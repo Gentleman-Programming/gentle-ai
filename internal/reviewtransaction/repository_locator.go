@@ -360,7 +360,7 @@ func matchReviewRepositoryContextV2Handle(handle string, identity RepositoryIden
 }
 
 func canonicalReviewRepositoryContextV2Payload(token reviewRepositoryContextV2Token) ([]byte, error) {
-	if token.Schema != reviewRepositoryContextV2Schema || !validReviewRepositoryContextV2Path(token.RepositoryRoot) ||
+	if (token.Schema != reviewRepositoryContextV2Schema && token.Schema != reviewRepositoryContextV3Schema) || !validReviewRepositoryContextV2Path(token.RepositoryRoot) ||
 		!validReviewRepositoryContextV2Path(token.GitCommonDir) || !validReviewRepositoryContextV2Path(token.GitDir) ||
 		!validSHA256(token.RepositoryRef) || validateReviewRepositoryContextBinding(ReviewRepositoryContextBinding{
 		LineageID: token.LineageID, TargetIdentity: token.TargetIdentity, Revision: token.CapturePhaseRevision,
@@ -390,7 +390,7 @@ func ValidateReviewRepositoryContextHandle(handle string) error {
 	if validReviewRepositoryContextHandle(handle) {
 		return nil
 	}
-	if validReviewRepositoryContextV2Handle(handle) {
+	if validReviewRepositoryContextV2Handle(handle) || validReviewRepositoryContextV3Handle(handle) {
 		return nil
 	}
 	return errors.New("invalid review repository context handle")
@@ -428,73 +428,19 @@ func ResolveReviewRepositoryContextBinding(ctx context.Context, repo, handle str
 	return root, resolved, nil
 }
 
-// ResolveReviewRepositoryContextBindingFromHost resolves a provider-issued rctx2
-// handle from the host worktree that launched a review task. It searches only
-// Git-registered worktrees that share the host's common directory; no
-// caller-authored target path participates in this discovery.
-func ResolveReviewRepositoryContextBindingFromHost(ctx context.Context, host, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
-	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil || !validReviewRepositoryContextV2Handle(handle) {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
-	}
-	hostLease, err := OpenRepositoryIdentityLease(ctx, host)
-	if err != nil || hostLease.Validate(ctx) != nil {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
-	}
-	hostIdentity := hostLease.Identity()
-	worktrees, err := linkedWorktreeDirectories(ctx, hostIdentity.RepositoryRoot)
-	if err != nil {
-		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
-	}
-
-	type match struct {
-		root    string
-		binding ReviewRepositoryContextBinding
-	}
-	var matches []match
-	for _, worktree := range worktrees {
-		lease, err := OpenRepositoryIdentityLease(ctx, worktree)
-		// A registered worktree that no longer opens as a Git repository is not
-		// a match, so it is skipped. Refusing the whole resolution instead lets
-		// one stale registration -- an editor or agent sandbox that recreated or
-		// pruned a checkout while `git worktree list` still names it -- deny
-		// every review this host could otherwise resolve. Nothing is admitted by
-		// skipping: the host lease and the closing revalidation still gate the
-		// result, every surviving candidate must share the host's common
-		// directory and match the rctx2 digest and a live authority, and the
-		// single-match rule still fails closed.
-		if err != nil || lease.Validate(ctx) != nil {
-			continue
-		}
-		identity := lease.Identity()
-		if identity.GitCommonDir != hostIdentity.GitCommonDir {
-			continue
-		}
-		root, resolved, err := ResolveReviewRepositoryContextBinding(ctx, identity.RepositoryRoot, handle, binding)
-		if err != nil {
-			continue
-		}
-		duplicate := false
-		for _, existing := range matches {
-			duplicate = existing.root == root
-			if duplicate {
-				break
-			}
-		}
-		if !duplicate {
-			matches = append(matches, match{root: root, binding: resolved})
-		}
-	}
-	if err := hostLease.Validate(ctx); err != nil || len(matches) != 1 {
-		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
-	}
-	return matches[0].root, matches[0].binding, nil
-}
-
+// resolveReviewRepositoryContext dispatches one handle by its format. An rctx2
+// digest is verified against the caller repository exactly as it always was;
+// an rctx3 handle, issued only to OpenCode hosts, names its own sealed root and
+// never consults the caller repository.
 func resolveReviewRepositoryContext(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
-	if !strings.HasPrefix(handle, reviewRepositoryContextV2HandlePrefix) {
+	switch {
+	case strings.HasPrefix(handle, reviewRepositoryContextV2HandlePrefix):
+		return resolveReviewRepositoryContextV2Token(ctx, repo, handle, binding)
+	case strings.HasPrefix(handle, reviewRepositoryContextV3HandlePrefix):
+		return resolveSealedReviewRepositoryContext(ctx, handle, binding)
+	default:
 		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
 	}
-	return resolveReviewRepositoryContextV2Token(ctx, repo, handle, binding)
 }
 
 // ResolveHistoricalReviewRepositoryContextBinding retains a read-only decoder for
@@ -526,7 +472,7 @@ func resolveOpaqueReviewRepositoryContext(ctx context.Context, handle string) (s
 }
 
 func resolveTargetedValidationReviewRepositoryContext(ctx context.Context, repo, handle string, requested ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, reviewTargetedValidationContext, error) {
-	root, binding, err := resolveReviewRepositoryContextV2Token(ctx, repo, handle, requested)
+	root, binding, err := resolveReviewRepositoryContext(ctx, repo, handle, requested)
 	if err != nil {
 		return "", ReviewRepositoryContextBinding{}, reviewTargetedValidationContext{}, err
 	}

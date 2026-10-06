@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -54,6 +57,53 @@ func assertOpaqueRepositoryContext(handle string, secrets ...string) error {
 	for _, secret := range secrets {
 		if secret != "" && strings.Contains(handle, secret) {
 			return fmt.Errorf("rctx2 handle is not opaque: %q leaks %q", handle, secret)
+		}
+	}
+	return nil
+}
+
+// assertSealedOpenCodeRepositoryContext proves the handle an OpenCode provider
+// task carries is the sealed rctx3 shape (#5136, #4516). Only OpenCode hosts
+// receive it: their relay runs in the host session directory, so the handle
+// names its own root -- sealed under a private per-user key, so a reader still
+// learns nothing about the filesystem. It is canonical unpadded base64url,
+// decodes to no structured payload, and neither its text nor its decoded bytes
+// carry any path fragment. Every other runtime keeps the rctx2 digest above.
+func assertSealedOpenCodeRepositoryContext(prompt string, secrets ...string) error {
+	encoded, found := strings.CutPrefix(prompt, "GENTLE_AI_REVIEW_PROVIDER_TASK ")
+	if !found {
+		return fmt.Errorf("OpenCode provider task has no Go-issued binding: %q", firstLine(prompt))
+	}
+	var binding struct {
+		RepositoryContext string `json:"repository_context"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &binding); err != nil {
+		return fmt.Errorf("parse OpenCode provider task binding: %w", err)
+	}
+	handle := binding.RepositoryContext
+	sealedText, found := strings.CutPrefix(handle, "rctx3_")
+	if !found {
+		return fmt.Errorf("OpenCode provider task repository context is not an rctx3 handle: %q", handle)
+	}
+	sealed, err := base64.RawURLEncoding.Strict().DecodeString(sealedText)
+	// nonce + identity digest + at least one root byte + authentication tag.
+	if err != nil || len(sealed) < 12+sha256.Size+1+16 {
+		return fmt.Errorf("rctx3 handle is not a canonical sealed payload: %q", handle)
+	}
+	if json.Valid(sealed) {
+		return fmt.Errorf("rctx3 handle decodes to structured data: %q", handle)
+	}
+	for _, secret := range secrets {
+		if secret == "" {
+			continue
+		}
+		if strings.Contains(handle, secret) {
+			return fmt.Errorf("rctx3 handle is not opaque: %q carries %q", handle, secret)
+		}
+		for _, fragment := range []string{secret, filepath.Base(secret)} {
+			if bytes.Contains(sealed, []byte(fragment)) {
+				return fmt.Errorf("rctx3 handle is not sealed: its decoded bytes carry %q", fragment)
+			}
 		}
 	}
 	return nil
