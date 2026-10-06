@@ -2162,11 +2162,11 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	// Legacy discovery does not change the 12 retained options.
-	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true, true)
 	if len(opts) != 12 {
 		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 12; got %v", len(opts), opts)
 	}
-	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 2, true)
+	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 2, true, true)
 	if len(optsWithProfiles) != 12 || !reflect.DeepEqual(opts, optsWithProfiles) {
 		t.Fatalf("legacy profile discovery changed welcome menu: %v", optsWithProfiles)
 	}
