@@ -1264,6 +1264,16 @@ func reviewBindingArguments(binding ReviewTransitionBinding) []ReviewTransitionA
 // capture operation and submission descriptor.
 const reviewInconclusiveTargetedValidationReason = "targeted_validation_inconclusive_recapture_required"
 
+// reviewRepositoryContextKeyUnsafeReason classifies an OpenCode-driven STATUS
+// that cannot seal its reviewer Task because this user's private sealing key
+// is unusable. It is an environment fault that wrote nothing, and its exit is
+// repairing the key file, which the cause names.
+var reviewRepositoryContextKeyUnsafeReason = reviewPreflightReason{
+	Code:       "repository_context_key_unsafe",
+	Message:    "This user's private review context key cannot be used, so the OpenCode reviewer Task cannot be sealed; the cause names the key file and its repair.",
+	NextAction: "stop",
+}
+
 // reviewOpenCodeTransitionBinding gives the inputs an OpenCode host collects
 // the sealed rctx3 handle its relay resolves. The relay runs in the host
 // session directory, which names nothing about the review (#5136, #4516), so

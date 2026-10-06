@@ -826,7 +826,7 @@ func TestOpenCodeRelayResolverAcceptsOnlyTheSealedHandle(t *testing.T) {
 	}
 	root, resolved, err := ResolveOpenCodeReviewRepositoryContextBinding(t.Context(), digest, binding)
 	if err == nil || root != "" || resolved != (ReviewRepositoryContextBinding{}) || !errors.Is(err, ErrUnsealedReviewRepositoryContext) ||
-		!strings.Contains(err.Error(), "gentle-ai review status") || !strings.Contains(err.Error(), "--agent <agent>") {
+		!strings.Contains(err.Error(), "gentle-ai review status") || !strings.Contains(err.Error(), "--lineage "+binding.LineageID) {
 		t.Fatalf("relay resolution of rctx2 = %q, %#v, %v; want a typed refusal naming a fresh OpenCode STATUS", root, resolved, err)
 	}
 	if root, resolved, err := ResolveReviewRepositoryContextBinding(t.Context(), fixture.store.repo, digest, binding); err != nil || root != fixture.store.repo || resolved != binding {

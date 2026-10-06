@@ -144,24 +144,49 @@ func TestOpenCodeReviewTransportRefusesAnRctx2HandleWithAFreshStatusContinuation
 		t.Skip("requires relay subprocesses")
 	}
 	reviewEnabledHome(t)
-	target, started, store, record := newArtifactReview(t, false)
-	start := openCodeLensTransportStart(t, target, record, record.State.SelectedLenses[0])
+	target, started, store, record := openCodeSealedLineage(t, "opencode-rctx2-remedy")
+	_, status := openCodeSealedStatus(t, target, started.LineageID, "")
+	issued := openCodeSealedCollectInput(t, status)
+	if issued.ProviderTask == nil {
+		t.Fatalf("OpenCode collect input carries no provider task: %#v", issued)
+	}
 	digest, err := reviewtransaction.DeriveReviewRepositoryContextHandle(t.Context(), target, reviewtransaction.ReviewRepositoryContextBinding{
 		LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 	})
 	if err != nil || !strings.HasPrefix(digest, "rctx2_") {
 		t.Fatalf("rctx2 derivation = %q, %v", digest, err)
 	}
+	start := openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: issued.ProviderTask.Prompt}
 	start.Prompt = strings.Replace(start.Prompt, openCodeTransportStartHandle(t, start), digest, 1)
 
 	// Even from the repository itself: the relay never resolves rctx2.
 	err = runOpenCodeRelayStartFrom(t, target, start)
 	var bindingErr *openCodeTransportBindingError
-	if !errors.As(err, &bindingErr) || openCodeTransportRefusalReason(err) != openCodeRefusalStaleAuthority ||
-		!strings.Contains(err.Error(), "gentle-ai review status") || !strings.Contains(err.Error(), "--agent <agent>") {
-		t.Fatalf("rctx2 relay error = %v, want a typed stale refusal naming a fresh OpenCode STATUS", err)
+	if !errors.As(err, &bindingErr) || openCodeTransportRefusalReason(err) != openCodeRefusalStaleAuthority {
+		t.Fatalf("rctx2 relay error = %v, want a typed stale refusal", err)
 	}
 	assertOpenCodeRelayAuthorityUnchanged(t, target, started.LineageID, store, record)
+
+	// The remedy is the exact bound continuation: running it reissues the
+	// current provider Task, not a selectorless START offer.
+	_, remedy, found := strings.Cut(err.Error(), "`")
+	remedy, _, closed := strings.Cut(remedy, "`")
+	if !found || !closed || !strings.Contains(remedy, "--lineage "+started.LineageID) {
+		t.Fatalf("rctx2 relay remedy %q does not name the bound lineage", err.Error())
+	}
+	args := strings.Fields(strings.ReplaceAll(remedy, "<repo>", target))
+	if len(args) < 3 || args[0] != "gentle-ai" {
+		t.Fatalf("rctx2 relay remedy is not a gentle-ai command: %q", remedy)
+	}
+	var output bytes.Buffer
+	if err := RunReview(args[2:], &output); err != nil || args[1] != "review" {
+		t.Fatalf("rctx2 relay remedy %q failed: %v\n%s", remedy, err, output.String())
+	}
+	var reissued ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &reissued)
+	if again := openCodeSealedCollectInput(t, reissued); again.ProviderTask == nil || again.ProviderTask.Prompt != issued.ProviderTask.Prompt {
+		t.Fatalf("rctx2 relay remedy did not reissue the current Task: %#v", reissued.NextTransition)
+	}
 }
 
 func loadOpenCodeRelayAuthority(t *testing.T, repo, lineage string) (reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {

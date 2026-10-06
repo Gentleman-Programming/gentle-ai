@@ -52,10 +52,11 @@ const (
 var reviewRepositoryContextV3Encoding = base64.RawURLEncoding.Strict()
 
 // ErrReviewRepositoryContextKeyUnsafe never names key bytes; it only names the
-// file an operator has to repair.
+// file an operator has to repair. The wording carries no path separator, so
+// the path-scrubbing failure envelope delivers it intact.
 var ErrReviewRepositoryContextKeyUnsafe = errReviewRepositoryContextKeyUnsafe
 
-var errReviewRepositoryContextKeyUnsafe = errors.New("review repository context key ~/.gentle-ai/review-context.key is not a private 32-byte regular file; restrict it to mode 0600 or move it aside so a new key is created, then run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` to obtain a fresh repository context")
+var errReviewRepositoryContextKeyUnsafe = errors.New("the review context key file review-context.key in the .gentle-ai directory of your home directory is not a private 32-byte regular file; run `chmod 600 review-context.key` in that directory, or move the file aside so a new key is created, then re-run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <agent> --lineage <lineage> --next-transition` to obtain a fresh repository context")
 
 var errInvalidReviewRepositoryContextV3 = errors.New("invalid rctx3 repository context") // refusal:by-design operator-knowledge: callers must refresh the provider-issued repository context instead of attempting to repair an untrusted token
 
@@ -75,11 +76,30 @@ func invalidReviewRepositoryContextV3Resolution(cause error) error {
 }
 
 // reviewRepositoryContextUnsealedError refuses, at the OpenCode relay, any
-// handle that is not the sealed rctx3 shape the relay's own STATUS issues.
-type reviewRepositoryContextUnsealedError struct{}
+// handle that is not the sealed rctx3 shape the relay's own STATUS issues. It
+// carries the already-validated lineage so the remedy names the bound STATUS
+// that reissues the Task, not a selectorless one that offers a fresh START.
+type reviewRepositoryContextUnsealedError struct{ lineageID string }
 
-func (reviewRepositoryContextUnsealedError) Error() string {
-	return "the OpenCode review relay accepts only the sealed rctx3 repository context its own STATUS issues; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <agent> --next-transition` to obtain the current provider-issued Task"
+func (err reviewRepositoryContextUnsealedError) Error() string {
+	return "the OpenCode review relay accepts only the sealed rctx3 repository context its own STATUS issues; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <agent> --lineage " + err.lineageID + " --next-transition` to obtain the current provider-issued Task"
+}
+
+// Is matches every unsealed-handle refusal regardless of its lineage.
+func (reviewRepositoryContextUnsealedError) Is(target error) bool {
+	_, ok := target.(reviewRepositoryContextUnsealedError)
+	return ok
+}
+
+// UnsealedReviewRepositoryContextLineage returns the validated lineage a relay
+// refusal of an unsealed handle was bound to, so the caller can name the exact
+// STATUS continuation for its own runtime.
+func UnsealedReviewRepositoryContextLineage(err error) (string, bool) {
+	var unsealed reviewRepositoryContextUnsealedError
+	if !errors.As(err, &unsealed) || unsealed.lineageID == "" {
+		return "", false
+	}
+	return unsealed.lineageID, true
 }
 
 func (reviewRepositoryContextUnsealedError) Unwrap() error {
@@ -122,8 +142,13 @@ func DeriveOpenCodeReviewRepositoryContextHandle(ctx context.Context, repo strin
 // root, so the relay refuses it with the STATUS that reissues the Task instead
 // of searching the host session for a candidate.
 func ResolveOpenCodeReviewRepositoryContextBinding(ctx context.Context, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
+	// The binding is validated first: the refusal below echoes its lineage
+	// into an operator-facing command, so it must be canonical.
+	if validateReviewRepositoryContextBinding(binding) != nil {
+		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV3
+	}
 	if !strings.HasPrefix(handle, reviewRepositoryContextV3HandlePrefix) {
-		return "", ReviewRepositoryContextBinding{}, reviewRepositoryContextUnsealedError{}
+		return "", ReviewRepositoryContextBinding{}, reviewRepositoryContextUnsealedError{lineageID: binding.LineageID}
 	}
 	return resolveSealedReviewRepositoryContext(ctx, handle, binding)
 }
@@ -291,6 +316,21 @@ func openReviewRepositoryContextV3(key []byte, handle string, binding ReviewRepo
 
 func validReviewRepositoryContextV3Root(root string) bool {
 	return len(root) <= reviewRepositoryContextV3MaxRootBytes && utf8.ValidString(root) && validReviewRepositoryContextV2Path(root)
+}
+
+// ReviewRepositoryContextKeyHealth reports, read-only, whether this user's
+// sealing key can be used. An absent key is healthy: the next derivation
+// creates it. A present key that is not a private 32-byte regular file
+// returns the actionable ErrReviewRepositoryContextKeyUnsafe refusal.
+func ReviewRepositoryContextKeyHealth() error {
+	_, err := loadReviewRepositoryContextKey(false)
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if errors.Is(err, errReviewRepositoryContextKeyUnsafe) {
+		return errReviewRepositoryContextKeyUnsafe
+	}
+	return invalidReviewRepositoryContextV3Resolution(err)
 }
 
 // loadReviewRepositoryContextKey returns this user's sealing key. Derivation

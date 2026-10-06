@@ -1330,7 +1330,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								// Only the probe's deterministic verdict stops STATUS: an unproven
 								// probe says nothing about artifacts that just verified, so it must
 								// never become a terminal captured-artifact failure (issue #3367).
-								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.State.CapturePhaseRevision)
+								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.State.CapturePhaseRevision, runtime)
 							}
 							if artifactErr == nil && !lensContextBudgetExceeded {
 								repositoryContext, artifactErr = reviewtransaction.DeriveReviewRepositoryContextHandle(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
@@ -1463,6 +1463,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					return err
 				}
 				transition = newReviewNextTransition(result, native.SelectedLenses, artifacts, artifactErr, input)
+			}
+			// Only an OpenCode-driven STATUS seals a handle. When sealing failed,
+			// an unsafe key is an environment fault with its own repair, not a
+			// lifecycle stop; every other runtime never consults the key.
+			if runtime == model.AgentOpenCode && transition.ReasonCode == "captured_artifacts_unverifiable" {
+				if keyErr := reviewtransaction.ReviewRepositoryContextKeyHealth(); keyErr != nil {
+					return reviewPreflightRefusal(reviewRepositoryContextKeyUnsafeReason, keyErr)
+				}
 			}
 			result.NextTransition = &transition
 			providerTargetedValidation := (transition.ReasonCode == "targeted_validation_required" || transition.ReasonCode == reviewInconclusiveTargetedValidationReason) &&

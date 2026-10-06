@@ -106,7 +106,13 @@ func openCodeTransportBindingInvalid(detail string) error {
 func openCodeTransportContextRefusal(err error) error {
 	switch {
 	case errors.Is(err, reviewtransaction.ErrUnsealedReviewRepositoryContext):
-		return openCodeTransportStaleAuthority("Task repository context is not the sealed rctx3 handle OpenCode STATUS issues; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <agent> --next-transition` to obtain the current provider-issued Task")
+		// This relay is the OpenCode transport, so the runtime that drives the
+		// reissuing STATUS is OpenCode by construction.
+		if lineage, ok := reviewtransaction.UnsealedReviewRepositoryContextLineage(err); ok {
+			return openCodeTransportStaleAuthority("Task repository context is not the sealed rctx3 handle OpenCode STATUS issues; run `" +
+				reviewProviderCaptureContinuation(model.AgentOpenCode, lineage) + "` to obtain the current provider-issued Task")
+		}
+		return openCodeTransportStaleAuthority("Task repository context is not the sealed rctx3 handle OpenCode STATUS issues; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <agent> --lineage <lineage> --next-transition` to obtain the current provider-issued Task")
 	case errors.Is(err, reviewtransaction.ErrReviewRepositoryContextKeyUnsafe):
 		return openCodeTransportBindingInvalid(reviewtransaction.ErrReviewRepositoryContextKeyUnsafe.Error())
 	default:
