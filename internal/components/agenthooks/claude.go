@@ -1,7 +1,6 @@
 package agenthooks
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -19,7 +18,7 @@ func InstallRetainedClaudeHooks(homeDir string, adapter agents.Adapter) (Result,
 	if path == "" {
 		return Result{}, nil
 	}
-	root := map[string]any{}
+	var data []byte
 	info, err := os.Lstat(path)
 	if err != nil && !os.IsNotExist(err) {
 		return Result{}, err
@@ -28,15 +27,13 @@ func InstallRetainedClaudeHooks(homeDir string, adapter agents.Adapter) (Result,
 		if !info.Mode().IsRegular() {
 			return Result{}, fmt.Errorf("hook settings %q is not a regular file", path)
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
+		if data, err = os.ReadFile(path); err != nil {
 			return Result{}, err
 		}
-		if len(data) > 0 {
-			if err := json.Unmarshal(data, &root); err != nil {
-				return Result{}, fmt.Errorf("parse Claude settings %q: %w", path, err)
-			}
-		}
+	}
+	root, err := decodeHookSettings(data)
+	if err != nil {
+		return Result{}, fmt.Errorf("parse Claude settings %q: %w", path, err)
 	}
 	raw, exists := root["hooks"]
 	hooks, ok := raw.(map[string]any)
@@ -77,12 +74,11 @@ func InstallRetainedClaudeHooks(homeDir string, adapter agents.Adapter) (Result,
 	if !changed {
 		return Result{Files: []string{path}}, nil
 	}
-	root["hooks"] = hooks
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := encodeHookSettings(data, root, hooks)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("rewrite Claude settings %q: %w", path, err)
 	}
-	wr, err := filemerge.WriteFileAtomic(path, append(out, '\n'), 0644)
+	wr, err := filemerge.WriteFileAtomic(path, out, 0644)
 	if err != nil {
 		return Result{}, err
 	}
