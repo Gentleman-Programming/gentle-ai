@@ -116,6 +116,9 @@ type operation struct {
 	// cleanup it was.
 	agents []model.AgentID
 	apply  func(path string) (changed bool, removed bool, err error)
+	// notes, when set, names what a successful apply kept for the user to
+	// decide on.
+	notes func() []string
 }
 
 // operationFailure records one operation that did not complete, so the run can
@@ -642,6 +645,9 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		if err != nil {
 			failures = append(failures, operationFailure{path: op.path, agents: op.agents, err: err})
 			continue
+		}
+		if op.notes != nil {
+			result.ManualActions = append(result.ManualActions, op.notes()...)
 		}
 		if op.typeID == opRemoveIfEmpty && !removed {
 			if note, ok := manualActionForNonEmptyDirectory(op.path); ok {
@@ -1749,6 +1755,15 @@ func mergeRewriteOps(a, b operation) operation {
 			}
 			changed2, removed2, err2 := b.apply(path)
 			return changed1 || changed2, removed2, err2
+		},
+		notes: func() []string {
+			var notes []string
+			for _, op := range []operation{a, b} {
+				if op.notes != nil {
+					notes = append(notes, op.notes()...)
+				}
+			}
+			return notes
 		},
 	}
 }
