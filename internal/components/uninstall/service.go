@@ -505,6 +505,10 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 				}
 				operationsByKey[key] = op
 			}
+			for _, op := range retainedOpenCodePluginOperations(adapter, s.homeDir) {
+				backupTargets[op.path] = struct{}{}
+				operationsByKey[operationKey(op)] = op
+			}
 		}
 	}
 	if slices.Contains(agentIDs, model.AgentOpenCode) && removesAllAgentComponents(componentIDs) {
@@ -536,10 +540,6 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			return plan{}, err
 		}
 		for _, op := range removeOwnedTelemetryRuntime(configDir) {
-			backupTargets[op.path] = struct{}{}
-			operationsByKey[operationKey(op)] = op
-		}
-		for _, op := range retainedOpenCodePluginOperations(adapter, s.homeDir) {
 			backupTargets[op.path] = struct{}{}
 			operationsByKey[operationKey(op)] = op
 		}
@@ -1240,7 +1240,8 @@ func rewriteSkillRegistryHook(path string) operation {
 			if !changed {
 				return false, false, nil
 			}
-			if jsonIsEmptyObject(updated) {
+			// An emptied object that still holds JSONC comments is user text.
+			if jsonIsEmptyObject(updated) && json.Valid(updated) {
 				if err := removeFileIfExists(path); err != nil {
 					return false, false, err
 				}
@@ -1264,14 +1265,30 @@ func managedRetainedHookCommand(cmd string) bool {
 		cmd == "gentle-ai telemetry runtime codex --json"
 }
 
+// removeSkillRegistryHook removes the managed hook commands. Strict JSON is
+// re-encoded; JSONC keeps every byte outside the hooks value and refuses,
+// rather than normalizes, hooks spelled with escapes or holding comments.
 func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
+	strict := json.Valid(raw)
 	root := map[string]any{}
-	if err := json.Unmarshal(raw, &root); err != nil {
-		return nil, false, err
+	if strict {
+		if err := json.Unmarshal(raw, &root); err != nil {
+			return nil, false, err
+		}
+	} else {
+		decoded, err := filemerge.UnmarshalJSONObject(raw)
+		if err != nil {
+			return nil, false, err
+		}
+		root = decoded
 	}
 	hooksMap, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return raw, false, nil
+	}
+	events := make([]string, 0, len(hooksMap))
+	for event := range hooksMap {
+		events = append(events, event)
 	}
 	changed := false
 	for _, hookKey := range []string{"UserPromptSubmit", "SessionStart", "Stop", "SubagentStop", "PreToolUse", "PostToolUse", "SessionEnd"} {
@@ -1316,6 +1333,27 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 	}
 	if !changed {
 		return raw, false, nil
+	}
+	if !strict && len(hooksMap) == 0 {
+		updated, kept, err := filemerge.RemoveJSONCMembers(raw, []string{"hooks"}, events, true)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(kept) > 0 {
+			return nil, false, fmt.Errorf("refuse to remove hooks %v spelled with escapes or holding comments; remove the Gentle AI hooks yourself", kept)
+		}
+		return updated, true, nil
+	}
+	if !strict {
+		overlay, err := json.Marshal(map[string]any{"hooks": map[string]any{"__replace__": hooksMap}})
+		if err != nil {
+			return nil, false, err
+		}
+		updated, err := filemerge.MergeOpenCodeJSONCObjects(raw, overlay)
+		if err != nil {
+			return nil, false, err
+		}
+		return updated, true, nil
 	}
 	if len(hooksMap) == 0 {
 		delete(root, "hooks")
@@ -1376,13 +1414,17 @@ func retainedOpenCodePluginOperations(adapter agents.Adapter, homeDir string) []
 		return removeEmpty(path)
 	}
 	ops = append(ops, dirOp)
-	for _, path := range modelVariantsCachePaths(filepath.Join(homeDir, ".gentle-ai", "cache")) {
-		op := removeFile(path)
-		op.agents = []model.AgentID{model.AgentOpenCode}
-		ops = append(ops, op)
+	// The model-variants cache is shared by the OpenCode family; only an
+	// OpenCode removal clears it, as before Kilocode plugins were removed.
+	if adapter.Agent() == model.AgentOpenCode {
+		for _, path := range modelVariantsCachePaths(filepath.Join(homeDir, ".gentle-ai", "cache")) {
+			ops = append(ops, removeFile(path))
+		}
 	}
+	// Attribute every operation to the agent being removed, so a failure keeps
+	// that agent's uninstall incomplete and names it in the rerun hint.
 	for i := range ops {
-		ops[i].agents = []model.AgentID{model.AgentOpenCode}
+		ops[i].agents = []model.AgentID{adapter.Agent()}
 	}
 	return ops
 }
