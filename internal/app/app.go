@@ -640,7 +640,7 @@ func tuiExecuteWithSDK(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent)
+	execResult, orchestrator, codexServiceTier := cli.ExecuteTUIInstallRecordingCodexServiceTier(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent)
 	// The TUI settles asynchronously: keep its deduplicated rollback snapshot
 	// until state persistence succeeds or the failure has been compensated.
 	if orchestrator != nil {
@@ -669,7 +669,9 @@ func tuiExecuteWithSDK(
 			installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
 			installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
 			installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
-			installState.CodexServiceTier = selection.CodexServiceTier
+			if codexServiceTier != nil { // only what engram actually left in config.toml
+				installState.CodexServiceTier = *codexServiceTier
+			}
 			installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
 			installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
 			installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
@@ -973,7 +975,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if !selection.ClearCodexOrchestratorAssignment && selection.CodexOrchestratorAssignment == nil && s.CodexOrchestratorAssignment != nil {
 		selection.CodexOrchestratorAssignment = codexOrchestratorFromState(s.CodexOrchestratorAssignment)
 	}
-	selection.CodexServiceTier, selection.CodexManagedServiceTier = s.CodexServiceTier, s.CodexServiceTier
+	if model.ValidCodexServiceTier(s.CodexServiceTier) {
+		selection.CodexServiceTier, selection.CodexManagedServiceTier = s.CodexServiceTier, s.CodexServiceTier
+	}
 	if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 		m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
 		for k, v := range s.ModelAssignments {
@@ -999,7 +1003,6 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 		selection.CodexModelAssignments != nil ||
 		selection.CodexOrchestratorAssignment != nil ||
 		selection.ClearCodexOrchestratorAssignment ||
-		selection.CodexServiceTier != selection.CodexManagedServiceTier ||
 		selection.CodexCarrilModelAssignments != nil ||
 		selection.CodexPhaseModelAssignments != nil
 	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasAssignmentSignal {
@@ -1044,9 +1047,6 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 			current.CodexOrchestratorAssignment = nil
 		} else if selection.CodexOrchestratorAssignment != nil {
 			current.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
-		}
-		if selection.CodexServiceTier != selection.CodexManagedServiceTier {
-			current.CodexServiceTier = selection.CodexServiceTier
 		}
 		if selection.CodexModelAssignments != nil {
 			if len(selection.CodexModelAssignments) > 0 {

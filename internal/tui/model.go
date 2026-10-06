@@ -215,6 +215,39 @@ func (m *Model) restoreCodexCustomAssignments() {
 	}
 }
 
+// validCodexServiceTier drops a persisted tier that is not a safe request
+// value, so it is neither offered nor used to edit config.toml.
+func validCodexServiceTier(tier string) string {
+	if !model.ValidCodexServiceTier(tier) {
+		return ""
+	}
+	return tier
+}
+
+// readPersistedCodexServiceTier returns the Codex service tier state recorded
+// as written by Gentle AI, or nil when state cannot be read.
+var readPersistedCodexServiceTier = func() *string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	s, err := state.Read(home)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	tier := validCodexServiceTier(s.CodexServiceTier)
+	return &tier
+}
+
+// refreshCodexManagedServiceTier keeps the session's managed tier equal to
+// what the last sync or install actually wrote, so a later Standard choice in
+// the same session retires exactly that value.
+func (m *Model) refreshCodexManagedServiceTier(recorded *string) {
+	if recorded != nil {
+		m.Selection.CodexManagedServiceTier = *recorded
+	}
+}
+
 // enterCodexModelPicker restores the picker from the selection and starts
 // runtime discovery so presets can offer the orchestrator's service tiers.
 func (m *Model) enterCodexModelPicker() tea.Cmd {
@@ -329,7 +362,7 @@ func (r *installProgressRun) nextMessage(runID uint64) tea.Msg {
 		if r.done {
 			result := r.result
 			r.mu.Unlock()
-			return PipelineDoneMsg{RunID: runID, Result: result}
+			return PipelineDoneMsg{RunID: runID, Result: result, CodexServiceTier: readPersistedCodexServiceTier()}
 		}
 		r.mu.Unlock()
 		<-r.notify
@@ -348,6 +381,8 @@ type StepProgressMsg struct {
 type PipelineDoneMsg struct {
 	RunID  uint64
 	Result pipeline.ExecutionResult
+	// CodexServiceTier is the tier state recorded as written (nil = unknown).
+	CodexServiceTier *string
 }
 
 // BackupRestoreMsg is sent when a backup restore completes.
@@ -377,6 +412,8 @@ type SyncDoneMsg struct {
 	Files         []string
 	ManualActions []string
 	Err           error
+	// CodexServiceTier is the tier state recorded as written (nil = unknown).
+	CodexServiceTier *string
 }
 
 // UninstallDoneMsg is sent when the uninstall operation completes.
@@ -850,8 +887,8 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		KiroModelAssignments:   installStateKiroAssignments(s.KiroModelAssignments),
 		ModelAssignments:       installStateModelAssignments(s.ModelAssignments),
 		// The persisted tier is both the pre-selection and what Gentle manages.
-		CodexServiceTier:        s.CodexServiceTier,
-		CodexManagedServiceTier: s.CodexServiceTier,
+		CodexServiceTier:        validCodexServiceTier(s.CodexServiceTier),
+		CodexManagedServiceTier: validCodexServiceTier(s.CodexServiceTier),
 	}
 
 	return Model{
@@ -1177,6 +1214,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.CodexModelPicker.AvailableModels = msg.Models
 		m.CodexModelPicker.ModelCapabilities = msg.Capabilities
+		screens.ClampCodexEffortCursor(&m.CodexModelPicker)
 		return m, nil
 	case UpgradeDoneMsg:
 		if m.Screen != ScreenUpgrade && m.Screen != ScreenUpdatePrompt {
@@ -1204,6 +1242,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SyncErr = msg.Err
 		m.HasSyncRun = true
 		m.PendingSyncOverrides = nil
+		m.refreshCodexManagedServiceTier(msg.CodexServiceTier)
 		return m, nil
 	case UninstallDoneMsg:
 		if m.Screen != ScreenUninstallConfirm {
@@ -1329,6 +1368,7 @@ func (m Model) handlePipelineDone(msg PipelineDoneMsg) (tea.Model, tea.Cmd) {
 
 	liveProgress := m.Progress
 	m.Execution = msg.Result
+	m.refreshCodexManagedServiceTier(msg.CodexServiceTier)
 	m.pipelineRunning = false
 	m.progressRun = nil
 
@@ -2948,13 +2988,13 @@ func (m Model) startSync(overrides *model.SyncOverrides) tea.Cmd {
 	return func() tea.Msg {
 		if detailed != nil {
 			files, actions, err := detailed(overrides)
-			return SyncDoneMsg{Files: files, ManualActions: actions, Err: err}
+			return SyncDoneMsg{Files: files, ManualActions: actions, Err: err, CodexServiceTier: readPersistedCodexServiceTier()}
 		}
 		if syncFn == nil {
 			return SyncDoneMsg{Err: fmt.Errorf("sync function not configured")}
 		}
 		files, err := syncFn(overrides)
-		return SyncDoneMsg{Files: files, Err: err}
+		return SyncDoneMsg{Files: files, Err: err, CodexServiceTier: readPersistedCodexServiceTier()}
 	}
 }
 

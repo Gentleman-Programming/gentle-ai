@@ -91,7 +91,8 @@ type codexCatalogModel struct {
 	SupportedReasoningLevels []struct {
 		Effort string `json:"effort"`
 	} `json:"supported_reasoning_levels"`
-	ServiceTiers []CodexServiceTier `json:"service_tiers"`
+	// ServiceTiers is nil when an older Codex omits the key entirely.
+	ServiceTiers *[]CodexServiceTier `json:"service_tiers"`
 }
 
 // CodexServiceTier is one Codex service tier a model advertises. ID is the
@@ -107,6 +108,9 @@ type CodexServiceTier struct {
 type CodexModelCapabilities struct {
 	Efforts      []CodexEffort
 	ServiceTiers []CodexServiceTier
+	// ServiceTiersReported is false when the runtime predates service_tiers;
+	// the tiers are then unknown and a persisted selection must be kept.
+	ServiceTiersReported bool
 }
 
 // CodexModelCatalog is the Custom picker catalog. Models missing from
@@ -181,12 +185,23 @@ func (entry codexCatalogModel) capabilities() (CodexModelCapabilities, bool) {
 			capabilities.Efforts = append(capabilities.Efforts, effort)
 		}
 	}
-	for _, tier := range entry.ServiceTiers {
+	if entry.ServiceTiers != nil {
+		capabilities.ServiceTiersReported = true
+	}
+	for _, tier := range ptrValue(entry.ServiceTiers) {
 		if tier.ID != "default" && ValidCodexServiceTier(tier.ID) && !slices.ContainsFunc(capabilities.ServiceTiers, func(t CodexServiceTier) bool { return t.ID == tier.ID }) {
 			capabilities.ServiceTiers = append(capabilities.ServiceTiers, tier)
 		}
 	}
-	return capabilities, len(capabilities.Efforts) > 0 || len(capabilities.ServiceTiers) > 0
+	return capabilities, len(capabilities.Efforts) > 0 || capabilities.ServiceTiersReported
+}
+
+func ptrValue[T any](value *T) T {
+	if value == nil {
+		var zero T
+		return zero
+	}
+	return *value
 }
 
 // ValidCodexServiceTier accepts a single lowercase request token so persisted

@@ -19,6 +19,10 @@ const codexDebugModelsFixture = `{"models":[
  "supported_reasoning_levels":[{"effort":"max","description":""},{"effort":"low","description":""},{"effort":"medium","description":""},{"effort":"high","description":""},{"effort":"xhigh","description":""},{"effort":"low","description":""}],
  "additional_speed_tiers":["fast"],
  "service_tiers":[{"id":"priority","name":"Fast","description":""},{"id":"default","name":"Standard","description":""},{"id":"bad tier","name":"x","description":""}]},
+{"slug":"gpt-old-codex","visibility":"list",
+ "supported_reasoning_levels":[{"effort":"high","description":""}],
+ "additional_speed_tiers":["fast"]},
+{"slug":"gpt-no-tiers","visibility":"list","service_tiers":[]},
 {"slug":"gpt-legacy","visibility":"list",
  "supported_reasoning_levels":[{"effort":"none","description":""},{"effort":"minimal","description":""},{"effort":"future-effort","description":""}]}
 ]}`
@@ -38,21 +42,25 @@ func TestDiscoverCodexModelsKeepsRuntimeAdvertisedCapabilitiesPerModel(t *testin
 
 	got := DiscoverCodexModels(context.Background())
 
-	if want := []string{"gpt-5.6-sol", "gpt-5.6-luna", "gpt-legacy"}; !reflect.DeepEqual(got.Models, want) {
+	if want := []string{"gpt-5.6-sol", "gpt-5.6-luna", "gpt-old-codex", "gpt-no-tiers", "gpt-legacy"}; !reflect.DeepEqual(got.Models, want) {
 		t.Fatalf("Models = %v, want %v", got.Models, want)
 	}
 	fast := []CodexServiceTier{{ID: "priority", Name: "Fast"}}
 	want := map[string]CodexModelCapabilities{
 		"gpt-5.6-sol": {
 			Efforts:      []CodexEffort{CodexEffortLow, CodexEffortMedium, CodexEffortHigh, CodexEffortXHigh, CodexEffortMax, CodexEffortUltra},
-			ServiceTiers: fast,
+			ServiceTiers: fast, ServiceTiersReported: true,
 		},
 		// Order is canonical and duplicates collapse; the explicit "default"
 		// sentinel and malformed IDs are never offered as tiers.
 		"gpt-5.6-luna": {
 			Efforts:      []CodexEffort{CodexEffortLow, CodexEffortMedium, CodexEffortHigh, CodexEffortXHigh, CodexEffortMax},
-			ServiceTiers: fast,
+			ServiceTiers: fast, ServiceTiersReported: true,
 		},
+		// Older Codex omits service_tiers: tiers are unknown, not absent.
+		"gpt-old-codex": {Efforts: []CodexEffort{CodexEffortHigh}},
+		// An explicit empty list is a runtime report of no tiers.
+		"gpt-no-tiers": {ServiceTiersReported: true},
 	}
 	if !reflect.DeepEqual(got.Capabilities, want) {
 		t.Fatalf("Capabilities = %#v, want %#v", got.Capabilities, want)

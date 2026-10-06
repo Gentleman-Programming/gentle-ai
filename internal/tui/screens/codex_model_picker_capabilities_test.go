@@ -17,11 +17,11 @@ func codexRuntimeCapabilities() map[string]model.CodexModelCapabilities {
 	return map[string]model.CodexModelCapabilities{
 		"gpt-5.6-sol": {
 			Efforts:      []model.CodexEffort{model.CodexEffortLow, model.CodexEffortMedium, model.CodexEffortHigh, model.CodexEffortXHigh, model.CodexEffortMax, model.CodexEffortUltra},
-			ServiceTiers: codexFastTier,
+			ServiceTiers: codexFastTier, ServiceTiersReported: true,
 		},
 		"gpt-5.6-luna": {
 			Efforts:      []model.CodexEffort{model.CodexEffortLow, model.CodexEffortMedium, model.CodexEffortHigh, model.CodexEffortXHigh, model.CodexEffortMax},
-			ServiceTiers: codexFastTier,
+			ServiceTiers: codexFastTier, ServiceTiersReported: true,
 		},
 	}
 }
@@ -90,7 +90,7 @@ func TestCodexCustomEffortsFollowRuntimeCapabilitiesPerModel(t *testing.T) {
 func codexPresetCapabilities(tiers []model.CodexServiceTier) map[string]model.CodexModelCapabilities {
 	orchestrator := model.CodexPresetOrchestratorAssignment(string(screens.CodexPresetRecommended)).Model
 	return map[string]model.CodexModelCapabilities{
-		orchestrator: {Efforts: []model.CodexEffort{model.CodexEffortMedium}, ServiceTiers: tiers},
+		orchestrator: {Efforts: []model.CodexEffort{model.CodexEffortMedium}, ServiceTiers: tiers, ServiceTiersReported: true},
 	}
 }
 
@@ -177,5 +177,37 @@ func TestCodexPresetWithoutAdvertisedTiersConfirmsImmediately(t *testing.T) {
 				t.Fatalf("ServiceTier = %q, want %q", state.ServiceTier, tt.wantTier)
 			}
 		})
+	}
+}
+
+// TestCodexCustomEffortCursorClampsToShorterAdvertisedList covers async
+// discovery shortening the effort list after the cursor moved on the curated one.
+func TestCodexCustomEffortCursorClampsToShorterAdvertisedList(t *testing.T) {
+	state := openCodexEffortSelect(t, "gpt-5.5")
+	for range 3 {
+		screens.HandleCodexCustomNav("down", &state, 0) // curated xhigh
+	}
+	state.ModelCapabilities["gpt-5.5"] = model.CodexModelCapabilities{Efforts: []model.CodexEffort{model.CodexEffortLow, model.CodexEffortMedium}}
+
+	screens.HandleCodexCustomNav("enter", &state, 0)
+	if got := state.CustomAssignments["jd-judge-a"]; got.Effort != model.CodexEffortMedium {
+		t.Fatalf("assignment = %+v, want clamped medium", got)
+	}
+}
+
+// TestCodexPresetPreservesTierWhenRuntimeOmitsServiceTiers covers Codex
+// builds that predate service_tiers: unreported tiers are unknown, not none.
+func TestCodexPresetPreservesTierWhenRuntimeOmitsServiceTiers(t *testing.T) {
+	orchestrator := model.CodexPresetOrchestratorAssignment(string(screens.CodexPresetRecommended)).Model
+	state := screens.NewCodexModelPickerState()
+	state.ModelCapabilities = map[string]model.CodexModelCapabilities{
+		orchestrator: {Efforts: []model.CodexEffort{model.CodexEffortMedium}},
+	}
+	state.ServiceTier = "priority"
+	if _, assignments := screens.HandleCodexModelPickerNav("enter", &state, 1); assignments == nil {
+		t.Fatal("preset did not confirm")
+	}
+	if state.ServiceTier != "priority" {
+		t.Fatalf("ServiceTier = %q, want preserved priority", state.ServiceTier)
 	}
 }

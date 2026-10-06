@@ -89,3 +89,75 @@ func TestInjectCodexWithoutTierKeepsConfigByteIdentical(t *testing.T) {
 		t.Fatalf("no-tier inject changed a user tier:\n--- want\n%s\n--- got\n%s", withUserTier, got)
 	}
 }
+
+func TestInjectCodexStandardIgnoresServiceTierInsideMultilineString(t *testing.T) {
+	const notes = "notes = \"\"\"\nservice_tier = \"priority\"\n\"\"\"\n"
+	tests := []struct{ name, seed, wantTop string }{
+		{"only the root assignment is retired", notes + "service_tier = \"priority\"\n", notes},
+		{"string content alone is never edited", notes, notes},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := injectCodexServiceTier(t, tt.seed, InjectOptions{CodexManagedServiceTier: "priority"})
+			if top, _, _ := strings.Cut(got, "\n["); !strings.HasPrefix(top+"\n", tt.wantTop) || strings.Count(got, "service_tier") != 1 {
+				t.Fatalf("multiline string content changed or root tier kept:\n%s", got)
+			}
+		})
+	}
+}
+
+func TestInjectCodexIgnoresInvalidServiceTiers(t *testing.T) {
+	got := injectCodexServiceTier(t, "model = \"m\"\nservice_tier = \"a b\"\n", InjectOptions{CodexServiceTier: "x\ny = 1"})
+	if strings.Contains(got, "x\\ny") || !strings.Contains(got, `service_tier = "a b"`) {
+		t.Fatalf("invalid desired tier was written:\n%s", got)
+	}
+	got = injectCodexServiceTier(t, "model = \"m\"\nservice_tier = \"a b\"\n", InjectOptions{CodexManagedServiceTier: "a b"})
+	if !strings.Contains(got, `service_tier = "a b"`) {
+		t.Fatalf("invalid managed tier was used to remove config:\n%s", got)
+	}
+}
+
+// TestInjectCodexReportsTheTierGentleOwnsAfterWrite pins the value callers
+// record as managed: only a tier this injection wrote or retired. An
+// unchanged selection reports nothing, so the recorded value stays.
+func TestInjectCodexReportsTheTierGentleOwnsAfterWrite(t *testing.T) {
+	const unchanged = "<nil>"
+	tests := []struct {
+		name, seed       string
+		desired, managed string
+		want             string
+	}{
+		{"new selection is written", "", "priority", "", "priority"},
+		{"replacing the managed tier", "service_tier = \"priority\"\n", "flex", "priority", "flex"},
+		{"standard retires the managed value", "service_tier = \"priority\"\n", "", "priority", ""},
+		{"standard over a user value owns nothing", "service_tier = \"flex\"\n", "", "priority", ""},
+		{"unchanged selection reports nothing", "service_tier = \"priority\"\n", "priority", "priority", unchanged},
+		{"no selection reports nothing", "service_tier = \"flex\"\n", "", "", unchanged},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			validCodexRuntime(t)
+			home := t.TempDir()
+			if tt.seed != "" {
+				path := filepath.Join(home, ".codex", "config.toml")
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(tt.seed), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result, err := InjectWithOptions(home, codexAdapter(), InjectOptions{CodexServiceTier: tt.desired, CodexManagedServiceTier: tt.managed})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := unchanged
+			if result.CodexServiceTier != nil {
+				got = *result.CodexServiceTier
+			}
+			if got != tt.want {
+				t.Fatalf("CodexServiceTier = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

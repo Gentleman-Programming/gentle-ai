@@ -265,7 +265,7 @@ func HandleCodexModelPickerNav(
 	if cursor < len(codexPresetOrder) {
 		selected := codexPresetOrder[cursor]
 		orchestrator := model.CodexPresetOrchestratorAssignment(string(selected)).Model
-		if capabilities, known := state.ModelCapabilities[orchestrator]; known {
+		if capabilities := state.ModelCapabilities[orchestrator]; capabilities.ServiceTiersReported {
 			if len(capabilities.ServiceTiers) > 0 {
 				state.PendingPreset = selected
 				state.CustomMode = CodexCustomModeServiceTier
@@ -277,7 +277,8 @@ func HandleCodexModelPickerNav(
 				}
 				return true, nil
 			}
-			// The runtime offers no tier for this orchestrator model.
+			// The runtime reports no tier for this orchestrator model. Unreported
+			// tiers (discovery unavailable or an older Codex) keep the selection.
 			state.ServiceTier = ""
 		}
 		return true, confirmCodexPreset(state, selected)
@@ -456,8 +457,15 @@ func codexEffortOptions(state CodexModelPickerState) []model.CodexEffort {
 	return codexCuratedEffortOptions
 }
 
+// ClampCodexEffortCursor keeps the effort cursor inside the current list,
+// which can shrink when runtime discovery arrives after the cursor moved.
+func ClampCodexEffortCursor(state *CodexModelPickerState) {
+	state.CustomEffortCursor = min(max(0, state.CustomEffortCursor), len(codexEffortOptions(*state))-1)
+}
+
 func handleCustomEffortSelectNav(key string, state *CodexModelPickerState) (bool, map[string]model.CodexEffort) {
 	codexEffortOptions := codexEffortOptions(*state)
+	ClampCodexEffortCursor(state)
 	switch key {
 	case "up", "k":
 		if state.CustomEffortCursor > 0 {
