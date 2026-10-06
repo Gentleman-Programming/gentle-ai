@@ -1108,3 +1108,55 @@ func TestKilocodePermissionsKeepBaseDuplicateKeyBehavior(t *testing.T) {
 		t.Fatalf("permission missing after merge: %s", raw)
 	}
 }
+
+// A user running deny-by-default keeps it: the overlay's "*" allows never land
+// inside a tool map the user scoped, where the last match would win over the
+// root "*" deny.
+func TestInjectKeepsUserDenyByDefault(t *testing.T) {
+	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		t.Run(string(id), func(t *testing.T) {
+			home := t.TempDir()
+			adapter, _ := agents.NewAdapter(id)
+			path := adapter.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			seed := `{"permission":{"*":"deny","bash":{"git status":"allow"}}}`
+			if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Inject(home, adapter); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root struct {
+				Permission map[string]json.RawMessage `json:"permission"`
+			}
+			if err := json.Unmarshal(raw, &root); err != nil {
+				t.Fatal(err)
+			}
+			if string(root.Permission["*"]) != `"deny"` {
+				t.Errorf("root deny changed: %s", root.Permission["*"])
+			}
+			// An unlisted command must fall through to the root deny: no tool
+			// map may carry its own "*" rule the user did not write.
+			for tool, value := range root.Permission {
+				var patterns map[string]string
+				if json.Unmarshal(value, &patterns) == nil {
+					if action, ok := patterns["*"]; ok {
+						t.Errorf("%s gained \"*\": %q over the user's deny-by-default", tool, action)
+					}
+				}
+			}
+			if got := remoteAction(t, raw, "rm -rf /"); got != "deny" {
+				t.Errorf("overlay deny lost: got %s", got)
+			}
+			if got := remoteAction(t, raw, "git status"); got != "allow" {
+				t.Errorf("user's own allow: got %s, want allow", got)
+			}
+		})
+	}
+}

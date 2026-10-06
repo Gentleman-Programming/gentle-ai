@@ -1,6 +1,7 @@
 package permissions
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -150,12 +151,48 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 	case model.AgentKilocode:
 		merge = filemerge.MergeJSONDefaultsForPath
 	}
+	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+		defaultsMerge := merge
+		merge = func(path string, base, overlay []byte) ([]byte, error) {
+			return defaultsMerge(path, base, withoutWildcardAllowsUnderUserDeny(base, overlay))
+		}
+	}
 	writeResult, err := mergeJSONFile(settingsPath, overlay, merge)
 	if err != nil {
 		return InjectionResult{}, err
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+}
+
+// withoutWildcardAllowsUnderUserDeny drops the overlay's "*": "allow" tool
+// rules when the user's root permission denies by default. Merged into a tool
+// map the user scoped, such an allow is the last match and would loosen the
+// user's deny; the overlay's asks and denies only tighten, so they stay.
+func withoutWildcardAllowsUnderUserDeny(base, overlay []byte) []byte {
+	root, err := filemerge.UnmarshalJSONObject(base)
+	if err != nil {
+		return overlay
+	}
+	permission, _ := root["permission"].(map[string]any)
+	if permission["*"] != "deny" {
+		return overlay
+	}
+	defaults, err := filemerge.UnmarshalJSONObject(overlay)
+	if err != nil {
+		return overlay
+	}
+	rules, _ := defaults["permission"].(map[string]any)
+	for _, value := range rules {
+		if patterns, ok := value.(map[string]any); ok && patterns["*"] == "allow" {
+			delete(patterns, "*")
+		}
+	}
+	encoded, err := json.Marshal(defaults)
+	if err != nil {
+		return overlay
+	}
+	return encoded
 }
 
 func mergeJSONFile(path string, overlay []byte, merge func(string, []byte, []byte) ([]byte, error)) (filemerge.WriteResult, error) {
