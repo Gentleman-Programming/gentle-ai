@@ -1109,9 +1109,9 @@ func TestKilocodePermissionsKeepBaseDuplicateKeyBehavior(t *testing.T) {
 	}
 }
 
-// A user running deny-by-default keeps it: the overlay's "*" allows never land
-// inside a tool map the user scoped, where the last match would win over the
-// root "*" deny.
+// A user running deny-by-default keeps it: no overlay rule looser than the
+// root "*" lands inside a tool map the user scoped, where it would follow the
+// root rule and win as the last match.
 func TestInjectKeepsUserDenyByDefault(t *testing.T) {
 	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
 		t.Run(string(id), func(t *testing.T) {
@@ -1151,6 +1151,9 @@ func TestInjectKeepsUserDenyByDefault(t *testing.T) {
 					}
 				}
 			}
+			if result, err := Inject(home, adapter); err != nil || result.Changed {
+				t.Fatalf("repeat injection = %+v, %v", result, err)
+			}
 			if got := remoteAction(t, raw, "rm -rf /"); got != "deny" {
 				t.Errorf("overlay deny lost: got %s", got)
 			}
@@ -1171,5 +1174,38 @@ func TestInjectKeepsUserDenyByDefault(t *testing.T) {
 				t.Errorf("user's own allow: got %s, want allow", got)
 			}
 		})
+	}
+}
+
+// Under a root "*" of ask, the overlay keeps its asks and denies but adds no
+// allow that would follow the root rule.
+func TestInjectKeepsUserAskByDefault(t *testing.T) {
+	home := t.TempDir()
+	adapter, _ := agents.NewAdapter(model.AgentOpenCode)
+	path := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"permission":{"*":"ask","bash":{"ls":"allow"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root struct {
+		Permission map[string]map[string]string `json:"permission"`
+	}
+	_ = json.Unmarshal(raw, &root)
+	for pattern, action := range root.Permission["bash"] {
+		if action == "allow" && pattern != "ls" {
+			t.Errorf("bash %q: allow loosens the user's ask-by-default", pattern)
+		}
+	}
+	if got := remoteAction(t, raw, "git push"); got != "ask" {
+		t.Errorf("overlay ask lost: got %s", got)
 	}
 }
