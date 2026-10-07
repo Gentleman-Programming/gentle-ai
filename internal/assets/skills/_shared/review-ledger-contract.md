@@ -8,9 +8,20 @@ The parent orchestrator coordinates one native transaction; reviewers, refuters,
 
 Enter this lifecycle once per candidate, after an authorized source-mutating implementation is complete and normalized and before reporting it complete, whenever the user-owned review switch is enabled (`gentle-ai review mode status` reads it without changing it). Run the selectorless STATUS in step 1 and route only from its returned `next_transition`; the START consent envelope lets the human decide this candidate, so never skip the preflight because the user did not ask for a review. Skip it only for a trivial passive documentation-only edit, when the user explicitly left this candidate unreviewed, or while a transaction is already bound to it. A runtime that runs this preflight itself hands the agent the exact returned START tokens and never runs START.
 
+## Lens selection
+
+Review is an outside view of the change from up to four independent lenses. Pick every lens pertinent to what you touched and how you touched it, and only those; a change that touches one concern pays for one lens. Judge by consequence, not by file names or counts:
+
+- `risk` when a mistake could expose, lose, or irreversibly change something: stored data, credentials, permissions, guards, or contracts others consume.
+- `resilience` when it changes behavior under failure: errors, retries, timeouts, partial writes, load, or concurrency.
+- `readability` when it changes what others read or depend on: public APIs, command output and messages, documentation, or code structure.
+- `reliability` when it changes logic or observable behavior that tests should pin.
+
+Give one `--lenses-reason` naming what you touched and how. Requirement compliance is verify's job before review; never choose lenses to re-check specs.
+
 ## Atomic lifecycle
 
-1. **Preflight only.** Selectorless STATUS only preflights the current worktree candidate and returns one exact START invocation. It never discovers, resumes, recovers, or evaluates ambient authority from another lineage or worktree: `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition`.
+1. **Preflight only.** Selectorless STATUS only preflights the current worktree candidate and returns one exact START invocation. It never discovers, resumes, recovers, or evaluates ambient authority from another lineage or worktree: `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition --lenses <r,...> --lenses-reason "<what you touched and how>"`. Choose the lenses yourself; see "Lens selection" below. Omit both flags only when `gentle-ai review capabilities --contract gentle-ai.review-integration/v2` does not list `start_lens_selection`.
 
 2. **Freeze once.** Invoke only the returned START operation and its ordered tokens unchanged. START freezes one compact atomic transaction with an explicit lineage, worktree, and target binding. It ignores every other lineage and worktree. Capture the returned lineage, revision, and target tokens. An exact replay of an active START may return `replayed`; a genuinely new START is independent.
 
@@ -41,7 +52,7 @@ For each returned `review.capture-result` input, invoke one OpenCode Task: copy 
 
 After an empty, malformed, schema-invalid, access/provider-failed, or incomplete capture, query the same exact-lineage STATUS. Relaunch only if its fresh `next_transition` reoffers the same bound slot. Never infer a retry from transcript text. A relayed capture passes its result through `--input <path|->`, one per lens in lens order; BOM-less UTF-8 is required on Windows PowerShell 5.1. Tokens carrying `--agent` capture in process with no `--input`.
 
-Only candidate-caused severe findings block. Pre-existing/base-only findings are follow-ups; unknown causality escalates. A deterministic blocker needs no refuter; inferential blockers share one read-only refuter batch. A four-lens review is long work: before its first lens, give one forecast covering four reviewer runs, the frozen correction budget, and the at-most-one bounded correction.
+Only candidate-caused severe findings block. Pre-existing/base-only findings are follow-ups; unknown causality escalates. Severe deterministic and inferential blockers share one read-only refuter batch on a runtime that can run it; elsewhere a deterministic blocker needs no refuter. A four-lens review is long work: before its first lens, give one forecast covering four reviewer runs, the frozen correction budget, and the at-most-one bounded correction.
 
 A correction is native-scoped. When the final reviewer or refuter capture opens `correction_required`, its `status_continuation` is the only re-entry: run its `review.status` operation and ordered tokens unchanged before acting again. Native Go maps edits only to corroborated frozen findings, owns repository evidence and the targeted validator, and permits at most one bounded correction. A validator that cannot inspect the immutable trees produced no verdict: surface one blocked human decision and submit nothing. Do not route it to a refuter or another actor without read-only immutable-tree access. Independent requirements/runtime verification never starts another reviewer, refuter, correction, or validator.
 
