@@ -146,21 +146,44 @@ func TestReviewLensContextCarriesRequestContext(t *testing.T) {
 	}
 }
 
-// TestReviewLensContextFocusesOnDesignWhenVerifyEvidenceIsPresent is S13: an
-// independent verify's per-spec verdicts ride in the same request file, and
-// the lens treats those specs as checked instead of re-checking them.
-func TestReviewLensContextFocusesOnDesignWhenVerifyEvidenceIsPresent(t *testing.T) {
-	content := requestContextFixture + "\n## Verify\n\nS1 PASS probe: `budget set --year 1999` exits 2.\nS2 PASS probe: `budget show` output matches the base byte for byte.\n"
-	request := writeRequestContextFile(t, content)
-	_, args, _ := startRequestContextReview(t, "request-context-verify", "--request-context", request)
+// requestContextVerifyPassFixture is a request whose verify section reports
+// every spec as passing: evidence a lens may read, never proof that removes a
+// requirement from its scope (S13 as reopened by S21).
+const requestContextVerifyPassFixture = requestContextFixture + "\n## Verify\n\nS1 PASS probe: `budget set --year 1999` exits 2.\nS2 PASS probe: `budget show` output matches the base byte for byte.\n"
 
-	block := lensContextBlock(t, args, args[slices.Index(args, "--lens")+1])
+// requireVerifyEvidenceKeepsScope checks the lens block for a frozen request
+// carrying Verify PASS verdicts: the evidence stays visible verbatim, the
+// lens keeps its own mandate, and the charge neither skips the passing specs
+// nor vouches that they were checked on the candidate under review.
+func requireVerifyEvidenceKeepsScope(t *testing.T, block, lens string) {
+	t.Helper()
+	section, found := lensContextSection(block, "GENTLE_AI_REVIEW_REQUEST_CONTEXT")
+	if !found || section != strings.TrimSpace(requestContextVerifyPassFixture) {
+		t.Fatalf("lens block does not carry the verify evidence verbatim:\n%s", block)
+	}
 	instruction, _ := lensContextSection(block, "GENTLE_AI_REVIEW_INSTRUCTION")
-	for _, required := range []string{"Verify evidence.", "already checked", "design, security, and maintainability"} {
+	for _, granted := range []string{"already checked", "do not re-check", "of this same candidate", "spend your review on"} {
+		if strings.Contains(instruction, granted) {
+			t.Fatalf("a reported PASS still removes requirements from the lens scope (%q):\n%s", granted, instruction)
+		}
+	}
+	_, focus, _ := reviewtransaction.LensMandate(lens)
+	for _, required := range []string{"Verify evidence.", "including specs it reports as passing", "never removes a requirement from your scope", focus} {
 		if !strings.Contains(instruction, required) {
 			t.Fatalf("instruction omits %q:\n%s", required, instruction)
 		}
 	}
+}
+
+// TestReviewLensContextKeepsVerifyPassSpecsInScope is S13 as reopened by S21:
+// a verify's per-spec verdicts ride in the request file and inform the lens,
+// but a textual PASS does not remove those specs from its review.
+func TestReviewLensContextKeepsVerifyPassSpecsInScope(t *testing.T) {
+	request := writeRequestContextFile(t, requestContextVerifyPassFixture)
+	_, args, _ := startRequestContextReview(t, "request-context-verify", "--request-context", request)
+
+	lens := args[slices.Index(args, "--lens")+1]
+	requireVerifyEvidenceKeepsScope(t, lensContextBlock(t, args, lens), lens)
 }
 
 // TestReviewStartCountsRequestContextAgainstLensBudget proves the request is
@@ -259,6 +282,65 @@ func TestReviewRecoverInheritsFrozenRequestContext(t *testing.T) {
 		successor.State.RequestContextHash != predecessor.State.RequestContextHash {
 		t.Fatalf("recovered successor lost the frozen request context: hash=%q content=%v", successor.State.RequestContextHash, successor.State.FrozenRequestContext)
 	}
+}
+
+// TestReviewRecoveredLensContextKeepsInheritedVerifyPassInScope is the S21
+// regression: a correction changes the candidate, recovery inherits the frozen
+// request with the predecessor's Verify PASS verdicts, and the successor's
+// lens still sees that evidence but must judge the changed candidate against
+// every requirement instead of treating the inherited PASS as checked.
+func TestReviewRecoveredLensContextKeepsInheritedVerifyPassInScope(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	request := writeRequestContextFile(t, requestContextVerifyPassFixture)
+	started := runNegotiatedReviewStartWith(t, repo, "request-context-verify-recover", "--request-context", request)
+	escalateReviewForRecovery(t, repo, ReviewFacadeStartResult{
+		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity, SelectedLenses: started.SelectedLenses,
+	})
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\nmore\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	predecessor := loadRequestContextRecord(t, repo, started.LineageID)
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"recover", "--cwd", repo, "--predecessor-lineage", started.LineageID,
+		"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", "request-context-verify-successor",
+		"--disposition", string(reviewtransaction.RecoveryEscalated),
+	}, &output); err != nil {
+		t.Fatalf("recover: %v\n%s", err, output.String())
+	}
+
+	// The successor's lens context is reached through the collect transition
+	// STATUS publishes, exactly as a runtime would reach it.
+	output.Reset()
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1,
+		"--lineage", "request-context-verify-successor", "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("successor STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) == 0 {
+		t.Fatalf("successor next transition = %#v", status.NextTransition)
+	}
+	args, lens, target := []string{"--cwd", repo}, "", ""
+	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
+		switch argument.Name {
+		case "lens":
+			lens = argument.Value
+		case "target":
+			target = argument.Value
+		}
+		args = append(args, "--"+argument.Name, argument.Value)
+	}
+	if lens == "" || target == "" || target == started.RepositoryContext.TargetIdentity {
+		t.Fatalf("successor collect does not review a changed candidate: lens=%q target=%q predecessor=%q", lens, target, started.RepositoryContext.TargetIdentity)
+	}
+	requireVerifyEvidenceKeepsScope(t, lensContextBlock(t, args, lens), lens)
 }
 
 // requestContextRefuterReview starts a negotiated review with the given START

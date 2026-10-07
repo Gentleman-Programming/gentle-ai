@@ -77,7 +77,7 @@ Pass `--request-context <file>` to make the lenses judge the candidate against t
 - The request hash is bound into the capture phase revision, so every artifact subject commits to it. Replaying START on the same lineage with a different request is an `atomic_start_conflict`.
 - Recovery successors inherit the frozen request. A relayed consent answer repeats `--request-context`.
 
-The file may end with an optional verify section opened by a line `## Verify`. Put the per-spec verdicts and probes from an independent verify of the same candidate there. When it is present, lenses treat the specs it reports as passing as already checked, and focus on design, security, and maintainability.
+The file may end with an optional verify section opened by a line `## Verify`. Put per-spec verdicts and probes there as evidence, not proof that the current candidate was checked. The request hash binds the text, not the truth of its assertions, and recovery may carry evidence over from an earlier candidate. Lenses independently judge every requested requirement against the current candidate, including specs reported as passing. Verify evidence neither narrows their scope nor redirects their lens mandate; its probes are leads, not permission to skip checks.
 
 The file must be non-empty UTF-8 text, and the flag may appear only once. Without the flag, START, the lens context, the refuter prompt, and the persisted authority are unchanged. Authority that carries a request context is persisted with two extra fields (`request_context_hash`, `frozen_request_context`).
 
