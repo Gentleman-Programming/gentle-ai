@@ -232,6 +232,8 @@ func TestReviewStatusPreflightRendersEachStartOptionAlone(t *testing.T) {
 // did, and the published bytes are stable across identical calls.
 func TestReviewStatusWithoutStartOptionsIsUnchanged(t *testing.T) {
 	reviewEnabledHome(t)
+	// The Pi host relay must declare its contract, as the installed launcher does.
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 	first, firstPayload, err := runStartPreflightStatus(t, ReviewIntegrationContractV2, repo, "--agent", "pi")

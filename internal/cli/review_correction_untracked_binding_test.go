@@ -98,6 +98,8 @@ func TestNegotiatedStatusPreservesUntrackedBindingThroughCorrectionLineage(t *te
 // must retain the frozen selection rather than demanding a new declaration.
 func TestSelectorlessStatusPreservesIntendedUntrackedBindingBeforeCorrectionPlan(t *testing.T) {
 	reviewEnabledHome(t)
+	// The Pi host relay must declare its contract, as the installed launcher does.
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo := initReviewCLIRepo(t)
 	const lineage = "correction-untracked-selectorless-status-4435"
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)

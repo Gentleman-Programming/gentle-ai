@@ -659,7 +659,7 @@ func openCodeCorroboratingRefuterOutput(t *testing.T, repo string, store reviewt
 	}
 	task, err := newReviewProviderTask(reviewerprovider.RoleRefuter, ReviewTransitionBinding{
 		LineageID: lineage, Revision: record.State.CapturePhaseRevision, TargetIdentity: record.State.InitialSnapshot.Identity,
-		RepositoryContext: rctx2ReviewRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		RepositoryContext: openCodeRefuterRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
 			LineageID: lineage, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
 		}),
 	})
@@ -687,4 +687,15 @@ func openCodeCorroboratingRefuterOutput(t *testing.T, repo string, store reviewt
 		t.Fatalf("provider refuter completion = %#v, %v", completed, err)
 	}
 	return []byte(*completed.Output)
+}
+
+// openCodeRefuterRepositoryContextForTest derives the sealed rctx3 handle
+// OpenCode STATUS issues for a Task, as the managed transport requires.
+func openCodeRefuterRepositoryContextForTest(t *testing.T, repo string, binding reviewtransaction.ReviewRepositoryContextBinding) string {
+	t.Helper()
+	handle, err := reviewtransaction.DeriveOpenCodeReviewRepositoryContextHandle(context.Background(), repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handle
 }
