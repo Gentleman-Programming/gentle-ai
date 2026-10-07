@@ -8,21 +8,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
-// prepareReviewFacadeCompactAtomicStart freezes compact state and its immutable
-// worktree-bound START binding without opening authority storage. The caller
-// performs context preflight and live snapshot revalidation before the exact
-// CompactStore.CreateOrReplayAtomicStart boundary.
-func prepareReviewFacadeCompactAtomicStart(
-	ctx context.Context, root, explicitLineage, policySource string,
-	target reviewtransaction.Target, snapshot reviewtransaction.Snapshot,
-	assessment reviewtransaction.RiskAssessment, changedLines int, lenses []string, runtimeAgent model.AgentID,
-) (reviewtransaction.CompactAtomicStartRequest, error) {
-	return prepareReviewFacadeCompactAtomicStartFor(ctx, root, explicitLineage, policySource, target, snapshot, assessment, changedLines, lenses, "", runtimeAgent)
-}
-
-// prepareReviewFacadeCompactAtomicStartFor is prepareReviewFacadeCompactAtomicStart
-// for lenses the agent may have selected itself with START --lenses; a
-// non-empty lensSelectionReason marks them as the agent's choice.
+// prepareReviewFacadeCompactAtomicStartFor prepares the compact atomic START
+// request; a non-empty lensSelectionReason marks lenses as the agent's own
+// START --lenses choice.
 func prepareReviewFacadeCompactAtomicStartFor(
 	ctx context.Context, root, explicitLineage, policySource string,
 	target reviewtransaction.Target, snapshot reviewtransaction.Snapshot,

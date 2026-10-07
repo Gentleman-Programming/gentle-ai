@@ -170,3 +170,13 @@ func providerTargetedValidationPayload(t *testing.T, request reviewtransaction.T
 	}
 	return payload
 }
+
+// prepareReviewFacadeCompactAtomicStart is the tier-default (no agent lens
+// selection) form of prepareReviewFacadeCompactAtomicStartFor these tests use.
+func prepareReviewFacadeCompactAtomicStart(
+	ctx context.Context, root, explicitLineage, policySource string,
+	target reviewtransaction.Target, snapshot reviewtransaction.Snapshot,
+	assessment reviewtransaction.RiskAssessment, changedLines int, lenses []string, runtimeAgent model.AgentID,
+) (reviewtransaction.CompactAtomicStartRequest, error) {
+	return prepareReviewFacadeCompactAtomicStartFor(ctx, root, explicitLineage, policySource, target, snapshot, assessment, changedLines, lenses, "", runtimeAgent)
+}
