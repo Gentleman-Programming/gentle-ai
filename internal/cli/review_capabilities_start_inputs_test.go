@@ -27,6 +27,13 @@ var reviewStartOptionsPreflightCapabilityFeature = ReviewCapabilityFeature{
 	Requires: []string{"native_next_transition", "start_agent_escalation", "start_request_context"},
 }
 
+// verify-always-rdd-high S8 phase A: callers detect that START and the STATUS
+// preflight accept --lenses/--lenses-reason before sending them, because an
+// older binary refuses unknown flags.
+var reviewStartLensSelectionCapabilityFeature = ReviewCapabilityFeature{
+	Name: "start_lens_selection", Supported: true, Requires: []string{"start_options_preflight"},
+}
+
 func TestReviewCapabilitiesAdvertiseStartRequestContextAndEscalation(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -56,7 +63,7 @@ func TestReviewCapabilitiesAdvertiseStartRequestContextAndEscalation(t *testing.
 			}
 			var got ReviewCapabilitiesResult
 			decodeStrictReviewJSON(t, output.Bytes(), &got)
-			for _, want := range append(slices.Clone(reviewStartInputCapabilityFeatures), reviewStartOptionsPreflightCapabilityFeature) {
+			for _, want := range append(slices.Clone(reviewStartInputCapabilityFeatures), reviewStartOptionsPreflightCapabilityFeature, reviewStartLensSelectionCapabilityFeature) {
 				if !slices.ContainsFunc(got.Features.Optional, func(feature ReviewCapabilityFeature) bool {
 					return feature.Name == want.Name && feature.Supported == want.Supported && slices.Equal(feature.Requires, want.Requires)
 				}) {
@@ -81,8 +88,9 @@ func TestReviewCapabilitiesAdvertiseStartRequestContextAndEscalation(t *testing.
 				removed []string
 				count   int
 			}{
-				{removed: []string{"start_options_preflight"}, count: wantHistoricalCount + 2},
-				{removed: []string{"start_options_preflight", "start_request_context", "start_agent_escalation"}, count: wantHistoricalCount},
+				{removed: []string{"start_lens_selection"}, count: wantHistoricalCount + 3},
+				{removed: []string{"start_lens_selection", "start_options_preflight"}, count: wantHistoricalCount + 2},
+				{removed: []string{"start_lens_selection", "start_options_preflight", "start_request_context", "start_agent_escalation"}, count: wantHistoricalCount},
 			} {
 				features["optional"] = slices.DeleteFunc(slices.Clone(current), func(feature any) bool {
 					return slices.Contains(historical.removed, feature.(map[string]any)["name"].(string))

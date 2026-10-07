@@ -268,6 +268,9 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 				{Name: "risk_reasons", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 				{Name: "scope_change_diagnostics", Supported: true, Requires: []string{"uniform_failure_envelope"}},
 				{Name: "start_agent_escalation", Supported: true, Requires: []string{"risk_reasons"}},
+				// START --lenses/--lenses-reason and their STATUS preflight
+				// (verify-always-rdd-high S8); older binaries refuse the flags.
+				{Name: "start_lens_selection", Supported: true, Requires: []string{"start_options_preflight"}},
 				// The two START input features promise direct START only;
 				// this one promises that a --next-transition STATUS
 				// preflights both inputs and renders them into its fresh

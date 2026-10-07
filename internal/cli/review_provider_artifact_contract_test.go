@@ -181,7 +181,10 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 		// which capabilities v2.6 advertises for the STATUS preflight of those
 		// two START inputs; the v2.3 optional count still stays exactly 15.
 		// Deliberate, not drift.
-		"schemas/capabilities-v2.3.schema.json": "8b340af73bbae504c240ac27b6dce26bb2bccdf2ab0f7bcf12f57063f72044c0",
+		// verify-always-rdd-high S8: the same enum admits start_lens_selection,
+		// which capabilities v2.6 advertises for START and STATUS --lenses;
+		// the v2.3 optional count still stays exactly 15. Deliberate, not drift.
+		"schemas/capabilities-v2.3.schema.json": "c1bc328459af44233943dd7f9414cd3d9bc95079d14f4a732a8719a17cb849e4",
 		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
 		// code and signal the classifier already publishes. Deliberate, not drift.
 		//

@@ -12,7 +12,7 @@ import (
 
 // reviewStartPreflightOptionNames are the START options STATUS preflights
 // (rdd-risk-gated S14/S17). START stays the only owner of their frozen state.
-var reviewStartPreflightOptionNames = []string{"request-context", "escalate-item", "escalate-reason"}
+var reviewStartPreflightOptionNames = []string{"request-context", "escalate-item", "escalate-reason", "lenses", "lenses-reason"}
 
 // reviewStartPreflightOptions are the START options a negotiated STATUS
 // validated and renders into its fresh review.start vector. The zero value
@@ -22,10 +22,13 @@ type reviewStartPreflightOptions struct {
 	// file whatever process cwd runs it.
 	RequestContextPath string
 	Escalation         *reviewtransaction.CompactAgentEscalation
+	// LensSelection is the agent's --lenses choice (verify-always-rdd-high S8),
+	// rendered in canonical lens names.
+	LensSelection *reviewLensSelection
 }
 
 func (options reviewStartPreflightOptions) declared() bool {
-	return options.RequestContextPath != "" || options.Escalation != nil
+	return options.RequestContextPath != "" || options.Escalation != nil || options.LensSelection != nil
 }
 
 // arguments renders the options after every other START argument, in the
@@ -39,6 +42,11 @@ func (options reviewStartPreflightOptions) arguments() []ReviewTransitionArgumen
 		arguments = append(arguments,
 			ReviewTransitionArgument{Name: "escalate-item", Value: strconv.Itoa(options.Escalation.Item)},
 			ReviewTransitionArgument{Name: "escalate-reason", Value: options.Escalation.Reason})
+	}
+	if options.LensSelection != nil {
+		arguments = append(arguments,
+			ReviewTransitionArgument{Name: "lenses", Value: strings.Join(options.LensSelection.Lenses, ",")},
+			ReviewTransitionArgument{Name: "lenses-reason", Value: options.LensSelection.Reason})
 	}
 	return arguments
 }
@@ -86,13 +94,13 @@ func reviewStatusStartOptionCounts(args []string) map[string]int {
 // parseReviewStatusStartOptions validates the START options exactly as START
 // does, without reading the repository or creating authority. They only make
 // sense for the fresh START a --next-transition STATUS renders.
-func parseReviewStatusStartOptions(args []string, nextTransition bool, contract, requestContextSource, item, reason string) (reviewStartPreflightOptions, error) {
+func parseReviewStatusStartOptions(args []string, nextTransition bool, contract, requestContextSource, item, reason, lenses, lensesReason string) (reviewStartPreflightOptions, error) {
 	counts := reviewStatusStartOptionCounts(args)
 	if !reviewStatusStartOptionsDeclared(args) {
 		return reviewStartPreflightOptions{}, nil
 	}
 	if !nextTransition {
-		return reviewStartPreflightOptions{}, fmt.Errorf("review status --request-context, --escalate-item, and --escalate-reason preflight the fresh START a next transition renders, so they require --next-transition; rerun `gentle-ai review status --contract %s --next-transition` with them", contract)
+		return reviewStartPreflightOptions{}, fmt.Errorf("review status --request-context, --escalate-item, --escalate-reason, --lenses, and --lenses-reason preflight the fresh START a next transition renders, so they require --next-transition; rerun `gentle-ai review status --contract %s --next-transition` with them", contract)
 	}
 	for _, name := range reviewStartPreflightOptionNames {
 		if counts[name] > 1 {
@@ -124,6 +132,14 @@ func parseReviewStatusStartOptions(args []string, nextTransition bool, contract,
 		return reviewStartPreflightOptions{}, fmt.Errorf("review status --escalate-reason must be non-empty and at most %d characters; rerun `gentle-ai review status --contract %s --next-transition --escalate-item <1-6> --escalate-reason <text>` with a one-line reason", reviewtransaction.AgentEscalationReasonMax, contract)
 	}
 	options.Escalation = escalation
+	selection, err := parseReviewStartLensSelection(args, lenses, lensesReason)
+	if err != nil {
+		// Same validation as START, worded for the STATUS that preflights it.
+		message := strings.Replace(err.Error(), "review start", "review status", 1)
+		message = strings.Replace(message, "`gentle-ai review start --lenses", "`gentle-ai review status --contract "+contract+" --next-transition --lenses", 1)
+		return reviewStartPreflightOptions{}, errors.New(message)
+	}
+	options.LensSelection = selection
 	return options, nil
 }
 

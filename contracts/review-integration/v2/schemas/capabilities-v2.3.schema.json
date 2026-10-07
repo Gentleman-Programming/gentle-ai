@@ -85,7 +85,7 @@
         "provider_artifact_admission", "provider_bound_native_git_context",
         "provider_submission_descriptors", "provider_targeted_validation_request", "recovered_correction_evidence",
         "repository_independent_capabilities", "restart_safe_projection", "risk_reasons", "scope_change_diagnostics",
-        "start_agent_escalation", "start_options_preflight", "start_request_context", "target_scoped_status",
+        "start_agent_escalation", "start_lens_selection", "start_options_preflight", "start_request_context", "target_scoped_status",
         "uniform_failure_envelope", "validating_result_reopen"
       ]
     },

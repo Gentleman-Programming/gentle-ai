@@ -804,6 +804,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	requestContextSource := flags.String("request-context", "", "preflight review start --request-context: validate the request file without creating authority and render it into the fresh START next transition")
 	escalateItem := flags.String("escalate-item", "", "preflight review start --escalate-item (1-6) and render it into the fresh START next transition")
 	escalateReason := flags.String("escalate-reason", "", "preflight review start --escalate-reason and render it into the fresh START next transition")
+	lensSelection := flags.String("lenses", "", "preflight review start --lenses and render it into the fresh START next transition")
+	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason and render it into the fresh START next transition")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -831,7 +833,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		// rdd-risk-gated S17: the START options are validated before the
 		// repository is touched, so a refused preflight writes nothing.
-		startOptions, err := parseReviewStatusStartOptions(args, *nextTransition, *contract, *requestContextSource, *escalateItem, *escalateReason)
+		startOptions, err := parseReviewStatusStartOptions(args, *nextTransition, *contract, *requestContextSource, *escalateItem, *escalateReason, *lensSelection, *lensSelectionReason)
 		if err != nil {
 			return reviewPreflightError(err)
 		}
@@ -1856,6 +1858,11 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	prepareFrozenShape := reviewtransaction.RecoveryDisposition(*disposition) == reviewtransaction.RecoveryEscalated &&
 		prior.State == reviewtransaction.StateEscalated && snapshot.CandidateTree == prior.CurrentSnapshot.CandidateTree
 	lenses, err := facadeSelectedLenses(assessment, *focus)
+	if prior.LensSelectionReason != "" {
+		// A recovered successor keeps the lenses the agent selected for its
+		// predecessor instead of falling back to the tier default.
+		lenses, err = reviewtransaction.SelectAgentReviewLenses(assessment, prior.SelectedLenses)
+	}
 	if err != nil {
 		if prepareFrozenShape && reviewFlagWasProvided(flags, "focus") {
 			return reviewFrozenShapeConflictRefusal(flags, "--focus", *cwd, *predecessor, *expected, *successor, *disposition)
@@ -1881,6 +1888,9 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 			frozenFocus = strings.TrimPrefix(prior.SelectedLenses[0], "review-")
 		}
 		liveLenses, lensErr := facadeSelectedLenses(assessment, frozenFocus)
+		if prior.LensSelectionReason != "" {
+			liveLenses, lensErr = reviewtransaction.SelectAgentReviewLenses(assessment, prior.SelectedLenses)
+		}
 		if lensErr != nil || risk != prior.RiskLevel || !slices.Equal(liveLenses, prior.SelectedLenses) {
 			return errors.New("frozen recovery review shape is incompatible with current repository risk; evidence reuse cannot preserve that shape, and changing --focus or --policy cannot make it compatible") // refusal:by-design world-action: repository risk classification drift requires a provider code fix before frozen-shape evidence reuse can be safe
 		}
@@ -1890,7 +1900,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
 		LineageID: *successor, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: prior.Generation + 1,
 		Snapshot: snapshot, PolicyHash: policyHash, PolicyContent: frozenPolicy,
-		RiskLevel: risk, SelectedLenses: lenses, OriginalChangedLines: &changedLines,
+		RiskLevel: risk, SelectedLenses: lenses, LensSelectionReason: prior.LensSelectionReason, OriginalChangedLines: &changedLines,
 	})
 	if err != nil {
 		return err
@@ -2192,6 +2202,8 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	requestContextSource := flags.String("request-context", "", "optional file with the verbatim request or feature specs this candidate was built for, plus an optional `## Verify` section with per-spec verdicts and probes; frozen with the review and shown to every lens")
 	escalateItem := flags.String("escalate-item", "", "raise the risk to high by citing one high-risk item (1-6), exactly like review assess; never lowers a tier and is frozen with the review")
 	escalateReason := flags.String("escalate-reason", "", "one-line reason for --escalate-item")
+	lensSelection := flags.String("lenses", "", "comma-separated 4R lenses the agent selected for what it touched and how (risk, resilience, readability, reliability); replaces --focus and is frozen with the authority")
+	lensSelectionReason := flags.String("lenses-reason", "", "one-line reason for --lenses")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus: risk, resilience, readability, or reliability; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "candidate projection: workspace or staged; staged base-diff records post-commit delivery provenance")
@@ -2254,6 +2266,10 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return reviewPreflightError(err)
 	}
 	escalation, err := parseReviewStartEscalation(args, *escalateItem, *escalateReason)
+	if err != nil {
+		return reviewPreflightError(err)
+	}
+	selection, err := parseReviewStartLensSelection(args, *lensSelection, *lensSelectionReason)
 	if err != nil {
 		return reviewPreflightError(err)
 	}
@@ -2346,6 +2362,12 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	assessment = escalateReviewStartAssessment(assessment, escalation)
 	changedLines := assessment.ChangedLines
 	lenses, err := facadeSelectedLenses(assessment, *focus)
+	if selection != nil {
+		lenses, err = reviewtransaction.SelectAgentReviewLenses(assessment, selection.Lenses)
+		if err != nil {
+			return reviewPreflightError(fmt.Errorf("%w; omit --lenses for a candidate without review lenses, or %s", err, reviewLensSelectionRerun))
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -2384,7 +2406,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 				reviewConsentFollowUpBase(*cwd, snapshot.Identity, formatReviewTargetEvidence(snapshot), selectedProjection, strings.TrimSpace(*lineage),
 					strings.TrimSpace(*baseRef), strings.TrimSpace(*policySource), strings.TrimSpace(*focus),
 					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, *runtimeAgent, strings.TrimSpace(*locale), intendedScope)+
-					reviewRequestContextFollowUpArgument(strings.TrimSpace(*requestContextSource))+reviewEscalationFollowUpArguments(escalation), *contract, *runtimeAgent, consentLocale)
+					reviewRequestContextFollowUpArgument(strings.TrimSpace(*requestContextSource))+reviewEscalationFollowUpArguments(escalation)+reviewLensSelectionFollowUpArguments(selection), *contract, *runtimeAgent, consentLocale)
 			if questionErr != nil {
 				return questionErr
 			}
@@ -2413,7 +2435,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// routing; explicit compatibility owners remain responsible for any manual
 	// inspection or disposition.
 	{
-		request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, startRuntime)
+		request, err := prepareReviewFacadeCompactAtomicStartFor(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, reviewLensSelectionReason(selection), startRuntime)
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
 		}
@@ -2432,6 +2454,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			frozen := *escalation
 			request.Binding.AgentEscalation = &frozen
 		}
+		request.Binding.LensSelectionReason = request.State.LensSelectionReason
 		// #1854: threaded through so the exact atomic START commit below can
 		// also report a requested trace's committed-but-degraded outcome,
 		// not only the zero-lens completion commit further down.
@@ -2549,6 +2572,12 @@ func validateReviewStartBinding(args []string, negotiated bool, target, projecti
 	if counts["escalate-reason"] > 1 {
 		return errors.New("review start repeats --escalate-reason") // refusal:by-design operator-knowledge: only the caller knows its one-line escalation reason
 	}
+	if counts["lenses"] > 1 {
+		return errors.New("review start repeats --lenses") // refusal:by-design operator-knowledge: only the caller knows which lenses fit what it touched
+	}
+	if counts["lenses-reason"] > 1 {
+		return errors.New("review start repeats --lenses-reason") // refusal:by-design operator-knowledge: only the caller knows why it chose its lenses
+	}
 	switch reviewStartConsentMode(strings.TrimSpace(consent)) {
 	case reviewConsentModeNone, reviewConsentModeRelay, reviewConsentModeGranted, reviewConsentModeDeclined:
 	default:
@@ -2642,7 +2671,7 @@ func reviewStartBindingFlagCounts(args []string) map[string]int {
 			continue
 		}
 		switch name {
-		case "contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale", "request-context", "escalate-item", "escalate-reason":
+		case "contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale", "request-context", "escalate-item", "escalate-reason", "lenses", "lenses-reason":
 			counts[name]++
 		}
 		if kind != reviewIntegrationBoolFlag && !hasValue {

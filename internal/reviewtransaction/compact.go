@@ -138,6 +138,11 @@ type CompactState struct {
 	// phase revision, inherited by recovery successors, and absent without an
 	// escalation, so authority started without one keeps its historical bytes.
 	AgentEscalation *CompactAgentEscalation `json:"agent_escalation,omitempty"`
+	// LensSelectionReason is why the agent chose SelectedLenses with START
+	// --lenses. It is bound into the capture phase revision, inherited by
+	// recovery successors, and absent when the tier default chose the lenses,
+	// so authority started without a selection keeps its historical bytes.
+	LensSelectionReason string `json:"lens_selection_reason,omitempty"`
 	// Historical review projections remain decode-only so released records can
 	// be classified as outdated and quarantined without restoring them as active
 	// authority. CompactReviewView derives all live review semantics from
@@ -315,6 +320,8 @@ type CompactAtomicStartBinding struct {
 	// AgentEscalation is absent without an escalation, so a binding without
 	// one keeps its historical bytes.
 	AgentEscalation *CompactAgentEscalation `json:"agent_escalation,omitempty"`
+	// LensSelectionReason is absent when the tier default chose the lenses.
+	LensSelectionReason string `json:"lens_selection_reason,omitempty"`
 }
 
 // AgentEscalationReasonMax bounds the one-line reason an agent gives for
@@ -366,6 +373,11 @@ func (binding CompactAtomicStartBinding) Validate() error {
 	}
 	if binding.AgentEscalation != nil {
 		if err := binding.AgentEscalation.Validate(); err != nil {
+			return err
+		}
+	}
+	if binding.LensSelectionReason != "" {
+		if err := ValidateLensSelectionReason(binding.LensSelectionReason); err != nil {
 			return err
 		}
 	}
@@ -449,6 +461,8 @@ func (binding CompactAtomicStartBinding) mismatchState(state CompactState) strin
 		return "request_context_hash"
 	case !equalCompactAgentEscalation(binding.AgentEscalation, state.AgentEscalation):
 		return "agent_escalation"
+	case binding.LensSelectionReason != state.LensSelectionReason:
+		return "lens_selection_reason"
 	case binding.Tier != state.RiskLevel:
 		return "tier"
 	case !equalStrings(binding.SelectedLenses, state.SelectedLenses):
@@ -498,6 +512,8 @@ func compactAtomicStartMismatch(existing, requested CompactAtomicStartBinding) s
 		return "request_context_hash"
 	case !equalCompactAgentEscalation(existing.AgentEscalation, requested.AgentEscalation):
 		return "agent_escalation"
+	case existing.LensSelectionReason != requested.LensSelectionReason:
+		return "lens_selection_reason"
 	case existing.Tier != requested.Tier:
 		return "tier"
 	case !equalStrings(existing.SelectedLenses, requested.SelectedLenses):
@@ -568,29 +584,32 @@ func deriveCompactCapturePhaseRevision(state CompactState) (string, error) {
 		AdmittedDigests  []string  `json:"admitted_digests"`
 		// Absent without an escalation, so historical phases keep their bytes.
 		AgentEscalation *CompactAgentEscalation `json:"agent_escalation,omitempty"`
+		// Absent without a lens selection, for the same reason.
+		LensSelectionReason string `json:"lens_selection_reason,omitempty"`
 	}{
-		Schema:           state.Schema,
-		LineageID:        state.LineageID,
-		Generation:       state.Generation,
-		TargetIdentity:   state.InitialSnapshot.Identity,
-		BaseTree:         state.InitialSnapshot.BaseTree,
-		CandidateTree:    state.InitialSnapshot.CandidateTree,
-		PathsDigest:      state.InitialSnapshot.PathsDigest,
-		PolicyHash:       state.PolicyHash,
-		RequestContext:   state.RequestContextHash,
-		RiskLevel:        state.RiskLevel,
-		SelectedLenses:   append([]string(nil), state.SelectedLenses...),
-		GenesisPaths:     append([]string(nil), state.GenesisPaths...),
-		CorrectionBudget: state.CorrectionBudget,
-		CorrectionPolicy: state.CorrectionBudgetPolicy,
-		WorktreeIdentity: compactCapturePhaseWorktreeIdentity(state),
-		PhaseState:       state.State,
-		PhaseEpoch:       state.CapturePhaseEpoch,
-		CurrentTarget:    state.CurrentSnapshot.Identity,
-		FixFindingIDs:    append([]string(nil), state.FixFindingIDs...),
-		ProposedLines:    state.ProposedCorrectionLines,
-		AdmittedDigests:  compactCapturePhaseAdmittedDigests(state),
-		AgentEscalation:  state.AgentEscalation,
+		Schema:              state.Schema,
+		LineageID:           state.LineageID,
+		Generation:          state.Generation,
+		TargetIdentity:      state.InitialSnapshot.Identity,
+		BaseTree:            state.InitialSnapshot.BaseTree,
+		CandidateTree:       state.InitialSnapshot.CandidateTree,
+		PathsDigest:         state.InitialSnapshot.PathsDigest,
+		PolicyHash:          state.PolicyHash,
+		RequestContext:      state.RequestContextHash,
+		RiskLevel:           state.RiskLevel,
+		SelectedLenses:      append([]string(nil), state.SelectedLenses...),
+		GenesisPaths:        append([]string(nil), state.GenesisPaths...),
+		CorrectionBudget:    state.CorrectionBudget,
+		CorrectionPolicy:    state.CorrectionBudgetPolicy,
+		WorktreeIdentity:    compactCapturePhaseWorktreeIdentity(state),
+		PhaseState:          state.State,
+		PhaseEpoch:          state.CapturePhaseEpoch,
+		CurrentTarget:       state.CurrentSnapshot.Identity,
+		FixFindingIDs:       append([]string(nil), state.FixFindingIDs...),
+		ProposedLines:       state.ProposedCorrectionLines,
+		AdmittedDigests:     compactCapturePhaseAdmittedDigests(state),
+		AgentEscalation:     state.AgentEscalation,
+		LensSelectionReason: state.LensSelectionReason,
 	}
 	payload, err := json.Marshal(preimage)
 	if err != nil {
@@ -765,6 +784,12 @@ func NewCompactState(start Start) (CompactState, error) {
 		frozenPolicy = &content
 	}
 	lenses, err := validateSelectedLenses(start.Mode, start.RiskLevel, start.SelectedLenses)
+	if start.LensSelectionReason != "" && start.Mode == ModeOrdinaryBounded {
+		if reasonErr := ValidateLensSelectionReason(start.LensSelectionReason); reasonErr != nil {
+			return CompactState{}, reasonErr
+		}
+		lenses, err = validateAgentSelectedLenses(start.RiskLevel, start.SelectedLenses)
+	}
 	if err != nil {
 		return CompactState{}, err
 	}
@@ -781,6 +806,7 @@ func NewCompactState(start Start) (CompactState, error) {
 		AdmittedRoleResults: []CompactAdmittedRoleResult{}, FixFindingIDs: []string{}, FixDeltaHash: EmptyFixDeltaHash,
 		RuntimeAgent: start.RuntimeAgent,
 	}
+	state.LensSelectionReason = start.LensSelectionReason
 	phase, err := deriveCompactCapturePhaseRevision(state)
 	if err != nil {
 		return CompactState{}, err
@@ -906,6 +932,11 @@ func (state CompactState) Validate() error {
 		state.FrozenRequestContext != nil && compactPolicyContentHash(*state.FrozenRequestContext) != state.RequestContextHash {
 		return errors.New("compact frozen request context does not match request_context_hash") // refusal:by-design world-action: frozen request content and its immutable hash disagree, so safe repair requires replacing the authority
 	}
+	if state.LensSelectionReason != "" {
+		if err := ValidateLensSelectionReason(state.LensSelectionReason); err != nil {
+			return err
+		}
+	}
 	if state.AgentEscalation != nil {
 		if err := state.AgentEscalation.Validate(); err != nil {
 			return err
@@ -915,6 +946,9 @@ func (state CompactState) Validate() error {
 		}
 	}
 	selected, err := validateSelectedLenses(ModeOrdinaryBounded, state.RiskLevel, state.SelectedLenses)
+	if state.LensSelectionReason != "" {
+		selected, err = validateAgentSelectedLenses(state.RiskLevel, state.SelectedLenses)
+	}
 	if err != nil || !equalStrings(selected, state.SelectedLenses) {
 		return errors.New("compact selected lenses are invalid")
 	}
@@ -2117,6 +2151,18 @@ func (state *CompactState) FreezeRequestContext(content string) error {
 		return err
 	}
 	state.CapturePhaseRevision = phase
+	return nil
+}
+
+// LensSelectionReasonMax bounds the reason an agent gives for its lens
+// selection.
+const LensSelectionReasonMax = 500
+
+// ValidateLensSelectionReason rejects a blank or oversized selection reason.
+func ValidateLensSelectionReason(reason string) error {
+	if strings.TrimSpace(reason) == "" || len(reason) > LensSelectionReasonMax {
+		return errors.New("compact lens selection requires a non-empty bounded reason") // refusal:by-design world-action: a malformed provider-built lens selection must be rebuilt before it can create authority
+	}
 	return nil
 }
 

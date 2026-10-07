@@ -17,6 +17,17 @@ func prepareReviewFacadeCompactAtomicStart(
 	target reviewtransaction.Target, snapshot reviewtransaction.Snapshot,
 	assessment reviewtransaction.RiskAssessment, changedLines int, lenses []string, runtimeAgent model.AgentID,
 ) (reviewtransaction.CompactAtomicStartRequest, error) {
+	return prepareReviewFacadeCompactAtomicStartFor(ctx, root, explicitLineage, policySource, target, snapshot, assessment, changedLines, lenses, "", runtimeAgent)
+}
+
+// prepareReviewFacadeCompactAtomicStartFor is prepareReviewFacadeCompactAtomicStart
+// for lenses the agent may have selected itself with START --lenses; a
+// non-empty lensSelectionReason marks them as the agent's choice.
+func prepareReviewFacadeCompactAtomicStartFor(
+	ctx context.Context, root, explicitLineage, policySource string,
+	target reviewtransaction.Target, snapshot reviewtransaction.Snapshot,
+	assessment reviewtransaction.RiskAssessment, changedLines int, lenses []string, lensSelectionReason string, runtimeAgent model.AgentID,
+) (reviewtransaction.CompactAtomicStartRequest, error) {
 	lineage := explicitLineage
 	if lineage == "" {
 		derived, err := reviewAtomicStartLineage(ctx, root, snapshot.Identity)
@@ -34,7 +45,7 @@ func prepareReviewFacadeCompactAtomicStart(
 	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
 		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
 		Snapshot: snapshot, PolicyHash: policyHash, PolicyContent: &policyContent, RiskLevel: assessment.Level,
-		SelectedLenses: append([]string(nil), lenses...), OriginalChangedLines: &changedLines, RuntimeAgent: string(runtimeAgent),
+		SelectedLenses: append([]string(nil), lenses...), LensSelectionReason: lensSelectionReason, OriginalChangedLines: &changedLines, RuntimeAgent: string(runtimeAgent),
 	})
 	if err != nil {
 		return reviewtransaction.CompactAtomicStartRequest{}, fmt.Errorf("build compact atomic START state: %w", err)

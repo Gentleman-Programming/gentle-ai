@@ -208,6 +208,13 @@
         ]
       },
       {
+        "name": "start_lens_selection",
+        "supported": true,
+        "requires": [
+          "start_options_preflight"
+        ]
+      },
+      {
         "name": "start_options_preflight",
         "supported": true,
         "requires": [

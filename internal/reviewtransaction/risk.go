@@ -159,6 +159,51 @@ func SelectReviewLenses(assessment RiskAssessment, focus string) ([]string, erro
 	}
 }
 
+// SelectAgentReviewLenses honors the agent's own lens choice for a reviewed
+// tier (verify-always-rdd-high S8): every named lens runs, in canonical order,
+// on medium and high alike. A structural-readback tier has no reviewers.
+func SelectAgentReviewLenses(assessment RiskAssessment, lenses []string) ([]string, error) {
+	if assessment.Level != RiskMedium && assessment.Level != RiskHigh {
+		return nil, fmt.Errorf("an agent lens selection needs a medium or high risk review, not %q", assessment.Level) // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+	}
+	chosen := map[string]bool{}
+	for _, lens := range lenses {
+		canonical, ok := ReviewLensFor(lens)
+		if !ok {
+			return nil, fmt.Errorf("unknown review lens %q", lens) // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+		}
+		if chosen[canonical] {
+			return nil, fmt.Errorf("repeated review lens %q", canonical) // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+		}
+		chosen[canonical] = true
+	}
+	selected := make([]string, 0, len(chosen))
+	for _, lens := range supportedLenses {
+		if chosen[lens] {
+			selected = append(selected, lens)
+		}
+	}
+	if len(selected) == 0 {
+		return nil, errors.New("an agent lens selection names no lens") // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+	}
+	return selected, nil
+}
+
+// ReviewLensFor resolves a lens in its short (risk) or canonical
+// (review-risk) form.
+func ReviewLensFor(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if lens, ok := reviewFocusLens(name); ok {
+		return lens, true
+	}
+	for _, lens := range supportedLenses {
+		if name == lens {
+			return lens, true
+		}
+	}
+	return "", false
+}
+
 func reviewFocusLens(focus string) (string, bool) {
 	lens, ok := map[string]string{
 		"risk": LensRisk, "resilience": LensResilience,

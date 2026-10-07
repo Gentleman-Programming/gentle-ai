@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
@@ -432,17 +431,11 @@ func validateReviewStartLenses(risk reviewtransaction.RiskLevel, lenses []string
 		if len(lenses) != 0 {
 			return errors.New("low-risk negotiated START cannot select lenses")
 		}
-	case reviewtransaction.RiskMedium:
-		if len(lenses) != 1 || !reviewStartSupportedLens(lenses[0]) {
-			return errors.New("medium-risk negotiated START requires one supported lens")
-		}
-	case reviewtransaction.RiskHigh:
-		want := []string{
-			reviewtransaction.LensRisk, reviewtransaction.LensResilience,
-			reviewtransaction.LensReadability, reviewtransaction.LensReliability,
-		}
-		if !reflect.DeepEqual(lenses, want) {
-			return errors.New("high-risk negotiated START requires canonical 4R lenses")
+	case reviewtransaction.RiskMedium, reviewtransaction.RiskHigh:
+		// The tier default selects one lens for medium and all four for high;
+		// an agent selection (START --lenses) may name any canonical subset.
+		if err := reviewtransaction.ValidateAgentSelectedLenses(risk, lenses); err != nil {
+			return fmt.Errorf("%s-risk negotiated START requires one to four supported lenses in canonical 4R order: %w", risk, err)
 		}
 	default:
 		return fmt.Errorf("unsupported negotiated START risk %q", risk)

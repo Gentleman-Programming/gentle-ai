@@ -76,10 +76,10 @@ Selectorless STATUS evaluates only the current worktree candidate and renders on
 
 #### START options through STATUS (`start_options_preflight`)
 
-A parent that runs only provider-issued tokens passes the START options to the negotiated STATUS instead of appending them to the START it receives. `review status --contract <contract> --next-transition` accepts `--request-context <file>`, `--escalate-item <1-6>`, and `--escalate-reason <text>`:
+A parent that runs only provider-issued tokens passes the START options to the negotiated STATUS instead of appending them to the START it receives. `review status --contract <contract> --next-transition` accepts `--request-context <file>`, `--escalate-item <1-6>`, `--escalate-reason <text>`, `--lenses <r,...>`, and `--lenses-reason <text>`:
 
 - STATUS validates them with START's own rules (see the two sections below) before it reads the repository, and creates no authority. A refusal is a `not_started` `invalid_request` failure, and nothing is written.
-- When the next transition is a fresh `review.start` (`fresh_target_ready`), its arguments end with the options: `request-context` (the absolute path of the file), then `escalate-item` and `escalate-reason`. The binding and every other argument are unchanged. START itself reads the file again and freezes the request and the escalation.
+- When the next transition is a fresh `review.start` (`fresh_target_ready`), its arguments end with the options: `request-context` (the absolute path of the file), then `escalate-item` and `escalate-reason`, then `lenses` (canonical lens names in 4R order) and `lenses-reason`. The binding and every other argument are unchanged. START itself reads the file again and freezes the request and the escalation.
 - Any other next transition is refused instead of being returned without the options: an existing lineage already froze its own options at START, and the other routes run no START. Rerun STATUS without the options, follow its transition, and pass them again to the STATUS that offers `review.start`.
 - The options require `--contract` and `--next-transition`, and each may appear only once.
 
@@ -120,17 +120,28 @@ START accepts the same escalation pair as `review assess`, with the same validat
 
 Without the flags, START and the persisted authority are unchanged. Authority that carries an escalation is not readable by older binaries; see the request-context compatibility note above. The `next_transition` of `review assess` is a `review status` preflight, not a START, so it does not carry the escalation: pass the same pair to START yourself.
 
+#### Agent lens selection (`--lenses <r,...> --lenses-reason <text>`)
+
+The agent names the 4R lenses pertinent to what it touched and how, instead of taking the tier default (one `review-reliability` lens for `medium`, all four for `high`). `--lenses` takes a comma-separated list of `risk`, `resilience`, `readability`, and `reliability` (or their `review-` names). `--lenses-reason` is a non-empty one-line reason of at most 500 bytes. Both flags or neither, each at most once, never together with `--focus`.
+
+- START runs exactly the named lenses, in canonical 4R order, on a `medium` or `high` candidate. A `high` candidate may run fewer than four. A candidate that selects no lenses (structural readback) refuses a selection.
+- START freezes the reason with the authority (`lens_selection_reason` in the state and in its START binding) and binds it into the capture phase revision. Replaying START on the same lineage with a different selection is an `atomic_start_conflict`.
+- Recovery successors inherit the selection and its reason. A relayed consent answer repeats both flags.
+
+Without the flags, START keeps the tier default and the persisted authority is unchanged. Authority that carries a selection is not readable by older binaries; see the request-context compatibility note above.
+
 #### Detecting support (`review capabilities`)
 
-Callers detect both START inputs, and their STATUS preflight, from `gentle-ai review capabilities` instead of probing START or STATUS. Both negotiated advertisements (`capabilities/v1.5` and `capabilities/v2.6`) list three optional features:
+Callers detect both START inputs, and their STATUS preflight, from `gentle-ai review capabilities` instead of probing START or STATUS. Both negotiated advertisements (`capabilities/v1.5` and `capabilities/v2.6`) list four optional features:
 
 | Feature | Input | Requires |
 | --- | --- | --- |
 | `start_request_context` | START `--request-context <file>` | `compact_v2_authority` |
 | `start_agent_escalation` | START `--escalate-item <1-6> --escalate-reason <text>` | `risk_reasons` |
 | `start_options_preflight` | STATUS `--next-transition` with the same three flags | `native_next_transition`, `start_agent_escalation`, `start_request_context` |
+| `start_lens_selection` | START and STATUS `--lenses <r,...> --lenses-reason <text>` | `start_options_preflight` |
 
-`start_request_context` and `start_agent_escalation` promise the flags on a direct START only. A binary that lists them without `start_options_preflight` rejects the flags on STATUS. When a feature is absent, omit its flags: released binaries without it reject them. The published v1.5 and v2.6 schemas accept historical optional-feature counts (13 and 15), advertisements with the two START features only (15 and 17), and current counts (16 and 18); the contract version alone does not prove support for any of the three. Older advertisements (`capabilities/v2.3` through `v2.5`) keep their exact feature lists.
+`start_request_context` and `start_agent_escalation` promise the flags on a direct START only. A binary that lists them without `start_options_preflight` rejects the flags on STATUS. When a feature is absent, omit its flags: released binaries without it reject them. The published v1.5 and v2.6 schemas accept historical optional-feature counts (13 and 15), advertisements with the two START features only (15 and 17), advertisements with the preflight but without `start_lens_selection` (16 and 18), and current counts (17 and 19); the contract version alone does not prove support for any of the four. Older advertisements (`capabilities/v2.3` through `v2.5`) keep their exact feature lists.
 
 ### 3. Bound calls drive the transaction
 

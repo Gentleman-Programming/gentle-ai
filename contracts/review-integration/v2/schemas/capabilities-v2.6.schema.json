@@ -106,7 +106,7 @@
         "optional": {
           "type": "array",
           "minItems": 15,
-          "maxItems": 18,
+          "maxItems": 19,
           "items": {
             "$ref": "capabilities-v2.3.schema.json#/$defs/feature"
           }

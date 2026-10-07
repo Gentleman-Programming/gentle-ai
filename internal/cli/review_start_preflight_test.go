@@ -204,6 +204,9 @@ func TestReviewStatusPreflightRendersEachStartOptionAlone(t *testing.T) {
 		{"escalation only", []string{"--escalate-item= 4", "--escalate-reason", "shares a lock with the gate"}, []ReviewTransitionArgument{
 			{Name: "escalate-item", Value: "4"}, {Name: "escalate-reason", Value: "shares a lock with the gate"},
 		}},
+		{"lens selection only", []string{"--lenses", "reliability,risk", "--lenses-reason", lensSelectionReasonFixture}, []ReviewTransitionArgument{
+			{Name: "lenses", Value: "review-risk,review-reliability"}, {Name: "lenses-reason", Value: lensSelectionReasonFixture},
+		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			plain, _, err := runStartPreflightStatus(t, ReviewIntegrationContractV2, repo)

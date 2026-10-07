@@ -83,3 +83,83 @@ func reviewEscalationFollowUpArguments(escalation *reviewtransaction.CompactAgen
 	}
 	return " --escalate-item " + strconv.Itoa(escalation.Item) + " --escalate-reason " + reviewTransitionShellWord(escalation.Reason)
 }
+
+// reviewLensSelection is the agent's START --lenses choice and its reason
+// (verify-always-rdd-high S8): the 4R lenses pertinent to what it touched and
+// how, in canonical lens names.
+type reviewLensSelection struct {
+	Lenses []string
+	Reason string
+}
+
+const reviewLensSelectionRerun = "rerun `gentle-ai review start --lenses <risk,resilience,readability,reliability> --lenses-reason <text>`"
+
+// parseReviewStartLensSelection validates the optional --lenses and
+// --lenses-reason pair: both or neither, known lens names without repeats, a
+// bounded non-empty reason, and never together with --focus. It returns nil
+// without either flag, so START keeps the tier default (phase A).
+func parseReviewStartLensSelection(args []string, lenses, reason string) (*reviewLensSelection, error) {
+	lensesGiven := reviewFlagProvided(args, "--lenses") || strings.TrimSpace(lenses) != ""
+	reasonGiven := reviewFlagProvided(args, "--lenses-reason") || reason != ""
+	if !lensesGiven && !reasonGiven {
+		return nil, nil
+	}
+	if !lensesGiven || !reasonGiven {
+		return nil, errors.New("review start --lenses and --lenses-reason must be passed together; " + reviewLensSelectionRerun)
+	}
+	if reviewFlagProvided(args, "--focus") {
+		return nil, errors.New("review start --lenses replaces --focus; omit --focus and " + reviewLensSelectionRerun)
+	}
+	seen := map[string]bool{}
+	selection := &reviewLensSelection{Reason: reason}
+	for _, name := range strings.Split(lenses, ",") {
+		lens, ok := reviewtransaction.ReviewLensFor(name)
+		if !ok {
+			return nil, fmt.Errorf("review start --lenses names unknown lens %q; %s", strings.TrimSpace(name), reviewLensSelectionRerun)
+		}
+		if seen[lens] {
+			return nil, fmt.Errorf("review start --lenses repeats lens %q; %s", lens, reviewLensSelectionRerun)
+		}
+		seen[lens] = true
+		selection.Lenses = append(selection.Lenses, lens)
+	}
+	selection.Lenses = reviewCanonicalLensOrder(selection.Lenses)
+	if err := reviewtransaction.ValidateLensSelectionReason(reason); err != nil {
+		return nil, fmt.Errorf("review start --lenses-reason must be non-empty and at most %d characters; %s with a one-line reason", reviewtransaction.LensSelectionReasonMax, reviewLensSelectionRerun)
+	}
+	return selection, nil
+}
+
+// reviewLensSelectionFollowUpArguments renders the selection words a relayed
+// consent answer must repeat, so answering consent never reruns START with the
+// tier default instead of the agent's lenses.
+func reviewLensSelectionFollowUpArguments(selection *reviewLensSelection) string {
+	if selection == nil {
+		return ""
+	}
+	return " --lenses " + reviewTransitionShellWord(strings.Join(selection.Lenses, ",")) +
+		" --lenses-reason " + reviewTransitionShellWord(selection.Reason)
+}
+
+// reviewLensSelectionReason returns the reason START freezes with the
+// selection, or "" when the tier default chose the lenses.
+func reviewLensSelectionReason(selection *reviewLensSelection) string {
+	if selection == nil {
+		return ""
+	}
+	return selection.Reason
+}
+
+// reviewCanonicalLensOrder orders selected lenses as the 4R lens set is
+// ordered, so a selection renders and freezes the same however it was typed.
+func reviewCanonicalLensOrder(lenses []string) []string {
+	ordered := make([]string, 0, len(lenses))
+	for _, lens := range []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability} {
+		for _, selected := range lenses {
+			if selected == lens {
+				ordered = append(ordered, lens)
+			}
+		}
+	}
+	return ordered
+}
