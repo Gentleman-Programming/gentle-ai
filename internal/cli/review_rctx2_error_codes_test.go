@@ -117,6 +117,67 @@ func TestRctx2RealRepositoryDiagnosticsWithoutMutation(t *testing.T) {
 	}
 }
 
+// TestRctx2MalformedBindingTupleReportsBindingUnusable pins the outer precheck
+// contract: a malformed lineage, target, or revision supplied with an rctx2
+// handle is a structural binding failure, so it must surface the same typed
+// rctx2_binding_unusable code the in-package resolver produces instead of the
+// generic repository_context_unavailable. A non-V2 handle keeps the generic
+// code, proving the shared validator was not changed, and no diagnostic path
+// may mutate authority or leak a path.
+func TestRctx2MalformedBindingTupleReportsBindingUnusable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("creates real Git repositories and compact authority")
+	}
+	const lineage = "rctx2-malformed-binding"
+	args, _, repo := startedOpaqueCaptureBinding(t, lineage)
+	statePath := reviewCLICompactStatePath(repo, lineage)
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed := func(name, value string) []string {
+		return replaceReviewArgument(t, args, name, value)
+	}
+	genericRctx3 := replaceReviewContextArgument(t, malformed("--expected-revision", "not-a-revision"), "rctx3_not-sealed")
+	genericRctx1 := replaceReviewContextArgument(t, malformed("--expected-revision", "not-a-revision"), "rctx1_"+strings.Repeat("a", 64))
+	for _, tt := range []struct {
+		name, code string
+		args       []string
+	}{
+		{"malformed revision", "rctx2_binding_unusable", malformed("--expected-revision", "not-a-revision")},
+		{"malformed target", "rctx2_binding_unusable", malformed("--target", "not-a-target")},
+		{"malformed lineage", "rctx2_binding_unusable", malformed("--lineage", "NOT-canonical")},
+		{"non-V2 rctx3 handle keeps generic code", "repository_context_unavailable", genericRctx3},
+		{"non-V2 rctx1 handle keeps generic code", "repository_context_unavailable", genericRctx1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := RunReviewCaptureResult(append(append([]string{}, tt.args...), "--preflight"), io.Discard)
+			if err == nil {
+				t.Fatal("malformed binding accepted")
+			}
+			message := err.Error()
+			if !strings.Contains(message, tt.code) {
+				t.Errorf("error = %q; want code %q", message, tt.code)
+			}
+			if tt.code != "rctx2_binding_unusable" && strings.Contains(message, "rctx2_binding_unusable") {
+				t.Errorf("non-V2 failure was relabelled as a V2 binding failure: %s", message)
+			}
+			for _, forbidden := range []string{repo, os.Getenv("HOME")} {
+				if strings.Contains(message, forbidden) {
+					t.Errorf("error leaks %q: %s", forbidden, message)
+				}
+			}
+			if reviewScrubDefectReportField(message) != message {
+				t.Errorf("error is not path-safe: %s", message)
+			}
+		})
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("diagnostics mutated compact authority: %v", err)
+	}
+}
+
 func TestRctx2ClassifierDoesNotRelabelGenericErrors(t *testing.T) {
 	for _, cause := range []error{
 		errors.New("invalid rctx2 repository context"),

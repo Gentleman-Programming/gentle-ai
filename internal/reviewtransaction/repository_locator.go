@@ -408,6 +408,14 @@ func ValidateReviewRepositoryContextHandle(handle string) error {
 // process cwd, then revalidates its repository and current compact authority.
 func ResolveReviewRepositoryContext(ctx context.Context, repo, handle string, binding ReviewRepositoryContextBinding) (string, error) {
 	if err := validateReviewRepositoryContextBinding(binding); err != nil {
+		// A structurally invalid rctx2 binding is the same failure the
+		// in-package resolver reports as ErrReviewRepositoryContextV2BindingUnusable.
+		// This outer precheck must not downgrade it to the generic code, but a
+		// non-V2 handle keeps the historical generic error because only the
+		// rctx2 resolver owns that sentinel classification.
+		if strings.HasPrefix(handle, reviewRepositoryContextV2HandlePrefix) {
+			return "", errInvalidReviewRepositoryContextV2
+		}
 		return "", err
 	}
 	root, resolved, err := ResolveReviewRepositoryContextBinding(ctx, repo, handle, binding)

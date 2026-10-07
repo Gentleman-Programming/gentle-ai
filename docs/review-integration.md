@@ -63,7 +63,7 @@ An `rctx2_` handle is an opaque hexadecimal digest, not a path or proof of activ
 
 | Code | Meaning and next action |
 | --- | --- |
-| `rctx2_binding_unusable` | Invalid handle or unmatched repository/binding tuple. Verify `--cwd` names the intended repository, then obtain the exact native `next_transition`; do not reconstruct tokens. A digest mismatch cannot identify which field differs. |
+| `rctx2_binding_unusable` | Structurally invalid handle or binding tuple, or a tuple that does not match the supplied repository and handle. Verify `--cwd` names the intended repository, then obtain the exact native `next_transition`; do not reconstruct tokens. A digest mismatch cannot identify which field differs. |
 | `rctx2_resolution_failed` | An underlying repository or authority check failed. Inspect the scrubbed cause and verify the repository and active binding; refreshing alone may not repair missing, unreadable, or mismatched authority. This does not prove the binding was valid when issued. |
 
 Git ownership refusals retain `git_repository_untrusted`; authority from a newer release retains `review_authority_newer_release`. Neither is repaired by refreshing a transition. Unrelated, non-V2 errors retain their existing generic classification.
