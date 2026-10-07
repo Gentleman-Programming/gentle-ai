@@ -154,7 +154,7 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 	if err != nil {
 		return reviewProviderRefuterRequest{}, err
 	}
-	claims, err := reviewProviderRefuterClaims(state.InitialSnapshot.Identity, compactReviewInputFromView(view))
+	claims, err := reviewProviderRefuterClaims(state.InitialSnapshot.Identity, compactReviewInputFromView(view), state.RuntimeAgent)
 	if err != nil {
 		return reviewProviderRefuterRequest{}, err
 	}
@@ -189,18 +189,38 @@ func reviewProviderNewRefuterRequest(ctx context.Context, repo, storeDir string,
 	return request, nil
 }
 
-func reviewProviderRefuterClaims(snapshot string, input reviewtransaction.CompactReviewInput) ([]reviewtransaction.RefuterClaim, error) {
+// reviewProviderRefutesDeterministic reports whether the runtime frozen at
+// START can run the provider refuter, so a deterministic finding may wait for
+// it (S11, L20). It reads only the frozen identity, never process environment,
+// so the claim set STATUS offers and the one the closing capture waits for are
+// always the same. Without a refuter runtime a deterministic finding blocks
+// directly, which keeps the manual lane and other runtimes from stopping at
+// manual_intervention_required.
+func reviewProviderRefutesDeterministic(runtime string) bool {
+	agent := model.AgentID(runtime)
+	return agent == model.AgentPi || agent == model.AgentOpenCode || reviewProviderCaptureRuntime(agent)
+}
+
+func reviewProviderRefuterClaims(snapshot string, input reviewtransaction.CompactReviewInput, runtime string) ([]reviewtransaction.RefuterClaim, error) {
 	claimText := map[string]string{}
 	for _, result := range input.LensResults {
 		for _, finding := range result.Findings {
 			claimText[finding.ID] = finding.Claim
 		}
 	}
+	refuteDeterministic := reviewProviderRefutesDeterministic(runtime)
 	claims := make([]reviewtransaction.RefuterClaim, 0)
 	for _, classification := range input.Classifications {
-		// Deterministic findings reach the refuter too (S11, L20): a lens's
-		// reproduction can still be a false positive the refuter drops.
-		if classification.Class != reviewtransaction.EvidenceInferential && classification.Class != reviewtransaction.EvidenceDeterministic {
+		// Deterministic findings reach the refuter too (S11, L20) when the
+		// runtime can run it: a lens's reproduction can still be a false
+		// positive the refuter drops.
+		switch classification.Class {
+		case reviewtransaction.EvidenceInferential:
+		case reviewtransaction.EvidenceDeterministic:
+			if !refuteDeterministic {
+				continue
+			}
+		default:
 			continue
 		}
 		switch classification.Causality {

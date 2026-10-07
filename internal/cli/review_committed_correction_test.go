@@ -47,21 +47,29 @@ func TestCommittedBaseDiffLastReviewerCapturePublishesExactStatusContinuation(t 
 	for order := 0; order < len(started.SelectedLenses)-1; order++ {
 		captureCleanCLIReviewerResult(t, repo, started, order, &bytes.Buffer{})
 	}
+	var closureOutput bytes.Buffer
 	captureCLIReviewerResultWithFindings(t, repo, started, len(started.SelectedLenses)-1, []facadeFinding{{
 		ID: "R3-001", Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate is wrong",
 		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 		CausalDisposition: reviewtransaction.CausalIntroduced,
-	}}, &bytes.Buffer{})
+	}}, &closureOutput)
 
-	// The severe finding reaches the refuter (L20), so the refuter capture is
-	// the terminal event that publishes the committed closure.
-	closure := corroborateRefuterClaimsForTest(t, repo, lineage)
-	if closure.Schema != reviewLastEventClosureSchema || closure.Operation != reviewCaptureRefuterCaptureOperation ||
+	var closure struct {
+		Schema             string                     `json:"schema"`
+		Operation          string                     `json:"operation"`
+		LineageID          string                     `json:"lineage_id"`
+		State              reviewtransaction.State    `json:"state"`
+		StatusContinuation *ReviewTransitionExecution `json:"status_continuation"`
+	}
+	if err := json.Unmarshal(closureOutput.Bytes(), &closure); err != nil {
+		t.Fatalf("decode committed final capture closure: %v\n%s", err, closureOutput.String())
+	}
+	if closure.Schema != reviewLastEventClosureSchema || closure.Operation != "review/capture-result" ||
 		closure.LineageID != lineage || closure.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("committed final capture closure = %#v, want correction-required public closure", closure)
 	}
 	if closure.StatusContinuation == nil {
-		t.Fatalf("committed correction closure lacks required status_continuation: %#v", closure)
+		t.Fatalf("committed correction closure lacks required status_continuation: %s", closureOutput.String())
 	}
 
 	continuation := closure.StatusContinuation
@@ -72,10 +80,8 @@ func TestCommittedBaseDiffLastReviewerCapturePublishesExactStatusContinuation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The closing event is the Pi host-relay refuter capture, so the
-	// continuation keeps its runtime.
 	wantArguments := map[string]string{
-		"cwd": repo, "contract": ReviewIntegrationContractV2, "next-transition": "true", "agent": "pi",
+		"cwd": repo, "contract": ReviewIntegrationContractV2, "next-transition": "true",
 		"lineage": lineage, "base-ref": record.State.InitialSnapshot.BaseTree, "committed-only": "true",
 	}
 	if len(arguments) != len(wantArguments) {
@@ -166,18 +172,9 @@ func TestCommittedBaseDiffCorrectionReentryRunsReturnedContinuationForAdvertised
 			switch runtime {
 			case model.AgentClaudeCode, model.AgentCodex:
 				previous := reviewProviderAdapterFor
-				reviewProviderAdapterFor = func(contract reviewerprovider.Contract, agent model.AgentID) (reviewerprovider.Adapter, error) {
+				reviewProviderAdapterFor = func(_ reviewerprovider.Contract, agent model.AgentID) (reviewerprovider.Adapter, error) {
 					if agent != runtime {
 						return nil, errors.New("unexpected runtime")
-					}
-					if contract.Role == reviewerprovider.RoleRefuter {
-						// The severe finding reaches the refuter (L20) inside
-						// the same compiled capture; it corroborates.
-						return providerTestAdapterFunc(func(_ context.Context, invocation reviewerprovider.Invocation) ([]byte, error) {
-							return json.Marshal(facadeRefuterResult{RequestHash: reviewProviderRequestHashForTest(t, invocation.Prompt()), Results: []facadeRefuterOutcome{{
-								FindingID: "R3-001", Outcome: reviewtransaction.OutcomeCorroborated, ProofRefs: []string{"independent reproduction"},
-							}}})
-						}), nil
 					}
 					return providerTestAdapter{raw: payload}, nil
 				}
@@ -201,7 +198,7 @@ func TestCommittedBaseDiffCorrectionReentryRunsReturnedContinuationForAdvertised
 				if err != nil || completed.Output == nil {
 					t.Fatalf("%s final capture = %#v, %v", runtime, completed, err)
 				}
-				terminal = openCodeCorroboratingRefuterOutput(t, repo, store, lineage)
+				terminal = []byte(*completed.Output)
 			}
 
 			var closure reviewLastEventClosureResult
@@ -646,56 +643,4 @@ func committedCorrectionStatus(t *testing.T, repo, lineage, baseTree string) Rev
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &status)
 	return status
-}
-
-// openCodeCorroboratingRefuterOutput relays the refuter batch a severe finding
-// requires (L20) through the OpenCode transport, corroborating every issued
-// claim, and returns the terminal closure the relay completion carries.
-func openCodeCorroboratingRefuterOutput(t *testing.T, repo string, store reviewtransaction.CompactStore, lineage string) []byte {
-	t.Helper()
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	task, err := newReviewProviderTask(reviewerprovider.RoleRefuter, ReviewTransitionBinding{
-		LineageID: lineage, Revision: record.State.CapturePhaseRevision, TargetIdentity: record.State.InitialSnapshot.Identity,
-		RepositoryContext: openCodeRefuterRepositoryContextForTest(t, repo, reviewtransaction.ReviewRepositoryContextBinding{
-			LineageID: lineage, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.State.CapturePhaseRevision,
-		}),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	relay := startOpenCodeTransportRelay(t, repo, openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "start", Prompt: task.Prompt})
-	request, err := reviewProviderNewRefuterRequest(t.Context(), repo, store.Dir, record.State, record.State.CapturePhaseRevision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	results := make([]facadeRefuterOutcome, 0, len(request.Claims))
-	for _, claim := range request.Claims {
-		results = append(results, facadeRefuterOutcome{FindingID: claim.FindingID, Outcome: reviewtransaction.OutcomeCorroborated, ProofRefs: []string{"independent reproduction"}})
-	}
-	raw, err := json.Marshal(facadeRefuterResult{RequestHash: request.RequestHash, Results: results})
-	if err != nil {
-		t.Fatal(err)
-	}
-	hostOutput := string(raw)
-	completed, err := relay.complete(openCodeTransportEnvelope{
-		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &hostOutput,
-	})
-	if err != nil || completed.Output == nil {
-		t.Fatalf("provider refuter completion = %#v, %v", completed, err)
-	}
-	return []byte(*completed.Output)
-}
-
-// openCodeRefuterRepositoryContextForTest derives the sealed rctx3 handle
-// OpenCode STATUS issues for a Task, as the managed transport requires.
-func openCodeRefuterRepositoryContextForTest(t *testing.T, repo string, binding reviewtransaction.ReviewRepositoryContextBinding) string {
-	t.Helper()
-	handle, err := reviewtransaction.DeriveOpenCodeReviewRepositoryContextHandle(context.Background(), repo, binding)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return handle
 }

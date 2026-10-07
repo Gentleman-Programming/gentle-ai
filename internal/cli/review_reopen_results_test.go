@@ -13,11 +13,15 @@ func TestReviewReopenResultsRemovesSelectedCanonicalEntryWithoutSidecar(t *testi
 	for order := 0; order < len(started.SelectedLenses)-1; order++ {
 		captureCLIReviewerResultWithFindings(t, repo, started, order, []facadeFinding{}, &bytes.Buffer{})
 	}
+	partial, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CaptureAdmittedRefuterResult(t.Context(), reviewtransaction.CompactAdmittedRefuterResultRequest{ExpectedRevision: partial.State.CapturePhaseRevision, TargetIdentity: partial.State.InitialSnapshot.Identity, RequestHash: facadePayloadHash([]byte("reopen refuter")), Payload: []byte(`{"results":[]}`)}); err != nil {
+		t.Fatal(err)
+	}
 	last := len(started.SelectedLenses) - 1
 	captureCLIReviewerResultWithFindings(t, repo, started, last, []facadeFinding{{Location: "service-token.ts:1", Severity: "CRITICAL", Claim: "candidate requires a bounded correction", ProofRefs: []string{"service-token.ts:1 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced}}, &bytes.Buffer{})
-	// The severe finding is an issued refuter claim (L20), so the fifth
-	// admitted role is the refuter batch that answers it.
-	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 	before, err := store.Load()
 	if err != nil {
 		t.Fatal(err)

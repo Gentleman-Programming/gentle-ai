@@ -255,9 +255,8 @@ func TestReviewCaptureResultIDLessCandidateCausalFinding(t *testing.T) {
 	}, &captured); err != nil {
 		t.Fatalf("id-less candidate-causal finding capture-result failed: %v", err)
 	}
-	// The refuter batch names the canonical fallback ID, so it closes only
-	// when admission and canonicalization agree (L20).
-	terminal := corroborateRefuterClaimsForTest(t, repo, started.LineageID)
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, captured.Bytes(), &terminal)
 	if terminal.Schema != reviewLastEventClosureSchema || terminal.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("id-less candidate-causal terminal capture = %#v", terminal)
 	}
@@ -559,7 +558,6 @@ func TestReviewCaptureResultTerminalCapturePreservesCausalClassification(t *test
 	}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 	completed, err := store.Load()
 	if err != nil {
 		t.Fatal(err)

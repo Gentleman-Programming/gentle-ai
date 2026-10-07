@@ -28,7 +28,8 @@ func writeReviewCLIRawInput(t *testing.T, raw []byte) string {
 
 // corroborateRefuterClaimsForTest submits the one refuter batch a reviewing
 // lineage requires once every lens is captured with a severe candidate-caused
-// finding (L20: deterministic findings reach the refuter too). It corroborates
+// finding (L20: deterministic findings reach the refuter too when the frozen
+// runtime can run it; otherwise it returns a zero closure). It corroborates
 // every issued claim through the public host-relay capture and returns the
 // terminal closure, which leaves the lineage where the last lens capture used
 // to leave it when deterministic findings were corroborated without a refuter.
@@ -41,6 +42,11 @@ func corroborateRefuterClaimsForTest(t *testing.T, repo, lineage string) reviewL
 	store, record, err := discoverCompactFacadeReview(t.Context(), root, lineage, false)
 	if err != nil {
 		t.Fatalf("discover refuter authority: %v", err)
+	}
+	if record.State.State != reviewtransaction.StateReviewing && !reviewProviderRefutesDeterministic(record.State.RuntimeAgent) {
+		// Without a refuter runtime the last lens capture already closed the
+		// review: a deterministic finding blocks directly, so no batch exists.
+		return reviewLastEventClosureResult{}
 	}
 	request, err := reviewProviderNewRefuterRequest(t.Context(), root, store.Dir, record.State, record.State.CapturePhaseRevision)
 	if err != nil {

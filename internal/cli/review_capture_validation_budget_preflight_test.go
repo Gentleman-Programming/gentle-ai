@@ -39,7 +39,6 @@ func providerCorrectionReadyOverBudget(t *testing.T) (string, string, reviewtran
 	if err := RunReviewCaptureResult(args, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)

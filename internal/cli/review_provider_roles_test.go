@@ -256,7 +256,7 @@ func TestReviewProviderRefuterClaimsIncludeDeterministicSevereFindings(t *testin
 			classification("X-insufficient", reviewtransaction.EvidenceInsufficient, reviewtransaction.CausalIntroduced),
 		},
 	}
-	claims, err := reviewProviderRefuterClaims(snapshot, input)
+	claims, err := reviewProviderRefuterClaims(snapshot, input, string(model.AgentPi))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,8 +272,52 @@ func TestReviewProviderRefuterClaimsIncludeDeterministicSevereFindings(t *testin
 	}
 
 	input.Classifications = input.Classifications[2:]
-	if _, err := reviewProviderRefuterClaims(snapshot, input); !errors.Is(err, errReviewProviderRefuterNotRequired) {
+	if _, err := reviewProviderRefuterClaims(snapshot, input, string(model.AgentPi)); !errors.Is(err, errReviewProviderRefuterNotRequired) {
 		t.Fatalf("batch without severe candidate-caused findings = %v, want the not-required sentinel", err)
+	}
+}
+
+// TestReviewProviderRefuterClaimsKeepDeterministicOnlyWhereARefuterRuns: a
+// deterministic finding waits for the refuter only when the runtime frozen at
+// START can run one. Elsewhere (manual lane, runtimes without a provider
+// refuter transport) it blocks directly, as before L20, so the review closes
+// instead of stopping at manual_intervention_required. Inferential findings
+// always reach the refuter.
+func TestReviewProviderRefuterClaimsKeepDeterministicOnlyWhereARefuterRuns(t *testing.T) {
+	snapshot := "sha256:" + strings.Repeat("2", 64)
+	input := reviewtransaction.CompactReviewInput{
+		LensResults: []reviewtransaction.LensResult{{Findings: []reviewtransaction.Finding{{ID: "D-introduced", Claim: "d"}, {ID: "I-worsened", Claim: "i"}}}},
+		Classifications: []reviewtransaction.FindingEvidence{
+			{FindingID: "D-introduced", Severity: "CRITICAL", Class: reviewtransaction.EvidenceDeterministic, Causality: reviewtransaction.CausalIntroduced, Proof: "proof d"},
+			{FindingID: "I-worsened", Severity: "CRITICAL", Class: reviewtransaction.EvidenceInferential, Causality: reviewtransaction.CausalWorsened, Proof: "proof i"},
+		},
+	}
+	for _, tt := range []struct {
+		runtime string
+		want    string
+	}{
+		{runtime: string(model.AgentPi), want: "D-introduced,I-worsened"},
+		{runtime: string(model.AgentOpenCode), want: "D-introduced,I-worsened"},
+		{runtime: string(model.AgentClaudeCode), want: "D-introduced,I-worsened"},
+		{runtime: string(model.AgentCodex), want: "D-introduced,I-worsened"},
+		{runtime: "", want: "I-worsened"},
+		{runtime: string(model.AgentGeminiCLI), want: "I-worsened"},
+	} {
+		claims, err := reviewProviderRefuterClaims(snapshot, input, tt.runtime)
+		if err != nil {
+			t.Fatalf("%q: %v", tt.runtime, err)
+		}
+		var ids []string
+		for _, claim := range claims {
+			ids = append(ids, claim.FindingID)
+		}
+		if got := strings.Join(ids, ","); got != tt.want {
+			t.Fatalf("runtime %q refuter claims = %s, want %s", tt.runtime, got, tt.want)
+		}
+	}
+	input.Classifications = input.Classifications[:1]
+	if _, err := reviewProviderRefuterClaims(snapshot, input, ""); !errors.Is(err, errReviewProviderRefuterNotRequired) {
+		t.Fatalf("deterministic-only batch without a refuter runtime = %v, want the not-required sentinel", err)
 	}
 }
 
@@ -284,7 +328,19 @@ func TestReviewProviderRefuterClaimsIncludeDeterministicSevereFindings(t *testin
 func TestReviewCaptureRefuterDropsADeterministicSevereFinding(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
-	repo, started, store, record := newArtifactReview(t, false)
+	// START freezes the Pi runtime: a deterministic finding waits for the
+	// refuter only on a runtime that can run it.
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
+	started := startFacadeReviewForRuntime(t, repo, model.AgentPi)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
 	result.Findings = []facadeFinding{{
 		ID: "R3-001", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate failure",
@@ -299,7 +355,7 @@ func TestReviewCaptureRefuterDropsADeterministicSevereFinding(t *testing.T) {
 	}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	record, err := store.Load()
+	record, err = store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
