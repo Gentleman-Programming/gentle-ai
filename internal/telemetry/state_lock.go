@@ -86,7 +86,8 @@ func lockState(homeDir string) (func(), error) {
 }
 
 // Update locks, loads (creating as EnsureState would), mutates, and saves.
-// Every state writer must go through this to avoid lost updates.
+// Every state writer must hold lockState across this cycle to avoid lost
+// updates. IncrementCounter also holds that lock across its policy check.
 func Update(homeDir string, mutate func(*State)) error {
 	unlock, err := lockState(homeDir)
 	if err != nil {
