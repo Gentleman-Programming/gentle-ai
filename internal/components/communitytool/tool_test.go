@@ -361,6 +361,27 @@ func TestCodeGraphGuidanceContainsLazyInitAndUsageRules(t *testing.T) {
 	}
 }
 
+func TestCodeGraphGuidancePreservesExplicitInitializationWorkspace(t *testing.T) {
+	guidance := CodeGraphGuidanceMarkdown()
+	for _, want := range []string{
+		"For project initialization, the explicit agent working directory is authoritative",
+		"Check `<cwd>/.git` (directory or worktree file) and `<cwd>/.codegraph/` before ancestor discovery",
+		"Never replace an initialization target with an enclosing repository",
+		"Only for an already-selected existing repository",
+		"git rev-parse --show-toplevel || pwd",
+		"If the explicit initialization target is not a Git root",
+		"git -C <cwd> init",
+		"never retry initialization against the parent",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Errorf("initialization workspace contract missing %q", want)
+		}
+	}
+	if strings.Contains(guidance, "1. Resolve the project root with `git rev-parse --show-toplevel || pwd`.") {
+		t.Error("guidance still unconditionally replaces the workspace with its ancestor Git root")
+	}
+}
+
 func TestCodeGraphGuidanceInjectsForRepresentativeAgents(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{"agent":{"worker":{"prompt":"use codegraph_explore"}}}`)

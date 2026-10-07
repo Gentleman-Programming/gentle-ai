@@ -52,6 +52,12 @@ Community Tools are opt-in and are not included by presets or automatic detectio
 |---|---|---|
 | CodeGraph | Installs its CLI and configures supported agent MCP/guidance integration. | Use CodeGraph’s upstream lifecycle commands. |
 
+### CodeGraph initialization workspace
+
+For project initialization, the explicit agent working directory is the target—not an enclosing Git repository. Check its local `.git` (directory or worktree file) and `.codegraph/` first. Ancestor Git-root discovery is only appropriate for an already-selected existing repository.
+
+`gentle-ai codegraph init --cwd <project-root>` requires that target to be a Git root and rejects unsafe locations. For a new nested project without local Git, initialize Git there first (`git -C <project-root> init`) as part of the requested project setup, then retry CodeGraph initialization at the same target. Do not substitute the parent repository or initialize Git merely to answer a codebase question.
+
 ---
 
 ## Skills

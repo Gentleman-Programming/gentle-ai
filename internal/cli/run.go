@@ -1899,7 +1899,13 @@ func (s agentRoutingGuidanceStep) Run() error {
 		return err
 	}
 
-	retainedHooks, err := agenthooks.InstallRetainedClaudeHooks(s.homeDir, adapter)
+	// Claude loads both global and project settings. Keep its hooks within
+	// the selected scope without changing Codex's home-level hook delivery.
+	hookRoot := s.homeDir
+	if adapter.Agent() == model.AgentClaudeCode {
+		hookRoot = ResolveAgentConfigDir(s.scope, s.homeDir, s.workspaceDir)
+	}
+	retainedHooks, err := agenthooks.InstallRetainedClaudeHooks(hookRoot, adapter)
 	if err != nil {
 		return fmt.Errorf("install retained Claude hooks for %q: %w", s.agent, err)
 	}
@@ -1913,7 +1919,7 @@ func (s agentRoutingGuidanceStep) Run() error {
 	if s.changedFiles != nil && telemetryHooks.Changed {
 		*s.changedFiles = append(*s.changedFiles, telemetryHooks.Files...)
 	}
-	hooks, err := agenthooks.InstallSkillRegistry(s.homeDir, adapter)
+	hooks, err := agenthooks.InstallSkillRegistry(hookRoot, adapter)
 	if err != nil {
 		return fmt.Errorf("install skill-registry hook for %q: %w", s.agent, err)
 	}
@@ -3774,11 +3780,10 @@ func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, sele
 		for _, path := range retiredOpenCodeSDDBackupPaths(homeDir, workspaceDir, scope, []model.AgentID{adapter.Agent()}) {
 			paths[path] = struct{}{}
 		}
-		// The routing step installs the retained review/telemetry and
-		// skill-registry hooks into the home Claude settings in every scope,
-		// whatever optional components were selected.
+		// Retained Claude hooks are installed independently of optional
+		// components. Snapshot the same scoped settings their writer uses.
 		if adapter.Agent() == model.AgentClaudeCode {
-			if path := adapter.SettingsPath(homeDir); path != "" {
+			if path := adapter.SettingsPath(ResolveAgentConfigDir(scope, homeDir, workspaceDir)); path != "" {
 				paths[path] = struct{}{}
 			}
 		}

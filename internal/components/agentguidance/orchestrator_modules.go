@@ -140,7 +140,9 @@ func splitOrchestratorModules(annotated string, specs []orchestratorFragmentSpec
 		spec := byID[span.id]
 		module, _, _ := strings.Cut(span.id, ".")
 		modulePath := strings.TrimRight(moduleDir, "/") + "/" + orchestratorModuleFile(module)
-		if filepath.IsAbs(moduleDir) {
+		// Native Windows references use the same separators as installed files.
+		// Keep Unix and home-relative pointer text byte-for-byte compatible.
+		if filepath.IsAbs(moduleDir) && filepath.VolumeName(moduleDir) != "" {
 			modulePath = filepath.Join(moduleDir, orchestratorModuleFile(module))
 		}
 		pointer := "On demand: when " + spec.reason + ", read `" + modulePath + "`, section \"" + spec.title + "\".\n"

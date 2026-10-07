@@ -1705,6 +1705,7 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 			if tc.wantRoot == "workspace" {
 				root = workspace
 			}
+			// Retained routing hooks and Context7 cleanup share selected-scope settings.
 			wantSettings := adapters[0].SettingsPath(root)
 			if !containsPath(targets, wantSettings) {
 				t.Fatalf("backupTargets missing cleanup path %q; targets=%v", wantSettings, targets)
@@ -1720,18 +1721,8 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 				otherRoot = home
 			}
 			otherSettings := adapters[0].SettingsPath(otherRoot)
-			if !tc.sameWorkspace && tc.scope == ScopeGlobal && containsPath(targets, otherSettings) {
-				t.Fatalf("global backupTargets selected workspace cleanup; targets=%v", targets)
-			}
-			// Routing writes retained hooks in HOME even in workspace scope.
-			// Back them up independently of Context7's selected-scope cleanup;
-			// neither cleanup is a Context7 verification requirement.
-			homeSettings := adapters[0].SettingsPath(home)
-			if !containsPath(targets, homeSettings) {
-				t.Fatalf("backupTargets missing global routing-hook settings %q; targets=%v", homeSettings, targets)
-			}
-			if containsPath(verificationPaths, homeSettings) {
-				t.Fatalf("Context7 verification must not require routing-hook settings %q; paths=%v", homeSettings, verificationPaths)
+			if !tc.sameWorkspace && containsPath(targets, otherSettings) {
+				t.Fatalf("backupTargets selected settings outside install scope; targets=%v", targets)
 			}
 		})
 	}
