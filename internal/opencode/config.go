@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -509,6 +510,45 @@ func intValue(value any) int {
 // target-level (locked/symlink/non-regular) refusal applies to it.
 func ValidateSettingsForWriters(settingsPath string, touchedKeys []string) error {
 	return validateSettingsForWriters(settingsPath, touchedKeys)
+}
+
+// ValidateSettingsRuntimeCompatibility refuses unowned native plural profiles
+// on V1 before managed mutations. It never rewrites or adopts those profiles.
+// Legacy SDD ownership is the same proof used by the retirement writer.
+func ValidateSettingsRuntimeCompatibility(ctx context.Context, settingsPath string, ownsRetiredAgent func(string, map[string]any) bool) error {
+	if settingsPath == "" {
+		return nil
+	}
+	if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(settingsPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read OpenCode settings for compatibility: %w", err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return fmt.Errorf("refuse malformed OpenCode settings %q: %w", settingsPath, err)
+	}
+	agents, _ := root["agents"].(map[string]any)
+	for name, value := range agents {
+		entry, _ := value.(map[string]any)
+		if ownsRetiredAgent(name, entry) || !NativeConfig(map[string]any{"agents": map[string]any{name: value}}) {
+			continue
+		}
+		major, err := DetectRuntimeMajor(ctx)
+		if err != nil {
+			return err
+		}
+		if major == RuntimeV1 {
+			return fmt.Errorf("refuse OpenCode settings %q: OpenCode V1 cannot use unowned native agents profiles; manual action required: select a compatible OpenCode runtime or reconcile these profiles yourself; configuration is unchanged", settingsPath)
+		}
+		return nil
+	}
+	return nil
 }
 
 func validateSettingsForWriters(settingsPath string, touchedKeys []string) error {

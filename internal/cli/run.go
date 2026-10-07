@@ -2705,7 +2705,10 @@ type openCodeSettingsValidationStep struct {
 func (s openCodeSettingsValidationStep) ID() string { return s.id }
 
 func (s openCodeSettingsValidationStep) Run() error {
-	return opencodeactivation.ValidateSettingsForWriters(s.settingsPath, s.touchedKeys)
+	if err := opencodeactivation.ValidateSettingsForWriters(s.settingsPath, s.touchedKeys); err != nil {
+		return err
+	}
+	return opencodeactivation.ValidateSettingsRuntimeCompatibility(context.Background(), s.settingsPath, legacyassets.OwnsOpenCodeSDDAgent)
 }
 
 // openCodeSettingsWriterKeys lists the top-level OpenCode settings keys the

@@ -15,6 +15,20 @@ version evidence refuses incompatible writes rather than assuming V2.
 | Community TUI plugins | Existing integration retained | Compatibility unproven; installation/update refuses, not silently omitted |
 | Native review | Existing V1 capability path retained | Admitted only for a V2 runtime whose managed plugin declares the V2 relay contract (see below) |
 
+## Preserving incompatible user profiles
+
+Install and sync refuse before managed mutations when the detected runtime is
+OpenCode V1 and the selected settings file contains unowned native V2 profiles
+in the plural `agents` map (for example, profiles with `permissions`). The
+refusal names the settings path and requires manual action. Configuration bytes
+and managed prompt files remain unchanged; Gentle AI does not migrate, delete,
+reinterpret or adopt these user or JD profiles.
+
+Select a compatible OpenCode runtime or reconcile the profiles yourself before
+retrying. Provably Gentle-owned retired SDD entries remain eligible for the
+existing cleanup. Native V2 settings retain their existing handling, and unknown
+runtime evidence still fails closed.
+
 ## What has actually been checked
 
 The four current V2 managed assets target released `@opencode/plugin@2.0.4`
@@ -116,7 +130,7 @@ symlinked `plugins` directory and its contents untouched.
 
 Install and sync also remove the retired agents earlier releases wrote to the
 settings file, on both runtime majors: `sdd-orchestrator` and `sdd-<phase>`
-entries, their profile-suffixed copies (`sdd-apply-fallback`), every entry of
+entries, their profile-suffixed copies (`sdd-apply-fallback`), provably owned entries of
 the plural `agents` map 3.7.0 left in some configs (OpenCode 1.x refuses that
 map, #5182), and the orchestrator `task` permissions that named a removed
 agent. The old `sdd-*` wildcard permission stays while any agent it matches
