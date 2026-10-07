@@ -11,6 +11,29 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
+func TestReviewHelpListsDecideAndPreservesExistingCommands(t *testing.T) {
+	const want = "Usage: gentle-ai review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-unachievable|capture-validation|lens-context|capabilities|assess|start|validate|status|repair|invalidate|abandon|decide|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Provider transports relay opaque bytes only; Go materializes, admits, captures, and closes review on its final causal event. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.\n"
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "no arguments"},
+		{name: "help command", args: []string{"help"}},
+		{name: "short help flag", args: []string{"-h"}},
+		{name: "long help flag", args: []string{"--help"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview(tc.args, &output); err != nil {
+				t.Fatalf("review help returned an error: %v", err)
+			}
+			if got := output.String(); got != want {
+				t.Fatalf("review help = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // decisionRequiredNextTransitionStatus crafts the negotiated STATUS shape the
 // adapter receives for a decision_required compact authority: current, stopped
 // action, manual replayability. Before #1380 this collapsed to
