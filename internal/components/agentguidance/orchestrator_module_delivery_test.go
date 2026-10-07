@@ -44,6 +44,39 @@ func TestClaudeModuleDeliveryPlansEveryPathBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestClaudeModuleDeliveryUsesNativeModulePointers(t *testing.T) {
+	home := t.TempDir()
+	result, err := InjectRoutingWithOptions(home, model.AgentClaudeCode, claudeModuleOptions)
+	if err != nil || !result.Changed {
+		t.Fatalf("inject = %+v, %v; want changed", result, err)
+	}
+	corePath := filepath.Join(home, ".claude", "CLAUDE.md")
+	data, err := os.ReadFile(corePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modules := 0
+	for _, path := range result.Files {
+		if !strings.HasPrefix(filepath.Base(path), "orchestrator-") {
+			continue
+		}
+		modules++
+		if !strings.Contains(string(data), "read `"+path+"`") {
+			t.Errorf("core has no native pointer to %q", path)
+		}
+	}
+	if modules == 0 {
+		t.Fatal("inject wrote no modules")
+	}
+	again, err := InjectRoutingWithOptions(home, model.AgentClaudeCode, claudeModuleOptions)
+	if err != nil || again.Changed {
+		t.Fatalf("second inject = %+v, %v; want unchanged", again, err)
+	}
+	if after, err := os.ReadFile(corePath); err != nil || string(after) != string(data) {
+		t.Fatalf("second inject changed core: %v", err)
+	}
+}
+
 func TestClaudeModuleDeliveryInjectsCoreModulesAndLedger(t *testing.T) {
 	home := t.TempDir()
 	configDir := filepath.Join(home, ".claude")

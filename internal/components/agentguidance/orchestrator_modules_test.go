@@ -3,6 +3,7 @@ package agentguidance
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -211,6 +212,20 @@ func TestOrchestratorModuleCoreKeepsCriticalPolicy(t *testing.T) {
 	}
 }
 
+func TestBuildOrchestratorModulesAcceptsNativeAbsoluteBinding(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), ".claude", "gentle-ai", "orchestrator")
+	bundle, err := buildOrchestratorModules(model.AgentClaudeCode, fakeModuleContract, dir)
+	if err != nil {
+		t.Fatalf("buildOrchestratorModules(native absolute path) error = %v", err)
+	}
+	for _, fragment := range bundle.fragments {
+		want := "read `" + filepath.Join(dir, orchestratorModuleFile(fragment.module)) + "`"
+		if !strings.Contains(fragment.pointer, want) {
+			t.Errorf("pointer = %q, want reference %q", fragment.pointer, want)
+		}
+	}
+}
+
 func TestBuildOrchestratorModulesRejectsUnsupportedBindings(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -224,6 +239,8 @@ func TestBuildOrchestratorModulesRejectsUnsupportedBindings(t *testing.T) {
 		{"blank binding", model.AgentClaudeCode, "   ", errInvalidOrchestratorModuleDir},
 		{"project-relative binding", model.AgentClaudeCode, ".claude/gentle-ai/orchestrator", errInvalidOrchestratorModuleDir},
 		{"dot-relative binding", model.AgentClaudeCode, "./orchestrator", errInvalidOrchestratorModuleDir},
+		{"drive-relative binding", model.AgentClaudeCode, `C:orchestrator`, errInvalidOrchestratorModuleDir},
+		{"current-volume binding", model.AgentClaudeCode, `\orchestrator`, errInvalidOrchestratorModuleDir},
 		{"import binding", model.AgentClaudeCode, "@~/.claude/gentle-ai/orchestrator", errInvalidOrchestratorModuleDir},
 		{"multiline binding", model.AgentClaudeCode, "~/.claude\n/orchestrator", errInvalidOrchestratorModuleDir},
 		{"backtick binding", model.AgentClaudeCode, "~/.claude/`x`", errInvalidOrchestratorModuleDir},

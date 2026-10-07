@@ -3,6 +3,7 @@ package agentguidance
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -86,7 +87,7 @@ func validateOrchestratorModuleDir(dir string) error {
 		return fmt.Errorf("%w: empty", errInvalidOrchestratorModuleDir)
 	case dir != strings.TrimSpace(dir) || strings.ContainsAny(dir, "\r\n`"):
 		return fmt.Errorf("%w: %q cannot be quoted on one pointer line", errInvalidOrchestratorModuleDir, dir)
-	case !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, "/"):
+	case !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, "/") && !filepath.IsAbs(dir):
 		return fmt.Errorf("%w: %q is not a user-global path", errInvalidOrchestratorModuleDir, dir)
 	}
 	return nil
@@ -136,8 +137,13 @@ func splitOrchestratorModules(annotated string, specs []orchestratorFragmentSpec
 		core.WriteString(annotated[cursor:span.start])
 		spec := byID[span.id]
 		module, _, _ := strings.Cut(span.id, ".")
-		pointer := "On demand: when " + spec.reason + ", read `" + strings.TrimRight(moduleDir, "/") + "/" +
-			orchestratorModuleFile(module) + "`, section \"" + spec.title + "\".\n"
+		modulePath := strings.TrimRight(moduleDir, "/") + "/" + orchestratorModuleFile(module)
+		// Native Windows references use the same separators as installed files.
+		// Keep Unix and home-relative pointer text byte-for-byte compatible.
+		if filepath.IsAbs(moduleDir) && filepath.VolumeName(moduleDir) != "" {
+			modulePath = filepath.Join(moduleDir, orchestratorModuleFile(module))
+		}
+		pointer := "On demand: when " + spec.reason + ", read `" + modulePath + "`, section \"" + spec.title + "\".\n"
 		body := annotated[span.bodyStart:span.bodyEnd]
 		fragments = append(fragments, orchestratorFragment{id: span.id, module: module, title: spec.title, pointer: pointer, body: body, offset: core.Len()})
 		core.WriteString(pointer)
