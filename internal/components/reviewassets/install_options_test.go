@@ -126,6 +126,51 @@ func TestNativeAgentOwnedModelUpdates(t *testing.T) {
 	}
 }
 
+// Engram reaches Claude Code under two namespaces: the user-scope MCP server
+// registered by `engram setup claude-code` (mcp__engram__*) and the older
+// plugin-namespaced one (mcp__plugin_engram_engram__*). Assets declare Engram
+// tools through {{ENGRAM_TOOL_PREFIX}} so both are granted; a template that
+// hardcodes one namespace silently strips the agents' Engram access.
+func TestClaudeAgentsGrantBothEngramNamespaces(t *testing.T) {
+	adapter, err := agents.NewAdapter(model.AgentClaudeCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	if _, err := reviewassets.InstallNativeAgents(home, adapter, reviewassets.InstallOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"jd-judge-a.md", "jd-judge-b.md", "jd-fix-agent.md"} {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(adapter.SubAgentsDir(home), name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rendered := string(data)
+			if strings.Contains(rendered, "ENGRAM_TOOL_PREFIX") {
+				t.Fatal("unrendered Engram tool placeholder shipped to the runtime")
+			}
+			var tools string
+			for _, line := range strings.Split(rendered, "\n") {
+				if strings.HasPrefix(line, "tools:") {
+					tools = line
+				}
+			}
+			if tools == "" {
+				t.Fatal("agent grants no tools line")
+			}
+			for _, tool := range []string{"mem_search", "mem_get_observation"} {
+				if !strings.Contains(tools, "mcp__engram__"+tool) {
+					t.Errorf("%s missing user-scope mcp__engram__%s: %s", name, tool, tools)
+				}
+				if !strings.Contains(tools, "mcp__plugin_engram_engram__"+tool) {
+					t.Errorf("%s missing plugin-scoped mcp__plugin_engram_engram__%s: %s", name, tool, tools)
+				}
+			}
+		})
+	}
+}
+
 func TestNativeAgentNoLedgerDoesNotAdoptMatchingBytes(t *testing.T) {
 	adapter, err := agents.NewAdapter(model.AgentKiroIDE)
 	if err != nil {

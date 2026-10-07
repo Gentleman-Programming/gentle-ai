@@ -18,7 +18,7 @@ import (
 // installs none, Kiro keeps Judgment Day, and Kimi keeps its main agent.
 var installedHashes = map[model.AgentID]map[string]string{
 	model.AgentClaudeCode: {
-		"jd-fix-agent.md": "a62bf9736226b81512cdedecbf5b6888714e6ae9dd6881b220504b859d35a218", "jd-judge-a.md": "76452ecee8bcf44b07a9ddc2d95b1adf0ada0c569f3d984d4858375528b6abf5", "jd-judge-b.md": "314dce8eda219f1336a824d5b8d2671fd982610107f52baaefa4ec6861b7fdf5", "review-readability.md": "3a15838d28ff2f02fca684e7036116917311f8bbe72c9d09b929015363d36737", "review-refuter.md": "fa58bacaa0af136963db25d25abe7fccad91a87f3454024f3d283339308976db", "review-reliability.md": "cd667908097d9d02d9c9ee0211b3040c4b4d507fbf2b21a78dd4bdf3d09e97ef", "review-resilience.md": "a4a186feb1b5e22b9edf09db9967416ddf3b41b613a268b7a9ee86f6cdc35986", "review-risk.md": "5c10ef801d1bddad5ee4f3e310b750b3dd5b98087c0f4ef1893f94c1d40c16b1",
+		"jd-fix-agent.md": "dabc4eec0f53ce13f7ee6849ff324b570c6c9b23cbf07e185b02a5350c2b3054", "jd-judge-a.md": "dbafe28fd5edc2c17ed5a2740c0eddd3c9f63243e7fae0f57341df073b6c1481", "jd-judge-b.md": "cade29de02c602dd316e20fc77a0756d2be136c6538f520a16c070ffc90e3d62", "review-readability.md": "3a15838d28ff2f02fca684e7036116917311f8bbe72c9d09b929015363d36737", "review-refuter.md": "fa58bacaa0af136963db25d25abe7fccad91a87f3454024f3d283339308976db", "review-reliability.md": "cd667908097d9d02d9c9ee0211b3040c4b4d507fbf2b21a78dd4bdf3d09e97ef", "review-resilience.md": "a4a186feb1b5e22b9edf09db9967416ddf3b41b613a268b7a9ee86f6cdc35986", "review-risk.md": "5c10ef801d1bddad5ee4f3e310b750b3dd5b98087c0f4ef1893f94c1d40c16b1",
 	},
 	model.AgentKimi: {
 		"gentleman.yaml": "4fd319f06d3381954556e7828c96bfc0901c428c1f00bacc407d1f63342349b1",
