@@ -120,9 +120,10 @@ func TestReviewConsentFollowUpKeepsRequestContext(t *testing.T) {
 	}
 }
 
-// TestReviewLensContextCarriesRequestContext is S10's output: the lens block
-// carries the frozen request as its own section, and the instruction tells the
-// lens to judge unmet requirements and unrequested scope against it.
+// TestReviewLensContextCarriesRequestContext is S10's output as narrowed by
+// verify-always-rdd-high S5: the lens block carries the frozen request as its
+// own section, read only as intent. Requirement compliance belongs to verify,
+// so the instruction no longer charges the lens with auditing the request.
 func TestReviewLensContextCarriesRequestContext(t *testing.T) {
 	request := writeRequestContextFile(t, requestContextFixture)
 	_, args, _ := startRequestContextReview(t, "request-context-lens", "--request-context", request)
@@ -133,13 +134,15 @@ func TestReviewLensContextCarriesRequestContext(t *testing.T) {
 		t.Fatalf("lens block does not carry the verbatim request context:\n%s", block)
 	}
 	instruction, _ := lensContextSection(block, "GENTLE_AI_REVIEW_INSTRUCTION")
-	for _, required := range []string{"GENTLE_AI_REVIEW_REQUEST_CONTEXT", "requested requirement the candidate does not meet", "unrequested scope"} {
+	for _, required := range []string{"GENTLE_AI_REVIEW_REQUEST_CONTEXT", "only to understand what the change intends", "verified separately"} {
 		if !strings.Contains(instruction, required) {
 			t.Fatalf("instruction omits %q:\n%s", required, instruction)
 		}
 	}
-	if strings.Contains(instruction, "Verify evidence.") {
-		t.Fatalf("instruction claims verify evidence the request does not carry:\n%s", instruction)
+	for _, audit := range []string{"requested requirement the candidate does not meet", "Judge the candidate against it", "Verify evidence."} {
+		if strings.Contains(instruction, audit) {
+			t.Fatalf("instruction still charges the lens with auditing the request (%q):\n%s", audit, instruction)
+		}
 	}
 	if strings.Index(block, "GENTLE_AI_REVIEW_REQUEST_CONTEXT\n") > strings.Index(block, "GENTLE_AI_REVIEW_NAME_STATUS") {
 		t.Fatal("request context appears after the candidate evidence")
@@ -147,43 +150,42 @@ func TestReviewLensContextCarriesRequestContext(t *testing.T) {
 }
 
 // requestContextVerifyPassFixture is a request whose verify section reports
-// every spec as passing: evidence a lens may read, never proof that removes a
-// requirement from its scope (S13 as reopened by S21).
+// every spec as passing. Verify results are inside evidence: the isolated
+// reviewers never see them (verify-always-rdd-high S5).
 const requestContextVerifyPassFixture = requestContextFixture + "\n## Verify\n\nS1 PASS probe: `budget set --year 1999` exits 2.\nS2 PASS probe: `budget show` output matches the base byte for byte.\n"
 
-// requireVerifyEvidenceKeepsScope checks the lens block for a frozen request
-// carrying Verify PASS verdicts: the evidence stays visible verbatim, the
-// lens keeps its own mandate, and the charge neither skips the passing specs
-// nor vouches that they were checked on the candidate under review.
-func requireVerifyEvidenceKeepsScope(t *testing.T, block, lens string) {
+// requireVerifyEvidenceExcluded checks the lens block for a frozen request
+// carrying a verify section: the lens sees the request as intent with the
+// verify section removed, keeps its own mandate, and is told nothing about
+// verify verdicts.
+func requireVerifyEvidenceExcluded(t *testing.T, block, lens string) {
 	t.Helper()
 	section, found := lensContextSection(block, "GENTLE_AI_REVIEW_REQUEST_CONTEXT")
-	if !found || section != strings.TrimSpace(requestContextVerifyPassFixture) {
-		t.Fatalf("lens block does not carry the verify evidence verbatim:\n%s", block)
+	if !found || section != strings.TrimSpace(requestContextFixture) {
+		t.Fatalf("lens block must carry the request without its verify section:\n%s", block)
+	}
+	if strings.Contains(block, "## Verify") || strings.Contains(block, "PASS probe") {
+		t.Fatalf("lens block carries verify evidence:\n%s", block)
 	}
 	instruction, _ := lensContextSection(block, "GENTLE_AI_REVIEW_INSTRUCTION")
-	for _, granted := range []string{"already checked", "do not re-check", "of this same candidate", "spend your review on"} {
-		if strings.Contains(instruction, granted) {
-			t.Fatalf("a reported PASS still removes requirements from the lens scope (%q):\n%s", granted, instruction)
-		}
+	if strings.Contains(instruction, "Verify evidence.") || strings.Contains(instruction, "reports as passing") {
+		t.Fatalf("instruction still mentions verify evidence:\n%s", instruction)
 	}
 	_, focus, _ := reviewtransaction.LensMandate(lens)
-	for _, required := range []string{"Verify evidence.", "including specs it reports as passing", "never removes a requirement from your scope", focus} {
-		if !strings.Contains(instruction, required) {
-			t.Fatalf("instruction omits %q:\n%s", required, instruction)
-		}
+	if !strings.Contains(instruction, focus) {
+		t.Fatalf("instruction omits the lens mandate %q:\n%s", focus, instruction)
 	}
 }
 
-// TestReviewLensContextKeepsVerifyPassSpecsInScope is S13 as reopened by S21:
-// a verify's per-spec verdicts ride in the request file and inform the lens,
-// but a textual PASS does not remove those specs from its review.
-func TestReviewLensContextKeepsVerifyPassSpecsInScope(t *testing.T) {
+// TestReviewLensContextExcludesVerifyEvidence is verify-always-rdd-high S5:
+// a verify's per-spec verdicts may ride in the request file, but the isolated
+// lens never sees them.
+func TestReviewLensContextExcludesVerifyEvidence(t *testing.T) {
 	request := writeRequestContextFile(t, requestContextVerifyPassFixture)
 	_, args, _ := startRequestContextReview(t, "request-context-verify", "--request-context", request)
 
 	lens := args[slices.Index(args, "--lens")+1]
-	requireVerifyEvidenceKeepsScope(t, lensContextBlock(t, args, lens), lens)
+	requireVerifyEvidenceExcluded(t, lensContextBlock(t, args, lens), lens)
 }
 
 // TestReviewStartCountsRequestContextAgainstLensBudget proves the request is
@@ -284,12 +286,11 @@ func TestReviewRecoverInheritsFrozenRequestContext(t *testing.T) {
 	}
 }
 
-// TestReviewRecoveredLensContextKeepsInheritedVerifyPassInScope is the S21
-// regression: a correction changes the candidate, recovery inherits the frozen
-// request with the predecessor's Verify PASS verdicts, and the successor's
-// lens still sees that evidence but must judge the changed candidate against
-// every requirement instead of treating the inherited PASS as checked.
-func TestReviewRecoveredLensContextKeepsInheritedVerifyPassInScope(t *testing.T) {
+// TestReviewRecoveredLensContextExcludesInheritedVerifyEvidence: a correction
+// changes the candidate, recovery inherits the frozen request with the
+// predecessor's verify verdicts, and the successor's lens still never sees
+// them (verify-always-rdd-high S5).
+func TestReviewRecoveredLensContextExcludesInheritedVerifyEvidence(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
@@ -340,7 +341,7 @@ func TestReviewRecoveredLensContextKeepsInheritedVerifyPassInScope(t *testing.T)
 	if lens == "" || target == "" || target == started.RepositoryContext.TargetIdentity {
 		t.Fatalf("successor collect does not review a changed candidate: lens=%q target=%q predecessor=%q", lens, target, started.RepositoryContext.TargetIdentity)
 	}
-	requireVerifyEvidenceKeepsScope(t, lensContextBlock(t, args, lens), lens)
+	requireVerifyEvidenceExcluded(t, lensContextBlock(t, args, lens), lens)
 }
 
 // requestContextRefuterReview starts a negotiated review with the given START
@@ -458,6 +459,25 @@ func TestReviewRefuterPromptCarriesFrozenRequestContext(t *testing.T) {
 	corrective := reviewProviderCorrectivePrompt(native.Invocation.Prompt(), errors.New("malformed result"))
 	if !bytes.Contains(corrective, []byte(section)) {
 		t.Fatal("corrective refuter prompt dropped the frozen request")
+	}
+}
+
+// TestReviewRefuterPromptExcludesVerifyEvidence: the refuter reads the frozen
+// request as intent too, so a verify section in the request file never
+// reaches its prompt (verify-always-rdd-high S5).
+func TestReviewRefuterPromptExcludesVerifyEvidence(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	request := writeRequestContextFile(t, requestContextVerifyPassFixture)
+	_, _, _, binding := requestContextRefuterReview(t, "request-context-refuter-verify", "--request-context", request)
+
+	prompt := materializeRequestContextRefuter(t, binding)
+	section := reviewLensContextRequestContext + "\n" + strings.TrimSpace(requestContextFixture) + "\n" + reviewLensContextRequestContext + "_END"
+	if !strings.Contains(prompt, section) {
+		t.Fatalf("refuter prompt must carry the request without its verify section:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "## Verify") || strings.Contains(prompt, "PASS probe") {
+		t.Fatalf("refuter prompt carries verify evidence:\n%s", prompt)
 	}
 }
 

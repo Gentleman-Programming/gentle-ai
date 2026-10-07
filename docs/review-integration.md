@@ -93,15 +93,15 @@ An exact replay of an active START can return `replayed`. A genuinely new START 
 
 #### Request context (`--request-context <file>`)
 
-Pass `--request-context <file>` to make the lenses judge the candidate against the request it was built for, not only through their own lens. The file holds the verbatim request or feature specs. START freezes its exact bytes and their hash with the authority, exactly like `--policy`:
+Pass `--request-context <file>` to show the lenses what the change intends. Lenses read the request as intent only and still review through their own lens: requirement and specification compliance belongs to verify, which runs before review. The file holds the verbatim request or feature specs. START freezes its exact bytes and their hash with the authority, exactly like `--policy`:
 
-- Every lens context then carries a `GENTLE_AI_REVIEW_REQUEST_CONTEXT` section, and the instruction asks the lens to report unmet requested requirements and unrequested scope.
+- Every lens context then carries a `GENTLE_AI_REVIEW_REQUEST_CONTEXT` section. The instruction tells the lens to use it only to understand the intended change, including which existing behavior it was asked to change, and not to audit the candidate against it.
 - The refuter prompt carries the same section, framed as untrusted evidence, so the refuter can tell behavior the request asked to change from unrequested scope. The section is part of the prompt only: the refuter request JSON and its `request_hash` are unchanged.
 - The request counts against the lens context budget and against the refuter prompt START measures. A request that cannot fit beside the evidence in either is refused by START before any authority exists; it is never truncated.
 - The request hash is bound into the capture phase revision, so every artifact subject commits to it. Replaying START on the same lineage with a different request is an `atomic_start_conflict`.
 - Recovery successors inherit the frozen request. A relayed consent answer repeats `--request-context`.
 
-The file may end with an optional verify section opened by a line `## Verify`. Put per-spec verdicts and probes there as evidence, not proof that the current candidate was checked. The request hash binds the text, not the truth of its assertions, and recovery may carry evidence over from an earlier candidate. Lenses independently judge every requested requirement against the current candidate, including specs reported as passing. Verify evidence neither narrows their scope nor redirects their lens mandate; its probes are leads, not permission to skip checks.
+The file may end with an optional verify section opened by a line `## Verify` (per-spec verdicts and probes). Verify results are inside evidence, so the reviewers never see them: the lens context and the refuter prompt carry the request only up to that heading. The frozen bytes and their hash still include the whole file, and recovery successors inherit it unchanged.
 
 The file must be non-empty UTF-8 text, and the flag may appear only once. Without the flag, START, the lens context, the refuter prompt, and the persisted authority are unchanged. Authority that carries a request context is persisted with two extra fields (`request_context_hash`, `frozen_request_context`).
 
