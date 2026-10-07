@@ -148,9 +148,9 @@ func reviewAssessDue(consumed bool, publicRisk string, changedLines int) (bool, 
 		return false, reviewAssessDueReasonAlreadyReviewed
 	case publicRisk == "high":
 		return true, reviewAssessDueReasonHighRisk
-	case publicRisk == "medium" && changedLines >= reviewtransaction.LargeChangeLines:
-		return true, reviewAssessDueReasonSliceBudgetReached
 	case publicRisk == "medium":
+		// Automatic review is for high risk only (verify-always-rdd-high S2):
+		// size is a reviewer prompt budget, not risk, and verify covers medium.
 		return false, reviewAssessDueReasonUnderBudget
 	default:
 		return false, reviewAssessDueReasonPassive

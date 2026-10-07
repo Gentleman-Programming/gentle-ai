@@ -247,13 +247,13 @@ With `--json`, it prints the typed `gentle-ai.review-assessment/v1` envelope:
 ```json
 {
   "schema": "gentle-ai.review-assessment/v1",
-  "risk": "medium",
-  "reasons": [{"code": "executable_change", "path": "notes/scratch.txt"}],
+  "risk": "high",
+  "reasons": [{"code": "service_token", "path": "internal/auth/service-token.go"}],
   "changed_paths": 1,
-  "changed_lines": 430,
+  "changed_lines": 43,
   "candidate": {"kind": "base-diff", "base_ref": "15ea98ed", "consumed": false},
   "review_due": true,
-  "review_due_reason": "slice_budget_reached",
+  "review_due_reason": "high_risk",
   "next_transition": {
     "operation": "review.status",
     "command": "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition --base-ref 15ea98ed --committed-only",
@@ -273,7 +273,7 @@ With `--json`, it prints the typed `gentle-ai.review-assessment/v1` envelope:
 
 `candidate.consumed` reports whether this exact candidate identity's terminal review authority was already acknowledged (`reviewtransaction.CompactTargetConsumed`, the same evidence `review status` itself consults before ever offering a fresh START for the identical identity), so a caller never re-derives that from a tombstone.
 
-`review_due` and `review_due_reason` turn the tier into the one consequence an orchestrator needs, in evaluation order: a consumed candidate always reports `already_reviewed` (`review_due: false`) regardless of tier; `high` risk always reports `review_due: true` with `high_risk`; `medium` reports `review_due: true` with `slice_budget_reached` once `changed_lines` reaches `reviewtransaction.LargeChangeLines` (400) over the assessed range, else `review_due: false` with `under_budget`; `passive` always reports `review_due: false` with `passive`. `changed_lines` is whatever range the caller assessed — pass `--base-ref <last reviewed boundary> --committed-only` to make it the accumulated ODD slice.
+`review_due` and `review_due_reason` turn the tier into the one consequence an orchestrator needs, in evaluation order: a consumed candidate always reports `already_reviewed` (`review_due: false`) regardless of tier; `high` risk always reports `review_due: true` with `high_risk`; `medium` always reports `review_due: false` with `under_budget`, whatever its `changed_lines` (automatic review is for high risk only; size is a reviewer prompt budget, not risk); `passive` always reports `review_due: false` with `passive`. `changed_lines` is whatever range the caller assessed — pass `--base-ref <last reviewed boundary> --committed-only` to make it the accumulated ODD slice.
 
 `next_transition` is present only when `review_due` is `true`: it is the exact, literally runnable `review status ... --next-transition` preflight continuation, built with the same argument builders and conventions `review status` itself uses, so an orchestrator executes `next_transition.command` verbatim instead of reconstructing the invocation from prose. Argument order is fixed: `--cwd`, `--contract`, the optional `--agent` the caller declared, `--next-transition`, and — only for a named base comparison — the caller's own `--base-ref` echoed verbatim plus `--committed-only`.
 

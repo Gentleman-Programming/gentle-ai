@@ -178,6 +178,11 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 		status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
 		return nil
 	}
+	// Only a review_due candidate earns a reminder (verify-always-rdd-high
+	// S2): high risk, by the same assessment `review assess` reports.
+	if !reviewStopHookReviewDue(root, runtimeAgent) {
+		return nil
+	}
 
 	// Check first, persist after delivery below: recording before the write
 	// risks losing the reminder if it fails or the process dies in between.
@@ -431,4 +436,24 @@ func recordReviewStopHookReminder(sessionID, targetIdentity string) (silent bool
 	}
 	_, err = filemerge.WriteFileAtomic(path, payload, 0o644)
 	return false, err
+}
+
+// reviewStopHookReviewDue reports review_due for the current candidate by
+// running the same in-process assessment `review assess` publishes. An
+// assessment that cannot answer fails closed to due, so a reminder is never
+// lost to an assessment error.
+func reviewStopHookReviewDue(root, runtimeAgent string) bool {
+	args := []string{"--cwd", root, "--json"}
+	if strings.TrimSpace(runtimeAgent) != "" {
+		args = append(args, "--agent", runtimeAgent)
+	}
+	var output bytes.Buffer
+	if err := RunReviewAssess(args, &output); err != nil {
+		return true
+	}
+	var result ReviewAssessmentResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		return true
+	}
+	return result.ReviewDue
 }

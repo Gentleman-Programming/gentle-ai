@@ -40,7 +40,8 @@ func stopHookJourneys() []Journey {
 					return nil
 				},
 			},
-			{Name: "fixture: stage docs", Fixture: stageDocs("stop-hook")},
+			// Only a review_due (high-risk) candidate earns a reminder.
+			{Name: "fixture: stage high-risk code", Fixture: stageAuthCode},
 			{
 				Name:  "an unreviewed candidate blocks with the STATUS preflight route",
 				Args:  productArgs("review", "stop-hook", "--agent", "claude-code"),

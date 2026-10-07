@@ -27,7 +27,8 @@ func TestReviewStopHookSilentAfterAcknowledgementWithoutPostBurnStatus(t *testin
 			t.Fatalf("acknowledged target triggered Stop: %s", output.String())
 		}
 	}
-	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", "new work after acknowledgement\n", 0o644)
+	// Only a review_due (high-risk) change earns a reminder (S2).
+	writeReviewStartCandidate(t, repo, "service-token-next.ts", "export const next = 1;\n", 0o644)
 	var output bytes.Buffer
 	payload := reviewStopHookTestPayload(t, "first-session", repo, false, nil)
 	if err := runReviewStopHook([]string{"--agent", "claude-code"}, strings.NewReader(payload), &output, io.Discard); err != nil {

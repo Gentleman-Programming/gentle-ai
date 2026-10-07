@@ -59,10 +59,37 @@ func runReviewStopHookSessionStartTest(t *testing.T, sessionID, repo string) (st
 	return stdout, stderr
 }
 
+// stageReviewStopHookCandidate stages a high-risk candidate: only high risk is
+// review_due, so only it earns a reminder (verify-always-rdd-high S2).
 func stageReviewStopHookCandidate(t *testing.T, repo string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 1;\n", 0o644)
+}
+
+// TestReviewStopHookStaysSilentForAMediumCandidate is verify-always-rdd-high
+// S2: a medium candidate is not review_due, so Stop never blocks on it and
+// records no reminder, even with RDD enabled and START offered.
+func TestReviewStopHookStaysSilentForAMediumCandidate(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	enableReviewStopHookRDD(t, repo)
+
+	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-medium", repo, false, nil))
+	var stdout, stderr bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("Stop run: %v\nstderr: %s", err, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "" {
+		t.Fatalf("Stop reminded about a medium candidate: %s", stdout.String())
+	}
+	if _, err := os.Stat(reviewStopHookStateFile(home, "sess-medium")); !os.IsNotExist(err) {
+		t.Fatalf("Stop recorded a reminder for a medium candidate, stat err=%v", err)
 	}
 }
 

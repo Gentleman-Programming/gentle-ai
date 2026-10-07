@@ -4,7 +4,7 @@ Pi uses the compact gentle-pi facade for this lifecycle: `gentle_review` for ins
 
 ## Entry rule
 
-After authorized source-mutating implementation is complete and normalized, and before reporting it complete, call `gentle_review` with {"operation":"inspect"}. Do this once per candidate whenever the user-owned review switch is enabled (`gentle-ai review mode status` reads it without changing it). The facade returns the only offered START route; do not infer, reconstruct, or replace it. Never skip the preflight because the user did not ask for a review: the START consent envelope lets the human decide this candidate. Skip it only for a trivial passive documentation-only edit, when the user explicitly left this candidate unreviewed, or while a transaction is already bound to it.
+Review is an extra outside view for high-risk work, never a per-candidate ritual. After authorized source-mutating implementation is complete and normalized, and before reporting it complete, whenever the user-owned review switch is enabled (`gentle-ai review mode status` reads it without changing it), call `gentle_review` with {"operation":"assess"}. Call `gentle_review` with {"operation":"inspect"} only when its `reviewDue` is true (high risk) or the user explicitly asks for a review of this candidate; otherwise do not start one, because verify already covered it by the risk tier. The facade returns the only offered START route; do not infer, reconstruct, or replace it. The START consent envelope lets the human decide this candidate. Skip it when the user explicitly left this candidate unreviewed or while a transaction is already bound to it.
 
 ## Lens selection
 

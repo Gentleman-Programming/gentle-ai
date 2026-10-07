@@ -390,7 +390,7 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			"run `gentle-ai review assess --cwd <repo> --agent <runtime> --base-ref <last reviewed boundary> --committed-only --json` on that commit and read `review_due` and `review_due_reason`",
 		}},
 		{"a due assessment hands over the exact preflight transition", []string{
-			"When `review_due` is true (`high_risk`, or `slice_budget_reached` for a medium range that reached the delivery budget of about 400 authored changed lines), execute the returned `next_transition.command` verbatim",
+			"When `review_due` is true (`high_risk`), or when the user explicitly asks for a review, execute the returned `next_transition.command` verbatim with your `--lenses`/`--lenses-reason` selection appended",
 			"it is the exact preflight STATUS for the same `--base-ref`/`--committed-only` selectors",
 			"the reviewed boundary advances to this commit once that review is acknowledged",
 		}},

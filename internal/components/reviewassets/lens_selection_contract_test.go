@@ -40,3 +40,27 @@ func TestReviewContractsTellTheAgentToSelectItsLenses(t *testing.T) {
 		})
 	}
 }
+
+// TestReviewContractsEnterReviewOnlyWhenDue is verify-always-rdd-high S2: the
+// rendered entry rule starts a review only for a review_due (high-risk)
+// candidate or an explicit user request, never once per candidate.
+func TestReviewContractsEnterReviewOnlyWhenDue(t *testing.T) {
+	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentCodex, model.AgentOpenCode, model.AgentPi} {
+		t.Run(string(agent), func(t *testing.T) {
+			contract := ContractFor(agent)
+			for _, want := range []string{
+				"Review is an extra outside view for high-risk work, never a per-candidate ritual.",
+				"or the user explicitly asks for a review of this candidate; otherwise do not start one, because verify already covered it by the risk tier.",
+			} {
+				if !strings.Contains(contract, want) {
+					t.Fatalf("%s entry rule omits %q", agent, want)
+				}
+			}
+			for _, banned := range []string{"Enter this lifecycle once per candidate", "Do this once per candidate", "never skip the preflight because the user did not ask for a review"} {
+				if strings.Contains(strings.ReplaceAll(contract, "Never skip", "never skip"), banned) {
+					t.Fatalf("%s entry rule still reviews every candidate (%q)", agent, banned)
+				}
+			}
+		})
+	}
+}
