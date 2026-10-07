@@ -17,7 +17,7 @@ import (
 )
 
 // #5256 U2b-2: the Claude routing step installs the retained review/telemetry
-// and skill-registry hooks into the home settings before it delivers guidance.
+// and skill-registry hooks into the scoped settings before it delivers guidance.
 // Install and sync must snapshot that file whatever optional components were
 // selected, so the normal outer rollback undoes the hook writes together with
 // the pilot files. These cases run the real planners, snapshotter, routing
@@ -82,7 +82,7 @@ func pilotFileStates(t *testing.T, paths []string) map[string]string {
 	return states
 }
 
-func TestClaudeModulePipelineRollbackPlansHomeSettingsWhereRoutingWritesHooks(t *testing.T) {
+func TestClaudeModulePipelineRollbackPlansScopedSettingsWhereRoutingWritesHooks(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}}
@@ -95,9 +95,8 @@ func TestClaudeModulePipelineRollbackPlansHomeSettingsWhereRoutingWritesHooks(t 
 		want  bool
 	}{
 		{name: "install global", scope: ScopeGlobal, want: true},
-		// Install schedules the routing step in every scope, and its hooks
-		// always target the home settings.
-		{name: "install workspace", scope: ScopeWorkspace, want: true},
+		// Workspace install snapshots the project settings where hooks are written.
+		{name: "install workspace", scope: ScopeWorkspace, want: false},
 		{name: "sync global", scope: ScopeGlobal, sync: true, want: true},
 		// A workspace sync skips Claude routing entirely and must not snapshot
 		// home state.
@@ -116,6 +115,12 @@ func TestClaudeModulePipelineRollbackPlansHomeSettingsWhereRoutingWritesHooks(t 
 			}
 			if got := containsPath(targets, settings); got != tc.want {
 				t.Fatalf("backup targets contain home Claude settings %q = %t, want %t\ntargets = %v", settings, got, tc.want, targets)
+			}
+			if !tc.sync && tc.scope == ScopeWorkspace {
+				workspaceSettings := claudeHomeSettingsPath(workspace)
+				if !containsPath(targets, workspaceSettings) {
+					t.Fatalf("backup targets omit workspace Claude settings %q", workspaceSettings)
+				}
 			}
 		})
 	}
