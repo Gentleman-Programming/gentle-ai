@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -412,6 +413,23 @@ func captureSelectedUntrackedCorrectionFinding(r *journeyRun) error {
 		if err != nil {
 			return err
 		}
+		if status.NextTransition.ReasonCode == "provider_refuter_required" {
+			// The deterministic finding reaches the refuter on this
+			// refuter-capable runtime (L20); its corroborating capture closes.
+			terminal, err = corroborateProviderRefuter(r, status)
+			if err != nil {
+				return err
+			}
+			var closure lastEventClosure
+			if err := json.Unmarshal([]byte(strings.TrimSpace(terminal.Stdout)), &closure); err != nil {
+				return fmt.Errorf("decode selected untracked refuter closure: %w", err)
+			}
+			if closure.State != "correction_required" || closure.LineageID != r.sandbox.Lineage || closure.StatusContinuation == nil || closure.StatusContinuation.Operation != "review.status" {
+				return fmt.Errorf("selected untracked refuter closure = %+v", closure)
+			}
+			r.sandbox.Scratch["j4435-closure"] = terminal.Stdout
+			return nil
+		}
 		if status.Authority.LineageID != r.sandbox.Lineage || status.Authority.State != "reviewing" ||
 			status.TargetIdentity != r.sandbox.Scratch["j4435-target"] || status.NextTransition.Kind != "collect" ||
 			status.NextTransition.ReasonCode != "reviewer_results_required" || len(status.NextTransition.Collect.Inputs) == 0 {
@@ -571,4 +589,53 @@ func intendedUntrackedJourneys() []Journey {
 			},
 		},
 	}
+}
+
+var (
+	refuterRequestHashPattern = regexp.MustCompile(`"request_hash":"(sha256:[0-9a-f]{64})"`)
+	refuterFindingIDPattern   = regexp.MustCompile(`"finding_id":"([A-Za-z0-9-]+)"`)
+)
+
+// corroborateProviderRefuter answers a provider_refuter_required STATUS the
+// way a host would: it materializes the Go-issued refuter task through the Pi
+// relay, corroborates every claim it names, and captures that result. The
+// sandbox keeps the Pi relay handshake afterwards.
+func corroborateProviderRefuter(r *journeyRun, status statusEnvelope) (Observation, error) {
+	// The Pi relay captures the refuter, so the returned continuation names
+	// the Pi runtime; keep its handshake for the rest of the journey.
+	r.sandbox.PiReviewRelayContract = "gentle-pi.review-relay/v1"
+	binding := []string{
+		"--cwd", r.sandbox.Repo, "--lineage", status.argument("lineage"), "--target", status.argument("target"),
+		"--expected-revision", status.argument("expected-revision"), "--repository-context", status.argument("repository-context"), "--agent", "pi",
+	}
+	task := r.run(append([]string{"review", "capture-refuter"}, append(binding, "--materialize")...), false)
+	if task.ExitCode != 0 {
+		return task, fmt.Errorf("materialize provider refuter: %s", firstLine(task.Stderr))
+	}
+	hash := refuterRequestHashPattern.FindStringSubmatch(task.Stdout)
+	if hash == nil {
+		return task, fmt.Errorf("materialized provider refuter task has no request hash")
+	}
+	results := []map[string]any{}
+	seen := map[string]bool{}
+	for _, match := range refuterFindingIDPattern.FindAllStringSubmatch(task.Stdout, -1) {
+		if seen[match[1]] {
+			continue
+		}
+		seen[match[1]] = true
+		results = append(results, map[string]any{"finding_id": match[1], "outcome": "corroborated", "proof_refs": []string{"independent reproduction of " + match[1]}})
+	}
+	payload, err := json.Marshal(map[string]any{"refuter_request_hash": hash[1], "results": results})
+	if err != nil {
+		return task, err
+	}
+	path, err := writeScratch(r.sandbox, "provider-refuter-result.json", payload)
+	if err != nil {
+		return task, err
+	}
+	captured := r.run(append([]string{"review", "capture-refuter"}, append(binding, "--input", path)...), true)
+	if captured.ExitCode != 0 {
+		return captured, fmt.Errorf("capture provider refuter: %s", firstLine(captured.Stderr))
+	}
+	return captured, nil
 }

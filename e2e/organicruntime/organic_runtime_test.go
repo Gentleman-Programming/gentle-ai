@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -414,10 +415,16 @@ func TestCodexProviderAdapterUsesPinnedLocalRuntime(t *testing.T) {
 			return
 		}
 		responseRequests++
-		_, err := io.ReadAll(request.Body)
+		body, err := io.ReadAll(request.Body)
 		if err != nil {
 			t.Errorf("read Codex request: %v", err)
 			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		// The severe deterministic finding reaches the refuter inside the
+		// same compiled capture; it corroborates every claim it is asked about.
+		if refuter := codexLoopbackRefuterResponse(body); refuter != nil {
+			writeCodexResponsesLoopback(t, writer, refuter)
 			return
 		}
 		writeCodexResponsesLoopback(t, writer, response)
@@ -460,8 +467,8 @@ exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e 
 	if err != nil {
 		t.Fatalf("registered Codex provider route: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if responseRequests != 1 {
-		t.Fatalf("registered Codex loopback made %d root, %d model, and %d Responses requests; want exactly one Responses request", rootRequests, modelRequests, responseRequests)
+	if responseRequests != 2 {
+		t.Fatalf("registered Codex loopback made %d root, %d model, and %d Responses requests; want one reviewer and one refuter Responses request", rootRequests, modelRequests, responseRequests)
 	}
 	denied := proxy.deniedRequests()
 	if denied == 0 {
@@ -658,6 +665,39 @@ func denyingProxyTargetIsExternal(request *http.Request) bool {
 	}
 	address, err := netip.ParseAddr(host)
 	return err != nil || !address.IsLoopback()
+}
+
+var (
+	codexLoopbackRequestHash = regexp.MustCompile(`request_hash\\*":\\*"(sha256:[0-9a-f]{64})`)
+	codexLoopbackFindingID   = regexp.MustCompile(`finding_id\\*":\\*"([A-Za-z0-9-]+)`)
+)
+
+// codexLoopbackRefuterResponse answers a provider refuter request carried in
+// a Responses body with a result that corroborates every claim, or returns
+// nil when the body is not a refuter request.
+func codexLoopbackRefuterResponse(body []byte) []byte {
+	if !bytes.Contains(body, []byte("gentle-ai.review-provider-refuter-request/v1")) {
+		return nil
+	}
+	hash := codexLoopbackRequestHash.FindSubmatch(body)
+	if hash == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	results := []map[string]any{}
+	for _, match := range codexLoopbackFindingID.FindAllSubmatch(body, -1) {
+		id := string(match[1])
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		results = append(results, map[string]any{"finding_id": id, "outcome": "corroborated", "proof_refs": []string{"loopback reproduced the claim in the frozen candidate"}})
+	}
+	payload, err := json.Marshal(map[string]any{"refuter_request_hash": string(hash[1]), "results": results})
+	if err != nil {
+		return nil
+	}
+	return payload
 }
 
 func writeCodexResponsesLoopback(t *testing.T, writer http.ResponseWriter, response []byte) {
@@ -2114,7 +2154,7 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 		t.Fatalf("correction journey needs one consolidated review with a budget: %#v", started)
 	}
 
-	_, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
+	stdout, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
 		Lens: started.SelectedLenses[0],
 		Findings: []organicFinding{{
 			Location:          path + ":5",
@@ -2129,14 +2169,11 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture candidate-caused result: %v\n%s", err, stderr)
 	}
-	// The severe finding reaches the refuter (L20); its corroborating capture
-	// is the event that opens the bounded correction.
-	stdout := harness.corroborateRefuter(lineage)
 	var required organicFinalizeResult
 	if err := json.Unmarshal([]byte(stdout), &required); err != nil {
 		t.Fatalf("decode correction-required capture: %v\n%s", err, stdout)
 	}
-	if required.Operation != "review.capture-refuter" || required.State != organicStateCorrectionRequired {
+	if required.Operation != "review/capture-result" || required.State != organicStateCorrectionRequired {
 		t.Fatalf("candidate-caused blocker did not require a correction: %#v", required)
 	}
 
