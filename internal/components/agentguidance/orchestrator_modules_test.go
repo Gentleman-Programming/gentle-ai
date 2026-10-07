@@ -181,8 +181,8 @@ func TestOrchestratorModuleCoreKeepsCriticalPolicy(t *testing.T) {
 		clauses    []string
 	}{
 		{"Delegated Verification Gate", sharedOrchestratorSection(shared, "Delegated Verification Gate (MANDATORY)"), []string{
-			"declines the consent envelope", "the parent follows the RDD off path instead", "**RDD off or unknown**",
-			"An unknown outcome is treated as not closed", "**Verify handoff**", "The writer receives `## Verification`",
+			"follows the native risk tier whether receipt-driven development (RDD) is on or off", "**Risk tier**",
+			"**RDD on**", "never replaces or skips the tier's verification", "**Verify handoff**", "The writer receives `## Verification`",
 		}},
 		{"Simple Delegation", strings.TrimSpace(routing[start:end]), []string{
 			"The delegation trigger stays mandatory", "requires one read-only explorer", "parent-context backstop",
