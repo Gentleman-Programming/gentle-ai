@@ -447,7 +447,7 @@ func reviewLensContextCompactAtomicStartBudgetRefusal(
 	if state.FrozenRequestContext != nil {
 		alone := state
 		alone.FrozenRequestContext = nil
-		if aloneOutcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, alone, revision); aloneOutcome == reviewLensContextRepresentable {
+		if aloneOutcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, alone, revision, model.AgentID(state.RuntimeAgent)); aloneOutcome == reviewLensContextRepresentable {
 			reason, action = reviewLensContextStartRequestBudgetReason, reviewLensContextStartRequestBudgetAction
 		} else {
 			action += reviewLensContextStartRequestShareAction
