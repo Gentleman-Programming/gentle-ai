@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -57,6 +58,24 @@ func moduleHashes(modules []orchestratorModule) map[string]string {
 	return files
 }
 
+func TestAssertModuleFileNativePermissions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode fs.FileMode
+	}{
+		{"private writable", 0o600},
+		{"shared writable", 0o644},
+		{"executable", 0o755},
+		{"read only", 0o444},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "module.md")
+			writeModuleTestFile(t, path, "module content\n", tc.mode)
+			assertModuleFile(t, path, "module content\n", tc.mode)
+		})
+	}
+}
+
 func assertModuleFile(t *testing.T, path, want string, mode fs.FileMode) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -64,8 +83,20 @@ func assertModuleFile(t *testing.T, path, want string, mode fs.FileMode) {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	info, err := os.Lstat(path)
-	if err != nil || string(data) != want || info.Mode() != mode {
-		t.Fatalf("%s = %q mode %v (%v), want %q mode %v", path, data, info.Mode(), err, want, mode)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if runtime.GOOS == "windows" {
+		// Go exposes the Windows read-only attribute, not POSIX permission bits.
+		// Keep checking file type and whether the owner-write bit was requested.
+		writable := mode&0o200 != 0
+		mode = mode.Type() | 0o444
+		if writable {
+			mode |= 0o222
+		}
+	}
+	if string(data) != want || info.Mode() != mode {
+		t.Fatalf("%s = %q mode %v, want %q mode %v", path, data, info.Mode(), want, mode)
 	}
 }
 
@@ -154,8 +185,13 @@ func TestOrchestratorModuleInstallStagesThenFinalizesLedger(t *testing.T) {
 				assertModuleFile(t, filepath.Join(dir, module.file), module.content, 0o644)
 			}
 			for _, created := range []string{filepath.Dir(dir), dir} {
-				if info, err := os.Lstat(created); err != nil || !info.IsDir() || info.Mode().Perm()&^0o700 != 0 {
-					t.Fatalf("created directory %s = %v (%v), want private directory", created, info, err)
+				info, err := os.Lstat(created)
+				if err != nil || !info.IsDir() {
+					t.Fatalf("created directory %s = %v (%v), want real directory", created, info, err)
+				}
+				// Windows FileMode does not describe directory ACL privacy.
+				if runtime.GOOS != "windows" && info.Mode().Perm()&^0o700 != 0 {
+					t.Fatalf("created directory %s mode = %v, want private directory", created, info.Mode())
 				}
 			}
 			if err := install.finalize(); err != nil {

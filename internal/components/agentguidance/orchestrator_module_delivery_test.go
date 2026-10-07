@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -101,6 +102,58 @@ func TestClaudeModuleDeliveryInjectsCoreModulesAndLedger(t *testing.T) {
 	}
 	if after := snapshotModuleTree(t, home); !reflect.DeepEqual(after, before) {
 		t.Fatalf("second inject changed the tree")
+	}
+}
+
+// #5336 exercises the production binding with an isolated native Windows home.
+func TestClaudeModuleDeliveryWindowsHomeBinding(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires native Windows path semantics")
+	}
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".claude")
+	corePath := filepath.Join(configDir, "CLAUDE.md")
+	writeModuleTestFile(t, corePath, coreTransactionUserCore, 0o600)
+	before := snapshotModuleTree(t, home)
+
+	result, err := InjectRoutingWithOptions(home, model.AgentClaudeCode, claudeModuleOptions)
+	if err != nil || !result.Changed {
+		t.Fatalf("inject into isolated Windows home = %+v, %v; want changed", result, err)
+	}
+	planned, err := RoutingPathsWithOptions(home, model.AgentClaudeCode, claudeModuleOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	core, err := os.ReadFile(corePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(core), "# My rules\n\nprefix text\n\n") || !strings.Contains(string(core), "\nsuffix text\n") {
+		t.Fatal("installation changed user text outside the managed sections")
+	}
+	for _, path := range result.Files {
+		if !slices.Contains(planned, path) {
+			t.Fatalf("wrote unplanned path %q", path)
+		}
+		if path != corePath && filepath.Base(path) != orchestratorModuleLedgerName {
+			if !strings.Contains(string(core), "`"+path+"`") {
+				t.Fatalf("core lacks native Windows pointer to %q", path)
+			}
+			if data, err := os.ReadFile(path); err != nil || len(data) == 0 {
+				t.Fatalf("referenced module %q = %q, %v; want nonempty content", path, data, err)
+			}
+		}
+	}
+	installed := snapshotModuleTree(t, home)
+	if reflect.DeepEqual(installed, before) {
+		t.Fatal("installation did not change the isolated home")
+	}
+	again, err := InjectRoutingWithOptions(home, model.AgentClaudeCode, claudeModuleOptions)
+	if err != nil || again.Changed || !reflect.DeepEqual(again.Files, result.Files) {
+		t.Fatalf("second inject = %+v, %v; want no-op", again, err)
+	}
+	if !reflect.DeepEqual(snapshotModuleTree(t, home), installed) {
+		t.Fatal("second installation changed stored files")
 	}
 }
 
