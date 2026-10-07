@@ -5,22 +5,20 @@ package testenv
 
 import "os"
 
-// overrideEnvVars lists the runtime-dir override environment variables that
-// gentle-ai's own agent-path resolution honors unconditionally when set to
-// an absolute value, bypassing whatever homeDir a caller passes in:
+// overrideEnvVars lists inherited config-path overrides that can bypass
+// a test's temporary home during agent-path resolution:
 //   - PI_CODING_AGENT_DIR (internal/agents/pi.AgentConfigPath)
 //   - OPENCODE_CONFIG_DIR (internal/opencode.ResolveRuntimeConfigForHome)
+//   - XDG_CONFIG_HOME (OpenCode config resolution when homeDir is the OS home)
 //
-// A developer shell that exports either of these (Gentle Shell does, for its
-// isolated Pi/OpenCode homes) leaks into any `go test` invocation that
-// inherits it, redirecting tests into the real ~/.pi or ~/.config instead of
-// their own temp home. XDG_CONFIG_HOME/APPDATA are deliberately excluded:
-// every adapter that reads them already guards with an explicit
-// homeDir-equals-os.UserHomeDir() check, which an arbitrary t.TempDir() home
-// never satisfies.
+// Inherited overrides can redirect tests into external configuration instead
+// of their own temp home. Tests that mock HOME can satisfy OpenCode's
+// homeDir-equals-os.UserHomeDir() check, so XDG_CONFIG_HOME must also be cleared.
+// Tests may explicitly set overrides after isolation to exercise resolution.
 var overrideEnvVars = []string{
 	"PI_CODING_AGENT_DIR",
 	"OPENCODE_CONFIG_DIR",
+	"XDG_CONFIG_HOME",
 }
 
 // Isolate unsets every known agent runtime-dir override environment

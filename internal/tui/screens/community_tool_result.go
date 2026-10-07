@@ -11,7 +11,7 @@ import (
 
 func RenderCommunityToolResult(results []communitytool.Result, err error) string {
 	var b strings.Builder
-	b.WriteString(styles.TitleStyle.Render("Community Tools/Plugins"))
+	b.WriteString(styles.TitleStyle.Render("Community Tools"))
 	b.WriteString("\n\n")
 
 	if err != nil {

@@ -733,14 +733,16 @@ func buildAppCandidateBinary(t *testing.T) string {
 	// 30s; the cap only guards against a hung toolchain, not build speed.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "build", "-o", binary, "../../cmd/gentle-ai")
+	// This fixture tests runtime state, not VCS metadata. Avoid consulting
+	// ambient repository ancestry when building from a linked worktree.
+	command := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-o", binary, "../../cmd/gentle-ai")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build candidate binary: %v\n%s", err, output)
 	}
 	return binary
 }
 
-func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.T) {
+func TestTuiInstallOnThenSyncRefreshesCanonicalAndRefusesTamperedOpenCodeActivation(t *testing.T) {
 	home := t.TempDir()
 	previousUserHomeDir := appUserHomeDir
 	appUserHomeDir = func() (string, error) { return home, nil }
@@ -764,9 +766,23 @@ func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.
 	if !strings.Contains(string(before), "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS") {
 		t.Fatalf("TUI install launcher missing background environment: %s", before)
 	}
-	stale := strings.Replace(string(before), "=true", "=stale", 1)
-	if err := os.WriteFile(launcher, []byte(stale), 0o755); err != nil {
-		t.Fatalf("WriteFile(stale launcher): %v", err)
+	// Issue #3451: a generated launcher for an older OpenCode target is still
+	// managed and refreshed in place. The old target must stay runnable because
+	// sync probes the runtime through the launcher already on process PATH.
+	resolvedBinDir, err := filepath.EvalSymlinks(binDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(OpenCode bin): %v", err)
+	}
+	oldBinDir, err := filepath.EvalSymlinks(writeFakeOpenCodeRuntime(t))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(old OpenCode bin): %v", err)
+	}
+	if !strings.Contains(string(before), resolvedBinDir) {
+		t.Fatalf("TUI install launcher does not target %q: %s", resolvedBinDir, before)
+	}
+	staleTarget := strings.ReplaceAll(string(before), resolvedBinDir, oldBinDir)
+	if err := os.WriteFile(launcher, []byte(staleTarget), 0o755); err != nil {
+		t.Fatalf("WriteFile(stale-target launcher): %v", err)
 	}
 
 	changed, err := tuiSync(home)(nil)
@@ -779,6 +795,19 @@ func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.
 	}
 	if string(after) != string(before) || !slices.Contains(changed, launcher) {
 		t.Fatalf("TUI sync launcher/changed files = %q/%v, want refreshed launcher and changed path", after, changed)
+	}
+
+	// A hand-edited launcher is no longer the generated one: sync refuses it
+	// and leaves the user's bytes in place.
+	tampered := strings.Replace(string(before), "=true", "=stale", 1)
+	if err := os.WriteFile(launcher, []byte(tampered), 0o755); err != nil {
+		t.Fatalf("WriteFile(tampered launcher): %v", err)
+	}
+	if _, err := tuiSync(home)(nil); err == nil || !strings.Contains(err.Error(), "user-owned OpenCode launcher collision") {
+		t.Fatalf("TUI sync error = %v, want user-owned launcher refusal", err)
+	}
+	if preserved, err := os.ReadFile(launcher); err != nil || string(preserved) != tampered {
+		t.Fatalf("tampered launcher after refused sync = %q, %v; want preserved", preserved, err)
 	}
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	settings, err := os.ReadFile(settingsPath)
@@ -2605,6 +2634,91 @@ func TestCustomClearRoundTripLeavesFutureSyncInPreserveMode(t *testing.T) {
 	loadPersistedAssignments(home, &future)
 	if future.CodexOrchestratorAssignment != nil || future.ClearCodexOrchestratorAssignment {
 		t.Fatalf("future sync did not return to preserve mode: assignment=%#v clear=%v", future.CodexOrchestratorAssignment, future.ClearCodexOrchestratorAssignment)
+	}
+}
+
+func TestLoadPersistedCodexServiceTierRestoresOnlyValidValues(t *testing.T) {
+	for _, tt := range []struct{ persisted, want string }{
+		{"priority", "priority"},
+		{"priority\nmodel = \"x\"", ""},
+	} {
+		home := t.TempDir()
+		if err := state.Write(home, state.InstallState{InstalledAgents: []string{"codex"}, CodexServiceTier: tt.persisted}); err != nil {
+			t.Fatalf("state.Write (seed): %v", err)
+		}
+		selection := model.Selection{}
+		loadPersistedAssignments(home, &selection)
+		if selection.CodexServiceTier != tt.want || selection.CodexManagedServiceTier != tt.want {
+			t.Fatalf("restored %q: tier = %q managed = %q, want %q", tt.persisted, selection.CodexServiceTier, selection.CodexManagedServiceTier, tt.want)
+		}
+	}
+}
+
+func TestPersistAssignmentsNeverRecordsTheSelectedCodexServiceTier(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"codex"}, CodexServiceTier: "flex"}); err != nil {
+		t.Fatalf("state.Write (seed): %v", err)
+	}
+	if err := persistAssignments(home, model.Selection{CodexServiceTier: "priority", CodexManagedServiceTier: "flex"}); err != nil {
+		t.Fatal(err)
+	}
+	if persisted, err := state.Read(home); err != nil || persisted.CodexServiceTier != "flex" {
+		t.Fatalf("persisted tier = %q, err = %v; want flex (only engram's write result is recorded)", persisted.CodexServiceTier, err)
+	}
+}
+
+func codexServiceTierInstall(t *testing.T, home string, components []model.ComponentID, desired, managed string) {
+	t.Helper()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentCodex}, Components: components, CodexServiceTier: desired, CodexManagedServiceTier: managed}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: components}
+	if result := tuiExecuteWithBackground(selection, resolved, system.DetectionResult{}, "", "", "", "", nil); result.Err != nil {
+		t.Fatalf("TUI install error = %v", result.Err)
+	}
+}
+
+func codexConfigAndStateTier(t *testing.T, home string) (string, string) {
+	t.Helper()
+	config, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	return string(config), persisted.CodexServiceTier
+}
+
+// TestTUIInstallRecordsOnlyTheCodexServiceTierEngramWrote covers both halves
+// of the managed-tier contract: a tier no engram run wrote is never recorded,
+// and a Standard install in the session that wrote Fast retires exactly it.
+func TestTUIInstallRecordsOnlyTheCodexServiceTierEngramWrote(t *testing.T) {
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
+	if runtime.GOOS == "windows" {
+		t.Skip("fake engram runtime is a POSIX shell script")
+	}
+	home := t.TempDir()
+	previousUserHomeDir := appUserHomeDir
+	appUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { appUserHomeDir = previousUserHomeDir })
+	// A fake engram on PATH keeps the engram component from installing anything.
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "engram"), []byte("#!/bin/sh\nprintf 'engram 1.18.0\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	codexServiceTierInstall(t, home, []model.ComponentID{model.ComponentPersona}, "priority", "")
+	if config, recorded := codexConfigAndStateTier(t, home); recorded != "" || strings.Contains(config, "service_tier") {
+		t.Fatalf("unwritten tier recorded: state = %q config:\n%s", recorded, config)
+	}
+
+	codexServiceTierInstall(t, home, []model.ComponentID{model.ComponentEngram}, "priority", "")
+	if config, recorded := codexConfigAndStateTier(t, home); recorded != "priority" || !strings.Contains(config, `service_tier = "priority"`) {
+		t.Fatalf("written tier not recorded: state = %q config:\n%s", recorded, config)
+	}
+
+	// Same session, now Standard: the managed value is what state recorded.
+	codexServiceTierInstall(t, home, []model.ComponentID{model.ComponentEngram}, "", "priority")
+	if config, recorded := codexConfigAndStateTier(t, home); recorded != "" || strings.Contains(config, "service_tier") {
+		t.Fatalf("Standard left an orphan: state = %q config:\n%s", recorded, config)
 	}
 }
 

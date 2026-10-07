@@ -112,7 +112,7 @@ func TestInstalledPromptCarriesRDDOnlyOnRDDRuntimes(t *testing.T) {
 				for _, want := range []string{
 					"The native RDD refuter owns native review claims; never duplicate or bypass it.",
 					"gentle-ai review mode enable|disable|status",
-					"gentle-ai review assess --cwd <repo> --json",
+					"gentle-ai review assess --cwd <repo> --agent " + string(agent) + " --json",
 					"**RDD on**",
 				} {
 					if !strings.Contains(prompt, want) {

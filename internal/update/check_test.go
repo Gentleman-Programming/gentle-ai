@@ -42,14 +42,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestActiveToolsExcludeRetiredSDDPlugin(t *testing.T) {
-	for _, tool := range Tools {
-		if tool.Name == "opencode-sdd-engram-manage" || tool.NpmPackage == "opencode-sdd-engram-manage" {
-			t.Fatalf("retired SDD plugin is still offered for update: %+v", tool)
-		}
-	}
-}
-
 // --- TestDetectInstalledVersion ---
 
 func TestDetectInstalledVersion(t *testing.T) {
@@ -257,93 +249,6 @@ func TestDetectInstalledVersionFallbackPathsNoFallbackDefined(t *testing.T) {
 	got := detectInstalledVersion(context.Background(), tool, "")
 	if got != "" {
 		t.Fatalf("detectInstalledVersion() = %q, want empty when LookPath fails and no fallback defined", got)
-	}
-}
-
-func TestDetectInstalledVersionFromOpenCodeNodeModulePackageJSON(t *testing.T) {
-	home := t.TempDir()
-	pkgDir := filepath.Join(home, ".config", "opencode", "node_modules", "opencode-sdd-engram-manage")
-	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.1.7"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	origHome := userHomeDir
-	userHomeDir = func() (string, error) { return home, nil }
-	t.Cleanup(func() { userHomeDir = origHome })
-
-	tool := ToolInfo{Name: "sdd-engram-plugin", NpmPackage: "opencode-sdd-engram-manage"}
-	if got := detectInstalledVersion(context.Background(), tool, "dev"); got != "1.1.7" {
-		t.Fatalf("detectInstalledVersion() = %q, want 1.1.7", got)
-	}
-}
-
-func TestDetectInstalledVersionFromOpenCodePackageJSONDependency(t *testing.T) {
-	home := t.TempDir()
-	opencodeDir := filepath.Join(home, ".config", "opencode")
-	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(opencodeDir, "package.json"), []byte(`{"dependencies":{"opencode-sdd-engram-manage":"^1.3.3"}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	origHome := userHomeDir
-	userHomeDir = func() (string, error) { return home, nil }
-	t.Cleanup(func() { userHomeDir = origHome })
-
-	tool := ToolInfo{Name: "sdd-engram-plugin", NpmPackage: "opencode-sdd-engram-manage"}
-	if got := detectInstalledVersion(context.Background(), tool, "dev"); got != "1.3.3" {
-		t.Fatalf("detectInstalledVersion() = %q, want 1.3.3", got)
-	}
-}
-
-func TestCheckSingleToolOpenCodePluginRegisteredNotMaterialized(t *testing.T) {
-	home := t.TempDir()
-	opencodeDir := filepath.Join(home, ".config", "opencode")
-	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	origHome := userHomeDir
-	origClient := httpClient
-	t.Cleanup(func() {
-		userHomeDir = origHome
-		httpClient = origClient
-	})
-	userHomeDir = func() (string, error) { return home, nil }
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(githubRelease{TagName: "v1.2.3", HTMLURL: "https://example.test/release"})
-	}))
-	defer server.Close()
-	httpClient = server.Client()
-	httpClient.Transport = &testTransport{server: server}
-
-	tool := ToolInfo{
-		Name:          "opencode-sdd-engram-manage",
-		Owner:         "owner",
-		Repo:          "repo",
-		InstallMethod: InstallOpenCodePlugin,
-		NpmPackage:    "opencode-sdd-engram-manage",
-	}
-
-	result := checkSingleTool(context.Background(), tool, "dev", system.PlatformProfile{})
-	if result.Status != RegisteredNotMaterialized {
-		t.Fatalf("status = %q, want %q", result.Status, RegisteredNotMaterialized)
-	}
-	if result.InstalledVersion != "" {
-		t.Fatalf("InstalledVersion = %q, want empty while package.json is missing", result.InstalledVersion)
-	}
-	if !strings.Contains(strings.ToLower(result.UpdateHint), "restart or reload opencode") {
-		t.Fatalf("UpdateHint should tell the user to restart/reload OpenCode, got %q", result.UpdateHint)
-	}
-	if !strings.Contains(result.UpdateHint, "peer dependency") {
-		t.Fatalf("UpdateHint should mention checking logs for dependency errors, got %q", result.UpdateHint)
 	}
 }
 

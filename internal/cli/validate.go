@@ -17,6 +17,10 @@ type InstallInput struct {
 	Scope     InstallScope
 	Channel   InstallChannel
 	DryRun    bool
+
+	// ClaudeOrchestratorModules opts a global install that selects Claude into
+	// the user-global module pilot (#5256).
+	ClaudeOrchestratorModules bool
 }
 
 func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult) (InstallInput, error) {
@@ -73,13 +77,33 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	if err != nil {
 		return InstallInput{}, err
 	}
+	// Rejected here, before the runtime is created or anything is written.
+	if flags.ClaudeOrchestratorModules {
+		hasClaude := containsAgent(selection.Agents, model.AgentClaudeCode)
+		if scope != ScopeGlobal || !hasClaude {
+			// --agent selects installation targets here, not the runtime calling
+			// review. Preserve the caller's selection in the corrected command.
+			agentNames := make([]string, 0, len(selection.Agents)+1)
+			for _, agent := range selection.Agents {
+				agentNames = append(agentNames, string(agent))
+			}
+			if !hasClaude {
+				agentNames = append(agentNames, string(model.AgentClaudeCode))
+			}
+			agents := strings.Join(agentNames, ",")
+			if scope != ScopeGlobal {
+				return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires --scope global, got %q; rerun gentle-ai install --agent %s --scope global --claude-orchestrator-modules", scope, agents)
+			}
+			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires the claude-code agent in the selection; rerun gentle-ai install --agent %s --scope global --claude-orchestrator-modules", agents)
+		}
+	}
 
 	channel, err := ResolveInstallChannel(flags.Channel)
 	if err != nil {
 		return InstallInput{}, err
 	}
 
-	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun}, nil
+	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun, ClaudeOrchestratorModules: flags.ClaudeOrchestratorModules}, nil
 }
 
 // personaAliasRemapNotice is printed whenever the legacy

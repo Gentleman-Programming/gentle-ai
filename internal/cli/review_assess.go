@@ -401,7 +401,15 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	if err != nil {
 		return failClosed(fmt.Errorf("review assess could not read terminal consumption evidence; retry with `gentle-ai review assess --help`: %w", err), failClosedCandidate)
 	}
-	reviewDue, reviewDueReason := reviewAssessDue(consumed, publicRisk, assessment.ChangedLines)
+	// #4739: STATUS withholds START when the candidate only adds passive
+	// content to an acknowledged one, so assess must not call it due either.
+	// Candidate.Consumed stays exact: this candidate itself was never burned.
+	alreadyReviewed := consumed
+	if !alreadyReviewed {
+		passive, passiveErr := reviewtransaction.AcknowledgedPassivePredecessor(ctx, root, snapshot)
+		alreadyReviewed = passiveErr == nil && passive
+	}
+	reviewDue, reviewDueReason := reviewAssessDue(alreadyReviewed, publicRisk, assessment.ChangedLines)
 	var nextTransition *ReviewAssessmentNextTransition
 	if reviewDue {
 		nextTransition = reviewAssessNextTransitionFor(root, runtimeAgent, trimmedBaseRef)

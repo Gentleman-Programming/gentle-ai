@@ -27,13 +27,6 @@ func TestEffectiveMethodWindowsPrecedenceIsUnchanged(t *testing.T) {
 		want          update.InstallMethod
 	}{
 		{
-			name:          "OpenCode plugin wins over go-install on Windows",
-			tool:          update.ToolInfo{Name: "opencode-subagent-statusline", InstallMethod: update.InstallOpenCodePlugin, NpmPackage: "opencode-subagent-statusline", GoImportPath: "github.com/example/plugin/cmd/plugin"},
-			profile:       system.PlatformProfile{OS: "windows", PackageManager: "brew", GoAvailable: true},
-			brewInstalled: true,
-			want:          update.InstallOpenCodePlugin,
-		},
-		{
 			name:          "brew-owned package wins over go-install on Windows",
 			tool:          update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai"},
 			profile:       system.PlatformProfile{OS: "windows", PackageManager: "brew", GoAvailable: true},

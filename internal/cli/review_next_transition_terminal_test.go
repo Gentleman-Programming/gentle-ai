@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,11 +210,163 @@ func TestNextTransitionDerivedRangeAcknowledgementStaysTerminal(t *testing.T) {
 	if err != nil || !consumed {
 		t.Fatalf("derived range consumption = %v, %v", consumed, err)
 	}
+	// #4739: a later commit that only adds passive content to the acknowledged
+	// candidate changes the identity but has nothing new to review. STATUS
+	// stops without authority and the Stop hook stays silent.
 	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", "new committed range\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "docs/ordinary-guide.md")
-	runReviewCLIGit(t, repo, "commit", "-qm", "new range")
+	runReviewCLIGit(t, repo, "commit", "-qm", "passive follow-up")
+	passive := derivedRangeTerminalStatus(t, repo)
+	if passive.TargetIdentity == offered.TargetIdentity || passive.NextTransition == nil || passive.NextTransition.Execute != nil ||
+		passive.NextTransition.ReasonCode != "acknowledged_predecessor_passive_delta" || passive.Authority != nil {
+		t.Fatalf("passive delta after acknowledgement re-offered review: %#v", passive)
+	}
+	payload = reviewStopHookTestPayload(t, "derived-range-passive-session", repo, false, nil)
+	output.Reset()
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, strings.NewReader(payload), &output, &diagnostics); err != nil || output.Len() != 0 {
+		t.Fatalf("passive delta Stop = %s, %v", output.String(), err)
+	}
+	if consumed, err := reviewtransaction.CompactTargetConsumed(context.Background(), repo, passive.TargetIdentity); err != nil || consumed {
+		t.Fatalf("suppressed passive delta recorded as consumed = %v, %v", consumed, err)
+	}
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "refs/remotes/origin/main"))
+	if assessed := derivedRangeAssess(t, repo, base); assessed.ReviewDue || assessed.ReviewDueReason != "already_reviewed" || assessed.Candidate.Consumed {
+		t.Fatalf("assess disagrees with STATUS for a passive delta: due=%v reason=%q consumed=%v", assessed.ReviewDue, assessed.ReviewDueReason, assessed.Candidate.Consumed)
+	}
+	// Anything non-passive after the acknowledgement is offered for review.
+	writeReviewStartCandidate(t, repo, "cmd/app/main.go", "package main\n\nfunc main() {}\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "cmd/app/main.go")
+	runReviewCLIGit(t, repo, "commit", "-qm", "code follow-up")
 	changed := derivedRangeTerminalStatus(t, repo)
-	if changed.TargetIdentity == offered.TargetIdentity || changed.NextTransition == nil || changed.NextTransition.Execute == nil || changed.NextTransition.Execute.Operation != "review.start" {
-		t.Fatalf("new committed range suppressed: %#v", changed)
+	if changed.TargetIdentity == passive.TargetIdentity || changed.NextTransition == nil || changed.NextTransition.Execute == nil || changed.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("non-passive committed range suppressed: %#v", changed)
+	}
+	if assessed := derivedRangeAssess(t, repo, base); assessed.ReviewDueReason == "already_reviewed" {
+		t.Fatalf("assess reported a non-passive delta as already reviewed: %#v", assessed)
+	}
+}
+
+func derivedRangeAssess(t *testing.T, repo, base string) ReviewAssessmentResult {
+	t.Helper()
+	var output bytes.Buffer
+	if err := RunReview([]string{"assess", "--cwd", repo, "--base-ref", base, "--committed-only", "--json"}, &output); err != nil {
+		t.Fatalf("review assess: %v\n%s", err, output.String())
+	}
+	var result ReviewAssessmentResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatalf("decode review assess: %v\n%s", err, output.String())
+	}
+	return result
+}
+
+// grantedDerivedRangeStart executes STATUS's offered START and, for a
+// medium or high candidate, the consent envelope's exact granted invocation.
+func grantedDerivedRangeStart(t *testing.T, repo string, offered ReviewTargetStatusResult) ReviewFacadeStartResult {
+	t.Helper()
+	args := []string{"start"}
+	for _, argument := range offered.NextTransition.Execute.Arguments {
+		args = append(args, argument.Token)
+	}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("execute offered START: %v\n%s", err, output.String())
+	}
+	var consent struct {
+		Choices []struct {
+			Answer     string `json:"answer"`
+			Invocation string `json:"invocation"`
+		} `json:"choices"`
+	}
+	decodeStrictReviewJSONLoose(t, output.Bytes(), &consent)
+	for _, choice := range consent.Choices {
+		if choice.Answer != "granted" {
+			continue
+		}
+		fields := strings.Fields(choice.Invocation)
+		if len(fields) < 3 || fields[0] != "gentle-ai" || fields[1] != "review" {
+			t.Fatalf("granted invocation = %q", choice.Invocation)
+		}
+		output.Reset()
+		if err := RunReview(fields[2:], &output); err != nil {
+			t.Fatalf("granted START: %v\n%s", err, output.String())
+		}
+		break
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSONLoose(t, output.Bytes(), &started)
+	if started.LineageID == "" {
+		t.Fatalf("START created no lineage: %s", output.String())
+	}
+	return started
+}
+
+func decodeStrictReviewJSONLoose(t *testing.T, payload []byte, target any) {
+	t.Helper()
+	if err := json.Unmarshal(payload, target); err != nil {
+		t.Fatalf("decode %s: %v", payload, err)
+	}
+}
+
+// #4739 must only withhold a fresh offer: a review someone deliberately
+// started on a passive delta is live authority and must stay visible.
+func TestNextTransitionPassiveDeltaNeverHidesALiveReview(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	runReviewCLIGit(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	runReviewCLIGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qam", "medium candidate")
+
+	// Approve and acknowledge the medium candidate through its real lens.
+	started := grantedDerivedRangeStart(t, repo, derivedRangeTerminalStatus(t, repo))
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var terminal reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output.Bytes(), &terminal)
+	if err := RunReview([]string{"acknowledge-approved", "--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--expected-revision", terminal.StoreRevision, "--token", terminal.Acknowledgement.Arguments[4].Value}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	writeReviewStartCandidate(t, repo, "docs/notes.md", "Tracking note.\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "docs/notes.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "passive follow-up")
+	passive := derivedRangeTerminalStatus(t, repo)
+	if passive.NextTransition == nil || passive.NextTransition.ReasonCode != "acknowledged_predecessor_passive_delta" {
+		t.Fatalf("passive delta after a medium acknowledgement re-offered review: %#v", passive.NextTransition)
+	}
+
+	// A deliberate review of the full range is live authority.
+	// It uses the exact command the shipped ledger row documents for this stop.
+	deliberate := passive
+	deliberate.NextTransition = &ReviewNextTransition{Kind: reviewNextTransitionExecute, Execute: &ReviewTransitionExecution{}}
+	for _, token := range []string{"--cwd=" + repo, "--contract=" + ReviewIntegrationContractV2, "--agent=claude-code", "--target=" + passive.TargetIdentity,
+		"--projection=" + string(passive.Projection.Projection), "--base-ref=" + passive.Projection.BaseTree, "--committed-only", "--consent=relay"} {
+		deliberate.NextTransition.Execute.Arguments = append(deliberate.NextTransition.Execute.Arguments, ReviewTransitionArgument{Token: token})
+	}
+	live := grantedDerivedRangeStart(t, repo, deliberate)
+	status := derivedRangeTerminalStatus(t, repo)
+	if status.NextTransition == nil || status.NextTransition.ReasonCode == "acknowledged_predecessor_passive_delta" {
+		t.Fatalf("live review %s hidden behind the passive-delta STOP: %#v", live.LineageID, status.NextTransition)
+	}
+	payload := reviewStopHookTestPayload(t, "live-review-session", repo, false, nil)
+	output.Reset()
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, strings.NewReader(payload), &output, io.Discard); err != nil || output.Len() == 0 {
+		t.Fatalf("Stop hook stayed silent over live review %s: %s, %v", live.LineageID, output.String(), err)
 	}
 }

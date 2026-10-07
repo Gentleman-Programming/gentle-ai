@@ -357,6 +357,28 @@ func TestOrchestratorWithProgressFunc(t *testing.T) {
 	}
 }
 
+// Prepare steps are preflight gates: a failed gate must stop the prepare stage
+// even when the orchestrator continues past apply failures, so no later
+// prepare step (for example a package install) runs after a refusal.
+func TestOrchestratorContinueOnErrorStopsPrepareAtFirstFailedGate(t *testing.T) {
+	var order []string
+	refusal := errors.New("unsafe settings")
+	orchestrator := NewOrchestrator(DefaultRollbackPolicy(), WithFailurePolicy(ContinueOnError))
+	result := orchestrator.Execute(StagePlan{
+		Prepare: []Step{newRollbackStep("gate", &order, refusal), newTestStep("mutating-preflight", &order)},
+		Apply:   []Step{newTestStep("apply", &order)},
+	})
+	if !errors.Is(result.Err, refusal) {
+		t.Fatalf("result error = %v, want the gate refusal", result.Err)
+	}
+	if want := []string{"run:gate"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("executed steps = %v, want %v", order, want)
+	}
+	if len(result.Prepare.Steps) != 1 || result.Prepare.Steps[0].Status != StepStatusFailed || len(result.Apply.Steps) != 0 {
+		t.Fatalf("prepare steps = %#v, apply steps = %#v; want only the failed gate", result.Prepare.Steps, result.Apply.Steps)
+	}
+}
+
 type testStep struct {
 	id      string
 	order   *[]string

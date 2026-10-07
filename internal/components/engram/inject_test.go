@@ -1810,10 +1810,17 @@ func TestInjectAntigravityRegistersEngramViaPluginOnly(t *testing.T) {
 		"mem_judge",
 		"optional mem_review",
 		"if mem_review is unavailable",
+		// #1903: tools still load first, but the initial read is project-gated.
+		"CRITICAL FIRST ACTION",
+		"before any initial mem_context, follow the Engram startup protocol",
+		"pass only the resolved project to mem_context",
 	} {
 		if !strings.Contains(hooksText, want) {
 			t.Fatalf("Antigravity Engram hook missing %q; got:\n%s", want, hooksText)
 		}
+	}
+	if strings.Contains(hooksText, "Then call mem_context when") {
+		t.Fatalf("Antigravity Engram hook still requests an ungated initial mem_context; got:\n%s", hooksText)
 	}
 
 	desktopMCPPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")

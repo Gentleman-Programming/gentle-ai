@@ -67,16 +67,17 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 |--------|---------------|-------------------------|
 | Decide/verify within the inline evidence budget | ✅ one bounded batch | — |
 | Understanding beyond the inline evidence budget, or long sequential exploration | — | ✅ one read-only explorer, then re-evaluate task size |
-| Read as preparation for a large task's write | — | ✅ together with the write |
+| Read as preparation for a delegated write | — | ✅ together with the write |
 | Write a small task (one understood change, any number of files) | ✅ | — |
-| Write a large (tracked) task | — | ✅ one writer per task |
+| Write a large (tracked) task with no Write rule reason | ✅ following its logbook | — |
+| Write a unit with a Write rule reason | — | ✅ one bounded writer per unit |
 | Bash for state (`git`, `gh`) | ✅ | — |
 | Focused test and suite of the change being made | ✅ once each | — |
 | High-risk change, or long suites, builds, installs, or native review actions of a large task | — | ✅ independent verifier or fresh per-action worker |
 
 Windsurf has no subagents: keep the same bounded scope as an isolated inline step. Report **Needs your decision** only when the bounded action cannot be performed safely.
 
-Keep one writer and a short synthesized handoff. Without subagents, isolate mapping, writing, preparation, and research into bounded steps.
+Keep each delegated writer bounded, with a short synthesized handoff. Without subagents, isolate mapping, writing, preparation, and research into bounded steps.
 
 #### Mandatory Delegation Triggers
 
@@ -86,8 +87,8 @@ These are parent-orchestrator routing boundaries. Use the smallest useful topolo
 2. **Mapping rule**: understanding that needs more evidence or more than approximately 5 sequential lookups requires one read-only explorer; with its handoff, re-evaluate task size. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence.
    - Keep parent bash output bounded to counts, --stat, tail, or summaries. On a large task, delegate long suites and builds; return concise observed results, including failures.
    - The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced. Pause and delegate the next bounded unit; do not claim runtime telemetry or enforcement.
-3. **Write rule**: a small task's writes stay inline, even across files; a large task delegates one writer per task. File count never fires this rule.
-4. **Context rule**: on a large task, delegate reading that prepares a write and broad research/context compression.
+3. **Write rule**: a small task's writes stay inline, even across files; delegate a writer only for a named reason: parallel units launched together (two or more independent units with disjoint edit surfaces, each clearly heavier than starting a subagent) or the context backstop. Never for size, a large task alone, file count, or a price ratio; without a reason the parent writes inline, following its logbook. File count never fires this rule.
+4. **Context rule**: when the Write rule delegates a write, delegate reading that prepares a write together with it, plus broad research/context compression; an inline write reads inline, and never explore files you will read anyway before writing inline.
 5. **Per-action rule**: run applicable tests, builds, and native review actions as bounded steps without changing the implementation route.
 6. **Verification rule**: a high-risk change (Task Size list) gets an independent verifier after the change's own checks; otherwise the change's own focused test and suite run inline.
 
@@ -114,7 +115,7 @@ The canonical native bounded-review contract is injected from the shared provide
 #### Cost and Context Balance
 
 - Keep exploration, implementation, and verification concerns separated even in one conversation.
-- Preserve one writer thread; do not interleave broad exploration with edits.
+- Do not interleave broad exploration with edits; parallel writers follow the **Parallel writers** rule under `## Implementation Routing`.
 - Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
 - Avoid extra ceremony for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
@@ -158,7 +159,7 @@ This is a self-correction mechanism. Do NOT ignore fallback reports — they ind
 
 ### ODD Work and Memory Context
 
-Because Windsurf has no subagents, read and write bounded authorized ODD work directly. Preserve unrelated working-tree changes, apply the configured TDD mode and exact runner, run applicable checks, and report observed results.
+Because Windsurf has no subagents, read and write bounded authorized ODD work directly. Preserve unrelated working-tree changes, apply the applicable test-first policy and runner from `## Implementation Routing`, run applicable checks, and report observed results.
 
 Search engram (`mem_search`) for relevant prior context when available. Save significant verified discoveries, decisions, or bug fixes via `mem_save`; do not rely solely on conversation history for cross-session continuity.
 

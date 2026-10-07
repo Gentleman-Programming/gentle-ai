@@ -125,9 +125,8 @@ func TestSharedReferencesDoNotAdvertiseSDD(t *testing.T) {
 
 func sharedReferenceInvitesSDD(line string) bool {
 	lower := strings.ToLower(line)
-	// Historical negative controls are evidence, not instructions. Section
-	// markers are stable composer bindings, not prose offered to the agent.
-	if strings.Contains(lower, "historical negative control:") || strings.HasPrefix(strings.TrimSpace(lower), "<!-- sdd-orchestrator-section:") {
+	// Historical negative controls are evidence, not instructions.
+	if strings.Contains(lower, "historical negative control:") {
 		return false
 	}
 	return regexp.MustCompile(`\bsdd\b|sdd[-/]|openspec|spec-driven`).MatchString(lower)
@@ -139,7 +138,8 @@ func TestSharedReferenceNegativeControls(t *testing.T) {
 		want bool
 	}{
 		{"Historical negative control: do not run sdd-apply or create OpenSpec files.", false},
-		{"<!-- sdd-orchestrator-section:Language Domain Contract:start -->", false},
+		{"<!-- odd-orchestrator-section:Language Domain Contract:start -->", false},
+		{"<!-- sdd-orchestrator-section:Language Domain Contract:start -->", true},
 		{"Run sdd-apply and persist in openspec/.", true},
 		{"Use spec-driven development for this task.", true},
 	} {
@@ -386,7 +386,8 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 			"Mandatory Delegation Triggers",
 			"Evidence budget rule", "one parallel batch",
 			"Mapping rule", "one read-only explorer",
-			"Write rule", "a large task delegates one writer per task",
+			"Write rule", "delegate a writer only for a named reason",
+			"parallel writers follow the **Parallel writers** rule under `## Implementation Routing`",
 			"Context rule", "reading that prepares a write", "broad research",
 			"Mandatory Delegation Triggers", "delegated direct",
 		} {
@@ -400,6 +401,17 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 		} {
 			if strings.Contains(content, retired) {
 				t.Fatalf("%s retained prompt-owned review ceremony %q", path, retired)
+			}
+		}
+		// gentle-shell#1731: writers are delegated for a reason, and parallel
+		// writers follow one rule instead of a single-writer ban.
+		for _, retired := range []string{
+			"a large task delegates one writer per task", "one writer per task",
+			"Use a single writer thread", "Preserve one writer thread",
+			"Keep one writer and", "Keep one writer.", "Keep one writer;",
+		} {
+			if strings.Contains(content, retired) {
+				t.Fatalf("%s retained size-based or single-writer routing %q", path, retired)
 			}
 		}
 
@@ -1005,7 +1017,7 @@ func TestOpenCodeODDOrchestratorDelegationVisibility(t *testing.T) {
 	for _, required := range []string{
 		"<!-- gentle-ai:opencode-desktop-delegation-progress -->",
 		"#### Delegation Visibility (OpenCode Desktop)",
-		"`delegate` or `task`",
+		"For every native subagent launch",
 		"assistant-visible status line immediately before the call",
 		"When the call returns",
 		"⏳ Delegating {phase} to {agent}...",
@@ -1551,6 +1563,82 @@ func TestODDOrchestratorAssetsScopedToParent(t *testing.T) {
 	}
 }
 
+// Gentleman-Programming/gentle-shell#1731: the worker tests each requested
+// rule plus only the touched existing behavior, the verifier probes the spec
+// itself in a scratch copy with a fixed severity bar, and both bound
+// corrections instead of looping.
+func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
+	t.Parallel()
+
+	want := map[string][]string{
+		"opencode/agents/gentle-ai-worker.md": {
+			// S6: RED per requested rule, PRESERVE for touched behavior, no padding, docs.
+			"add behavior-level tests for each requested rule",
+			"covers the cases the rule itself names",
+			"through the public interface",
+			"update the help text and docs that describe it",
+			"3. PRESERVE",
+			"add one test proving its previous behavior still holds; add no other cases",
+			"counts as touched when it shares the code you changed",
+			"they need no RED run",
+			"PRESERVE/REFACTOR",
+			// S8: bounded self-correction.
+			"one correction attempt per failing check, and a second only if the same check still fails",
+			"return `status: partial` with the failing command and its output",
+		},
+		"opencode/agents/gentle-ai-verify.md": {
+			// S7: read-only scope, spec-derived probes, first-launch scratch copy.
+			"Read-only means no edits to the repository or its git state",
+			"## Spec-derived probes",
+			"Verify the request, not the writer's work",
+			"**Own probes.**", "**Invariants.**", "**Interactions.**", "**Build and scope.**", "**Every item.**", "**Durable probes.**",
+			"Probe on your first launch",
+			"`mktemp -d` under the system temp directory, never inside the workspace",
+			"leave no new file in the workspace (check `git status` before and after)",
+			"No network, no installs",
+			// S7: severity bar.
+			"## Severity",
+			"reproduce it at the baseline",
+			"pre-existing advisory, never a blocker",
+			"outside the realistic domain",
+			"Silently ignoring an option or value the user passed explicitly, with a success exit, is always a blocker",
+			"An unrequested change to the output, error text, or line numbering of a command that existed at the baseline is change-caused and a blocker",
+			// S8: one correction batch, one bounded recheck.
+			"one correction batch and one recheck limited to the reported blockers",
+			"a second correction only when the recheck shows the same blocker still failing, never for a new finding",
+			"never start a new full sweep",
+		},
+	}
+	for path, clauses := range want {
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		for _, clause := range clauses {
+			if !strings.Contains(string(body), clause) {
+				t.Errorf("%s is missing %q", path, clause)
+			}
+		}
+	}
+
+	// S9: Pi/Node-only scratch details and the retired TRIANGULATE step stay out.
+	retired := map[string][]string{
+		"opencode/agents/gentle-ai-worker.md": {"TRIANGULATE"},
+		"opencode/agents/gentle-ai-verify.md": {"NODE_COMPILE_CACHE", "NO_UPDATE_NOTIFIER", "--reflink"},
+	}
+	for path, phrases := range retired {
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		for _, phrase := range phrases {
+			if strings.Contains(string(body), phrase) {
+				t.Errorf("%s still contains %q", path, phrase)
+			}
+		}
+	}
+}
+
 // Gentleman-Programming/gentle-shell#1713: the generic workers read the ODD
 // feature document as the specification, by reference, instead of a
 // paraphrase of the user's request; verify grounds its verdict in each spec.
@@ -1572,5 +1660,51 @@ func TestOpenCodeGenericAgentsReadTheFeatureSpecByReference(t *testing.T) {
 				t.Errorf("%s is missing %q", path, clause)
 			}
 		}
+	}
+}
+
+// #1731 parity: the Hermes delegation skill and the shared persistence contract
+// delegate for a named reason, never for file count, and forward the routing
+// block's test-first policy instead of a strict TDD mode.
+func TestDelegationSkillsDelegateForReasonAndForwardTestDiscipline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path     string
+		required []string
+		retired  []string
+	}{
+		{
+			path: "skills/hermes-ephemeral-delegation/SKILL.md",
+			required: []string{
+				"a named reason",
+				"the applicable test-first policy and runner from `## Implementation Routing`",
+				"Write one RED test per requested rule",
+				"the **Verify handoff** from the Delegated Verification Gate",
+			},
+			retired: []string{"4+ files", "multi-file reads", "TDD mode", "strict TDD"},
+		},
+		{
+			path:     "skills/_shared/persistence-contract.md",
+			required: []string{"the applicable test-first policy and runner from `## Implementation Routing`"},
+			retired:  []string{"TDD mode", "strict TDD"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+
+			body := MustRead(tt.path)
+			for _, want := range tt.required {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s is missing %q", tt.path, want)
+				}
+			}
+			for _, retired := range tt.retired {
+				if strings.Contains(body, retired) {
+					t.Errorf("%s keeps retired %q", tt.path, retired)
+				}
+			}
+		})
 	}
 }

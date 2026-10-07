@@ -7,21 +7,16 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
 )
 
-// TestIsolateUnsetsKnownAgentRuntimeDirOverrides pins the exact set of
-// environment variables Isolate must neutralize: PI_CODING_AGENT_DIR
-// (internal/agents/pi.AgentConfigPath honors it as an absolute override,
-// bypassing whatever homeDir a test passes in) and OPENCODE_CONFIG_DIR
-// (internal/opencode.ResolveRuntimeConfigForHome does the same). Both are
-// read unconditionally when absolute, unlike XDG_CONFIG_HOME/APPDATA in the
-// agent adapters, which only apply when homeDir equals the real
-// os.UserHomeDir() — already guarded against an arbitrary t.TempDir() home.
+// Isolate removes inherited overrides entirely, rather than setting empty
+// values. Behavioral path/write coverage lives in the subprocess regressions.
 func TestIsolateUnsetsKnownAgentRuntimeDirOverrides(t *testing.T) {
-	t.Setenv("PI_CODING_AGENT_DIR", "/sentinel/pi-agent-dir")
-	t.Setenv("OPENCODE_CONFIG_DIR", "/sentinel/opencode-config-dir")
+	for _, key := range []string{"PI_CODING_AGENT_DIR", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"} {
+		t.Setenv(key, t.TempDir())
+	}
 
 	testenv.Isolate()
 
-	for _, key := range []string{"PI_CODING_AGENT_DIR", "OPENCODE_CONFIG_DIR"} {
+	for _, key := range []string{"PI_CODING_AGENT_DIR", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"} {
 		if got, ok := os.LookupEnv(key); ok {
 			t.Fatalf("Isolate() left %s = %q, want unset", key, got)
 		}

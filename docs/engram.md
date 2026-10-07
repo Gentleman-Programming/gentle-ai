@@ -186,6 +186,16 @@ Since v1.11.0, engram reads the git remote URL at startup, normalizes it to lowe
 
 If you're working outside a git repo, engram falls back to the directory name.
 
+### Startup project resolution
+
+The injected protocol makes the agent call `mem_current_project` and wait for it before its first `mem_context`, `mem_search`, or `mem_review`:
+
+- **Unique**: a non-empty `project` with no `available_projects` (including the `dir_basename` fallback) is passed as the exact `project` value.
+- **Ambiguous**: when `available_projects` is non-empty or `project_source` is `ambiguous`, the agent asks you to choose one. The choice is a workspace alternative, not a project key; the agent re-resolves it only when the tool accepts a `cwd`, and otherwise skips initial reads.
+- **Unverified or no project**: checked first, when the workspace is unknown, the returned `cwd` does not match it, or the call fails, the agent stops and skips initial project-scoped reads; an empty `project` with no alternatives also skips them. It never guesses or searches all projects.
+
+Explicit requests to recall memory across projects, or from a named other project, are still honored; asking to work on another project is not one. In Engram 2.2.1 `mem_current_project` takes no arguments and resolves from the MCP server's working directory, so start the agent from the repository you want memory for.
+
 ---
 
 ## Full Documentation

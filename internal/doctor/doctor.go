@@ -11,6 +11,7 @@ const (
 	CheckInstalledAssetVersion CheckID = "installed:asset_version"
 	CheckEngramReachable       CheckID = "engram:reachable"
 	CheckDiskSpace             CheckID = "disk:space"
+	CheckOpenCodeProfile       CheckID = "opencode:managed_profile"
 )
 
 // ToolCheckID returns the stable check identifier for a tool binary.
@@ -34,6 +35,8 @@ const (
 	RemedyInstall          RemedyID = "install"
 	RemedyRepairState      RemedyID = "repair-state"
 	RemedySync             RemedyID = "sync"
+	RemedyEditShellPath    RemedyID = "edit-shell-path"
+	RemedyReorderPath      RemedyID = "reorder-path"
 	RemedyStartEngram      RemedyID = "start-engram"
 	RemedyInspectEngram    RemedyID = "inspect-engram"
 	RemedyFreeDiskSpace    RemedyID = "free-disk-space"
@@ -88,6 +91,10 @@ func NewRemedy(id RemedyID, description string) *Remedy {
 		r.Category, r.EligibilityReason = RemedyCategoryInstall, "no bounded managed install was identified"
 	case RemedyRemoveDuplicates:
 		r.Category, r.EligibilityReason = RemedyCategoryEnvironment, "binary ownership is unknown"
+	case RemedyEditShellPath:
+		r.Category, r.EligibilityReason = RemedyCategoryEnvironment, "shell startup files are user-owned"
+	case RemedyReorderPath:
+		r.Category, r.EligibilityReason = RemedyCategoryEnvironment, "PATH order is user-owned"
 	case RemedyRepairState:
 		r.Category, r.EligibilityReason = RemedyCategoryConfiguration, "no safe recovery source was identified"
 	case RemedySync:

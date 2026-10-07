@@ -42,7 +42,7 @@ This prevents a historical authority, a sibling worktree, or a stale lifecycle r
 
 A session rooted in repository A can review an explicitly user-authorized nested target in unrelated repository B. Go resolves the requested path to B's canonical worktree root; adapters remain opaque and never parse authorization or roots. Once B is selected, the host retains B through STATUS, consent, collection, correction, validation, acknowledgement, and burn. Provider-issued tokens remain exact; an invocation without `--cwd` runs with process cwd B.
 
-Opaque `repository_context` can materialize or capture from process cwd A, but remains bound to B. Identical lineage text in A and B names independent authority: approval burns B only and leaves A unchanged. Ordinary repository policy owns delivery, and any explicitly authorized delivery action runs in B only.
+Opaque `repository_context` can materialize or capture from process cwd A, but remains bound to B. OpenCode hosts receive a sealed `rctx3` handle that names B's canonical root, so their relay opens B directly instead of discovering it from the session directory; every other runtime keeps the `rctx2` digest. Identical lineage text in A and B names independent authority: approval burns B only and leaves A unchanged. Ordinary repository policy owns delivery, and any explicitly authorized delivery action runs in B only.
 
 Only Claude Code, Codex, OpenCode, and Pi receive this lifecycle. Unsupported runtimes fail before repository or authority mutation.
 
@@ -84,8 +84,8 @@ The organic implementation route, with RDD entering at the end over the frozen c
 ```mermaid
 flowchart TD
     A["User requests a change<br/>(Claude Code · OpenCode · Codex...)"] --> B{"Implementation<br/>route"}
-    B -->|"decide/verify<br/>1–3 files"| C["Direct inline"]
-    B -->|"4+ file exploration<br/>or 2+ non-trivial writes"| D["Delegated direct<br/>(one bounded worker)"]
+    B -->|"understood work,<br/>or no named reason"| C["Direct inline"]
+    B -->|"map needed to decide,<br/>parallel units, or context backstop"| D["Delegated direct<br/>(one bounded worker per unit)"]
     C --> E["Implementation + tests"]
     D --> E
     E --> F{"RDD enabled?<br/>(user-owned, opt-out)"}

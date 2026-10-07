@@ -11,7 +11,7 @@ import (
 
 func RenderCommunityTools(selected []model.CommunityToolID, cursor int, statuses []communitytool.Status, loading bool, statusErr error) string {
 	var b strings.Builder
-	b.WriteString(styles.TitleStyle.Render("Community Tools/Plugins"))
+	b.WriteString(styles.TitleStyle.Render("Community Tools"))
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Optional cross-agent tools Gentle AI can install and wire for you."))
 	b.WriteString("\n\n")
@@ -76,7 +76,7 @@ func CommunityToolsOptionCount() int {
 
 func RenderCommunityToolInstalling(selected []model.CommunityToolID, spinner string, statuses []communitytool.Status) string {
 	var b strings.Builder
-	b.WriteString(styles.TitleStyle.Render("Community Tools/Plugins"))
+	b.WriteString(styles.TitleStyle.Render("Community Tools"))
 	b.WriteString("\n\n")
 	b.WriteString(styles.SelectedStyle.Render(fmt.Sprintf("%s Installing community tools…", spinner)))
 	b.WriteString("\n")

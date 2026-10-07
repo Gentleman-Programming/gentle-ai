@@ -508,3 +508,114 @@ func TestConfiguredModelsExtractsCostLimitVariants(t *testing.T) {
 		t.Errorf("model-empty-extras Variants = %v, want empty", empty.Variants)
 	}
 }
+
+func TestValidateSettingsForWritersRefusesUnsafeOpenCodeSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+	}{
+		{"escaped spelling of a managed key", `{"\u0061gent": {"gentle-orchestrator": {"prompt": "x"}}}`},
+		{"comment inside a managed key value", `{"agent": {/* user note */ "gentle-orchestrator": {"prompt": "x"}}}`},
+		{"duplicate keys anywhere", `{"agent": {}, "theme": 1, "theme": 2}`},
+		{"malformed document", "// interrupted user edit\n{\n  \"agent\": {\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settingsPath := filepath.Join(t.TempDir(), "opencode.jsonc")
+			if err := os.WriteFile(settingsPath, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateSettingsForWriters(settingsPath, allOpenCodeWriterKeys); err == nil {
+				t.Fatalf("ValidateSettingsForWriters() = nil, want refusal for %q", tc.content)
+			}
+		})
+	}
+
+	t.Run("symlinked settings path", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "user.json")
+		if err := os.WriteFile(target, []byte(`{"agent":{}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(dir, "opencode.jsonc")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if err := ValidateSettingsForWriters(link, allOpenCodeWriterKeys); err == nil {
+			t.Fatal("ValidateSettingsForWriters() = nil, want symlink refusal")
+		}
+	})
+
+	t.Run("locked settings path", func(t *testing.T) {
+		settingsPath := filepath.Join(t.TempDir(), "opencode.jsonc")
+		if err := os.WriteFile(settingsPath, []byte(`{"agent":{}}`), 0o000); err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateSettingsForWriters(settingsPath, allOpenCodeWriterKeys); err == nil {
+			t.Fatal("ValidateSettingsForWriters() = nil, want locked-file refusal")
+		}
+	})
+
+	t.Run("non-regular settings path", func(t *testing.T) {
+		settingsPath := filepath.Join(t.TempDir(), "opencode.jsonc")
+		if err := os.Mkdir(settingsPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateSettingsForWriters(settingsPath, allOpenCodeWriterKeys); err == nil {
+			t.Fatal("ValidateSettingsForWriters() = nil, want non-regular refusal")
+		}
+	})
+}
+
+func TestValidateSettingsForWritersFollowsExistingContract(t *testing.T) {
+	for _, tc := range []struct {
+		name, ext, content string
+	}{
+		{"valid JSONC with comments around untouched members", ".jsonc", "{\n  // user provider note\n  \"provider\": {\"local\": {\"models\": {\"m\": {},}}},\n  \"theme\": \"default\",\n  \"agent\": {\"gentle-orchestrator\": {\"prompt\": \"x\"}},\n}\n"},
+		{"comment inside a non-managed value", ".jsonc", `{"provider": {/* note */ "local": {}}}`},
+		{"escaped spelling of a non-managed key", ".jsonc", `{"\u0070rovider": {"local": {}}}`},
+		{"empty document", ".jsonc", ``},
+		{"strict JSON keeps shared writer contract", ".json", `{"agent": {"gentle-orchestrator": {"prompt": "x"}}, "theme": 1, "theme": 2}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settingsPath := filepath.Join(t.TempDir(), "opencode"+tc.ext)
+			if err := os.WriteFile(settingsPath, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateSettingsForWriters(settingsPath, allOpenCodeWriterKeys); err != nil {
+				t.Fatalf("ValidateSettingsForWriters() error = %v, want pass", err)
+			}
+		})
+	}
+
+	t.Run("missing settings file is accepted", func(t *testing.T) {
+		if err := ValidateSettingsForWriters(filepath.Join(t.TempDir(), "opencode.jsonc"), allOpenCodeWriterKeys); err != nil {
+			t.Fatalf("missing settings refused: %v", err)
+		}
+	})
+
+	t.Run("empty settings path is accepted", func(t *testing.T) {
+		if err := ValidateSettingsForWriters("", allOpenCodeWriterKeys); err != nil {
+			t.Fatalf("empty settings path refused: %v", err)
+		}
+	})
+}
+
+// allOpenCodeWriterKeys is every top-level key a managed OpenCode settings
+// writer can touch when all of them are selected.
+var allOpenCodeWriterKeys = []string{"agent", "permission", "theme", "mcp"}
+
+func TestValidateSettingsForWritersIgnoresKeysNoSelectedWriterTouches(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "opencode.jsonc")
+	content := `{"theme": {/* user theme note */ "name": "x"}, "\u0070ermission": {}, "agent": {}}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSettingsForWriters(settingsPath, []string{"agent"}); err != nil {
+		t.Fatalf("ValidateSettingsForWriters(agent only) error = %v, want pass for untouched theme/permission", err)
+	}
+	if err := ValidateSettingsForWriters(settingsPath, []string{"agent", "theme"}); err == nil {
+		t.Fatal("ValidateSettingsForWriters(agent, theme) = nil, want refusal for a comment inside the touched theme value")
+	}
+	if got, _ := os.ReadFile(settingsPath); string(got) != content {
+		t.Fatal("validation mutated the settings document")
+	}
+}

@@ -16,6 +16,8 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // --- checkOneTool ---
@@ -1161,6 +1163,312 @@ func TestRunDoctor_HomeDirError(t *testing.T) {
 	err := RunDoctor(context.Background(), &buf)
 	if err == nil {
 		t.Error("expected error when home dir fails")
+	}
+}
+
+// Issue #3452: doctor reports whether new login shells will find the managed
+// OpenCode launcher directory.
+func TestCheckOpenCodeProfileReportsPersistence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX login shells are not used on Windows")
+	}
+	// The check reads the profile the current login shell uses.
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("ZDOTDIR", "")
+	home := t.TempDir()
+	binDir := opencode.BinDir(home)
+	// Background on implies a written launcher; persistence is what varies.
+	activateDoctorLauncher(t, home, "linux", "")
+	if _, err := opencode.RemoveManagedProfileBlock(filepath.Join(home, ".profile")); err != nil {
+		t.Fatal(err)
+	}
+
+	missing := checkOpenCodeProfile(home, []string{"/usr/bin"})
+	if missing.Status != CheckStatusWarn || missing.Remedy == nil || !strings.Contains(missing.Remedy.Description, opencode.ProfileExportLine(binDir)) {
+		t.Fatalf("missing persistence result = %#v", missing)
+	}
+
+	if onPath := checkOpenCodeProfile(home, []string{"/usr/bin", binDir}); onPath.Status != CheckStatusPass {
+		t.Fatalf("bin directory on PATH result = %#v", onPath)
+	}
+
+	profile := filepath.Join(home, ".profile")
+	edited := "# >>> gentle-ai managed OpenCode launcher >>>\nexport PATH=/user:\"$PATH\"\n# <<< gentle-ai managed OpenCode launcher <<<\n"
+	if err := os.WriteFile(profile, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkOpenCodeProfile(home, nil); got.Status != CheckStatusWarn {
+		t.Fatalf("edited block result = %#v, want warn", got)
+	}
+
+	block := "# >>> gentle-ai managed OpenCode launcher >>>\n" + opencode.ProfileExportLine(binDir) + "\n# <<< gentle-ai managed OpenCode launcher <<<\n"
+	if err := os.WriteFile(profile, []byte("export USER=1\n"+block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkOpenCodeProfile(home, nil); got.Status != CheckStatusPass || !strings.Contains(got.Detail, profile) {
+		t.Fatalf("managed profile result = %#v, want pass naming %s", got, profile)
+	}
+}
+
+// Issue #3453: the OpenCode installer's .zshrc PATH line runs after the login
+// profile, so new shells resolve the real binary before the launcher even
+// though the profile block is present. Doctor must not report it healthy.
+func TestCheckOpenCodeProfileReportsRcFileShadowing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX login shells are not used on Windows")
+	}
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("ZDOTDIR", "")
+	home := t.TempDir()
+	real := activateDoctorLauncher(t, home, "linux", "")
+	zshrc := filepath.Join(home, ".zshrc")
+	if err := os.WriteFile(zshrc, []byte("# opencode\nexport PATH="+filepath.Dir(real)+":$PATH\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkOpenCodeProfile(home, []string{"/usr/bin"})
+	if got.Status != CheckStatusWarn || !strings.Contains(got.Detail, zshrc) || !strings.Contains(got.Detail, real) {
+		t.Fatalf("shadowed result = %#v, want warn naming %s and %s", got, zshrc, real)
+	}
+	if got.Remedy == nil || !strings.Contains(got.Remedy.Description, opencode.ProfileExportLine(opencode.BinDir(home))) {
+		t.Fatalf("shadowed remedy = %#v, want manual export line", got.Remedy)
+	}
+}
+
+// activateDoctorLauncher writes a real managed launcher for goos into home and
+// returns the real OpenCode target it delegates to. targetOverride names a
+// target string that differs from the on-disk file (e.g. Windows casing).
+func activateDoctorLauncher(t *testing.T, home, goos, targetOverride string) string {
+	t.Helper()
+	name := "opencode"
+	if goos == "windows" {
+		name = "opencode.cmd"
+	}
+	real := filepath.Join(home, ".opencode", "bin", name)
+	if err := os.MkdirAll(filepath.Dir(real), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(real, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := real
+	if targetOverride != "" {
+		target = targetOverride
+	}
+	plan, err := opencode.PrepareActivation(home, opencode.ActivationOptions{
+		OS:                      goos,
+		Path:                    filepath.Dir(real),
+		RunVersion:              func(string) (string, error) { return "1.15.11", nil },
+		AddToUserPath:           func(string) error { return nil },
+		AddToUserPathWithResult: func(string) (system.UserPathAddition, error) { return system.UserPathAddition{}, nil },
+		ResolveTarget:           func(string, string, string) (string, error) { return target, nil },
+		NewShellPath:            func() (string, error) { return opencode.BinDir(home), nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	return real
+}
+
+// Issue #5238: the managed launcher and the target it delegates to are one
+// activation chain, not duplicate installations; genuine extra copies still warn.
+func TestCheckOneToolTreatsManagedLauncherAndTargetAsOneInstallation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX execute bits are not used on Windows")
+	}
+	origLook, origGOOS, origExts, origHome := lookPathFn, doctorGOOS, executableExtsFn, osUserHomeDirDoctor
+	t.Cleanup(func() {
+		lookPathFn, doctorGOOS, executableExtsFn, osUserHomeDirDoctor = origLook, origGOOS, origExts, origHome
+	})
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("ZDOTDIR", "")
+
+	t.Run("posix launcher and direct target", func(t *testing.T) {
+		doctorGOOS = "linux"
+		executableExtsFn = func() []string { return []string{""} }
+		home := t.TempDir()
+		osUserHomeDirDoctor = func() (string, error) { return home, nil }
+		real := activateDoctorLauncher(t, home, "linux", "")
+		launcher := opencode.POSIXLauncherPath(home)
+		lookPathFn = func(string) (string, error) { return launcher, nil }
+		dirs := []string{opencode.BinDir(home), filepath.Dir(real)}
+		if got := checkOneTool("opencode", dirs); got.Status != CheckStatusPass {
+			t.Fatalf("launcher chain = %#v, want pass", got)
+		}
+
+		other := filepath.Join(t.TempDir(), "opencode")
+		if err := os.WriteFile(other, []byte("other"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := checkOneTool("opencode", append(dirs, filepath.Dir(other)))
+		if got.Status != CheckStatusWarn || !strings.Contains(got.Detail, "2 copies found") || !strings.Contains(got.Detail, other) {
+			t.Fatalf("genuine extra copy = %#v, want warn with 2 copies naming %s", got, other)
+		}
+	})
+
+	t.Run("posix target reached through package-manager symlink", func(t *testing.T) {
+		doctorGOOS = "linux"
+		executableExtsFn = func() []string { return []string{""} }
+		home := t.TempDir()
+		osUserHomeDirDoctor = func() (string, error) { return home, nil }
+		real := activateDoctorLauncher(t, home, "linux", "")
+		globalBin := t.TempDir()
+		if err := os.Symlink(real, filepath.Join(globalBin, "opencode")); err != nil {
+			t.Skipf("symlink creation unavailable: %v", err)
+		}
+		lookPathFn = func(string) (string, error) { return opencode.POSIXLauncherPath(home), nil }
+		if got := checkOneTool("opencode", []string{opencode.BinDir(home), globalBin}); got.Status != CheckStatusPass {
+			t.Fatalf("launcher chain through symlink = %#v, want pass", got)
+		}
+	})
+
+	t.Run("windows cmd launcher and pnpm target with different casing", func(t *testing.T) {
+		doctorGOOS = "windows"
+		executableExtsFn = func() []string { return []string{".exe", ".cmd"} }
+		home := t.TempDir()
+		osUserHomeDirDoctor = func() (string, error) { return home, nil }
+		pnpm := filepath.Join(home, ".opencode", "bin")
+		real := activateDoctorLauncher(t, home, "windows", filepath.Join(pnpm, "opencode.CMD"))
+		lookPathFn = func(string) (string, error) { return opencode.WindowsCMDPath(home), nil }
+		if got := checkOneTool("opencode", []string{opencode.BinDir(home), filepath.Dir(real)}); got.Status != CheckStatusPass {
+			t.Fatalf("windows launcher chain = %#v, want pass", got)
+		}
+	})
+
+	// A target that precedes its launcher on PATH bypasses the launcher: that is
+	// shadowing, not one installation (e.g. a Windows machine PATH entry from
+	// choco or winget ahead of the user PATH).
+	t.Run("posix target before launcher is shadowing", func(t *testing.T) {
+		doctorGOOS = "linux"
+		executableExtsFn = func() []string { return []string{""} }
+		home := t.TempDir()
+		osUserHomeDirDoctor = func() (string, error) { return home, nil }
+		real := activateDoctorLauncher(t, home, "linux", "")
+		lookPathFn = func(string) (string, error) { return real, nil }
+		got := checkOneTool("opencode", []string{filepath.Dir(real), opencode.BinDir(home)})
+		assertLauncherShadowed(t, got, real, opencode.POSIXLauncherPath(home), opencode.BinDir(home))
+	})
+
+	t.Run("windows target before launcher is shadowing", func(t *testing.T) {
+		doctorGOOS = "windows"
+		executableExtsFn = func() []string { return []string{".exe", ".cmd"} }
+		home := t.TempDir()
+		osUserHomeDirDoctor = func() (string, error) { return home, nil }
+		pnpm := filepath.Join(home, ".opencode", "bin")
+		real := activateDoctorLauncher(t, home, "windows", filepath.Join(pnpm, "opencode.CMD"))
+		lookPathFn = func(string) (string, error) { return real, nil }
+		got := checkOneTool("opencode", []string{filepath.Dir(real), opencode.BinDir(home)})
+		assertLauncherShadowed(t, got, real, opencode.WindowsCMDPath(home), opencode.BinDir(home))
+	})
+
+	t.Run("marker-only file is not a managed launcher", func(t *testing.T) {
+		doctorGOOS = "linux"
+		executableExtsFn = func() []string { return []string{""} }
+		home := t.TempDir()
+		osUserHomeDirDoctor = func() (string, error) { return home, nil }
+		real := filepath.Join(t.TempDir(), "opencode")
+		if err := os.WriteFile(real, []byte("real"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		forged := opencode.POSIXLauncherPath(home)
+		if err := os.MkdirAll(filepath.Dir(forged), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(forged, []byte("#!/bin/sh\n# "+opencode.OwnershipMarker+"\nexec '"+real+"' \"$@\"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		lookPathFn = func(string) (string, error) { return forged, nil }
+		if got := checkOneTool("opencode", []string{opencode.BinDir(home), filepath.Dir(real)}); got.Status != CheckStatusWarn {
+			t.Fatalf("marker-only file = %#v, want duplicate warning", got)
+		}
+	})
+}
+
+func assertLauncherShadowed(t *testing.T, got CheckResult, target, launcher, binDir string) {
+	t.Helper()
+	if got.Status != CheckStatusWarn || !strings.Contains(got.Detail, target) || !strings.Contains(got.Detail, launcher) || !strings.Contains(got.Detail, "bypass") {
+		t.Fatalf("target before launcher = %#v, want warn that %s bypasses %s", got, target, launcher)
+	}
+	if got.Remedy == nil || got.Remedy.ID == doctor.RemedyRemoveDuplicates || !strings.Contains(got.Remedy.Description, binDir) {
+		t.Fatalf("target before launcher remedy = %#v, want PATH-order remedy naming %s", got.Remedy, binDir)
+	}
+}
+
+// A shell whose startup cannot be modeled is informational: warn with
+// guidance, never fail.
+func TestCheckOpenCodeProfileUnverifiableShellWarnsWithGuidance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX login shells are not used on Windows")
+	}
+	t.Setenv("SHELL", "/usr/bin/fish")
+	t.Setenv("ZDOTDIR", "")
+	home := t.TempDir()
+	activateDoctorLauncher(t, home, "linux", "")
+	got := checkOpenCodeProfile(home, []string{opencode.BinDir(home), "/usr/bin"})
+	if got.Status != CheckStatusWarn || !strings.Contains(got.Detail, "could not verify") {
+		t.Fatalf("unverifiable shell = %#v, want informational warn", got)
+	}
+	if got.Remedy == nil || !strings.Contains(got.Remedy.Description, "command -v opencode") || !strings.Contains(got.Remedy.Description, opencode.ProfileExportLine(opencode.BinDir(home))) {
+		t.Fatalf("unverifiable shell remedy = %#v, want verification guidance", got.Remedy)
+	}
+}
+
+func TestRunDoctorAddsOpenCodeProfileCheckOnlyWhenBackgroundIsOn(t *testing.T) {
+	origLookPath := lookPathFn
+	origAvail := availableBytesFn
+	origHTTP := httpGetFn
+	origPathDirs := pathDirsFn
+	origHomeDir := osUserHomeDirDoctor
+	origExecutable := osExecutableDoctor
+	origGOOS := doctorGOOS
+	t.Cleanup(func() {
+		lookPathFn = origLookPath
+		availableBytesFn = origAvail
+		httpGetFn = origHTTP
+		pathDirsFn = origPathDirs
+		osUserHomeDirDoctor = origHomeDir
+		osExecutableDoctor = origExecutable
+		doctorGOOS = origGOOS
+	})
+	lookPathFn = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+	availableBytesFn = func(string) (int64, error) { return 1024 * 1024 * 1024, nil }
+	httpGetFn = func(string, time.Duration) (int, error) { return 200, nil }
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
+	pathDirsFn = func() []string { return []string{"/usr/local/bin"} }
+	osExecutableDoctor = func() (string, error) { return "/usr/local/bin/gentle-ai", nil }
+
+	for _, tt := range []struct {
+		name      string
+		goos      string
+		payload   string
+		wantCheck bool
+	}{
+		{name: "background on", goos: "linux", payload: `{"installed_agents":["opencode"],"opencode_background_subagents":"on"}`, wantCheck: true},
+		{name: "background off", goos: "linux", payload: `{"installed_agents":["opencode"],"opencode_background_subagents":"off"}`},
+		{name: "windows uses user PATH", goos: "windows", payload: `{"installed_agents":["opencode"],"opencode_background_subagents":"on"}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			doctorGOOS = tt.goos
+			homeDir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(homeDir, ".gentle-ai"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(homeDir, ".gentle-ai", "state.json"), []byte(tt.payload), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+			var buf bytes.Buffer
+			if err := RunDoctor(context.Background(), &buf); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(buf.String(), string(doctor.CheckOpenCodeProfile)); got != tt.wantCheck {
+				t.Fatalf("profile check present = %t, want %t; output:\n%s", got, tt.wantCheck, buf.String())
+			}
+		})
 	}
 }
 

@@ -159,6 +159,9 @@ var reviewStopReasonNarration = map[string]string{
 	"target_already_acknowledged": "This exact target was already acknowledged and its review authority was burned. " +
 		"No further review action is required; delivery follows ordinary repository policy. Changed targets remain eligible for review. " +
 		"Only when deliberately requesting a new independent review, use `gentle-ai review start`; do not automatically restart this consumed target.",
+	"acknowledged_predecessor_passive_delta": "This committed range only adds passive content (documentation or notes) to a candidate that was already approved and acknowledged, so there is nothing new to review. " +
+		"No review action is required and no review authority was created; delivery follows ordinary repository policy. Any non-passive change is offered for review again. " +
+		"Only when deliberately requesting a new independent review, use `gentle-ai review start`.",
 	"rdd_disabled": "Review mode is disabled. Run `gentle-ai review mode status --cwd <repo> --json` to inspect the deciding scope; STATUS renders the exact scoped enable command for this request.",
 	"staged_workspace_overlay_recovery_unavailable": "Pass `--lineage <id>` to continue the review you already started, " +
 		"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh.",

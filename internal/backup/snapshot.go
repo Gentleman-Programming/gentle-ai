@@ -2,11 +2,13 @@ package backup
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -105,7 +107,9 @@ func (s Snapshotter) buildEntry(sourcePath string) (ManifestEntry, ArchiveEntry,
 	// bits to detect it as a symlink before classifying the target.
 	info, err := os.Lstat(cleanSource)
 	if err != nil {
-		if os.IsNotExist(err) {
+		// ENOTDIR means an ancestor is a regular file, so nothing can exist
+		// here either; the restore leaves that ancestor untouched.
+		if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
 			// Path does not exist on disk: it is a prospective install target,
 			// not a user-owned artifact (sockets, FIFOs, devices, and dangling
 			// symlinks are handled separately below). Mark it as a regular

@@ -31,12 +31,12 @@ verification cost or external side effects, accepted residual risk, or delivery.
 | Route | Use it when | What happens |
 |---|---|---|
 | **Direct inline** | The task is **small**: understood within the inline evidence budget, risk contained, and resumable from the request plus `git diff`, whatever the number of files. | Read, edit, and run the focused test and suite inline. |
-| **Delegated direct** | Understanding exceeds the inline evidence budget; or the task is **large** (its resume test fails), so reading that prepares a write, broad research, and the writer delegate; or the change is **high risk** and needs an independent verifier. File count never decides it. | Delegate the narrow exploration and/or one writer needed for that action. |
+| **Delegated direct** | Understanding exceeds the inline evidence budget; or a writer has a named reason (two or more independent units with disjoint edit surfaces launched together, or the long-session context backstop), so reading that prepares that write delegates with it; or the change is **high risk** and needs an independent verifier. Size, a large task alone, file count, or a price ratio never decides it. | Delegate the narrow exploration, one bounded writer per unit with a reason, and/or the verifier needed for that action. |
 
 File count never decides the route or the task size. High risk takes a task
 out of the small path and adds an independent verifier after the change's own
-checks. The feature document and the delegated writer still come only from a
-failed resume test. When receipt-driven development is on and native assess returns a
+checks. The feature document still comes only from a failed resume test; a
+large task without a writer reason stays inline, following its logbook. When receipt-driven development is on and native assess returns a
 risk tier, that tier wins; the agent may only raise it.
 
 Delegation also applies per action. Tests, builds, installs, and native review

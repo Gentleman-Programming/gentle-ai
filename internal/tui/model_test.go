@@ -186,9 +186,9 @@ func TestCodexCustomDiscoveryStartsAsCommandWithFallback(t *testing.T) {
 	t.Cleanup(func() { discoverCodexModels = originalDiscover })
 
 	called := false
-	discoverCodexModels = func(context.Context) []string {
+	discoverCodexModels = func(context.Context) model.CodexModelCatalog {
 		called = true
-		return []string{"discovered-model"}
+		return model.CodexModelCatalog{Models: []string{"discovered-model"}}
 	}
 
 	m := NewModel(system.DetectionResult{}, "dev")
@@ -230,11 +230,14 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 		wantApplied bool
 	}{
 		{
+			// Presets read discovered service tiers, so the newest result
+			// applies on the main picker too.
 			name: "after leaving Custom",
 			setup: func(m *Model) {
 				m.CodexModelPicker.CustomMode = screens.CodexCustomModeNone
 			},
-			msg: CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+			msg:         CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+			wantApplied: true,
 		},
 		{
 			name: "after leaving picker",
@@ -282,6 +285,57 @@ func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
 				t.Fatalf("AvailableModels = %v, want unchanged %v", state.CodexModelPicker.AvailableModels, fallback)
 			}
 		})
+	}
+}
+
+func TestCodexServiceTierPreselectsDiscoversAndFeedsSyncOverride(t *testing.T) {
+	originalDiscover := discoverCodexModels
+	t.Cleanup(func() { discoverCodexModels = originalDiscover })
+	orchestrator := model.CodexPresetOrchestratorAssignment(string(screens.CodexPresetRecommended)).Model
+	discoverCodexModels = func(context.Context) model.CodexModelCatalog {
+		return model.CodexModelCatalog{
+			Models: []string{orchestrator},
+			Capabilities: map[string]model.CodexModelCapabilities{
+				orchestrator: {ServiceTiers: []model.CodexServiceTier{{ID: "priority", Name: "Fast"}}, ServiceTiersReported: true},
+			},
+		}
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{CodexServiceTier: "priority"})
+	if m.Selection.CodexServiceTier != "priority" || m.Selection.CodexManagedServiceTier != "priority" {
+		t.Fatalf("NewModel tier = %q managed = %q, want persisted priority", m.Selection.CodexServiceTier, m.Selection.CodexManagedServiceTier)
+	}
+	m.Screen = ScreenModelConfig
+	m.Cursor = 3 // Configure Codex models
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenCodexModelPicker || state.CodexModelPicker.ServiceTier != "priority" {
+		t.Fatalf("screen = %v tier = %q, want Codex picker pre-selecting priority", state.Screen, state.CodexModelPicker.ServiceTier)
+	}
+	if cmd == nil {
+		t.Fatal("opening the Codex picker did not start runtime discovery")
+	}
+	updated, _ = state.Update(cmd())
+	state = updated.(Model)
+
+	state.Cursor = 1 // Recommended
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.CodexModelPicker.CustomMode != screens.CodexCustomModeServiceTier || state.CodexModelPicker.ServiceTierCursor != 1 {
+		t.Fatalf("mode = %v cursor = %d, want tier step with priority pre-selected", state.CodexModelPicker.CustomMode, state.CodexModelPicker.ServiceTierCursor)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyUp})
+	state = updated.(Model)
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.Selection.CodexServiceTier != "" {
+		t.Fatalf("Selection.CodexServiceTier = %q, want standard", state.Selection.CodexServiceTier)
+	}
+	overrides := state.PendingSyncOverrides
+	if overrides == nil || overrides.CodexServiceTier == nil || *overrides.CodexServiceTier != "" {
+		t.Fatalf("PendingSyncOverrides.CodexServiceTier = %#v, want explicit standard", overrides)
 	}
 }
 
@@ -350,6 +404,74 @@ func TestCodexCustomDiscoveryClampsModelSelectCursorBeforeEnter(t *testing.T) {
 	}
 	if state.CodexModelPicker.CustomPendingModel != "discovered-model-2" {
 		t.Fatalf("CustomPendingModel = %q, want %q", state.CodexModelPicker.CustomPendingModel, "discovered-model-2")
+	}
+}
+
+func TestCodexCustomDiscoveryClampsEffortSelectCursorBeforeEnter(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	m.CodexModelPicker.CustomMode = screens.CodexCustomModeEffortSelect
+	m.CodexModelPicker.CustomPendingModel = "gpt-5.6-luna"
+	m.CodexModelPicker.CustomEffortCursor = 3 // curated xhigh, before discovery
+	m.codexModelDiscoveryRequest = 1
+
+	updated, _ := m.Update(CodexModelsDiscoveredMsg{
+		RequestID: 1,
+		Models:    []string{"gpt-5.6-luna"},
+		Capabilities: map[string]model.CodexModelCapabilities{
+			"gpt-5.6-luna": {Efforts: []model.CodexEffort{model.CodexEffortLow, model.CodexEffortMedium}},
+		},
+	})
+	state := updated.(Model)
+	if state.CodexModelPicker.CustomEffortCursor != 1 {
+		t.Fatalf("CustomEffortCursor = %d, want clamped to 1 on capability arrival", state.CodexModelPicker.CustomEffortCursor)
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if got := state.CodexModelPicker.CustomAssignments["jd-judge-a"]; got.ModelID != "gpt-5.6-luna" || got.Effort != model.CodexEffortMedium {
+		t.Fatalf("assignment = %+v, want gpt-5.6-luna/medium", got)
+	}
+}
+
+// TestCodexManagedServiceTierRefreshesFromStateAfterSyncAndInstall keeps the
+// session's managed tier equal to what state recorded as written, so a later
+// Standard choice in the same session retires exactly that value.
+func TestCodexManagedServiceTierRefreshesFromStateAfterSyncAndInstall(t *testing.T) {
+	original := readPersistedCodexServiceTier
+	t.Cleanup(func() { readPersistedCodexServiceTier = original })
+	readPersistedCodexServiceTier = func() *string { tier := "priority"; return &tier }
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.SyncFn = func(*model.SyncOverrides) ([]string, error) { return nil, nil }
+	msg, ok := m.startSync(nil)().(SyncDoneMsg)
+	if !ok || msg.CodexServiceTier == nil || *msg.CodexServiceTier != "priority" {
+		t.Fatalf("sync completion did not carry the recorded tier: %#v", msg)
+	}
+	m.Screen = ScreenSync
+	updated, _ := m.Update(msg)
+	state := updated.(Model)
+	if state.Selection.CodexManagedServiceTier != "priority" {
+		t.Fatalf("managed tier after sync = %q, want priority recorded in state", state.Selection.CodexManagedServiceTier)
+	}
+
+	standard := ""
+	updated, _ = state.Update(PipelineDoneMsg{CodexServiceTier: &standard})
+	state = updated.(Model)
+	if state.Selection.CodexManagedServiceTier != "" {
+		t.Fatalf("managed tier after install = %q, want empty recorded in state", state.Selection.CodexManagedServiceTier)
+	}
+	updated, _ = state.Update(PipelineDoneMsg{}) // unreadable state keeps the session value
+	if got := updated.(Model).Selection.CodexManagedServiceTier; got != "" {
+		t.Fatalf("managed tier changed without a recorded value: %q", got)
+	}
+}
+
+func TestNewModelDropsInvalidPersistedCodexServiceTier(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{CodexServiceTier: "priority\nmodel = \"x\""})
+	if m.Selection.CodexServiceTier != "" || m.Selection.CodexManagedServiceTier != "" {
+		t.Fatalf("tier = %q managed = %q, want invalid state value dropped", m.Selection.CodexServiceTier, m.Selection.CodexManagedServiceTier)
 	}
 }
 
@@ -538,6 +660,32 @@ func TestSanitizeKnownModelEfforts_UnknownModelDataPreservesStoredEffort(t *test
 
 			if got["sdd-apply"].Effort != "high" {
 				t.Fatalf("Effort = %q, want high when variants are unknown", got["sdd-apply"].Effort)
+			}
+		})
+	}
+}
+
+func TestSanitizeKnownModelEfforts_PreservesRuntimeAdvertisedEffortLevels(t *testing.T) {
+	tests := []struct {
+		name       string
+		assignment model.ModelAssignment
+		sddModels  map[string][]opencode.Model
+		wantEffort string
+	}{
+		{
+			name:       "extended effort preserved when in model EffortLevels",
+			assignment: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5.6-sol", Effort: "max"},
+			sddModels:  map[string][]opencode.Model{"openai": {{ID: "gpt-5.6-sol", Variants: []string{"low", "medium", "high", "max", "ultra"}}}},
+			wantEffort: "max",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assignments := map[string]model.ModelAssignment{"sdd-apply": tt.assignment}
+			got := sanitizeKnownModelEfforts(assignments, tt.sddModels)
+			if got["sdd-apply"].Effort != tt.wantEffort {
+				t.Fatalf("Effort = %q, want %q", got["sdd-apply"].Effort, tt.wantEffort)
 			}
 		})
 	}
@@ -1982,7 +2130,7 @@ func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	}
 }
 
-func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
+func TestWelcomeMenu_UninstallNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
 	m.Cursor = 9
@@ -1995,7 +2143,7 @@ func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
 	}
 }
 
-func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
+func TestWelcomeMenu_UninstallNavigation_WithOpenCodeDetected(t *testing.T) {
 	m := NewModel(system.DetectionResult{
 		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
 	}, "dev")
@@ -2010,17 +2158,12 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 	}
 }
 
-// TestWelcomeMenu_OptionCount verifies legacy discovery does not change the menu.
+// TestWelcomeMenu_OptionCount verifies the 12 retained welcome options.
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	// Legacy discovery does not change the 12 retained options.
-	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true)
 	if len(opts) != 12 {
-		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 12; got %v", len(opts), opts)
-	}
-	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 2, true)
-	if len(optsWithProfiles) != 12 || !reflect.DeepEqual(opts, optsWithProfiles) {
-		t.Fatalf("legacy profile discovery changed welcome menu: %v", optsWithProfiles)
+		t.Fatalf("WelcomeOptions() len = %d, want 12; got %v", len(opts), opts)
 	}
 }
 
@@ -2313,7 +2456,7 @@ func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
 	}
 }
 
-func TestUninstallModeScreen_FullWithProfilesSkipsProfileSelection(t *testing.T) {
+func TestUninstallModeScreen_FullSkipsEngramScopeSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
 	m.Screen = ScreenUninstallMode
 	m.Cursor = 1 // Full Uninstall option
@@ -2324,8 +2467,8 @@ func TestUninstallModeScreen_FullWithProfilesSkipsProfileSelection(t *testing.T)
 	if state.Screen != ScreenUninstallConfirm {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
 	}
-	if len(state.UninstallProfilesToRemove) != 0 {
-		t.Fatalf("legacy profiles selected for deletion: %v", state.UninstallProfilesToRemove)
+	if state.UninstallEngramScopeSelected {
+		t.Fatal("full uninstall must not mark the Engram scope as selected")
 	}
 }
 
@@ -2359,7 +2502,7 @@ func TestUninstallComponents_ContinueNavigatesToConfirm(t *testing.T) {
 	}
 }
 
-func TestUninstallComponents_ContinueWithProfilesSkipsProfileSelection(t *testing.T) {
+func TestUninstallComponents_ContinueWithoutEngramSkipsScopeSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
 	m.Screen = ScreenUninstallComponents
 	m.UninstallMode = model.UninstallModePartial
@@ -2370,23 +2513,24 @@ func TestUninstallComponents_ContinueWithProfilesSkipsProfileSelection(t *testin
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallConfirm || len(state.UninstallProfilesToRemove) != 0 {
-		t.Fatalf("partial component uninstall selected legacy profiles: screen=%v profiles=%v", state.Screen, state.UninstallProfilesToRemove)
+	if state.Screen != ScreenUninstallConfirm || state.UninstallEngramScopeSelected {
+		t.Fatalf("partial component uninstall without Engram: screen=%v scopeSelected=%v", state.Screen, state.UninstallEngramScopeSelected)
 	}
 }
 
-func TestUninstallProfiles_ContinueNavigatesToConfirm(t *testing.T) {
+func TestUninstallEngramScope_ContinueNavigatesToConfirm(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenUninstallProfiles
-	m.UninstallProfilesAvailable = []string{"cheap"}
-	m.UninstallProfilesToRemove = []string{"cheap"}
-	m.Cursor = len(m.UninstallProfilesAvailable)
+	m.Screen = ScreenUninstallEngramScope
+	m.Cursor = 0
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallConfirm {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+	if !state.UninstallEngramScopeSelected {
+		t.Fatal("continuing from the Engram scope screen must mark the scope as selected")
 	}
 }
 
@@ -2581,27 +2725,24 @@ func TestStartUninstall_FullRemoveNonBrewRemovesBinary(t *testing.T) {
 	}
 }
 
-func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
+func TestStartUninstall_UsesEngramScopeUninstallWhenSelected(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.UninstallMode = model.UninstallModePartial
 	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
-	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
-	m.UninstallProfilesToRemove = []string{"cheap"}
-	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallEngramScopeSelected = true
+	m.UninstallEngramScope = model.EngramUninstallScopeProject
 
 	called := false
-	m.UninstallWithProfilesFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+	m.UninstallWithEngramScopeFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
 		called = true
-		if !reflect.DeepEqual(profileNames, []string{"cheap"}) {
-			t.Fatalf("profileNames = %v, want [cheap]", profileNames)
-		}
-		if engramScope != model.EngramUninstallScopeGlobal {
-			t.Fatalf("engramScope = %q, want %q", engramScope, model.EngramUninstallScopeGlobal)
+		if engramScope != model.EngramUninstallScopeProject {
+			t.Fatalf("engramScope = %q, want %q", engramScope, model.EngramUninstallScopeProject)
 		}
 		return componentuninstall.Result{}, nil
 	}
 	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
-		t.Fatalf("UninstallFn should not be called when UninstallWithProfilesFn is configured")
+		t.Fatalf("UninstallFn should not be called when UninstallWithEngramScopeFn is configured")
 		return componentuninstall.Result{}, nil
 	}
 
@@ -2610,7 +2751,7 @@ func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
 		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
 	}
 	if !called {
-		t.Fatal("UninstallWithProfilesFn was not called")
+		t.Fatal("UninstallWithEngramScopeFn was not called")
 	}
 }
 
@@ -2632,8 +2773,8 @@ func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelecti
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallProfiles {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
+	if state.Screen != ScreenUninstallEngramScope {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallEngramScope)
 	}
 	if !state.UninstallEngramProjectScopeAvailable {
 		t.Fatal("UninstallEngramProjectScopeAvailable = false, want true")

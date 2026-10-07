@@ -20,14 +20,14 @@ ODD runs by default on every request, in every configured runtime, without you a
 3. **Resolve uncertainty** — optional research for a named uncertainty, one focused question for a real product decision, at most one assumption challenge for a high-consequence unproven premise.
 4. **Classify** — by task size: small when understood, risk is contained, and the work could be resumed from the request plus `git diff`; large only when that resume test fails. Counts of files, commands, tests, fixes, or a requested todo list never decide it.
 5. **Track before the first write** — for substantial work, create the feature document and its Engram mirror before the first source write, and tell you in one line which document was created and how many tasks it holds.
-6. **Implement task by task** — route each task through the smallest useful topology with the configured TDD mode and applicable checks; check items off only with observed proof. Every task closes with at least one work-unit commit on the feature branch (branch first when on the default branch), with tests and docs alongside the behavior, using a Conventional Commit message; the feature document records the commit identity as evidence.
+6. **Implement task by task** — route each task through the smallest useful topology with the default applicable test-first policy and applicable checks; check items off only with observed proof. Every task closes with at least one work-unit commit on the feature branch (branch first when on the default branch), with tests and docs alongside the behavior, using a Conventional Commit message; the feature document records the commit identity as evidence.
 7. **Close** — report the verified outcome, every failed or pending check, and the next step. The native review candidate is a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch.
 
 - **One feature document:** `odd/tasks/<feature-name>.md` is the specification subagents read by reference, in a fixed order: a short header; `## Specs` with numbered `S#` that quote your exact strings, error messages, and examples verbatim, plus acceptance criteria and checks; `## Tasks` with one line per task (stable ID, linked `S#`, route, commit); and `## Log` last, where `L1` is your original request verbatim and later corrections, evidence, and rationale are appended. A requirement change rewrites only the affected spec and reopens only its task. Project-scoped Engram topic `odd/<feature-name>/tasks` mirrors the full current document and file locator.
 - **Handoffs:** workers receive a reference to the document, their task, and its `S#`, never a paraphrase of your request; they read until `## Log` and report which specs they covered. Verify reads the whole document, runs the spec's examples you authorized, against isolated state when they mutate data, and returns a verdict per spec. A failure you report is reproduced before anyone decides it already works.
 - **Task size:** about 400 authored changed lines (additions plus deletions) per task is only a planning heuristic, not a task acceptance criterion, hard cap, counter-trigger, automatic stop, forced split, or RDD trigger. Keep the smallest coherent behavior with its tests and docs. If the correct, clear solution naturally exceeds it, briefly explain why and continue without size-only rework loops. Never delete spaces, blank lines, or comments for cosmetic savings, omit tests, minify, add gratuitous abstractions, or split artificially. Forward the same advisory-only instruction to delegated subagents. Existing repository policy and separate PR size gates remain unchanged.
 - **Changes:** accepted user, review, or verification changes update affected intent and tasks together, preserve valid completed and unrelated work, and add new tasks or reopen invalidated tasks with a reason. Findings alone do not authorize expansion or automatic acceptance; routine corrections stay with their tasks. Checkoffs require observed outcomes and applicable proof; they are not approval or a review receipt. New business scope still needs your authorization.
-- **TDD:** resolve on/off from existing project/session configuration or explicit user choice, retaining source and exact runner in the feature document when present; tests existing does not enable it. Forward mode/source/runner to every implementation worker and refresh on resume. Enabled means observed RED before implementation → GREEN → REFACTOR; disabled still runs ordinary functional checks. Unknown/conflicting mode or a missing runner needs only the clarification affecting the next action—never invent precedence or a runner.
+- **Tests:** test-first applies by default when a relevant runnable deterministic test and a clear expected outcome exist: observed RED before implementation → GREEN → REFACTOR; otherwise explain the exception and run proportionate functional checks. Write one RED test per requested rule, covering the cases that rule names and asserting its observable effects (output, exit code, persisted data) through the public interface. For every existing command or option the change touches (it shares the changed code), add one test proving its previous behavior still holds; add no other cases. Update help text and docs for any changed command, option, or message. Record the runner in the feature document and forward the policy and runner to every implementation worker; never invent a runner.
 - **Checking:** run applicable functional checks per task; a TODO checkbox does not trigger a review cycle. The native review candidate is a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch. After each work-unit commit, when RDD is enabled, assess it with `gentle-ai review assess --cwd <repo> --agent <runtime> --base-ref <last reviewed boundary> --committed-only --json` and read `review_due` and `review_due_reason` from the returned envelope. When `review_due` is `true` (`high_risk` or `slice_budget_reached`), execute the returned `next_transition.command` verbatim — it is the exact preflight STATUS invocation for the same `--base-ref`/`--committed-only` selectors — and follow the transitions it returns; the reviewed boundary advances to this commit once that review is acknowledged. When `review_due` is `false`, record the reason (`passive`, `under_budget`, or `already_reviewed`) and continue: a `passive` commit needs no review and the boundary advances immediately, an `under_budget` medium commit stays pending in the slice until a later commit reaches the delivery budget, and `already_reviewed` means this exact range is already covered by terminal authority. The first boundary is the branch point, and every reviewed boundary becomes the next base. Record the assessed tier and outcome per task: `review_due`/`review_due_reason`, or the transition's acknowledged/declined/unavailable outcome. Existing risk, consent, and authority stay unchanged; never infer low risk from a failed assessment. Never skip an existing delivery gate.
 - **Delivery:** at feature-document creation, forecast authored changed lines (additions plus deletions, generated files excluded) from the task list, and keep a running count from work-unit commits. Choose one delivery strategy per feature: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. When the forecast or running count exceeds about 400 authored changed lines, apply the chosen strategy before the next commit. `ask-on-risk` asks once for the chain strategy (`stacked-to-main` or `feature-branch-chain`); `auto-chain` asks only for a missing chain strategy and slices automatically. Cache both choices, and record slice boundaries (which commits each PR holds) in the feature document. Resolve the `work-unit-commits` and `chained-pr` skills by registry name before planning or creating any PR.
 - **RDD consent:** when enabled, native candidate risk assessment comes first: passive/low stays silent with structural checks, no reviewer, and no consent ceremony; medium/high presents existing candidate consent and runs the native review plan only on grant. Declining uses ordinary policy. Disabled RDD never starts or prompts; ordinary checks remain. This is prospective change risk, not defect severity or a model-selected threshold. Failed assessment never implies low risk; existing native continuations and authority still apply.
@@ -61,7 +61,7 @@ flowchart TD
     I --> J
     J -->|Yes| K[One feature document and full Engram mirror]
     J -->|No| L[Small work without durable task artifacts]
-    K --> TT[Resolve configured TDD, source and runner]
+    K --> TT[Resolve applicable test-first policy and runner]
     L --> TT
     TT --> M[Implement next authorized task]
     M --> N[Applicable proportionate checks]
@@ -179,6 +179,8 @@ gentle-ai install --dry-run \
   --preset full-gentleman
 ```
 
+Cursor's managed `gentle-ai.mdc` rule includes YAML frontmatter with `alwaysApply: true`, so its guidance applies to every Agent conversation. Install verification checks this activation metadata as well as file existence, and requires the entire frontmatter to be one valid YAML document (no additional documents or malformed trailing content). Run `gentle-ai sync --agent cursor` to repair rules generated by older versions; sync retains appended managed sections and does not duplicate the frontmatter.
+
 ### skill-registry refresh
 
 Refresh the project-local skill registry used by orchestrators before they delegate work:
@@ -199,7 +201,7 @@ See [Skill Registry](skill-registry.md) for the full index-first flow and diagra
 
 ### Community Tools
 
-The installer’s **Community Tools/Plugins** screen offers opt-in integrations that are never selected by a preset or detection.
+The installer’s **Community Tools** screen offers opt-in integrations that are never selected by a preset or detection.
 
 ### sync
 
@@ -269,6 +271,10 @@ gentle-ai uninstall --agent cursor --component skills --yes
 
 If no `--component` flag is provided for a partial uninstall, `gentle-ai` removes all managed uninstallable components for the selected agent set.
 
+An uninstall that removes every component of an agent (`--all`, or no `--component` flag) also retires what releases before v4.0.0 installed for the retired SDD workflow, with the same ownership proof as install and sync (see [Components](components.md)): `sdd-*` skills, commands, native agents, Codex profiles, the Kimi module, OpenCode and Kilocode agent entries and prompts, the Claude Code preflight hook, and the `<!-- gentle-ai:sdd-orchestrator -->` block of the agent's prompt files, including its active prompt, since uninstall delivers no routing guidance that would migrate it. Files whose bytes no release wrote are kept and reported: move or delete them yourself. A directory that is a symlink is never entered, Pi files are never touched, and everything uninstall changes is in its backup snapshot.
+
+A complete Claude Code uninstall also retires the optional orchestrator modules pilot and keeps module files Gentle AI does not own; see [Claude Code orchestrator modules](rollback.md#claude-code-orchestrator-modules-pilot).
+
 ### update / upgrade
 
 Check for and install new versions of `gentle-ai` itself. The pre-upgrade backup snapshot covers only the agents recorded in `state.InstalledAgents` (`~/.gentle-ai/state.json`) — not every agent config directory that exists on your machine.
@@ -280,6 +286,10 @@ gentle-ai update
 # Upgrade to the latest release (downloads new binary, replaces current)
 gentle-ai upgrade
 ```
+
+A failed check for one tool does not block results or upgrades for the other managed tools. Both commands show failed checks as `[!!]` and keep the partial-check warning visible; `upgrade` only attempts tools with a confirmed available update. Unknown versions are not treated as up to date.
+
+Partial checks return exit code `0` when the remaining work succeeds. If every tool check fails, or an attempted upgrade fails, the command returns a non-zero exit code. `upgrade --dry-run` follows the same check policy without executing upgrades.
 
 After any upgrade or manual binary replacement, run `gentle-ai sync` to refresh all managed assets to the new version's content.
 
@@ -316,6 +326,12 @@ If you choose to install several tools from this tap, run `brew trust gentleman-
 
 The TUI **Configure Models** screen lets you assign models to supported agents, including Judgment Day roles (`jd-judge-a`, `jd-judge-b`, `jd-fix-agent`). Configure the available slots for your selected agent.
 
+For Codex, efforts and speed come from the installed runtime (`codex debug models`):
+
+- **Effort.** The Custom picker offers only the reasoning efforts each model advertises. `max` and `ultra` appear only on models that list them. Without discovery, the picker falls back to `low`–`xhigh`.
+- **Speed.** After you choose a preset, the picker asks for speed only when the runtime advertises a service tier for that preset's orchestrator model. Fast is a service tier, not a reasoning effort. Gentle AI writes it once as the top-level `service_tier` in `~/.codex/config.toml`, and Codex workers inherit it.
+- **Standard.** Choosing Standard removes only the `service_tier` value Gentle AI wrote, and only while the config still holds that exact value. A `service_tier` you set yourself is never changed.
+
 ### doctor
 
 Read-only ecosystem health diagnostics — no changes made to your configuration:
@@ -328,8 +344,9 @@ Checks performed:
 
 | Check | What it verifies |
 |-------|-----------------|
-| Tool binaries | Required tools present on `PATH`; shadow detection (wrong binary resolves first) |
+| Tool binaries | Required tools present on `PATH`; shadow detection (wrong binary resolves first). The managed OpenCode launcher and the executable it delegates to count as one installation when the launcher comes first on `PATH`; when the target comes first, doctor warns that it bypasses the launcher |
 | `state.json` validity | Parses `~/.gentle-ai/state.json` and reports any schema/corruption issues |
+| OpenCode activation (`opencode:managed_profile`) | With OpenCode background subagents on (POSIX): a new login shell resolves `opencode` to the managed launcher, not to a copy that a later startup file puts first on `PATH`; warns when this cannot be verified |
 | Engram MCP reachability | Confirms the Engram MCP server responds |
 | Disk space | Warns when available space is critically low |
 
@@ -351,8 +368,9 @@ gentle-ai -v
 | `telemetry` | Manage telemetry consent (`status`, `enable`, `disable`) and runtime events | [Telemetry](telemetry.md) |
 | `review` | Receipt-Driven Development review lifecycle, including `review assess` and `review mode` | [Review Integration](review-integration.md) |
 | `codegraph init --cwd <project-root>` | Validate a project root, then initialize its CodeGraph index (used by generated agent guidance) | [Components](components.md) |
+| `codegraph [--help\|-h]`, `codegraph init [--help\|-h]` | Show local CodeGraph initialization help and exit successfully without initializing an index; other CodeGraph commands are not forwarded | |
 | `skill-registry list [--json]` | List the resolved, deduplicated skill set | [Skill Registry](skill-registry.md) |
-| `uninstall opencode-plugin <id> [--yes]` | Remove one managed OpenCode community plugin | — |
+| `uninstall opencode-plugin <id> [--yes]` | Remove `gentle-logo` or a legacy external plugin registration (`sub-agent-statusline`, `sdd-engram-plugin`) left by older installations | — |
 
 ---
 
@@ -369,6 +387,7 @@ gentle-ai -v
 | `--channel`                   | Release channel: `stable` (default), `beta`, or `nightly` (alias for `beta`). Also settable via `GENTLE_AI_CHANNEL`. |
 | `--opencode-background-subagents` | OpenCode background subagents: `auto`, `on`, or `off`. Also settable via `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS`. See [below](#background-subagent-flags). |
 | `--pi-background-subagents`   | Pi background-subagent policy projected for `gentle-pi`: `auto`, `on`, or `off`. Also settable via `GENTLE_AI_PI_BACKGROUND_SUBAGENTS`. |
+| `--claude-orchestrator-modules` | Global Claude Code only: install the orchestrator as an always-loaded core plus on-demand modules in `~/.claude/gentle-ai/orchestrator/`. Off by default; rejected with `--scope workspace` or without `claude-code` in the selection. Sync, uninstall and restore limits: [Claude Code orchestrator modules](rollback.md#claude-code-orchestrator-modules-pilot). |
 | `--dry-run`                   | Preview the install plan without applying changes                                                                 |
 
 ## CLI Flags (sync)

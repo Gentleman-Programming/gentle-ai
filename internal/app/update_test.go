@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"reflect"
@@ -45,7 +46,7 @@ func TestRunUpdate_ReturnsErrorWhenChecksFail(t *testing.T) {
 	}
 }
 
-func TestRunUpgrade_ReturnsErrorBeforeExecutingWhenChecksFail(t *testing.T) {
+func TestRunUpgrade_ReturnsErrorBeforeExecutingWhenAllChecksFail(t *testing.T) {
 	origCheckFiltered := updateCheckFiltered
 	origUpgradeExecute := upgradeExecute
 	origUpgradeExecuteWithOptions := upgradeExecuteWithOptions
@@ -61,12 +62,6 @@ func TestRunUpgrade_ReturnsErrorBeforeExecutingWhenChecksFail(t *testing.T) {
 			{
 				Tool:   update.ToolInfo{Name: "engram"},
 				Status: update.CheckFailed,
-			},
-			{
-				Tool:             update.ToolInfo{Name: "gga"},
-				InstalledVersion: "1.0.0",
-				LatestVersion:    "2.0.0",
-				Status:           update.UpdateAvailable,
 			},
 		}
 	}
@@ -103,6 +98,77 @@ func TestRunUpgrade_ReturnsErrorBeforeExecutingWhenChecksFail(t *testing.T) {
 	}
 	if strings.Contains(out, "Upgrade\n") {
 		t.Fatalf("runUpgrade() should stop before rendering upgrade report:\n%s", out)
+	}
+}
+
+// Partial checks must preserve useful results without upgrading failed tools.
+func TestPartialUpdateChecks(t *testing.T) {
+	for _, healthyStatus := range []update.UpdateStatus{update.UpdateAvailable, update.UpToDate} {
+		for _, command := range []string{"update", "upgrade", "dry-run", "upgrade-failure"} {
+			t.Run(string(healthyStatus)+"/"+command, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				t.Setenv("USERPROFILE", home)
+				results := []update.UpdateResult{
+					{Tool: update.ToolInfo{Name: "engram"}, Status: update.CheckFailed},
+					{Tool: update.ToolInfo{Name: "gga"}, InstalledVersion: "1.0.0", LatestVersion: "2.0.0", Status: healthyStatus},
+				}
+				origAll, origFiltered, origExecute := updateCheckAll, updateCheckFiltered, upgradeExecuteWithOptions
+				t.Cleanup(func() {
+					updateCheckAll, updateCheckFiltered, upgradeExecuteWithOptions = origAll, origFiltered, origExecute
+				})
+				updateCheckAll = func(context.Context, string, system.PlatformProfile) []update.UpdateResult { return results }
+				updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult { return results }
+				calls := 0
+				upgradeExecuteWithOptions = func(_ context.Context, got []update.UpdateResult, _ system.PlatformProfile, gotHome string, dryRun bool, opts upgrade.ExecuteOptions) upgrade.UpgradeReport {
+					calls++
+					if !reflect.DeepEqual(got, results) || gotHome != home || dryRun != (command == "dry-run") || !opts.SkipBackup {
+						t.Fatalf("executor arguments = %v, %q, %v, %+v", got, gotHome, dryRun, opts)
+					}
+					if command == "upgrade-failure" {
+						return upgrade.UpgradeReport{Results: []upgrade.ToolUpgradeResult{{ToolName: "gga", Status: upgrade.UpgradeFailed, Err: fmt.Errorf("upgrade failure")}}}
+					}
+					return upgrade.UpgradeReport{}
+				}
+				var out bytes.Buffer
+				profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
+				var err error
+				if command == "update" {
+					err = runUpdate(context.Background(), "1.0.0", profile, &out)
+				} else {
+					err = runUpgrade(context.Background(), upgradeArgs{dryRun: command == "dry-run", noBackup: true}, system.DetectionResult{System: system.SystemInfo{Profile: profile}}, &out)
+				}
+				if command == "upgrade-failure" {
+					if err == nil || !strings.Contains(err.Error(), "upgrade failed for \"gga\"") {
+						t.Fatalf("error = %v, want actual upgrade failure", err)
+					}
+				} else if err != nil {
+					t.Fatalf("partial checks returned error: %v", err)
+				}
+				wantCalls := 1
+				if command == "update" {
+					wantCalls = 0
+				}
+				if calls != wantCalls {
+					t.Fatalf("executor calls = %d, want %d", calls, wantCalls)
+				}
+				text := out.String()
+				for _, want := range []string{"[!!] engram", "check failed", "gga"} {
+					if !strings.Contains(text, want) {
+						t.Fatalf("missing %q in output:\n%s", want, text)
+					}
+				}
+				if healthyStatus == update.UpdateAvailable && !strings.Contains(text, "1 update(s) available. 1 check(s) failed.") {
+					t.Fatalf("missing mixed summary:\n%s", text)
+				}
+				if healthyStatus == update.UpToDate && !strings.Contains(text, "Update check incomplete") {
+					t.Fatalf("missing partial warning:\n%s", text)
+				}
+				if strings.Contains(text, "All tools are up to date!") {
+					t.Fatalf("misleading output:\n%s", text)
+				}
+			})
+		}
 	}
 }
 

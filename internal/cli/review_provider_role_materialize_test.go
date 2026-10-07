@@ -447,7 +447,7 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			// eligibility gate keyed on the relay handshake env var.
 			name: "without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true"),
-			want: "repository_context_unavailable",
+			want: "rctx2_binding_unusable",
 		},
 		{
 			name: "without materialize or input", env: reviewPiHostRelayContract,
@@ -493,7 +493,7 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			// var (issue #4256).
 			name: "execution without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--execute=true"),
-			want: "repository_context_unavailable",
+			want: "rctx2_binding_unusable",
 		},
 	}
 	for _, test := range tests {

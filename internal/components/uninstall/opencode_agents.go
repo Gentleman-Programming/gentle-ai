@@ -1,6 +1,7 @@
 package uninstall
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -46,7 +47,8 @@ func removeOpenCodeGentleman(path string, agentID model.AgentID) operation {
 // removeOpenCodeFamilyAgents rewrites only runtime-owned entries with a
 // managed shape or the legacy v3.7.0 ownership marker.
 func removeOpenCodeFamilyAgents(path string, agentID model.AgentID) operation {
-	return operation{typeID: opRewriteFile, path: path, apply: func(path string) (bool, bool, error) {
+	var notes []string
+	return operation{typeID: opRewriteFile, path: path, notes: func() []string { return notes }, apply: func(path string) (bool, bool, error) {
 		raw, err := os.ReadFile(path)
 		if os.IsNotExist(err) {
 			return false, false, nil
@@ -70,6 +72,11 @@ func removeOpenCodeFamilyAgents(path string, agentID model.AgentID) operation {
 				continue
 			}
 			if entry["__managed_by"] == "gentle-ai/sdd" {
+				if strings.HasPrefix(name, "sdd-") {
+					// Retired SDD agents belong to the settings retirement
+					// (retiredSDDOperation), as in sync.
+					continue
+				}
 				// Mirror the migration ownership rules without requiring a sync.
 				if opencodeagents.LegacyOwned(agentID, name) {
 					delete(agents, name)
@@ -100,6 +107,7 @@ func removeOpenCodeFamilyAgents(path string, agentID model.AgentID) operation {
 		orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
 		if orchestrator != nil {
 			permission, _ := orchestrator["permission"].(map[string]any)
+			questionOwned := installedQuestionShape(agentID, permission)
 			task, _ := permission["task"].(map[string]any)
 			for name := range removed {
 				if _, ok := task[name]; ok {
@@ -109,6 +117,14 @@ func removeOpenCodeFamilyAgents(path string, agentID model.AgentID) operation {
 			}
 			if len(task) == 0 && task != nil {
 				delete(permission, "task")
+			}
+			// The routing owner writes exactly "allow" (#4816), but only its
+			// install shape proves it; an unproven "allow" is kept and reported.
+			if questionOwned {
+				delete(permission, "question")
+				changed = true
+			} else if permission["question"] == "allow" {
+				notes = append(notes, fmt.Sprintf("Kept agent.gentle-orchestrator.permission.question \"allow\" in %s: gentle-ai cannot prove it wrote it. Remove it if you did not set it.", path))
 			}
 			if len(permission) == 0 && permission != nil {
 				delete(orchestrator, "permission")
@@ -134,6 +150,23 @@ func removeOpenCodeFamilyAgents(path string, agentID model.AgentID) operation {
 		result, err := filemerge.WriteFileAtomic(path, append(encoded, '\n'), filemerge.ExistingFileMode(path, 0o644))
 		return result.Changed, false, err
 	}}
+}
+
+// installedQuestionShape proves question "allow" is Gentle AI's only inside
+// the permission object install and v3.7.0 wrote: question plus a task map of
+// Gentle AI delegation grants, with no rule of the user's beside them.
+func installedQuestionShape(agentID model.AgentID, permission map[string]any) bool {
+	task, ok := permission["task"].(map[string]any)
+	if permission["question"] != "allow" || !ok || len(task) == 0 || len(permission) != 2 {
+		return false
+	}
+	for target, effect := range task {
+		granted := effect == "allow" && (opencodeagents.LegacyOwned(agentID, target) || opencodeagents.UninstallRole(agentID, target))
+		if !granted && (target != "*" || effect != "deny") {
+			return false
+		}
+	}
+	return true
 }
 
 func managedOrchestratorSkeleton(entry map[string]any) bool {

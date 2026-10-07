@@ -25,6 +25,12 @@ var (
 // RunCodeGraph exposes the safe, Gentle-AI-owned initialization boundary used
 // by generated agent guidance. It intentionally accepts no raw CodeGraph args.
 func RunCodeGraph(args []string, stdout io.Writer) error {
+	if len(args) == 0 ||
+		(len(args) == 1 && (args[0] == "init" || args[0] == "--help" || args[0] == "-h")) ||
+		(len(args) == 2 && args[0] == "init" && (args[1] == "--help" || args[1] == "-h")) {
+		_, _ = io.WriteString(stdout, codeGraphHelp)
+		return nil
+	}
 	if len(args) != 3 || args[0] != "init" || args[1] != "--cwd" || strings.TrimSpace(args[2]) == "" {
 		return fmt.Errorf("usage: gentle-ai codegraph init --cwd <project-root>")
 	}
@@ -38,6 +44,19 @@ func RunCodeGraph(args []string, stdout io.Writer) error {
 	_, _ = fmt.Fprintf(stdout, "CodeGraph initialized: %s\n", root)
 	return nil
 }
+
+const codeGraphHelp = `gentle-ai codegraph — Initialize a project's CodeGraph index
+
+USAGE
+  gentle-ai codegraph init --cwd <project-root>
+
+OPTIONS
+  --cwd <project-root>  Existing Git project directory (required for initialization)
+  --help, -h            Show this help without initializing an index
+
+Running 'gentle-ai codegraph' or 'gentle-ai codegraph init' without arguments shows this help.
+Only 'init --cwd <project-root>' is supported; other CodeGraph commands are not forwarded.
+`
 
 func canonicalCodeGraphProjectRoot(candidate string) (string, error) {
 	canonicalCandidate, err := filepath.EvalSymlinks(candidate)

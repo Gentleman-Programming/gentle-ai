@@ -34,22 +34,22 @@ func RunRestoreWithFnAndInput(args []string, restorer RestoreFunc, stdout io.Wri
 	return runRestoreWithHomeDir(args, restorer, stdout, stdin, osUserHomeDir)
 }
 
-// newRestoreFlagSet builds the flag set used to answer help requests and to
-// report unknown flags with the same derived usage. The custom Usage adds the
-// positional backup-selection syntax the flag package cannot derive from the
-// registrations; PrintDefaults keeps the flag descriptions derived from them.
-func newRestoreFlagSet() *flag.FlagSet {
+// newRestoreFlagSet binds parsed flags to the values that drive restore.
+// The custom Usage adds the positional backup-selection syntax the flag package
+// cannot derive; PrintDefaults keeps descriptions derived from registrations.
+func newRestoreFlagSet(list, yes *bool) *flag.FlagSet {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	// Descriptions are what the derived usage shows the operator,
 	// so they are the documentation rather than a placeholder.
-	_ = fs.Bool("list", false, "list available backups without restoring")
-	_ = fs.Bool("yes", false, "skip confirmation prompt")
+	fs.BoolVar(list, "list", false, "list available backups without restoring (--list=false disables listing)")
+	fs.BoolVar(yes, "yes", false, "skip confirmation prompt (--yes=false requires confirmation)")
 	fs.Usage = func() {
 		// Keep the "Usage of " prefix: derivedUsageText strips everything
 		// before it, so the flag package's duplicated error line is not
 		// reported twice alongside the custom block.
 		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
 		fmt.Fprintln(fs.Output(), "  gentle-ai restore [--list | latest | <id>] [--yes]")
+		fmt.Fprintln(fs.Output(), "  -- ends flag parsing; at most one backup target is accepted")
 		fs.PrintDefaults()
 	}
 	return fs
@@ -61,38 +61,42 @@ func newRestoreFlagSet() *flag.FlagSet {
 // resolve the home directory, so `restore --help` works even on hosts where
 // the home directory cannot be resolved.
 func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader, resolveHome func() (string, error)) error {
-	// Pre-scan for --yes/-y and --list flags before standard flag parsing,
-	// because positional arguments (e.g. `restore backup-001 --yes`) appear
-	// before flags in the args slice and flag.FlagSet stops parsing at the
-	// first non-flag argument.
 	list := false
 	yes := false
+	fs := newRestoreFlagSet(&list, &yes)
 	var positional []string
+	flagsEnded := false
 
 	for _, a := range args {
-		switch a {
-		case "--list", "-list":
-			list = true
-		case "--yes", "-yes", "-y":
-			yes = true
-		default:
-			if strings.HasPrefix(a, "-") {
-				// Unknown flag — surface error via flag.FlagSet for consistent messages.
-				fs := newRestoreFlagSet()
-				// Parse only the flag actually detected. flag.Parse stops at
-				// the first non-flag token, so handing it the full args slice
-				// makes `restore <backup> --anything` return nil: the unknown
-				// flag is swallowed and the help request never seen.
-				if err := parseCommandFlags(fs, []string{a}); err != nil {
-					if writeHelpRequest(err, stdout) == nil {
-						return nil
-					}
-					return fmt.Errorf("parse restore flags: %w", err)
-				}
+		if flagsEnded {
+			positional = append(positional, a)
+			continue
+		}
+		if a == "--" {
+			flagsEnded = true
+			continue
+		}
+		if !strings.HasPrefix(a, "-") {
+			positional = append(positional, a)
+			continue
+		}
+		// Keep the existing short alias without a duplicate help entry.
+		if a == "-y" {
+			a = "--yes"
+		}
+		// Parse each flag against the same bound values, so flags after a
+		// positional still work and explicit boolean values are not discarded.
+		if err := parseCommandFlags(fs, []string{a}); err != nil {
+			if writeHelpRequest(err, stdout) == nil {
 				return nil
 			}
-			positional = append(positional, a)
+			return fmt.Errorf("parse restore flags: %w", err)
 		}
+	}
+
+	// Reject surplus targets before listing, prompting, or restoring anything.
+	if len(positional) > 1 {
+		return fmt.Errorf("usage: gentle-ai restore [--list | latest | <id>] [--yes]")
 	}
 
 	// Resolve the home directory only once the request is known to need it.

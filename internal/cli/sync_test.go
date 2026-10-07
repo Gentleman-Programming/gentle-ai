@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -18,6 +20,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	kilocodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
@@ -29,6 +32,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
@@ -588,54 +592,6 @@ func TestParseSyncFlagsSDDMode(t *testing.T) {
 			}
 			if flags.SDDMode != tt.want {
 				t.Errorf("SDDMode = %q, want %q", flags.SDDMode, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseSyncFlagsSDDProfileStrategy(t *testing.T) {
-	tests := []struct {
-		name    string
-		args    []string
-		want    string
-		wantErr bool
-	}{
-		{
-			name: "absent defaults to empty(auto)",
-			args: []string{},
-			want: "",
-		},
-		{
-			name:    "generated-multi",
-			args:    []string{"--sdd-profile-strategy", "generated-multi"},
-			wantErr: true,
-		},
-		{
-			name:    "external-single-active",
-			args:    []string{"--sdd-profile-strategy", "external-single-active"},
-			wantErr: true,
-		},
-		{
-			name:    "invalid returns error",
-			args:    []string{"--sdd-profile-strategy", "invalid"},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			flags, err := ParseSyncFlags(tt.args)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ParseSyncFlags() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), "sdd-profile-strategy") {
-					t.Fatalf("error = %q, want retired flag named", err)
-				}
-				return
-			}
-			if flags.SDDProfileStrategy != tt.want {
-				t.Errorf("SDDProfileStrategy = %q, want %q", flags.SDDProfileStrategy, tt.want)
 			}
 		})
 	}
@@ -1687,9 +1643,10 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 	})
 
 	// Runtime telemetry files are reconciled before persisted visual components.
-	// The last two entries are the routing guidance targets. Guidance is written
-	// for every configured agent regardless of which components are persisted, so
-	// a first sync of a purely visual selection still delivers it (issue #1794).
+	// Routing guidance targets follow: guidance is written for every configured
+	// agent regardless of which components are persisted, so a first sync of a
+	// purely visual selection still delivers it (issue #1794). Managed OpenCode
+	// plugins converge last, as install provisions them (issue #5192).
 	wantFiles := []string{
 		filepath.Join(home, ".config", "opencode", "plugins", "telemetry-runtime.ts"),
 		filepath.Join(home, ".config", "opencode", ".gentle-ai-telemetry-runtime.json"),
@@ -1712,6 +1669,9 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 		filepath.Join(home, ".claude", "CLAUDE.md"),
 		filepath.Join(home, ".config", "opencode", "opencode.json"),
 		filepath.Join(home, ".config", "opencode", ".gentle-ai-default-agent.json"),
+		filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"),
+		filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts"),
+		filepath.Join(home, ".config", "opencode", "plugins", "skill-registry.ts"),
 	}
 
 	first, err := RunSync([]string{"--agents", "claude-code,opencode"})
@@ -1785,8 +1745,9 @@ func TestRunSyncSkipsOpenCodeGentleLogoWhenOpenCodeNotSelected(t *testing.T) {
 
 // TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent
 // reproduces issue #1440: when the persisted selection lacks the SDD component
-// but managed OpenCode plugins are already installed on disk, `gentle-ai sync`
-// must refresh them to the embedded assets of the running binary.
+// but a previous release's managed OpenCode plugins are installed on disk,
+// `gentle-ai sync` must refresh them to the embedded assets of the running
+// binary.
 func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *testing.T) {
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{
@@ -1801,11 +1762,8 @@ func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *tes
 	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
 	stalePlugins := map[string]string{
 		"opencode-review-transport.ts": filepath.Join(pluginsDir, "opencode-review-transport.ts"),
-		"model-variants.ts":            filepath.Join(pluginsDir, "model-variants.ts"),
 	}
-	for name, path := range stalePlugins {
-		mustWriteFile(t, path, []byte("// stale v2.1.7 managed plugin "+name))
-	}
+	mustWriteFile(t, stalePlugins["opencode-review-transport.ts"], releasedOpenCodePlugin(t, "v3.7.0/plugins/opencode-review-transport.ts"))
 
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
@@ -1834,12 +1792,6 @@ func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *tes
 			t.Errorf("ChangedFiles missing refreshed plugin path %q\nchanged = %#v", path, result.ChangedFiles)
 		}
 	}
-
-	// skill-registry.ts was never installed — sync must not create it.
-	skillRegistry := filepath.Join(pluginsDir, "skill-registry.ts")
-	if _, err := os.Stat(skillRegistry); !os.IsNotExist(err) {
-		t.Errorf("sync must not create never-installed plugin %q; stat err = %v", skillRegistry, err)
-	}
 }
 
 // TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode ensures a stale
@@ -1857,7 +1809,7 @@ func TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode(t *testing.T) {
 
 	pluginsDir := filepath.Join(home, ".config", "kilo", "plugins")
 	reviewPlugin := filepath.Join(pluginsDir, "review-result-artifacts.ts")
-	mustWriteFile(t, reviewPlugin, []byte("// stale v2.1.7 managed plugin"))
+	mustWriteFile(t, reviewPlugin, releasedOpenCodePlugin(t, "v2.1.7/plugins/review-result-artifacts.ts"))
 
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
@@ -1879,26 +1831,26 @@ func TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode(t *testing.T) {
 	if !containsPath(result.ChangedFiles, reviewPlugin) {
 		t.Errorf("ChangedFiles missing removed Kilocode plugin path %q\nchanged = %#v", reviewPlugin, result.ChangedFiles)
 	}
-
-	// skill-registry.ts was never installed — sync must not create it.
-	skillRegistry := filepath.Join(pluginsDir, "skill-registry.ts")
-	if _, err := os.Stat(skillRegistry); !os.IsNotExist(err) {
-		t.Errorf("sync must not create never-installed plugin %q; stat err = %v", skillRegistry, err)
-	}
 }
 
-// TestRunSyncDoesNotCreateOpenCodeReviewPluginWhenNeverInstalled guards the
-// refresh behavior for issue #1440: users who never had the SDD/OpenCode
-// plugins installed must not receive them from a plain sync.
-func TestRunSyncDoesNotCreateOpenCodeReviewPluginWhenNeverInstalled(t *testing.T) {
+// TestRunSyncRecreatesMissingManagedOpenCodePlugins guards issues #5192 and
+// #5099: sync converges with install, so a deleted or never-provisioned
+// managed plugin is recreated from the running binary's assets.
+func TestRunSyncRecreatesMissingManagedOpenCodePlugins(t *testing.T) {
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{
-		InstalledAgents:     []string{"opencode"},
+		InstalledAgents:     []string{"opencode", "kilocode"},
 		SelectionConfigured: true,
 		Components:          []model.ComponentID{model.ComponentEngram},
 		Persona:             "neutral",
 	}); err != nil {
 		t.Fatalf("state.Write() error = %v", err)
+	}
+	openCodePlugins := filepath.Join(home, ".config", "opencode", "plugins")
+	for _, name := range opencoderuntimeplugins.ManagedPluginNames(model.AgentOpenCode) {
+		if name != "opencode-review-transport.ts" {
+			mustWriteFile(t, filepath.Join(openCodePlugins, name), []byte(assets.MustRead("opencode/plugins/"+name)))
+		}
 	}
 
 	restoreHome := osUserHomeDir
@@ -1910,13 +1862,23 @@ func TestRunSyncDoesNotCreateOpenCodeReviewPluginWhenNeverInstalled(t *testing.T
 		backup.UserHomeDirFn = restoreBackupHome
 	})
 
-	if _, err := RunSync(nil); err != nil {
+	result, err := RunSync(nil)
+	if err != nil {
 		t.Fatalf("RunSync() error = %v", err)
 	}
 
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts")
-	if _, err := os.Stat(pluginPath); !os.IsNotExist(err) {
-		t.Errorf("sync must not install %q for users who never had it; stat err = %v", pluginPath, err)
+	for configDir, agent := range map[string]model.AgentID{"opencode": model.AgentOpenCode, "kilo": model.AgentKilocode} {
+		for _, name := range opencoderuntimeplugins.ManagedPluginNames(agent) {
+			path := filepath.Join(home, ".config", configDir, "plugins", name)
+			got, readErr := os.ReadFile(path)
+			if readErr != nil || string(got) != assets.MustRead("opencode/plugins/"+name) {
+				t.Errorf("sync did not converge managed plugin %q: %v", path, readErr)
+			}
+		}
+	}
+	recreated := filepath.Join(openCodePlugins, "opencode-review-transport.ts")
+	if !containsPath(result.ChangedFiles, recreated) {
+		t.Errorf("ChangedFiles missing recreated plugin %q\nchanged = %#v", recreated, result.ChangedFiles)
 	}
 }
 
@@ -2153,7 +2115,7 @@ func TestSyncRollbackRestoresLegacyOpenCodePluginAndRemovesReplacement(t *testin
 	home := t.TempDir()
 	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
 	legacyPath := filepath.Join(pluginsDir, opencoderuntimeplugins.LegacyOpenCodeReviewPluginName)
-	legacyBytes := []byte("legacy review plugin\n")
+	legacyBytes := releasedOpenCodePlugin(t, "v2.1.7/plugins/review-result-artifacts.ts")
 	mustWriteFile(t, legacyPath, legacyBytes)
 
 	selection := model.Selection{
@@ -2927,6 +2889,86 @@ func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
 	}
 }
 
+// Issue #5219: sync must not recreate retired Pi SDD agents recorded in the
+// CodeGraph manifest, and undoing an overlay stays inside the sync backup.
+func TestRunSyncReleasesRetiredPiSDDAgentsFromCodeGraphManifest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}); err != nil {
+		t.Fatal(err)
+	}
+	probe := func(string) (communitytool.PiCodeGraphMCPProbeResult, error) {
+		return communitytool.PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []communitytool.PiCodeGraphMCPTool{{
+			Name: "codegraph_explore",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query":       map[string]any{"type": "string"},
+					"maxFiles":    map[string]any{"type": "integer"},
+					"projectPath": map[string]any{"type": "string"},
+				},
+				"required": []any{"query"},
+			},
+		}}}, nil
+	}
+	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: probe}); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(home, ".pi", "agent", "agents")
+	missing, overlaid := filepath.Join(agentsDir, "sdd-apply.md"), filepath.Join(agentsDir, "sdd-verify.md")
+	before := "---\ntools: read, bash\n---\npackage sdd agent\n"
+	after := before + "\n<!-- gentle-ai:pi-codegraph-guidance -->\nguidance\n<!-- /gentle-ai:pi-codegraph -->\n"
+	sum := sha256.Sum256([]byte(after))
+	owned := map[string]any{"before": before, "after": after, "afterHash": hex.EncodeToString(sum[:]), "mode": 0o644}
+	manifestPath := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
+	var manifest map[string]any
+	if err := json.Unmarshal([]byte(readTextFile(t, manifestPath)), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	children := manifest["children"].(map[string]any)
+	children[missing], children[overlaid] = owned, owned
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, manifestPath, encoded)
+	if err := os.Chmod(manifestPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, overlaid, []byte(after))
+
+	codeGraph := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph}}
+	targets, err := syncBackupTargetsScoped(home, "", ScopeGlobal, codeGraph, resolveAdapters(codeGraph.Agents))
+	if err != nil || !containsPath(targets, overlaid) {
+		t.Fatalf("retired Pi child release lacks a sync snapshot: %v, %v", targets, err)
+	}
+
+	previousRefresh := refreshPiCodeGraphIfConfigured
+	refreshPiCodeGraphIfConfigured = func(homeDir, workspaceDir string) (communitytool.PiCodeGraphResult, bool, error) {
+		result, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: homeDir, WorkspaceDir: workspaceDir, Selected: true, EffectiveMCPProbe: probe})
+		return result, true, err
+	}
+	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
+
+	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("sync recreated retired Pi SDD agent: %v", err)
+	}
+	if got := readTextFile(t, overlaid); got != before {
+		t.Fatalf("retired Pi SDD agent = %q, want before-image %q", got, before)
+	}
+	if !containsPath(result.ChangedFiles, overlaid) || containsPath(result.ChangedFiles, missing) {
+		t.Fatalf("changed files = %v, want only the released overlay", result.ChangedFiles)
+	}
+	if text := readTextFile(t, manifestPath); strings.Contains(text, "sdd-apply.md") || strings.Contains(text, "sdd-verify.md") {
+		t.Fatalf("manifest still owns retired Pi SDD agents:\n%s", text)
+	}
+}
+
 // TestRunSyncReportsLegacySelectionMigrationPersistenceFailure verifies that
 // failed legacy migration persistence restores both managed assets and state.
 func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) {
@@ -3011,6 +3053,17 @@ func hasStepID(steps []pipeline.Step, id string) bool {
 	return false
 }
 
+// releasedOpenCodePlugin returns plugin bytes exactly as a published release
+// shipped them, from the opencoderuntimeplugins fixtures.
+func releasedOpenCodePlugin(t *testing.T, rel string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "components", "opencoderuntimeplugins", "testdata", "released", filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func mustWriteFile(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -3030,7 +3083,7 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 		t.Fatalf("MkdirAll(plugins) error = %v", err)
 	}
 	legacyPluginPath := filepath.Join(pluginsDir, "background-agents.ts")
-	if err := os.WriteFile(legacyPluginPath, []byte("legacy background agents plugin"), 0o644); err != nil {
+	if err := os.WriteFile(legacyPluginPath, releasedOpenCodePlugin(t, "v1.7.19/plugins/background-agents.ts"), 0o644); err != nil {
 		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
 	}
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -3717,17 +3770,9 @@ func TestSyncActionsExecutedReflectsChangedFiles(t *testing.T) {
 	}
 }
 
-// ─── Task 5.5: Profile sync integration ───────────────────────────────────────
-
-// TestRunSyncWithProfilesIntegration is the Task 5.5 integration test.
-// It verifies the full profile sync flow:
-// 1. Creates a temp home directory with a minimal opencode.json
-// 2. Runs sync with 3 named profiles (cheap, premium, balanced)
-// 3. Asserts all 33 profile agent keys are in the resulting opencode.json (11 × 3)
-// 4. Asserts model assignments are set correctly on the orchestrators
-// 5. Asserts prompt files exist in ~/.config/opencode/prompts/sdd/
-// 6. Runs sync AGAIN with no changes → asserts filesChanged=0 (idempotent)
-func TestRunSyncWithProfilesIntegration(t *testing.T) {
+// TestRunSyncOpenCodeIsIdempotentWithoutSDDAgents verifies that an OpenCode
+// sync never recreates retired SDD agents and that a repeat sync is a no-op.
+func TestRunSyncOpenCodeIsIdempotentWithoutSDDAgents(t *testing.T) {
 	home := t.TempDir()
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
@@ -3738,34 +3783,6 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 
-	// Build 3 profiles with distinct orchestrator models.
-	profiles := []model.Profile{
-		{
-			Name: "cheap",
-			OrchestratorModel: model.ModelAssignment{
-				ProviderID: "anthropic",
-				ModelID:    "claude-haiku-3-5-20241022",
-			},
-			PhaseAssignments: map[string]model.ModelAssignment{
-				"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-haiku-3-5-20241022"},
-			},
-		},
-		{
-			Name: "premium",
-			OrchestratorModel: model.ModelAssignment{
-				ProviderID: "anthropic",
-				ModelID:    "claude-opus-4-5",
-			},
-		},
-		{
-			Name: "balanced",
-			OrchestratorModel: model.ModelAssignment{
-				ProviderID: "anthropic",
-				ModelID:    "claude-sonnet-4-5",
-			},
-		},
-	}
-
 	sel := model.Selection{
 		Agents: []model.AgentID{model.AgentOpenCode},
 		Components: []model.ComponentID{
@@ -3774,7 +3791,6 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 			model.ComponentGGA,
 			model.ComponentSkills,
 		},
-		Profiles: profiles,
 	}
 
 	// Run 1: fresh home.
@@ -3798,16 +3814,13 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 	settingsStr := string(settingsData)
 
 	if strings.Contains(settingsStr, `"sdd-orchestrator-cheap"`) || strings.Contains(settingsStr, `"sdd-init"`) {
-		t.Fatalf("retired SDD profiles recreated: %s", settingsStr)
+		t.Fatalf("retired SDD agents recreated: %s", settingsStr)
 	}
 	if slashHome := filepath.ToSlash(home); strings.Contains(settingsStr, slashHome) {
 		t.Errorf("opencode.json should not contain temp home path %q", slashHome)
 	}
 
 	// Run 2: same selection → all assets already current → filesChanged=0.
-	// Note: The second sync with profiles will re-generate the overlay, but since
-	// DetectProfiles is called when no explicit profiles are provided (normal re-sync),
-	// we run with the SAME selection (profiles still provided) to test idempotency.
 	result2, err := RunSyncWithSelection(home, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() run2 error = %v", err)
@@ -3817,96 +3830,6 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 	}
 	if !result2.NoOp {
 		t.Errorf("run2: NoOp = false, want true (all assets already current)")
-	}
-}
-
-// TestRunSyncDetectsExistingProfilesOnRegularSync verifies Task 5.3 behavior:
-// when no explicit profiles are provided (normal sync), DetectProfiles is called
-// to find existing profiles and their prompts are regenerated.
-func TestRunSyncDetectsExistingProfilesOnRegularSync(t *testing.T) {
-	home := t.TempDir()
-	restoreCommand := runCommand
-	restoreLookPath := cmdLookPath
-	t.Cleanup(func() {
-		runCommand = restoreCommand
-		cmdLookPath = restoreLookPath
-	})
-	runCommand = func(string, ...string) error { return nil }
-	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
-
-	// Run 1: sync with a profile to establish it in opencode.json.
-	selWithProfile := model.Selection{
-		Agents: []model.AgentID{model.AgentOpenCode},
-		Components: []model.ComponentID{
-			model.ComponentEngram,
-			model.ComponentContext7,
-			model.ComponentGGA,
-			model.ComponentSkills,
-		},
-		Profiles: []model.Profile{
-			{
-				Name: "test-profile",
-				OrchestratorModel: model.ModelAssignment{
-					ProviderID: "anthropic",
-					ModelID:    "claude-haiku-3-5-20241022",
-				},
-				PhaseAssignments: map[string]model.ModelAssignment{
-					"jd-judge-a": {
-						ProviderID: "anthropic",
-						ModelID:    "claude-opus-4-5",
-						Effort:     "high",
-					},
-					"jd-fix-agent": {
-						ProviderID: "anthropic",
-						ModelID:    "claude-sonnet-4-20250514",
-					},
-				},
-			},
-		},
-	}
-
-	_, err := RunSyncWithSelection(home, selWithProfile)
-	if err != nil {
-		t.Fatalf("RunSyncWithSelection() run1 error = %v", err)
-	}
-
-	// Verify the profile was created.
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
-	settingsData, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile error = %v", err)
-	}
-	if strings.Contains(string(settingsData), `"sdd-orchestrator-test-profile"`) {
-		t.Fatalf("run1 recreated retired profile: %s", settingsData)
-	}
-
-	// Run 2: normal sync (no explicit profiles) → DetectProfiles should find the
-	// existing profile and regenerate it. The result should be no-op since the
-	// regenerated content is identical.
-	selNoProfiles := model.Selection{
-		Agents: []model.AgentID{model.AgentOpenCode},
-		Components: []model.ComponentID{
-			model.ComponentEngram,
-			model.ComponentContext7,
-			model.ComponentGGA,
-			model.ComponentSkills,
-		},
-		// No profiles: ordinary repeat sync.
-	}
-
-	result2, err := RunSyncWithSelection(home, selNoProfiles)
-	if err != nil {
-		t.Fatalf("RunSyncWithSelection() run2 (no explicit profiles) error = %v", err)
-	}
-
-	// The detected profile should be regenerated. Since content is identical,
-	// the sync should still detect the profile key exists.
-	settingsData2, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile run2 error = %v", err)
-	}
-	if !bytes.Equal(settingsData, settingsData2) || result2.FilesChanged != 0 {
-		t.Fatalf("regular sync did not converge: changed=%d", result2.FilesChanged)
 	}
 }
 
@@ -4491,36 +4414,6 @@ func TestParseSyncFlagsProfilePhaseUnknownPhaseReturnsError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected error for --profile-phase with unknown phase 'sdd-bogus', got nil")
-	}
-}
-
-// TestBuildSyncSelectionProfilesForwarded verifies that Profiles from SyncFlags
-// are forwarded to the model.Selection's overrides for use in the sync pipeline.
-func TestBuildSyncSelectionProfilesForwarded(t *testing.T) {
-	profile := model.Profile{
-		Name: "cheap",
-		OrchestratorModel: model.ModelAssignment{
-			ProviderID: "anthropic",
-			ModelID:    "claude-haiku-3-5-20241022",
-		},
-	}
-	flags := SyncFlags{Profiles: []model.Profile{profile}}
-
-	sel := BuildSyncSelection(flags, []model.AgentID{model.AgentOpenCode})
-
-	if len(sel.Profiles) != 1 {
-		t.Fatalf("BuildSyncSelection() Profiles length = %d, want 1", len(sel.Profiles))
-	}
-	if sel.Profiles[0].Name != "cheap" {
-		t.Errorf("Selection.Profiles[0].Name = %q, want %q", sel.Profiles[0].Name, "cheap")
-	}
-}
-
-func TestBuildSyncSelectionSDDProfileStrategyForwarded(t *testing.T) {
-	flags := SyncFlags{SDDProfileStrategy: string(model.SDDProfileStrategyExternalSingleActive)}
-	sel := BuildSyncSelection(flags, []model.AgentID{model.AgentOpenCode})
-	if sel.SDDProfileStrategy != model.SDDProfileStrategyExternalSingleActive {
-		t.Fatalf("Selection.SDDProfileStrategy = %q, want %q", sel.SDDProfileStrategy, model.SDDProfileStrategyExternalSingleActive)
 	}
 }
 
@@ -6393,6 +6286,7 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 			"sdd-apply": "medium",
 		},
 		CodexOrchestratorAssignment: &state.CodexOrchestratorAssignmentState{Model: "gpt-5.6-sol", Effort: "low"},
+		CodexServiceTier:            "priority",
 		CodexCarrilModelAssignments: map[string]string{"sdd-strong": "gpt-5.5", "sdd-mid": "gpt-5.5", "sdd-cheap": "gpt-5.4-mini"},
 		CodexPhaseModelAssignments:  map[string]string{"sdd-apply": "gpt-5.6-terra"},
 		ModelAssignments: map[string]state.ModelAssignmentState{
@@ -6722,7 +6616,10 @@ func TestSyncV2SDKPreflightBeforeManagedRuntimeWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := rt.stagePlan()
-	if err := plan.Prepare[0].Run(); err == nil || !strings.Contains(err.Error(), "@opencode/plugin@2.0.4") {
+	if plan.Prepare[0].ID() != "prepare:opencode-settings-validation" || plan.Prepare[1].ID() != "prepare:opencode-plugin-dependency" {
+		t.Fatalf("prepare order = %s, %s; want settings validation before the SDK preflight", plan.Prepare[0].ID(), plan.Prepare[1].ID())
+	}
+	if err := plan.Prepare[1].Run(); err == nil || !strings.Contains(err.Error(), "@opencode/plugin@2.0.4") {
 		t.Fatalf("missing SDK preflight error = %v", err)
 	}
 	for _, name := range append([]string{"telemetry-runtime.ts"}, opencoderuntimeplugins.ManagedOpenCodePluginNames()...) {
@@ -6822,7 +6719,7 @@ func TestSyncRoutingGuidanceSurvivesOpenCodePluginRefresh(t *testing.T) {
 		t.Fatalf("install omitted OpenCode routing or remote authorization:\n%s", prompt)
 	}
 	plugin := filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts")
-	if err := os.WriteFile(plugin, []byte("stale review plugin"), 0o644); err != nil {
+	if err := os.WriteFile(plugin, releasedOpenCodePlugin(t, "v3.7.0/plugins/opencode-review-transport.ts"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	changed := runSyncInjectionSteps(t, home, selection)
@@ -6906,7 +6803,7 @@ func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *test
 		t.Fatalf("syncBackupTargets() error = %v", err)
 	}
 
-	routing, err := agentguidance.RoutingPaths(home, agent)
+	routing, err := agentguidance.RoutingPathsWithOptions(home, agent, agentguidance.RoutingOptions{})
 	if err != nil {
 		t.Fatalf("RoutingPaths(%q) error = %v", agent, err)
 	}
@@ -7127,4 +7024,233 @@ func TestPartialSyncKeepsOpenCodeInPersistedSelection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSyncPrepareRefusesUnsafeOpenCodeSettingsBeforeAnyMutation(t *testing.T) {
+	for _, tc := range []struct{ name, content string }{
+		{"escaped touched key", `{"\u0061gent": {"gentle-orchestrator": {"prompt": "x"}}}`},
+		{"comment inside touched value", `{"agent": {/* user note */ "gentle-orchestrator": {"prompt": "x"}}}`},
+		{"duplicate top-level keys", `{"agent": {}, "theme": 1, "theme": 2}`},
+		{"malformed document", "// interrupted user edit\n{\n  \"agent\": {\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			t.Setenv("OPENCODE_CONFIG_DIR", "")
+			settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.jsonc")
+			mustWriteFile(t, settingsPath, []byte(tc.content))
+
+			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+			rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(rt.stagePlan())
+			if result.Err == nil {
+				t.Fatal("sync accepted unsafe OpenCode settings")
+			}
+
+			if len(result.Prepare.Steps) != 1 {
+				t.Fatalf("prepare recorded %d step(s), want only the failed settings validation: %#v", len(result.Prepare.Steps), result.Prepare.Steps)
+			}
+			last := result.Prepare.Steps[0]
+			if last.StepID != "prepare:opencode-settings-validation" || last.Status != pipeline.StepStatusFailed || last.Err == nil {
+				t.Fatalf("validation step = (%s, %v), want failed with an error", last.Status, last.Err)
+			}
+			if len(result.Apply.Steps) != 0 {
+				t.Fatalf("apply ran %d step(s) after the settings refusal", len(result.Apply.Steps))
+			}
+			if got := readTextFile(t, settingsPath); got != tc.content {
+				t.Fatalf("settings changed by a refused sync:\n got: %s\nwant: %s", got, tc.content)
+			}
+			for _, path := range telemetryruntime.ManagedPaths(opencodeagent.NewAdapter().GlobalConfigDir(home)) {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("telemetry runtime asset created by a refused sync: %s (%v)", path, err)
+				}
+			}
+		})
+	}
+}
+
+// A workspace-scoped sync writes <workspace>/opencode.jsonc, so the prepare
+// gate must validate that document, not the global settings file.
+func TestWorkspaceSyncPrepareRefusesUnsafeWorkspaceOpenCodeSettings(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	unsafe := `{"\u0061gent": {"gentle-orchestrator": {"prompt": "x"}}}`
+	settingsPath := filepath.Join(workspace, "opencode.jsonc")
+	mustWriteFile(t, settingsPath, []byte(unsafe))
+
+	// Persona writes agent in a workspace sync (routing guidance is global only).
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentPersona}}
+	rt, err := newSyncRuntimeWithScope(home, selection, ScopeWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(rt.stagePlan())
+	if result.Err == nil {
+		t.Fatal("workspace sync accepted unsafe workspace OpenCode settings")
+	}
+	if len(result.Prepare.Steps) != 1 || result.Prepare.Steps[0].StepID != "prepare:opencode-settings-validation" || result.Prepare.Steps[0].Status != pipeline.StepStatusFailed {
+		t.Fatalf("prepare steps = %#v, want only the failed settings validation", result.Prepare.Steps)
+	}
+	if len(result.Apply.Steps) != 0 {
+		t.Fatalf("apply ran %d step(s) after the settings refusal", len(result.Apply.Steps))
+	}
+	if got := readTextFile(t, settingsPath); got != unsafe {
+		t.Fatalf("workspace settings changed by a refused sync:\n got: %s\nwant: %s", got, unsafe)
+	}
+}
+
+// A workspace sync skips OpenCode routing guidance, so without Persona no
+// writer touches agent: a comment inside agent must not block it.
+func TestWorkspaceSyncPrepareIgnoresAgentWithoutAnAgentWriter(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	content := `{"agent": {/* user note */ "gentle-orchestrator": {"prompt": "x"}}}`
+	mustWriteFile(t, filepath.Join(workspace, "opencode.jsonc"), []byte(content))
+
+	rt, err := newSyncRuntimeWithScope(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}, ScopeWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := rt.stagePlan().Prepare[0]
+	if gate.ID() != "prepare:opencode-settings-validation" {
+		t.Fatalf("first prepare step = %q, want the settings validation", gate.ID())
+	}
+	if err := gate.Run(); err != nil {
+		t.Fatalf("workspace sync validation refused agent with no agent writer: %v", err)
+	}
+}
+
+// Persisted OpenCode model assignments are written into agent by every sync,
+// including a workspace sync without routing or Persona, so an unsafe agent
+// value must be refused before any mutation.
+func TestWorkspaceSyncPrepareRefusesAgentWhenModelAssignmentsWriteIt(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	content := `{"agent": {/* user note */ "gentle-orchestrator": {"prompt": "x"}}}`
+	mustWriteFile(t, filepath.Join(workspace, "opencode.jsonc"), []byte(content))
+
+	selection := model.Selection{
+		Agents:           []model.AgentID{model.AgentOpenCode},
+		ModelAssignments: map[string]model.ModelAssignment{"gentle-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-5"}},
+	}
+	rt, err := newSyncRuntimeWithScope(home, selection, ScopeWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := rt.stagePlan().Prepare[0]
+	if gate.ID() != "prepare:opencode-settings-validation" {
+		t.Fatalf("first prepare step = %q, want the settings validation", gate.ID())
+	}
+	if err := gate.Run(); err == nil {
+		t.Fatal("workspace sync with model assignments accepted a comment inside agent")
+	}
+}
+
+func TestSyncPrepareValidationFollowsExistingContract(t *testing.T) {
+	t.Run("missing settings pass the gate and sync succeeds", func(t *testing.T) {
+		home := t.TempDir()
+		setOpenCodeTestHome(t, home)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+		t.Setenv("OPENCODE_CONFIG_DIR", "")
+		t.Setenv("DO_NOT_TRACK", "1")
+		settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.json")
+
+		if _, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}); err != nil {
+			t.Fatalf("sync rejected missing OpenCode settings: %v", err)
+		}
+		if _, err := os.Stat(settingsPath); err != nil {
+			t.Fatalf("sync did not create the settings document: %v", err)
+		}
+	})
+
+	t.Run("valid JSONC passes the gate and keeps user data", func(t *testing.T) {
+		home := t.TempDir()
+		setOpenCodeTestHome(t, home)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+		t.Setenv("OPENCODE_CONFIG_DIR", "")
+		t.Setenv("DO_NOT_TRACK", "1")
+		settingsPath := filepath.Join(home, "xdg", "opencode", "opencode.jsonc")
+		mustWriteFile(t, settingsPath, []byte("{\n  // user provider note\n  \"provider\": {\"local\": {\"models\": {\"m\": {}}}},\n  \"agent\": {\"gentle-orchestrator\": {\"prompt\": \"x\"}},\n}\n"))
+
+		if _, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}); err != nil {
+			t.Fatalf("sync rejected valid OpenCode settings: %v", err)
+		}
+		after, err := filemerge.UnmarshalJSONObject([]byte(readTextFile(t, settingsPath)))
+		if err != nil {
+			t.Fatalf("settings unreadable after sync: %v", err)
+		}
+		provider, ok := after["provider"].(map[string]any)
+		if !ok || provider["local"] == nil {
+			t.Fatalf("user provider data destroyed by sync: %#v", after["provider"])
+		}
+	})
+}
+
+// Post-sync verification proves every retired managed plugin is gone, not
+// only the legacy review plugin.
+func TestPostSyncVerificationRequiresEveryRetiredPluginRemoved(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	adapter := opencodeagent.NewAdapter()
+	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "sdd-task-result-artifacts.ts")
+	mustWriteFile(t, stale, []byte("stale"))
+	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
+	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	for _, check := range report.Checks {
+		if check.ID == "verify:sync:file:"+stale {
+			if check.Status != verify.CheckStatusFailed {
+				t.Fatalf("retired plugin check status = %v, want failed", check.Status)
+			}
+			return
+		}
+	}
+	t.Fatalf("no post-sync check for retired plugin %s; checks = %v", stale, report.Checks)
+}
+
+// Kilocode receives managed plugins too, so post-sync verification proves its
+// retired plugins are gone like OpenCode's.
+func TestPostSyncVerificationRequiresKilocodeRetiredPluginRemoved(t *testing.T) {
+	home := t.TempDir()
+	setOpenCodeTestHome(t, home)
+	adapter := kilocodeagent.NewAdapter()
+	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "background-agents.ts")
+	mustWriteFile(t, stale, []byte("stale"))
+	selection := model.Selection{Agents: []model.AgentID{model.AgentKilocode}}
+	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	for _, check := range report.Checks {
+		if check.ID == "verify:sync:file:"+stale {
+			if check.Status != verify.CheckStatusFailed {
+				t.Fatalf("retired Kilocode plugin check status = %v, want failed", check.Status)
+			}
+			return
+		}
+	}
+	t.Fatalf("no post-sync check for retired Kilocode plugin %s; checks = %v", stale, report.Checks)
 }

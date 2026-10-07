@@ -1,12 +1,14 @@
 package testenv_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
@@ -26,6 +28,9 @@ const isolateSentinelHomeEnv = "GENTLE_AI_TESTENV_ISOLATE_HOME"
 // a sentinel directory — mirroring exactly how Gentle Shell exports it
 // before `go test` ever starts, i.e. before any package TestMain runs.
 func TestMain(m *testing.M) {
+	if os.Getenv(isolateSentinelSubprocessEnv) == "xdg" {
+		runOpenCodeSentinelSubprocess()
+	}
 	if os.Getenv(isolateSentinelSubprocessEnv) == "1" {
 		runIsolateSentinelSubprocess()
 	}
@@ -61,7 +66,9 @@ func TestIsolateNeutralizesSentinelSetBeforeTestMain(t *testing.T) {
 	sentinel := t.TempDir()
 	home := t.TempDir()
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestIsolateNeutralizesSentinelSetBeforeTestMain$")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestIsolateNeutralizesSentinelSetBeforeTestMain$")
 	cmd.Env = append(os.Environ(),
 		isolateSentinelSubprocessEnv+"=1",
 		"PI_CODING_AGENT_DIR="+sentinel,

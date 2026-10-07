@@ -66,7 +66,7 @@ func RunUninstallWithSelection(homeDir, workspaceDir string, agentIDs []model.Ag
 	return componentuninstall.PartialUninstall(homeDir, workspaceDir, AppVersion, agents, components)
 }
 
-func RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir string, agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+func RunUninstallWithSelectionAndEngramScope(homeDir, workspaceDir string, agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
 	agents := make([]string, 0, len(agentIDs))
 	for _, agentID := range agentIDs {
 		agents = append(agents, string(agentID))
@@ -75,7 +75,7 @@ func RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir string, agentIDs
 	for _, componentID := range componentIDs {
 		components = append(components, string(componentID))
 	}
-	return componentuninstall.PartialUninstallWithProfileSelection(homeDir, workspaceDir, AppVersion, agents, components, profileNames, engramScope)
+	return componentuninstall.PartialUninstallWithEngramScopeSelection(homeDir, workspaceDir, AppVersion, agents, components, engramScope)
 }
 
 func RenderUninstallReport(result componentuninstall.Result) string {

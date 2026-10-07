@@ -40,11 +40,11 @@ In practice: **the installer detects Kiro from `~/.kiro`**, not from `PATH`. If 
 
 ## ODD Execution Model
 
-> **Since v4.0.0:** SDD (Spec-Driven Development) is retired in favor of [ODD](usage.md#organic-driven-development-odd). gentle-ai no longer installs `sdd-*` Kiro agents and no longer routes work through `.kiro/specs/`. Existing `sdd-*` agent files from earlier installs are left in place.
+> **Since v4.0.0:** SDD (Spec-Driven Development) is retired in favor of [ODD](usage.md#organic-driven-development-odd). gentle-ai no longer installs `sdd-*` Kiro agents and no longer routes work through `.kiro/specs/`. A global `gentle-ai install` or `gentle-ai sync` removes the `sdd-*` agent files earlier releases installed in `~/.kiro/agents/` when their content matches what a release wrote (model choices and Gentle AI managed blocks may differ). A file with any other change is kept and listed under manual actions: move or delete it yourself. Removed files are part of the sync backup, so `gentle-ai restore` brings them back.
 
 Kiro runs with **native sub-agent delegation** via `~/.kiro/agents/`.
 
-The ODD orchestrator stays in the steering file. It keeps understood work inline and delegates bounded delegated-direct work to Kiro's native subagents, with one writer at a time. Engram™ provides cross-session persistence when available.
+The ODD orchestrator stays in the steering file. It keeps work inline by default and delegates to Kiro's native subagents only for a named reason: an exploration map, parallel writers on disjoint edit surfaces, the context backstop, or independent verification of a high-risk change. Engram™ provides cross-session persistence when available.
 
 The `jd-*` agents run the [Judgment Day](components.md#skills) adversarial review: two blind judges and one fix agent.
 

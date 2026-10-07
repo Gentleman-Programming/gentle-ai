@@ -187,7 +187,11 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 		//
 		// rdd-risk-gated S14: the risk reason enums admit the agent_escalation
 		// code and signal START publishes for --escalate-item. Deliberate, not drift.
-		"schemas/start-v4.schema.json": "bc3f8fb33a74b764a63c272ace4db6fa6136a7eeef1d1f036ca5ac66f7e4f071",
+		//
+		// issues #5136/#4516: the handle also admits the sealed rctx3 shape
+		// OpenCode hosts receive; rctx1/rctx2 are unchanged. Deliberate, not
+		// drift.
+		"schemas/start-v4.schema.json": "28efd5a6545cc72de2f978565af3bfe74098bcded3999f1738fe14308fcd121d",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -204,8 +208,10 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 func TestReviewProviderArtifactV24IntendedUntrackedContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"schemas/capabilities-v2.4.schema.json":            "fc4d55dbad6b19cc4c289e8ed94bd1839800ca2892e449640459b668e0c7b0b5",
-		"schemas/intended-untracked-selection.schema.json": "6f300c4cc10ab669fa3ef8cc608829df623a453cd5e6629958786e0724430259",
+		"schemas/capabilities-v2.4.schema.json": "fc4d55dbad6b19cc4c289e8ed94bd1839800ca2892e449640459b668e0c7b0b5",
+		// Issue #4821: an absolute document ID restores sibling $ref resolution;
+		// the wire envelope identity remains unchanged. Deliberate, not drift.
+		"schemas/intended-untracked-selection.schema.json": "2379d4b748ffd9719058aa5b10ed6640f0dec9a525198cf8e14cd827408a348e",
 		"schemas/status-v6.schema.json":                    "0aa731e4d3961d678b4e51a6be0af93f2de82a4a326c3366e2fbe6a3e687236c",
 	}
 	for name, expected := range want {
@@ -229,16 +235,18 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"schemas/gate-result.schema.json": "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
-		// issues #4226/#4453: last-event-closure documents terminal escalation
-		// and exposes complete admitted reviewer results before acknowledgement.
-		// Deliberate, not drift.
-		"schemas/last-event-closure.schema.json": "08a94def144d70c0c1e84b73a1a245cd36bc73dc1ade4aa733b42097b05593eb",
+		// issues #4223/#4226/#4453: last-event-closure publishes rejected
+		// targeted-validator evidence, terminal escalation, and complete admitted
+		// reviewer results before acknowledgement. Deliberate, not drift.
+		"schemas/last-event-closure.schema.json": "d0fa6e52fbe0cf22862ac0ab31f76996885dd9454b5dbe70eca17e7416af5d56",
 		// issue #3894: start/v4 publishes the reviewing status continuation, so
 		// transition-execution gains the start_status_execution definition it
 		// references. Deliberate, not drift.
 		// issue #3932: start_status_execution carries the opaque
 		// repository-context row, so a foreign process cwd fails closed.
-		"schemas/transition-execution.schema.json":   "3743a16d915f5d95be047af1f0454f342aa4c3eb7bcb0d8991f81ae3b89873c1",
+		// issues #5136/#4516: the repository-context row also admits the
+		// sealed rctx3 shape OpenCode hosts receive.
+		"schemas/transition-execution.schema.json":   "fcddf353a243d0e6d6553742e8c180c71a110465d9676f74b149f26b9e3cffd8",
 		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {
@@ -536,7 +544,7 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "capabilities-v2.4.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV24},
 		{name: "capabilities-v2.5.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV25},
 		{name: "capabilities-v2.6.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV26},
-		{name: "intended-untracked-selection.schema.json", id: reviewIntendedUntrackedSelectionSchema},
+		{name: "intended-untracked-selection.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/intended-untracked-selection.schema.json"},
 		{name: "consent.schema.json", id: ReviewIntegrationConsentSchemaIDV2},
 		{name: "consent-v3.schema.json", id: ReviewIntegrationConsentSchemaIDV3},
 		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},

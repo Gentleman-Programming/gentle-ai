@@ -298,7 +298,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 		}},
 		{"native risk before candidate consent", []string{
 			"When RDD is enabled, first use the existing native candidate risk assessment",
-			"gentle-ai review assess --cwd <repo> --json",
+			"gentle-ai review assess --cwd <repo> --agent <runtime> --json",
 			"Passive/low uses silent structural checks with no reviewer or consent ceremony",
 			"Medium/high relays the existing candidate consent",
 			"native review runs only on grant",
@@ -327,6 +327,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			for _, tt := range applicable {
 				t.Run(tt.name, func(t *testing.T) {
 					for _, clause := range tt.clauses {
+						clause = strings.ReplaceAll(clause, "<runtime>", string(agent.ID))
 						if !strings.Contains(rendered, clause) {
 							t.Errorf("missing organic instruction %q", clause)
 						}
@@ -437,6 +438,7 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			for _, tt := range applicable {
 				t.Run(tt.name, func(t *testing.T) {
 					for _, clause := range tt.clauses {
+						clause = strings.ReplaceAll(clause, "<runtime>", string(agent.ID))
 						if !strings.Contains(rendered, clause) {
 							t.Errorf("missing work-unit commit instruction %q", clause)
 						}
@@ -595,6 +597,9 @@ func TestRenderRoutingIsSemanticallyEqualAcrossAgents(t *testing.T) {
 			t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
 		}
 
+		// Each runtime declares its own identity on review commands; that is
+		// the one intended difference between runtimes of the same group.
+		rendered = strings.ReplaceAll(rendered, "--agent "+string(agent.ID)+" ", "--agent <runtime> ")
 		semantics := routingSemantics(rendered)
 		if len(semantics) == 0 {
 			t.Fatalf("RenderRouting(%q) carries no routing semantics", agent.ID)
@@ -725,7 +730,8 @@ func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 				"stop and delegate through the runtime's subagent mechanism",
 				"executing past a fired trigger inline is a routing defect",
 				"**Mapping trigger:** when understanding exceeds the inline batch budget",
-				"**Writer trigger:** a large task delegates one bounded writer per task; file count never fires this trigger",
+				"**Writer trigger:** a writer is delegated only for a named reason",
+				"file count never fires this trigger",
 				"**Preparation trigger:**",
 				"**Long-session backstop:**",
 				"pause and delegate the next bounded unit",
@@ -861,6 +867,98 @@ func TestRenderRoutingSizesTasksByUnderstandingRiskAndResumability(t *testing.T)
 				} {
 					if !strings.Contains(rendered, want) {
 						t.Fatalf("RenderRouting(%q) is missing agent escalation clause %q", agent.ID, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// gentle-shell#1731: a writer is delegated for a named reason, never for size;
+// parallel writers stay safe without a single-writer ban; every code change
+// closes with a risk line; a tracked task never pauses on hedged wording; and
+// exploration exists only to decide or route.
+func TestRenderRoutingDelegatesForReason(t *testing.T) {
+	t.Parallel()
+
+	specs := []struct {
+		name     string
+		required []string
+		retired  []string
+	}{
+		{"S1 writer by reason", []string{
+			"**Writer trigger:** a writer is delegated only for a named reason",
+			"(a) parallelism: two or more independent units with disjoint edit surfaces, each clearly heavier than starting a subagent, launched together",
+			"(b) context: the long-session backstop below",
+			"Never delegate a writer for size, a large task alone, file count, or a price ratio",
+			"Without a reason, the parent works inline, following its logbook",
+			"large tasks without a Writer trigger reason, which follow their logbook",
+		}, []string{
+			"a large task delegates one writer per task",
+			"a large task delegates one bounded writer per task",
+		}},
+		{"S2 parallel writers", []string{
+			"**Parallel writers:** work in another repository goes in a fresh worktree based on that repository's main",
+			"Parallel units in the same local repository run in the same tree, each with declared disjoint edit surfaces",
+			"the parent owns git",
+			"writers run no repository-wide formatters, generators, or installs",
+			"a shared file has one owner or the parent edits it at the end",
+			"the parent checks each writer's diff against its surface before accepting it",
+			"one seam check runs at the end",
+			"Units that need the same file use isolated worktrees",
+		}, []string{
+			"single writer",
+			"single-threaded",
+		}},
+		{"S3 risk line", []string{
+			"**Risk line**: close every code change, small path or delegated, with `Risk: item N (reason)` or `Risk: none`",
+			"(1) data or irreversible effects: migrations, changing or deleting existing stored data, persisted format changes (not saving new records)",
+			"(3) contracts others consume: changing or removing public API, CLI flags, config formats, published exports, or mirrored prompts or contracts others already consume (not adding a flag, command, or optional field; requested changes are not high risk by themselves; unrequested breaks in shared code are)",
+			"Before writing `Risk: none`, check whether the diff changes code that existing behavior the request did not mention also uses",
+		}, []string{
+			"deleting or rewriting persisted data",
+		}},
+		{"S4 no self-pause", []string{
+			"Hedged wording is not a stop",
+			"A tracked task ends pending only with the user's explicit stop or one **Needs your decision** result naming the open blockers or missing proof",
+		}, nil},
+		{"S5 explore only to decide or route", []string{
+			"Explore only for a map you need to decide or route, never to read files you will read anyway before writing inline",
+			"when the Writer trigger delegates a write, reading that prepares it",
+			"Inline writes read inline",
+		}, []string{
+			"On a small task the parent reads and writes inline",
+		}},
+		{"S6 test discipline", []string{
+			"Write one RED test per requested rule",
+			"For every existing command or option the change touches, add one test proving its previous behavior still holds",
+			"add no other cases",
+			"An existing behavior counts as touched when it shares the code you changed (options, parsers, helpers, validation)",
+			"Each test asserts every observable effect of the rule (output, exit code, persisted data), covers the cases the rule itself names, and goes through the public interface",
+			"When you add or change a command, option, or message, update the help text and docs",
+		}, []string{
+			"configured TDD mode",
+			"strict TDD is active",
+		}},
+	}
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+			for _, spec := range specs {
+				for _, want := range spec.required {
+					if !strings.Contains(rendered, want) {
+						t.Errorf("%s: RenderRouting(%q) is missing %q", spec.name, agent.ID, want)
+					}
+				}
+				for _, retired := range spec.retired {
+					if strings.Contains(rendered, retired) {
+						t.Errorf("%s: RenderRouting(%q) keeps retired %q", spec.name, agent.ID, retired)
 					}
 				}
 			}

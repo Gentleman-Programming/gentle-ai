@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -191,6 +192,25 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 
 	case model.StrategyFileReplace:
 		promptPath := adapter.SystemPromptFile(homeDir)
+
+		if adapter.Agent() == model.AgentCursor {
+			existing, err := readFileOrEmpty(promptPath)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			// Cursor owns the leading persona body, but other components append
+			// marker-bound sections that install and sync must retain.
+			if idx := strings.Index(existing, "<!-- gentle-ai:"); idx >= 0 {
+				content = strings.TrimRight(content, "\n") + "\n\n" + existing[idx:]
+			}
+			writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(cursor.WrapRule(content)), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || writeResult.Changed
+			files = append(files, promptPath)
+			break
+		}
 
 		if adapter.Agent() == model.AgentOpenCode {
 			existing, err := readFileOrEmpty(promptPath)
@@ -917,7 +937,7 @@ func readFileOrEmpty(path string) (string, error) {
 func wrapInstructionsFile(content string) string {
 	frontmatter := "---\n" +
 		"name: Gentle AI Persona\n" +
-		"description: Teaching-oriented persona with SDD orchestration and Engram protocol\n" +
+		"description: Teaching-oriented persona with ODD orchestration and Engram protocol\n" +
 		"applyTo: \"**\"\n" +
 		"---\n\n"
 

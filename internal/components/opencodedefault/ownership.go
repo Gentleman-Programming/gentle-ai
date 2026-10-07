@@ -77,9 +77,9 @@ func (p *InstallPlan) Apply() (bool, error) {
 	if owned == nil || p.recapture || !current.present || current.value != ManagedAgent {
 		owned = newOwnership(current)
 	}
-	// Merge instead of re-encoding so permission rule order and every
-	// unrelated user value are preserved.
-	settings, err := filemerge.MergeJSONObjects(raw, []byte(`{"default_agent":"`+ManagedAgent+`"}`))
+	// Merge instead of re-encoding so permission rule order, every unrelated
+	// user value, and JSONC comments are preserved.
+	settings, err := filemerge.MergeJSONObjectsForPath(p.settingsPath, raw, []byte(`{"default_agent":"`+ManagedAgent+`"}`))
 	if err != nil {
 		return false, err
 	}
@@ -108,7 +108,7 @@ func ApplyShareDefault(settingsPath string) (bool, error) {
 	if _, chosen := root["share"]; chosen {
 		return false, nil
 	}
-	settings, err := filemerge.MergeJSONObjects(raw, []byte(`{"share":"disabled"}`))
+	settings, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, []byte(`{"share":"disabled"}`))
 	if err != nil {
 		return false, err
 	}

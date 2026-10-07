@@ -18,9 +18,6 @@ func RenderDryRun(result InstallResult) string {
 	_, _ = fmt.Fprintf(b, "Unsupported agents: %s\n", joinAgentIDs(result.Resolved.UnsupportedAgents))
 	_, _ = fmt.Fprintf(b, "Persona: %s\n", result.Selection.Persona)
 	_, _ = fmt.Fprintf(b, "Preset: %s\n", result.Selection.Preset)
-	if result.Selection.SDDMode != "" {
-		_, _ = fmt.Fprintf(b, "SDD mode: %s\n", result.Selection.SDDMode)
-	}
 	_, _ = fmt.Fprintf(b, "Components order: %s\n", joinComponentIDs(result.Resolved.OrderedComponents))
 	_, _ = fmt.Fprintf(b, "Auto-added dependencies: %s\n", joinComponentIDs(result.Resolved.AddedDependencies))
 	_, _ = fmt.Fprintf(b, "Platform decision: %s\n", formatPlatformDecision(result.Review.PlatformDecision))
@@ -34,7 +31,7 @@ func RenderDryRun(result InstallResult) string {
 	}
 	if containsAgent(result.Resolved.Agents, model.AgentOpenCode) && result.Background.Activation.Action != "" {
 		if result.Background.Effective == model.OpenCodeBackgroundOn {
-			_, _ = fmt.Fprintf(b, "OpenCode background runtime ready: %t\n", result.BackgroundPolicyEnabled)
+			_, _ = fmt.Fprintln(b, renderOpenCodeBackgroundRuntime(result.Background, result.BackgroundPolicyEnabled))
 		}
 		_, _ = fmt.Fprintln(b, renderOpenCodeBackgroundActivation(result.Background))
 	}

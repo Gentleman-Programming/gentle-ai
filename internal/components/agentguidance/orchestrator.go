@@ -188,6 +188,13 @@ func selectGenericOrchestrator(content, capability string) (string, error) {
 // capability selects the generic instruction variant: "small" selects the
 // small-model text and any other value, including empty, selects capable.
 func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSource, capability string) (string, error) {
+	return renderOrchestrator(agent, source, capability, false)
+}
+
+// renderOrchestrator is the single render path. annotate keeps the shared
+// module fragment markers for the internal core/module construction; the
+// public render always strips those exact marker lines.
+func renderOrchestrator(agent model.AgentID, source ReviewContractSource, capability string, annotate bool) (string, error) {
 	if agent == model.AgentPi {
 		return "", fmt.Errorf("render orchestrator for %q: the Pi prompt is owned by Gentle Shell", agent)
 	}
@@ -206,7 +213,7 @@ func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSour
 	}
 
 	rdd := model.SupportsReceiptDrivenDevelopment(agent)
-	content, err = expandSharedOrchestratorSections(content, rdd)
+	content, err = expandSharedOrchestratorSections(content, rdd, annotate)
 	if err != nil {
 		return "", fmt.Errorf("render orchestrator for %q: %w", agent, err)
 	}
@@ -238,6 +245,9 @@ func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSour
 	content = strings.ReplaceAll(content, runtimeAgentIDPlaceholder, string(agent))
 	if strings.Contains(content, "{{GENTLE_AI_") {
 		return "", fmt.Errorf("render orchestrator for %q: unresolved template placeholder in %s", agent, path)
+	}
+	if !annotate && strings.Contains(content, orchestratorFragmentMarkerToken) {
+		return "", fmt.Errorf("render orchestrator for %q: malformed module fragment marker survived the render", agent)
 	}
 	return strings.TrimSpace(content) + "\n", nil
 }
@@ -271,7 +281,8 @@ func stripReceiptDrivenDevelopment(content string) (string, error) {
 // a nested reference. An unknown section fails rather than shipping a prompt
 // with a literal template token in it. Without receipt-driven development, a
 // section's "(ODD only)" variant replaces its canonical body when one exists.
-func expandSharedOrchestratorSections(content string, rdd bool) (string, error) {
+// annotate keeps the module fragment markers inside the canonical bodies.
+func expandSharedOrchestratorSections(content string, rdd, annotate bool) (string, error) {
 	shared, err := assets.Read(sharedOrchestratorSectionsAsset)
 	if err != nil {
 		return "", err
@@ -279,12 +290,16 @@ func expandSharedOrchestratorSections(content string, rdd bool) (string, error) 
 	var missing []string
 	expanded := sharedOrchestratorSectionPlaceholder.ReplaceAllStringFunc(content, func(match string) string {
 		name := sharedOrchestratorSectionPlaceholder.FindStringSubmatch(match)[1]
+		section := sharedOrchestratorSection
+		if annotate {
+			section = annotatedSharedOrchestratorSection
+		}
 		body := ""
 		if !rdd {
-			body = sharedOrchestratorSection(shared, name+oddOnlySectionSuffix)
+			body = section(shared, name+oddOnlySectionSuffix)
 		}
 		if body == "" {
-			body = sharedOrchestratorSection(shared, name)
+			body = section(shared, name)
 		}
 		if body == "" {
 			missing = append(missing, name)
@@ -298,15 +313,25 @@ func expandSharedOrchestratorSections(content string, rdd bool) (string, error) 
 	return expanded, nil
 }
 
+// sharedOrchestratorSection returns a canonical body without its module
+// fragment marker lines, byte for byte the body before the markers existed.
 func sharedOrchestratorSection(shared, name string) string {
-	open := "<!-- sdd-orchestrator-section:" + name + ":start -->"
-	closing := "<!-- sdd-orchestrator-section:" + name + ":end -->"
+	return strings.TrimSpace(stripOrchestratorFragmentMarkers(rawSharedOrchestratorSection(shared, name)))
+}
+
+func annotatedSharedOrchestratorSection(shared, name string) string {
+	return strings.TrimSpace(rawSharedOrchestratorSection(shared, name))
+}
+
+func rawSharedOrchestratorSection(shared, name string) string {
+	open := "<!-- odd-orchestrator-section:" + name + ":start -->"
+	closing := "<!-- odd-orchestrator-section:" + name + ":end -->"
 	start := strings.Index(shared, open)
 	end := strings.Index(shared, closing)
 	if start < 0 || end < start {
 		return ""
 	}
-	return strings.TrimSpace(shared[start+len(open) : end])
+	return shared[start+len(open) : end]
 }
 
 // sectionBounds returns the byte range of the section that opens at heading and

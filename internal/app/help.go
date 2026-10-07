@@ -16,6 +16,8 @@ COMMANDS
   install      Configure AI coding agents on this machine
   uninstall    Remove Gentle AI managed files from this machine
   sync         Sync agent configs and skills to current version
+  codegraph init --cwd <project-root>
+               Initialize a project's CodeGraph index; codegraph [init] --help shows local help
   skill-registry refresh
                Refresh .atl/skill-registry.md with cache-hit fast path
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>] [--locale <en|es>]

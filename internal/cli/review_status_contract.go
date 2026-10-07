@@ -119,6 +119,10 @@ type ReviewTargetStatusResult struct {
 	// emitted fresh START and its exact validator render them through
 	// reviewStartArguments, so neither can drift from the other.
 	startOptions reviewStartPreflightOptions
+	// passiveDeltaAfterAcknowledgement marks an authority-free STOP for a
+	// committed range that only adds passive content to an acknowledged
+	// candidate (#4739). It selects the STOP reason, never authority.
+	passiveDeltaAfterAcknowledgement bool
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -819,7 +823,7 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			return nil
 		}
 		if result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityNotReplayable {
-			if result.Authority != nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "target_already_acknowledged" {
+			if result.Authority != nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != reviewConsumedStopReason(result) {
 				return errors.New("consumed target lacks an authority-free terminal STOP") // refusal:by-design world-action: only a provider code fix can reconcile an internally inconsistent consumed-target envelope
 			}
 			return nil
@@ -1924,4 +1928,14 @@ func validReviewGitTree(value string) bool {
 		}
 	}
 	return true
+}
+
+// reviewConsumedStopReason names the authority-free terminal STOP for an
+// unrelated target STATUS will not offer: the exact target was acknowledged,
+// or it only adds passive content to an acknowledged candidate (#4739).
+func reviewConsumedStopReason(status ReviewTargetStatusResult) string {
+	if status.passiveDeltaAfterAcknowledgement {
+		return "acknowledged_predecessor_passive_delta"
+	}
+	return "target_already_acknowledged"
 }

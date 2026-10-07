@@ -22,7 +22,7 @@ Multiple skills can apply at once. Match by file context (extensions, paths) and
 ## Kimi-native notes
 
 - Use Kimi built-ins plus `/skill:` or `/flow:` for skill entrypoints
-- Do NOT pretend custom `/sdd-*` slash commands exist
+- Do NOT pretend custom slash commands exist beyond the installed `/skill:` and `/flow:` entrypoints
 - If a custom agent is active, its YAML definition is the source of truth for tools and subagents
 
 ## Persona Voice

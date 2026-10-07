@@ -23,6 +23,11 @@ import (
 type InjectionResult struct {
 	Changed bool
 	Files   []string
+	// CodexServiceTier is non-nil only when this injection wrote a new Codex
+	// service_tier or retired the managed one; it is the tier Gentle AI owns
+	// afterwards ("" = none). Callers record it as the managed tier; nil keeps
+	// the previously recorded value.
+	CodexServiceTier *string
 }
 
 // bootstrapper is an optional adapter capability: if an adapter implements
@@ -173,6 +178,14 @@ type InjectOptions struct {
 	// nil preserves the user's existing main-session configuration.
 	CodexOrchestratorAssignment *model.CodexOrchestratorAssignment
 
+	// CodexServiceTier writes the top-level service_tier when it is a new,
+	// non-empty selection (different from CodexManagedServiceTier).
+	CodexServiceTier string
+	// CodexManagedServiceTier is the service_tier Gentle AI previously wrote.
+	// With no CodexServiceTier selected it is removed only while config.toml
+	// still holds exactly that value; any other user value is left untouched.
+	CodexManagedServiceTier string
+
 	// CodexCarrilModelAssignments retains saved model choices for ODD workers.
 	// Existing legacy carril keys remain readable, but no SDD profiles are written.
 	CodexCarrilModelAssignments map[string]string
@@ -222,7 +235,7 @@ const antigravityEngramPluginJSON = `{
 }
 `
 
-const antigravityEngramToolsMessage = "CRITICAL FIRST ACTION — Ensure these Engram MCP tools are available before responding: mem_save, mem_search, mem_context, mem_session_summary, mem_session_start, mem_session_end, mem_get_observation, mem_suggest_topic_key, mem_capture_passive, mem_save_prompt, mem_update, mem_current_project, mem_judge. When available, also load/select optional mem_review for memory lifecycle review; if mem_review is unavailable, continue with the required tools above. If Antigravity defers MCP tools, load/select these tools from the engram MCP server first. Then call mem_context when the user asks about prior work or the session needs project memory."
+const antigravityEngramToolsMessage = "CRITICAL FIRST ACTION — Ensure these Engram MCP tools are available before responding: mem_save, mem_search, mem_context, mem_session_summary, mem_session_start, mem_session_end, mem_get_observation, mem_suggest_topic_key, mem_capture_passive, mem_save_prompt, mem_update, mem_current_project, mem_judge. When available, also load/select optional mem_review for memory lifecycle review; if mem_review is unavailable, continue with the required tools above. If Antigravity defers MCP tools, load/select these tools from the engram MCP server first. Loading tools never resolves the project: before any initial mem_context, follow the Engram startup protocol (call mem_current_project and apply its workspace, ambiguous, and no-project checks), then pass only the resolved project to mem_context when the user asks about prior work or the session needs project memory."
 
 func antigravityEngramHooksJSON() []byte {
 	cfg := map[string]any{
@@ -707,6 +720,7 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 
 	files := make([]string, 0, 2)
 	changed := false
+	var codexServiceTier *string
 
 	// 1. Write MCP server config using the adapter's strategy.
 	switch adapter.MCPStrategy() {
@@ -878,6 +892,19 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "model", opts.CodexOrchestratorAssignment.Model)
 			withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "model_reasoning_effort", string(opts.CodexOrchestratorAssignment.Effort))
 		}
+		// Invalid tiers are dropped, and an unchanged selection leaves
+		// service_tier exactly as the user keeps it.
+		desiredTier, managedTier := validServiceTier(opts.CodexServiceTier), validServiceTier(opts.CodexManagedServiceTier)
+		var changedTier *string
+		if desiredTier != managedTier {
+			if desiredTier != "" {
+				withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "service_tier", desiredTier)
+			} else if line, ok := rootCodexServiceTierLine(withCompact, managedTier); ok {
+				lines := strings.Split(withCompact, "\n")
+				withCompact = strings.Join(append(lines[:line], lines[line+1:]...), "\n")
+			}
+			changedTier = &desiredTier
+		}
 
 		// Step 3 — [mcp_servers.engram] block (always last; strip+re-append at EOF).
 		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())
@@ -889,6 +916,7 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		}
 		changed = changed || tomlWrite.Changed
 		files = append(files, configPath)
+		codexServiceTier = changedTier
 
 		// Retired SDD-only profile files, including user-customized copies, are
 		// deliberately neither created nor modified by Engram injection.
@@ -955,7 +983,7 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		}
 	}
 
-	return InjectionResult{Changed: changed, Files: files}, nil
+	return InjectionResult{Changed: changed, Files: files, CodexServiceTier: codexServiceTier}, nil
 }
 
 // upsertCodexTableKeyBeforeMCPServers behaves like filemerge.UpsertTOMLTableKey,
@@ -1586,4 +1614,35 @@ func nativeOpenCodeEngramOverlay(path string, overlay []byte) ([]byte, error) {
 	}
 	patch["mcp"] = map[string]any{"servers": map[string]any{"engram": server}}
 	return json.Marshal(patch)
+}
+
+func validServiceTier(tier string) string {
+	if !model.ValidCodexServiceTier(tier) {
+		return ""
+	}
+	return tier
+}
+
+// rootCodexServiceTierLine finds the root-scope line that is byte-for-byte the
+// service_tier assignment Gentle AI writes for tier. Lines inside multiline
+// strings are content, not assignments, and never match.
+func rootCodexServiceTierLine(content, tier string) (int, bool) {
+	if tier == "" {
+		return 0, false
+	}
+	want := fmt.Sprintf("service_tier = %q", tier)
+	var multilineQuote byte
+	for i, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if multilineQuote == 0 {
+			if strings.HasPrefix(trimmed, "[") {
+				return 0, false
+			}
+			if trimmed == want {
+				return i, true
+			}
+		}
+		multilineQuote = filemerge.ScanTOMLMultilineString(line, multilineQuote)
+	}
+	return 0, false
 }
