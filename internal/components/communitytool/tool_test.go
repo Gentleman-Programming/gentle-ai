@@ -827,8 +827,48 @@ func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testin
 		t.Fatalf("Pi manual action = %q, want pending state", result.PiCodeGraph.ManualActions[0])
 	}
 	pi := findAgentStatus(t, *result.StatusAfter, model.AgentPi)
-	if pi.Configured || pi.Status != AgentStatusMissing {
-		t.Fatalf("Pi status = %#v, want unconfigured pending state", pi)
+	// Validated capability with pending adapter health is configured: the
+	// pending manual action above remains the authoritative follow-up.
+	if !pi.Configured || pi.Status != AgentStatusConfigured {
+		t.Fatalf("Pi status = %#v, want configured with pending adapter health", pi)
+	}
+	if !strings.Contains(pi.Reason, "pending") {
+		t.Fatalf("Pi reason = %q, want pending adapter-health evidence", pi.Reason)
+	}
+}
+
+func TestDetectStatusReportsPiConfiguredWhenAdapterHealthIsPending(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "subagents", "worker.md"), "---\ntools: bash\n---\nwork\n")
+	previousProbe := piCodeGraphEffectiveMCPProbe
+	piCodeGraphEffectiveMCPProbe = func(path string) (PiCodeGraphMCPProbeResult, error) {
+		result, _ := piProbeForTest(path)
+		return result, ErrPiCodeGraphAdapterHealthUnavailable
+	}
+	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previousProbe })
+
+	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true})
+	if err != nil {
+		t.Fatalf("ReconcilePiCodeGraph() error = %v, want pending success", err)
+	}
+	if len(result.ManualActions) != 1 || !strings.Contains(result.ManualActions[0], "remains pending") {
+		t.Fatalf("ManualActions = %#v, want the pending manual action", result.ManualActions)
+	}
+	if !result.MCP.Adapter || !result.MCP.ReadOnlyExplore || len(result.MCP.Tools) != 1 {
+		t.Fatalf("pending reconcile MCP = %#v, want validated capability evidence preserved", result.MCP)
+	}
+
+	status := DetectStatus(model.CommunityToolCodeGraph, home, DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	pi := findAgentStatus(t, status, model.AgentPi)
+	if !pi.Detected || !pi.Configured || pi.Status != AgentStatusConfigured {
+		t.Fatalf("Pi status = %#v, want detected and configured while adapter health is pending", pi)
+	}
+	if !strings.Contains(pi.Reason, "pending") {
+		t.Fatalf("Pi reason = %q, want pending adapter-health evidence", pi.Reason)
+	}
+	if !status.CodeGraphReconcileSatisfied() {
+		t.Fatalf("CodeGraphReconcileSatisfied() = false, want satisfied for validated Pi capability")
 	}
 }
 
