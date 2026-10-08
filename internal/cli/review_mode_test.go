@@ -122,7 +122,7 @@ func TestReviewModeGlobalOnlyNeverResolvesRepository(t *testing.T) {
 	if testing.Short() || runtime.GOOS == "windows" {
 		t.Skip("POSIX unreadable Git metadata integration")
 	}
-	reviewModeHome(t)
+	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	metadata := filepath.Join(repo, ".git")
 	if err := os.Chmod(metadata, 0); err != nil {
@@ -148,6 +148,26 @@ func TestReviewModeGlobalOnlyNeverResolvesRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, cwd := range []string{repo, filepath.Join(t.TempDir(), "nonexistent")} {
+		if err := state.Write(home, state.InstallState{RDDMode: "unknown"}); err != nil {
+			t.Fatal(err)
+		}
+		output.Reset()
+		err := RunReviewMode([]string{"status", "--global-only", "--cwd", cwd}, &output)
+		var unreadable *ReviewModeUnreadableError
+		if !errors.As(err, &unreadable) || len(unreadable.Scopes) != 1 {
+			t.Fatalf("missing global refusal: %v", err)
+		}
+		// Follow both printed continuations under unusable Git metadata/cwd.
+		for _, command := range unreadable.Scopes[0].commands() {
+			if err := state.Write(home, state.InstallState{RDDMode: "unknown"}); err != nil {
+				t.Fatal(err)
+			}
+			output.Reset()
+			args := append(strings.Fields(strings.Trim(command, "`"))[3:], "--cwd", cwd)
+			if err := RunReviewMode(args, &output); err != nil {
+				t.Fatalf("printed recovery %s failed: %v", command, err)
+			}
+		}
 		for _, operation := range []string{"enable", "status", "disable"} {
 			output.Reset()
 			if err := RunReviewMode([]string{operation, "--global-only", "--cwd", cwd, "--json"}, &output); err != nil {
@@ -242,7 +262,7 @@ func TestReviewModeGlobalOnlySourceValidation(t *testing.T) {
 					t.Fatalf("unknown global refusal = %v", err)
 				}
 				for _, verb := range []string{"enable", "disable"} {
-					if !strings.Contains(err.Error(), "gentle-ai review mode "+verb+" --scope=global") {
+					if !strings.Contains(err.Error(), "gentle-ai review mode "+verb+" --scope=global --global-only") {
 						t.Fatalf("missing global repair command: %v", err)
 					}
 				}

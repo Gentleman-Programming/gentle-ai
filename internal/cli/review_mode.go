@@ -158,7 +158,7 @@ func runGlobalOnlyReviewMode(operation string) (reviewtransaction.RDDModeStatus,
 			return status, cause
 		}
 		return status, &ReviewModeUnreadableError{
-			Scopes: []ReviewModeUnreadableScope{{Scope: reviewModeScopeGlobal, Path: state.Path(home)}},
+			Scopes: []ReviewModeUnreadableScope{{Scope: reviewModeScopeGlobal, Path: state.Path(home), GlobalOnly: true}},
 			Cause:  cause,
 		}
 	}
@@ -192,9 +192,10 @@ func globalOnlyReviewModeStatus(global reviewtransaction.RDDGlobalMode) reviewtr
 // cannot be read as a mode, the file that holds it, and the repository that
 // file belongs to.
 type ReviewModeUnreadableScope struct {
-	Scope string
-	Path  string
-	Repo  string
+	Scope      string
+	Path       string
+	Repo       string
+	GlobalOnly bool
 }
 
 func (scope ReviewModeUnreadableScope) label() string {
@@ -209,6 +210,9 @@ func (scope ReviewModeUnreadableScope) label() string {
 // to, because a clone-local record is only reachable through its own clone.
 func (scope ReviewModeUnreadableScope) commands() []string {
 	suffix := " --scope=" + scope.Scope
+	if scope.GlobalOnly {
+		suffix += " --global-only"
+	}
 	if scope.Scope == reviewModeScopeClone {
 		suffix += " --cwd " + scope.Repo
 	}
