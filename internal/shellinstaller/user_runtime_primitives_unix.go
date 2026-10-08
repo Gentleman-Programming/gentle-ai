@@ -59,12 +59,23 @@ func privateDestination(dest string) error {
 }
 
 func privatePhysical(path string) (os.FileInfo, error) {
+	return privatePhysicalEntry(path, true)
+}
+
+// privateForeignPhysical checks a regular file the installer reads but does
+// not own, such as the operator's gentle-ai binary; on darwin a quarantine
+// xattr left by an approved download is tolerated there, never on owned entries.
+func privateForeignPhysical(path string) (os.FileInfo, error) {
+	return privatePhysicalEntry(path, false)
+}
+
+func privatePhysicalEntry(path string, owned bool) (os.FileInfo, error) {
 	info, err := os.Lstat(path)
 	canonical, canonicalErr := filepath.EvalSymlinks(path)
 	if err != nil || canonicalErr != nil || canonical != path || !info.Mode().IsRegular() {
 		return nil, privateError("filesystem", errors.Join(err, canonicalErr))
 	}
-	if err := privateExtendedMetadata(path, info, true); err != nil {
+	if err := privateExtendedMetadata(path, info, owned); err != nil {
 		return nil, privateError("filesystem", err)
 	}
 	return info, nil

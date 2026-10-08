@@ -130,8 +130,10 @@ func userSystemResolve(path string) (string, error) {
 // object behind the descriptor.
 func userDescriptorPath(fd int) (string, error) {
 	buffer := make([]byte, unix.PathMax)
-	if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETPATH, int(uintptr(unsafe.Pointer(&buffer[0])))); err != nil {
-		return "", err
+	// The pointer is converted inside the syscall.Syscall argument list so the
+	// buffer stays live and unmoved for the kernel write (unsafe.Pointer rule 4).
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), uintptr(unix.F_GETPATH), uintptr(unsafe.Pointer(&buffer[0]))); errno != 0 {
+		return "", errno
 	}
 	return unix.ByteSliceToString(buffer), nil
 }
@@ -202,7 +204,8 @@ func userPhysicalWithin(inner, outer string) bool {
 }
 
 // Flags that neither restrict mutation nor hide content from the mode bits.
-const privateBenignFlags = unix.UF_NODUMP | unix.UF_HIDDEN | unix.UF_TRACKED
+// UF_COMPRESSED is APFS transparent (decmpfs) compression of the same bytes.
+const privateBenignFlags = unix.UF_NODUMP | unix.UF_HIDDEN | unix.UF_TRACKED | unix.UF_COMPRESSED
 
 // privateExtendedMetadata refuses metadata the mode bits do not show: BSD
 // flags (immutable, append-only, dataless, restricted, ...), ACLs with any

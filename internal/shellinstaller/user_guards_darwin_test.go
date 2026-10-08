@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -221,6 +222,14 @@ func TestDarwinExtendedMetadataRefusesFlagsACLsAndQuarantine(t *testing.T) {
 	if _, err := privateDirectory(directory); err != nil {
 		t.Fatalf("operator ancestor with com.apple.quarantine refused: %v", err)
 	}
+	// A Gatekeeper-approved, browser-downloaded gentle-ai keeps its quarantine
+	// xattr; it is the operator's file, not an installer-owned entry.
+	if _, err := privateForeignPhysical(file); err != nil {
+		t.Fatalf("operator supervisor source with com.apple.quarantine refused: %v", err)
+	}
+	if _, err := privateForeignPhysical(filepath.Join(directory, "missing")); err == nil {
+		t.Fatal("foreign physical check accepted a missing file")
+	}
 
 	current, err := user.Current()
 	if err != nil {
@@ -243,6 +252,42 @@ func TestDarwinExtendedMetadataRefusesFlagsACLsAndQuarantine(t *testing.T) {
 	darwinACL(t, file, "everyone deny delete")
 	darwinACL(t, directory, "group:everyone deny delete,file_inherit,directory_inherit")
 	accepted("deny-only ACL", directory, file)
+}
+
+func TestDarwinExtendedMetadataAcceptsTransparentCompression(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, compressed := filepath.Join(base, "source"), filepath.Join(base, "compressed")
+	if err := os.WriteFile(source, []byte(strings.Repeat("gentle shell ", 4096)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("/usr/bin/ditto", "--hfsCompression", source, compressed).CombinedOutput(); err != nil {
+		t.Fatalf("ditto: %v: %s", err, out)
+	}
+	info, err := os.Lstat(compressed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Sys().(*syscall.Stat_t).Flags&unix.UF_COMPRESSED == 0 {
+		t.Skip("filesystem did not apply transparent compression")
+	}
+	if _, err := privatePhysical(compressed); err != nil {
+		t.Fatalf("transparently compressed file refused: %v", err)
+	}
+}
+
+func TestDarwinDescriptorPathReturnsOnDiskSpelling(t *testing.T) {
+	file, err := os.Open("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	path, err := userDescriptorPath(int(file.Fd()))
+	if err != nil || path != "/private/tmp" {
+		t.Fatalf("descriptor path = %q, %v; want /private/tmp", path, err)
+	}
 }
 
 func TestDarwinSyncIssuesFullFsync(t *testing.T) {

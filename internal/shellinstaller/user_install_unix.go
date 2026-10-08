@@ -225,7 +225,7 @@ func userSourceFile(ctx context.Context, path string, size int64, pin string) (s
 // Distribution provenance belongs to the separately trusted source build, not
 // this mutable checksum. It witnesses cooperative preimages, not loaded bytes.
 func userSupervisorSHA(ctx context.Context, source string) (string, error) {
-	info, err := privatePhysical(source)
+	info, err := privateForeignPhysical(source)
 	if err != nil || ctx.Err() != nil || info.Size() > 268435456 || info.Mode().Perm()&0022 != 0 || info.Mode().Perm()&0111 == 0 {
 		return "", privateError("source", errors.Join(err, ctx.Err()))
 	}
@@ -244,7 +244,7 @@ func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 		}
 	}
 	data, err := os.ReadFile(source)
-	fresh, freshErr := privatePhysical(source)
+	fresh, freshErr := privateForeignPhysical(source)
 	if err != nil || freshErr != nil || privateStamp(info) != privateStamp(fresh) || ctx.Err() != nil {
 		return "", privateError("preimage", errors.Join(err, freshErr, ctx.Err()))
 	}
