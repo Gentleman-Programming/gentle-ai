@@ -20,6 +20,13 @@ const (
 // that signal and keep running, so every probe is another SIGKILL.
 const userReapProbe = syscall.SIGKILL
 
+// privateReapRun is privateRun's post-Wait cleanup. One darwin group SIGKILL
+// can miss a member forked during it, so the group is reaped until the kernel
+// reports it empty; any other outcome is an uncertain PrivateRuntimeError.
+func privateReapRun(pid int, waitErr error, _ func() error) error {
+	return userReapGroup(pid, waitErr)
+}
+
 // userKillGroup signals every member of process group pgid with the Linux
 // answers. Darwin returns EPERM, not success, when every member is already
 // exiting (P_WEXIT) or a zombie awaiting its parent's wait; the group is still

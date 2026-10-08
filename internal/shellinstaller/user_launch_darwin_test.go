@@ -3,9 +3,13 @@
 package shellinstaller
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -53,6 +57,34 @@ func TestDarwinReapGroupKillsMemberForkedDuringKill(t *testing.T) {
 		}
 		if err := syscall.Kill(-cmd.Process.Pid, 0); !errors.Is(err, syscall.ESRCH) {
 			t.Fatalf("iteration %d: group after reap = %v, want ESRCH", iteration, err)
+		}
+	}
+}
+
+// privateRun must leave no member behind when its leader exits while a
+// background subshell forks: the single post-Wait group SIGKILL races that fork
+// on darwin and can also answer EPERM for members already exiting. Background
+// stdio is detached so Wait returns as soon as the leader exits.
+func TestDarwinPrivateRunReapsMemberForkedDuringKill(t *testing.T) {
+	dir := t.TempDir()
+	for iteration := 0; iteration < 25; iteration++ {
+		pidFile := filepath.Join(dir, strconv.Itoa(iteration))
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `echo $$ > "$1"; (sleep 2; :) </dev/null >/dev/null 2>&1 & exit 0`, "sh", pidFile)
+		cmd.Env = []string{"PATH=/usr/bin:/bin"}
+		output, err := privateRun(ctx, cmd, cancel)
+		cancel()
+		data, readErr := os.ReadFile(pidFile)
+		pid, atoiErr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if readErr != nil || atoiErr != nil || pid != cmd.Process.Pid {
+			t.Fatalf("iteration %d: leader pid %q, %v, %v", iteration, data, readErr, atoiErr)
+		}
+		t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+		if err != nil || output != "" {
+			t.Fatalf("iteration %d: privateRun = %q, %v; want a clean run", iteration, output, err)
+		}
+		if probe := syscall.Kill(-pid, 0); !errors.Is(probe, syscall.ESRCH) {
+			t.Fatalf("iteration %d: group after privateRun = %v, want ESRCH", iteration, probe)
 		}
 	}
 }

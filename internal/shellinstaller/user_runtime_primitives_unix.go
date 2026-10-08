@@ -132,7 +132,7 @@ func privateRun(ctx context.Context, cmd *exec.Cmd, cancel context.CancelFunc) (
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = 750 * time.Millisecond
 	kill := func() error {
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); errors.Is(err, syscall.ESRCH) {
+		if err := userKillGroup(cmd.Process.Pid, syscall.SIGKILL); errors.Is(err, syscall.ESRCH) {
 			return os.ErrProcessDone
 		} else {
 			return err
@@ -143,7 +143,12 @@ func privateRun(ctx context.Context, cmd *exec.Cmd, cancel context.CancelFunc) (
 		return "", privateError("start", err)
 	}
 	err := cmd.Wait() // WaitDelay bounds inherited pipes and joins stdlib copiers.
-	if killErr := kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+	killErr := privateReapRun(cmd.Process.Pid, err, kill)
+	var uncertain *PrivateRuntimeError
+	if errors.As(killErr, &uncertain) {
+		return "", killErr // A group member outlived the bounded reap.
+	}
+	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
 		err = errors.Join(err, killErr)
 	}
 	if output.overflow || !utf8.Valid(output.data) {

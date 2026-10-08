@@ -946,6 +946,12 @@ func userKillGroup(pgid int, sig syscall.Signal) error {
 	return syscall.Kill(-pgid, sig)
 }
 
+// privateReapRun is privateRun's post-Wait cleanup: one group SIGKILL, whose
+// ESRCH answer means the group already emptied.
+func privateReapRun(_ int, _ error, kill func() error) error {
+	return kill()
+}
+
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	manifest, err := userReadManifest(ctx, root)
 	if err != nil {
