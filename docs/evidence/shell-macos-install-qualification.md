@@ -28,7 +28,7 @@ go build -mod=readonly -o "$base/gentle-ai" ./cmd/gentle-ai
 | `shared-fixture`, `shared-fd-refusal` | A Shared inspect against an agent with a pre-existing `bin/fd` refuses, names the conflict, creates no target and leaves the prefix, agent and parent inventories unchanged. |
 | `shared-inspect` … `shared-artifacts` | Shared install binds the selected prefix and agent; launch versions and artifact pins as above. |
 | `recover-inspect` … `recover-restore` | Damaging the coding-agent `package.json` makes Pi refuse to start; the recovery token is stable after damage; a wrong token refuses without changes; the printed token restores the original `package.json` and `settings.json` bytes and retains both quarantines. |
-| `residue`, `real-home` | No stage or workspace residue (`.gentle-node-stage.*`, `.gentle-user-*` and similar); redirected HOME, TMPDIR and XDG directories stay empty; a watch list of real-HOME locations (`.pi`, `.npm`, `.config`, `.cache`, `Library/Caches`, …) is unchanged. |
+| `residue`, `real-home` | No stage or workspace residue (`.gentle-node-stage.*`, `.gentle-user-*` and similar); redirected HOME, TMPDIR and XDG directories stay empty; the real-HOME locations the stack would write (`.pi`, `.npm`, `.gentle-ai`, `.config`, `.cache`, `.local`, …) are unchanged. In `Library/Caches` and `Library/Application Support`, which macOS daemons rewrite constantly, the run fails when any child named after the stack (gentle, node, npm, pi, rg, fd, ripgrep, earendil, supervisor, go-build) appears or changes; other changes are recorded in the receipt as `realHomeSystemChurn`. |
 
 Each command has its own deadline inside a whole-run deadline (22 min) that nests inside the step (25 min) and job (55 min) deadlines. On a timeout or unexpected exit the receipt names the failing checkpoint and command, its limit and elapsed seconds, and a bounded output tail.
 
@@ -43,7 +43,7 @@ Each command has its own deadline inside a whole-run deadline (22 min) that nest
 | Node durability | The Node helper's `fsync` may fall back from `F_FULLFSYNC`; only Go writes fail closed. |
 | Other hosts | One `macos-latest` image per run. Other macOS versions, Intel/Rosetta refusal and network or FUSE filesystems are covered by unit tests, not by this receipt. |
 | Interactive and fault paths | The installer TUI, cancellation, publication faults, stock `pi update` and a full Pi session are not exercised. |
-| Full HOME inventory | The real-HOME check is a fixed watch list, not a byte inventory of the whole home directory. |
+| Full HOME inventory | The real-HOME check is a fixed watch list, not a byte inventory of the whole home directory. Inside the two system-volatile `Library` directories it attributes changes by child name: on `macos-latest` every observed change came from Apple daemons (Spotlight, TCC, CloudKit, Safari, geoanalyticsd, remindd, …), so a write under an unrelated name would not be caught there. |
 | Publisher availability | Every run downloads pinned artifacts from their publishers; an outage fails the run without saying anything about the installer. |
 
 ## Recorded runs

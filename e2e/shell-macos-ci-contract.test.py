@@ -183,7 +183,7 @@ class MacOSQualificationContract(unittest.TestCase):
 
     def test_script_is_stdlib_only_and_reports_timeouts(self):
         tree, constants = script_constants()
-        allowed = {'argparse', 'hashlib', 'json', 'os', 'platform', 'pwd', 'shutil', 'signal', 'subprocess', 'sys',
+        allowed = {'argparse', 'hashlib', 'json', 'os', 'platform', 'pwd', 're', 'shutil', 'signal', 'subprocess', 'sys',
                    'tarfile', 'tempfile', 'time'}
         imported = set()
         for node in ast.walk(tree):

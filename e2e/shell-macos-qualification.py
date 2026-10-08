@@ -19,6 +19,7 @@ import json
 import os
 import platform
 import pwd
+import re
 import shutil
 import signal
 import subprocess
@@ -58,6 +59,12 @@ RESIDUE_PREFIXES = ('.gentle-node-stage.', '.gentle-shell-stage.', '.gentle-user
 REAL_HOME_WATCH = ('.pi', '.pi/agent', '.npm', '.npmrc', '.gentle-ai', '.gentle-shell', '.node_repl_history',
                    '.config', '.config/gentle-ai', '.config/pi', '.cache', '.cache/gentle-ai', '.local',
                    '.local/share', '.local/state', 'Library/Caches', 'Library/Application Support')
+# macOS daemons (Spotlight, TCC, CloudKit, ...) rewrite these directories all
+# the time, observed on macos-latest runners. Inside them only children that
+# belong to the candidate's stack fail the run; the rest is recorded as churn.
+REAL_HOME_SYSTEM_VOLATILE = ('Library/Caches', 'Library/Application Support')
+REAL_HOME_STACK_SUBSTRINGS = ('gentle', 'earendil', 'ripgrep', 'go-build')
+REAL_HOME_STACK_TOKENS = frozenset(('pi', 'rg', 'fd', 'npm', 'node', 'nodejs', 'supervisor'))
 
 START = time.monotonic()
 RECEIPT = {'schema': SCHEMA, 'result': 'fail', 'checkpoints': []}
@@ -321,6 +328,13 @@ def real_home_children(home):
     return children
 
 
+def real_home_stack_entry(name):
+    """True when a Library child is named after the candidate's own stack."""
+    lowered = name.lower()
+    tokens = set(token for token in re.split(r'[^a-z0-9]+', lowered) if token)
+    return any(marker in lowered for marker in REAL_HOME_STACK_SUBSTRINGS) or bool(tokens & REAL_HOME_STACK_TOKENS)
+
+
 def real_home_changes(before, after, limit=30):
     """Which children were added, removed or modified, so a failure is attributable."""
     report = {}
@@ -493,10 +507,19 @@ def qualify(context):
 
     checkpoint('real-home')
     home_after = real_home_snapshot(real_home)
-    changed = sorted(key for key in home_before if home_before[key] != home_after[key])
-    if changed:
-        RECEIPT['realHomeChanges'] = real_home_changes(home_children_before, real_home_children(real_home))
+    changes = real_home_changes(home_children_before, real_home_children(real_home))
+    changed = sorted(key for key in home_before if home_before[key] != home_after[key] and key not in REAL_HOME_SYSTEM_VOLATILE)
+    stack = sorted('%s/%s' % (relative, name)
+                   for relative in REAL_HOME_SYSTEM_VOLATILE if relative in changes
+                   for name in changes[relative]['added'] + changes[relative]['modified']
+                   if real_home_stack_entry(name))
+    churn = {relative: changes[relative] for relative in REAL_HOME_SYSTEM_VOLATILE if relative in changes}
+    if churn:
+        RECEIPT['realHomeSystemChurn'] = churn
+    if changed or stack:
+        RECEIPT['realHomeChanges'] = changes
     require(not changed, 'real HOME changed at %s' % changed)
+    require(not stack, 'candidate stack wrote into real HOME system directories: %s' % stack)
     reached('real-home', watchedEntries=len(REAL_HOME_WATCH))
 
 
