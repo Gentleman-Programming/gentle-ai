@@ -339,3 +339,38 @@ func TestOpenCodeSyncAddsWildcardDenyBeforeExistingGrants(t *testing.T) {
 		t.Fatalf("wildcard deny must precede existing grants (last match wins):\n%s", text)
 	}
 }
+
+// A sync dry-run reports the V2 plugin SDK refusal the real sync would stop
+// on, instead of previewing a plan that cannot run.
+func TestSyncDryRunReportsMissingOpenCodeV2PluginSDK(t *testing.T) {
+	home := installTestHome(t)
+	stubOpenCodeRuntimeVersion(t, home, "2.0.23")
+	if err := os.RemoveAll(filepath.Join(home, ".config", "opencode", "node_modules")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := RunSync([]string{"--agent", "opencode", "--dry-run"})
+	if err != nil {
+		t.Fatalf("dry-run error = %v", err)
+	}
+	report := RenderSyncReport(result)
+	for _, want := range []string{"Would stop:", "OpenCode V2 requires", "@opencode/plugin"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("dry-run report missing %q:\n%s", want, report)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".config", "opencode", "node_modules")); !os.IsNotExist(statErr) {
+		t.Errorf("dry-run installed the SDK: %v", statErr)
+	}
+}
+
+func TestSyncDryRunWithOpenCodeV2PluginSDKReportsNoStop(t *testing.T) {
+	home := installTestHome(t)
+	stubOpenCodeRuntimeVersion(t, home, "2.0.23")
+	result, err := RunSync([]string{"--agent", "opencode", "--dry-run"})
+	if err != nil {
+		t.Fatalf("dry-run error = %v", err)
+	}
+	if report := RenderSyncReport(result); strings.Contains(report, "Would stop:") {
+		t.Fatalf("dry-run reported a stop with the SDK installed:\n%s", report)
+	}
+}

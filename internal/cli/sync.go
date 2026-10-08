@@ -89,6 +89,9 @@ type SyncResult struct {
 	// components touch the same file. It is nil when no files changed.
 	ChangedFiles  []string
 	ManualActions []string
+	// DryRunStops lists refusals a dry-run found that the real sync would stop
+	// on before writing anything.
+	DryRunStops []string
 
 	Background              OpenCodeBackgroundResolution
 	BackgroundPolicyEnabled bool
@@ -2380,6 +2383,13 @@ func RunSync(args []string) (SyncResult, error) {
 			if prepare, ok := step.(prepareBackupStep); ok && prepare.targetErr != nil {
 				return result, fmt.Errorf("resolve backup targets: %w", prepare.targetErr)
 			}
+			// Without consent the plugin SDK preflight only reads, so the
+			// dry-run reports the refusal the real sync would stop on.
+			if preflight, ok := step.(openCodePluginDependencyPreflightStep); ok && preflight.consent == nil {
+				if err := preflight.Run(); err != nil {
+					result.DryRunStops = append(result.DryRunStops, err.Error())
+				}
+			}
 		}
 		return result, nil
 	}
@@ -2581,6 +2591,9 @@ func RenderSyncReport(result SyncResult) string {
 		}
 		fmt.Fprintf(&b, "Prepare steps: %d\n", len(result.Plan.Prepare))
 		fmt.Fprintf(&b, "Apply steps: %d\n", len(result.Plan.Apply))
+		for _, stop := range result.DryRunStops {
+			fmt.Fprintf(&b, "Would stop: %s\n", stop)
+		}
 		backgroundReport()
 		return strings.TrimRight(b.String(), "\n")
 	}
