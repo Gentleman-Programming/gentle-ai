@@ -32,6 +32,22 @@ For Shared, use `--mode shared` and supply `--prefix /owned/selected-prefix --ag
 
 Launch `TARGET/bin/gentle-shell` or `TARGET/bin/pi`. Normal launches have no installer menu; `TARGET/bin/gentle-shell install` reopens it. The installer does not modify PATH or shell files, replace an unrelated `pi`, or require a root installation.
 
+## Global RDD source (new native CLI interface)
+
+A build containing this interface accepts these commands with the **intended private HOME** selected:
+
+```sh
+gentle-ai review mode enable --global-only --json
+gentle-ai review mode status --global-only --json
+gentle-ai review mode disable --global-only --json
+```
+
+`--global-only` reads/writes the existing global user-state source without resolving a repository, even inside a staging directory nested under a clone. Global scope is the default; `--scope clone` and any `--expected-revision` are rejected with this flag. Status is read-only; writes retain the existing state lock and preserve other installation selections. No Pi settings, experience preferences or project files are changed.
+
+This is a **global-source view**, not a project force-on control. It reports `scope=global`, the global/default effective value, clone-local unset, and no clone revision. Without this flag, status still reports both sources and any off wins: a clone-local off still disables later ordinary review operations even after global enable. An unset global source defaults on; unreadable state fails closed with an error.
+
+**Distribution dependency:** stock pinned native 4.0.0 does not support this new flag. This source change does not update its immutable artifact, SDK source or installer pin. Consumers require separately authorized distribution and runtime qualification before using it; these commands are not evidence of restored Global RDD UI, three-OS qualification or a passing full installer journey.
+
 ## Shared settings: preview before confirming
 
 Inspect prints the selected agent's `settings.json` path and **only** its `packages` and `npmCommand` before/after values, including actual physical paths:
