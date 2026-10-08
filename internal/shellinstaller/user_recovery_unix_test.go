@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package shellinstaller
 
 import (
@@ -13,7 +15,10 @@ import (
 
 func userRecoveryFixture(t *testing.T) (string, string, string) {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir()) // darwin spells TMPDIR through /var.
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(root, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +50,10 @@ func recoveryInspect(t *testing.T, root string) string {
 
 func TestUserSharedFailureRetainsOnlyAfterProvisioning(t *testing.T) {
 	for _, started := range []bool{false, true} {
-		workspace := t.TempDir()
+		workspace, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := os.Chmod(workspace, 0700); err != nil {
 			t.Fatal(err)
 		}

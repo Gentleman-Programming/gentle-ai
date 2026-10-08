@@ -133,6 +133,7 @@ type userLimitsWitness struct{ read, write *os.File }
 
 func userLimitsAttach(cmd *exec.Cmd) (*userLimitsWitness, error) {
 	if len(cmd.ExtraFiles) != 0 {
+		// refusal:by-design human-authority: only an installer caller passes extra descriptors; a maintainer must fix that caller
 		return nil, privateError("refused", errors.New("limits wrapper owns descriptor 3"))
 	}
 	read, write, err := os.Pipe()
@@ -156,6 +157,7 @@ func (w *userLimitsWitness) result(waitErr error) error {
 	}
 	var exit *exec.ExitError
 	if errors.As(waitErr, &exit) && exit.ExitCode() == 125 && (readErr != nil || string(attested) != userLimitsAttested) {
+		// refusal:by-design world-action: the inherited hard rlimits of this login session must be raised outside gentle-ai
 		return privateError("refused", errors.Join(waitErr, readErr, errors.New("the kernel refused an owned process limit before the command ran")))
 	}
 	return waitErr

@@ -21,30 +21,20 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Darwin entry points for Separate installation. There is no user manager to
-// re-enter: every entry repeats userDarwinKernelCheck, owned installer
-// commands run through userSupervise and the launched Pi runs in one
-// userLaunchGroup group. Shared mode and its recovery refuse until they are
-// enabled on darwin.
+// Darwin entry points for Separate and Shared installation and Shared
+// recovery. There is no user manager to re-enter: every entry repeats
+// userDarwinKernelCheck, owned installer commands run through userSupervise
+// and the launched Pi runs in one userLaunchGroup group.
 
 // userKernelGate is the kernel qualification every darwin entry repeats; tests
 // replace it to drive refusals.
 var userKernelGate = userDarwinKernelCheck
-
-const userDarwinSharedRefusal = "Shared mode is not yet available on macOS: this version installs Separate only and changes no existing Pi prefix or agent; " +
-	"choose a new owned target and run gentle-ai shell install --mode separate"
-
-const userDarwinRecoverRefusal = "shell recover is not yet available on macOS: it restores Shared preimages and this version installs Separate only; " +
-	"run gentle-ai shell --help for the supported commands"
 
 func UserKernelCheck() error {
 	return userKernelGate()
 }
 
 func ValidateUserInstall(req UserInstallRequest) error {
-	if req.Mode == "shared" {
-		return privateError("refused", errors.New(userDarwinSharedRefusal))
-	}
 	return userValidateInstall(req)
 }
 
@@ -54,11 +44,6 @@ func InspectUserInstall(req UserInstallRequest) (string, error) {
 
 func RunUserInstall(ctx context.Context, req UserInstallRequest) (UserInstallResult, error) {
 	return userRunInstall(ctx, req)
-}
-
-// Only Shared mode previews settings, and Shared refuses on darwin.
-func userPreviewReadSettings(UserInstallRequest, string) ([]byte, bool, error) {
-	return nil, false, privateError("refused", errors.New(userDarwinSharedRefusal))
 }
 
 // An internal selector names the same operation: darwin never forwards to a
@@ -84,7 +69,7 @@ func RunUserEntry(ctx context.Context, _ string, args []string, stdin io.Reader,
 		}
 		return err
 	case "recover":
-		return privateError("refused", errors.New(userDarwinRecoverRefusal))
+		return userRecover(ctx, args[1:], stdout)
 	case "launch":
 		if len(args) < 2 {
 			return errors.New("missing owned launch root")

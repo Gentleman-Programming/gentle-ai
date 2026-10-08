@@ -71,39 +71,6 @@ func TestDarwinSeparateSelectionCanonicalizesOnce(t *testing.T) {
 	}
 }
 
-func TestDarwinSharedAndRecoverRefuseBeforeEffects(t *testing.T) {
-	_, parent := darwinPrivateParent(t)
-	req := UserInstallRequest{Destination: filepath.Join(parent, "shell"), Mode: "shared",
-		SharedPrefix: filepath.Join(parent, "prefix"), SharedAgent: filepath.Join(parent, "agent")}
-	bundle := filepath.Join(req.SharedPrefix, "lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
-	for _, dir := range []string{filepath.Dir(bundle), req.SharedAgent} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(bundle, []byte("stock"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	before := strings.Join(darwinEntries(t, parent), ",")
-	const shared = "Shared mode is not yet available on macOS"
-	_, inspectErr := InspectUserInstall(req)
-	_, previewErr := PreviewUserInstall(req, "")
-	_, runErr := RunUserInstall(context.Background(), req)
-	entryErr := RunUserEntry(context.Background(), "", []string{"install", req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, "f"}, nil, nil, nil)
-	for name, err := range map[string]error{"validate": ValidateUserInstall(req), "inspect": inspectErr, "preview": previewErr, "run": runErr, "entry": entryErr} {
-		if err == nil || !strings.Contains(err.Error(), shared) || !strings.Contains(err.Error(), "gentle-ai shell install --mode separate") {
-			t.Fatalf("%s: Shared must refuse with the precise macOS message: %v", name, err)
-		}
-	}
-	err := RunUserEntry(context.Background(), "", []string{"recover", req.Destination, "inspect"}, nil, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "shell recover is not yet available on macOS") || !strings.Contains(err.Error(), "gentle-ai shell --help") {
-		t.Fatalf("recover must refuse with the precise macOS message: %v", err)
-	}
-	if after := strings.Join(darwinEntries(t, parent), ","); after != before {
-		t.Fatalf("refused Shared or recover changed the parent: %q -> %q", before, after)
-	}
-}
-
 func TestDarwinEntryPointsFollowKernelGate(t *testing.T) {
 	if reflect.ValueOf(userKernelGate).Pointer() != reflect.ValueOf(userDarwinKernelCheck).Pointer() {
 		t.Fatal("production kernel gate is not userDarwinKernelCheck")

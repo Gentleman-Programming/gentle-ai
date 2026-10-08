@@ -73,7 +73,7 @@ Restart OpenCode after enabling managed activation. Start a new login shell so t
 | Platform | Guide |
 | --- | --- |
 | Linux amd64 | [Gentle Shell on Linux](gentle-shell-linux-install.md) |
-| macOS 14+ on Apple silicon (Separate mode only) | [Gentle Shell on macOS](gentle-shell-macos-install.md) |
+| macOS 14+ on Apple silicon | [Gentle Shell on macOS](gentle-shell-macos-install.md) |
 | Windows 11 x64 | [Gentle Shell on Windows](gentle-shell-windows-install.md) |
 
 ## Windows Notes

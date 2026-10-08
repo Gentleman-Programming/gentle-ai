@@ -5,7 +5,6 @@ package shellinstaller
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
 	"golang.org/x/sys/unix"
 )
 
@@ -330,90 +328,6 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 
 func RunUserInstall(ctx context.Context, req UserInstallRequest) (UserInstallResult, error) {
 	return userRunInstall(ctx, req)
-}
-
-func userRecover(ctx context.Context, args []string, stdout io.Writer) error {
-	if len(args) != 2 || !privateHierarchyPath(args[0]) {
-		return errors.New("recovery: supply ROOT and inspect or printed confirmation")
-	}
-	root := args[0]
-	identity, err := userIdentity(root)
-	if err != nil {
-		return err
-	}
-	selectionPath := filepath.Join(root, "state/selection.json")
-	upgrade := filepath.Join(root, "state/upgrade/selection.json")
-	if _, statErr := os.Lstat(upgrade); statErr == nil {
-		selectionPath = upgrade
-	} else if !os.IsNotExist(statErr) {
-		return statErr
-	}
-	selectionInfo, err := privatePhysical(selectionPath)
-	if err != nil || selectionInfo.Size() > 4096 || selectionInfo.Mode().Perm()&0022 != 0 || selectionInfo.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
-		return errors.New("recovery selection is absent or malformed; preserve evidence")
-	}
-	data, err := os.ReadFile(selectionPath)
-	var selection struct{ Mode, Prefix, Agent, FinalPrefix, FinalRoot, PrefixSHA, AgentSHA string }
-	if err != nil || len(data) > 4096 || json.Unmarshal(data, &selection) != nil || selection.Mode != "shared" || !privateHierarchyPath(selection.Prefix) || !privateHierarchyPath(selection.Agent) || !privateHierarchyPath(selection.FinalRoot) || !privateHierarchyPath(selection.FinalPrefix) || selection.FinalPrefix != selection.Prefix {
-		return errors.New("recovery selection is absent or malformed; preserve evidence")
-	}
-	for _, digest := range []string{selection.PrefixSHA, selection.AgentSHA} {
-		if len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != "" {
-			return errors.New("recovery preimage hashes are absent or malformed; preserve evidence")
-		}
-	}
-	binding := map[string]string{"selectionSHA": fmt.Sprintf("%x", sha256.Sum256(data))}
-	for key, selected := range map[string]string{"rootID": root, "prefixID": selection.Prefix, "agentID": selection.Agent} {
-		id, err := userRecoveryID(selected)
-		if err != nil {
-			return err
-		}
-		binding[key] = id
-	}
-	for _, name := range []string{"prefix.preimage", "agent.preimage"} {
-		stamp, err := userTreeStamp(filepath.Join(filepath.Dir(selectionPath), name))
-		if err != nil {
-			return err
-		}
-		identity += ":" + stamp
-	}
-	identity += ":" + binding["prefixID"] + ":" + binding["agentID"]
-	token := fmt.Sprintf("%x", sha256.Sum256(append(data, []byte(identity)...)))
-	if args[1] == "inspect" {
-		_, err := fmt.Fprintf(stdout, "Recovery confirmation: %s\nSelected prefix: %q\nSelected agent: %q\n", token, selection.Prefix, selection.Agent)
-		return err
-	}
-	if args[1] != token {
-		return errors.New("fresh recovery confirmation differs")
-	}
-	node := filepath.Join(root, "runtime/node/bin/node")
-	if _, err := privateNativeFile(ctx, node, 0700, privateNativeNodeSize, privateNativeNodeSHA); err != nil {
-		return err
-	}
-	helperBytes, err := assets.ReadUserHelper()
-	if err != nil {
-		return err
-	}
-	helper := filepath.Join(root, "provision.mjs")
-	if _, err := privateNativeFile(ctx, helper, 0400, int64(len(helperBytes)), fmt.Sprintf("%x", sha256.Sum256(helperBytes))); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-	authority, err := json.Marshal(binding)
-	if err != nil {
-		return err
-	}
-	cmd := exec.CommandContext(ctx, node, helper, root, selection.Prefix, selection.Agent, selection.FinalPrefix, selection.FinalRoot, "shared", "restore", string(authority))
-	cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, selection.Prefix, selection.Agent)
-	_, err = privateRun(ctx, cmd, cancel)
-	if err != nil {
-		failure := privateError("uncertain", err)
-		failure.Workspace, failure.Destination = root, selection.Prefix
-		return failure // The restore command may already have moved shared data.
-	}
-	_, err = fmt.Fprintf(stdout, "Restored selected shared preimages; preserve recovery evidence at %q\n", root)
-	return err
 }
 
 const userBinarySize int64 = 17109176

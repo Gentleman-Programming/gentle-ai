@@ -39,6 +39,10 @@ func userIdentity(path string) (string, error) {
 
 // This is a consent preimage, not a replacement for recoverable snapshots.
 // Inventory both trees twice at inspection; never follow an escaping symlink.
+// Every entry passes the darwin metadata guard as foreign, like the selected
+// roots in privateDirectory: the operator's trees and the saved preimages that
+// copy them may carry an approved download's quarantine, never hidden grants
+// or flags. Linux has no such metadata.
 func userTreeStamp(root string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -62,6 +66,9 @@ func userTreeStamp(root string) (string, error) {
 		before := info.Sys().(*syscall.Stat_t)
 		if int(before.Uid) != os.Getuid() {
 			return errors.New("selection contains foreign owner")
+		}
+		if err := privateExtendedMetadata(path, info, false); err != nil {
+			return err
 		}
 		content := ""
 		switch {

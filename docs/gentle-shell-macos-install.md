@@ -1,6 +1,6 @@
 # Gentle Shell on macOS
 
-**Source candidate only, not a release guide.** On an Apple silicon Mac with macOS 14 or newer, `gentle-ai shell install` creates a **Separate** private Gentle Shell: stock Pi 1.0.0, Gentle/native 4.0.0 and Node 24.18.0/npm, all from pinned artifacts. Shared mode and recovery are not available on macOS in this version. Native macOS qualification evidence is still pending.
+**Source candidate only, not a release guide.** On an Apple silicon Mac with macOS 14 or newer, `gentle-ai shell install` creates a private Gentle Shell in **Separate** or **Shared** mode: stock Pi 1.0.0, Gentle/native 4.0.0 and Node 24.18.0/npm, all from pinned artifacts. `gentle-ai shell recover` restores Shared preimages. Modes, confirmations and recovery follow the [Linux contract](gentle-shell-linux-install.md); this page lists what differs on macOS. Native macOS qualification evidence is still pending.
 
 ## Quick path
 
@@ -9,6 +9,8 @@ gentle-ai shell install --target /owned/private-parent/shell --mode separate --i
 gentle-ai shell install --target /owned/private-parent/shell --mode separate --confirm PRINTED_SHA256
 /owned/private-parent/shell/bin/pi --version
 ```
+
+For Shared, use `--mode shared` and supply `--prefix /owned/selected-prefix --agent /owned/selected-agent` on **both** calls.
 
 Or run `gentle-ai shell install` with no flags for the installer TUI: Enter reviews, `y` confirms and closes the TUI before installation starts, Escape aborts. Launch `TARGET/bin/gentle-shell` or `TARGET/bin/pi`; `TARGET/bin/gentle-shell install` reopens the installer.
 
@@ -20,19 +22,29 @@ Or run `gentle-ai shell install` with no flags for the installer TUI: Enter revi
 | User | Run as the target user. Root or `sudo` refuses. |
 | Target parent | Owned by you, mode `0700`, on one filesystem. Absolute paths using only ASCII letters, digits, `/`, `_`, `.` and `-`. |
 | Path spelling | `/tmp`, `/var` and `/etc` are resolved once to their `/private/...` spelling. Any other symbolic link in the path refuses. |
-| Extended metadata | Owned entries refuse BSD flags (other than nodump, hidden, tracked and APFS compression), ACLs with any allow entry, and `com.apple.quarantine`. Deny-only ACLs and `com.apple.provenance` are accepted. |
+| Extended metadata | Every checked entry refuses BSD flags (other than nodump, hidden, tracked and APFS compression) and ACLs with any allow entry. Deny-only ACLs and `com.apple.provenance` are accepted. `com.apple.quarantine` refuses on entries the installer creates; your Shared prefix and agent, their saved preimages and the running `gentle-ai` are yours, so a quarantine left by an approved download is accepted there. |
 | Supervisor binary | The running `gentle-ai`, after resolving links such as a Homebrew symlink, and every ancestor directory must be owned by you or root and not group/other writable. Only the root-owned sticky `/private/tmp` is excepted. |
-| Durability | The installer flushes its own writes and directory entries with `F_FULLFSYNC`. A filesystem without `F_FULLFSYNC` (some network or FUSE mounts) refuses installation instead of risking unflushed data. |
+| Durability | The installer's own Go writes and directory entries flush with `F_FULLFSYNC`; a filesystem without it (some network or FUSE mounts) refuses installation instead of risking unflushed data. The Node provisioning helper (prefix, settings and recovery copies) uses Node's `fsync`, which tries `F_FULLFSYNC` and falls back to a weaker barrier or plain `fsync` where the filesystem lacks it. |
 
 ## Modes on macOS
 
-| Mode | macOS status |
+| Mode | Selection and effects |
 | --- | --- |
-| Separate | Available. New private prefix, runtime, HOME, agent and state; an existing personal Pi is untouched. |
-| Shared (`--mode shared`) | Not yet available. Refuses at inspection, before any change. |
-| `gentle-ai shell recover` | Not yet available. It restores Shared preimages, so it refuses too. |
+| Separate | New private prefix, runtime, HOME, agent and state; an existing personal Pi is untouched. |
+| Shared (`--mode shared`) | Explicit existing owned global Pi prefix and agent on the target's filesystem; both new bindings use those same objects. Inspect previews the `settings.json` `packages` and `npmCommand` changes exactly as on Linux. |
 
-The installer does not modify PATH or shell files, replace an unrelated `pi`, or require a root installation. It also writes pinned `fd` and `rg` into the private `AGENT/bin`, which stock Pi prefers over PATH.
+The installer does not modify PATH or shell files, replace an unrelated `pi`, or require a root installation. It writes pinned `fd` and `rg` (the `aarch64-apple-darwin` builds below) into `AGENT/bin`, which stock Pi prefers over PATH: the private agent (Separate) or the selected `--agent` (Shared). Shared never replaces personal tools: an existing `fd` or `rg` (including links), or an `AGENT/bin` that is not an owned physical `0700`/`0755` directory with clean metadata, refuses at inspect and confirmation before any change.
+
+## Undo Shared changes
+
+Use the **actual installed TARGET**, never a prefix or agent:
+
+```sh
+gentle-ai shell recover TARGET inspect
+gentle-ai shell recover TARGET PRINTED_CONFIRMATION
+```
+
+Recovery is the Linux contract: it needs intact saved preimages and fresh printed consent, restores the **whole prefix and agent**, moves the current contents to a retained quarantine beside the preimages, and is not uninstall. If a Shared installation fails as uncertain before TARGET exists, use the printed `WORKSPACE/installed` as ROOT. **Recover before deleting TARGET**; see [Undo Shared changes](gentle-shell-linux-install.md#undo-shared-changes) for the full rules. On macOS the restore command runs under the same process-group containment as installation.
 
 ## Containment: what it is and what it is not
 
