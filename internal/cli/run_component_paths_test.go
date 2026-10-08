@@ -1761,7 +1761,7 @@ func TestComponentPathsOpenCodeGentleLogoMatchesSelectedAdapter(t *testing.T) {
 			filepath.Join(home, ".config", "opencode", "tui.jsonc"),
 		}},
 	} {
-		paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentOpenCodeGentleLogo)
+		paths := verificationComponentPaths(home, "", ScopeGlobal, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentOpenCodeGentleLogo)
 		if len(paths) != len(tt.want) {
 			t.Fatalf("%q paths = %v, want %v", tt.agent, paths, tt.want)
 		}

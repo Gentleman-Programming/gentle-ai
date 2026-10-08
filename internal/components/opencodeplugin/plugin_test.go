@@ -470,6 +470,82 @@ func TestInstallOnV1RestoresPreExistingBundleWhenRegistrationFails(t *testing.T)
 	assertRestoredSourceMode(t, bundlePath, originalInfo.Mode())
 }
 
+// TestInstallOnV2RefusesMalformedOpenCodeJSON pins finding: an unparseable
+// opencode.json must surface its parse error and must never be rewritten
+// from an empty base — the install fails and rolls everything back.
+func TestInstallOnV2RefusesMalformedOpenCodeJSON(t *testing.T) {
+	home := t.TempDir()
+	setProbe(t, "2.0.4")
+	configDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	malformed := []byte("{ not json")
+	if err := os.WriteFile(filepath.Join(configDir, "opencode.json"), malformed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Install(home, model.OpenCodePluginGentleLogo)
+	if err == nil {
+		t.Fatal("Install() error = nil, want the opencode.json parse failure")
+	}
+	if !strings.Contains(err.Error(), "opencode.json") {
+		t.Fatalf("error %v does not name the unparseable config", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(configDir, "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(malformed) {
+		t.Fatalf("opencode.json = %q, want unchanged %q", data, malformed)
+	}
+	for _, path := range []string{
+		filepath.Join(configDir, "tui-plugins", "gentle-logo.js"),
+		filepath.Join(configDir, "tui-plugins", "gentle-logo", "tui.js"),
+		filepath.Join(configDir, "cli.json"),
+	} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("%s still exists after rollback; stat err = %v", path, statErr)
+		}
+	}
+}
+
+// TestStaleRetirementPreservesUnrelatedEntriesWithMatchingBasenames pins the
+// stale-retirement filter's scope: only entries resolving inside the managed
+// tui-plugins directory (plus the known relative entries) are gentle-logo
+// owned. Unrelated plugins in other directories that merely share a basename
+// or suffix must survive.
+func TestStaleRetirementPreservesUnrelatedEntriesWithMatchingBasenames(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staleEntry := filepath.ToSlash(filepath.Join(configDir, "tui-plugins", "gentle-logo.tsx"))
+	if err := os.WriteFile(filepath.Join(configDir, "tui.json"), []byte(`{"$schema":"https://opencode.ai/tui.json","plugin":["user-plugin","other/gentle-logo.js","shared/gentle-logo.tsx","`+staleEntry+`"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Install(home, model.OpenCodePluginGentleLogo); err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+
+	var tuiConfig struct {
+		Plugin []string `json:"plugin"`
+	}
+	decodeFile(t, filepath.Join(configDir, "tui.json"), &tuiConfig)
+	want := []string{"user-plugin", "other/gentle-logo.js", "shared/gentle-logo.tsx", gentleLogoV1Entry}
+	if len(tuiConfig.Plugin) != len(want) {
+		t.Fatalf("tui.json plugin = %#v, want %v", tuiConfig.Plugin, want)
+	}
+	for i := range want {
+		if tuiConfig.Plugin[i] != want[i] {
+			t.Fatalf("tui.json plugin = %#v, want %v", tuiConfig.Plugin, want)
+		}
+	}
+}
+
 func TestPriorFileRestoreReportsRemovalFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permissions do not deny file removal on windows")
@@ -493,6 +569,34 @@ func TestPriorFileRestoreReportsRemovalFailure(t *testing.T) {
 	prior := priorFile{}
 	if err := prior.restore(target); err == nil {
 		t.Fatal("restore() error = nil, want removal failure")
+	}
+}
+
+// TestFileExistsDistinguishesMissingFromStatErrors pins the helper contract:
+// a genuinely missing path reports (false, nil) while any other stat failure
+// (invalid path, permission, I-O) is propagated instead of being read as
+// absence. Windows cannot deny stat via directory permissions, so an invalid
+// path (NUL byte) stands in for the unreadable class.
+func TestFileExistsDistinguishesMissingFromStatErrors(t *testing.T) {
+	home := t.TempDir()
+
+	exists, err := fileExists(filepath.Join(home, "missing.json"))
+	if err != nil {
+		t.Fatalf("fileExists(missing) error = %v, want clean false", err)
+	}
+	if exists {
+		t.Fatal("fileExists(missing) = true, want false")
+	}
+
+	exists, err = fileExists(filepath.Join(home, "bad\x00name"))
+	if err == nil {
+		t.Fatal("fileExists(invalid path) error = nil, want the stat error")
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("fileExists(invalid path) error %v must not be classified as absence", err)
+	}
+	if exists {
+		t.Fatal("fileExists(invalid path) = true, want false")
 	}
 }
 

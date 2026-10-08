@@ -1420,7 +1420,7 @@ func TestComponentPathsIncludeGentleLogoOnV2Runtime(t *testing.T) {
 		Agents:     []model.AgentID{model.AgentOpenCode},
 		Components: []model.ComponentID{model.ComponentOpenCodeGentleLogo},
 	}
-	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeGlobal, selection, resolveAdapters([]model.AgentID{model.AgentOpenCode}), model.ComponentOpenCodeGentleLogo)
+	paths := verificationComponentPaths(home, workspace, ScopeGlobal, selection, resolveAdapters([]model.AgentID{model.AgentOpenCode}), model.ComponentOpenCodeGentleLogo)
 
 	want := []string{
 		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.js"),
@@ -1436,6 +1436,30 @@ func TestComponentPathsIncludeGentleLogoOnV2Runtime(t *testing.T) {
 	}
 	if slices.Contains(paths, filepath.Join(home, ".config", "opencode", "tui.json")) {
 		t.Fatal("V2 target list must not require tui.json when it does not exist")
+	}
+}
+
+// TestBackupTargetsFailClosedWhenLogoFileSetUnavailable pins the fail-closed
+// backup contract (issue #5364 corrections): when the gentle-logo managed
+// file set cannot be computed (here: an unresolvable runtime), backup target
+// building returns the error instead of a partial snapshot list.
+func TestBackupTargetsFailClosedWhenLogoFileSetUnavailable(t *testing.T) {
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("not-a-version")}, nil
+	}
+
+	home := t.TempDir()
+	targets, err := backupTargets(home, "", ScopeGlobal, model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentOpenCodeGentleLogo},
+	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}, OrderedComponents: []model.ComponentID{model.ComponentOpenCodeGentleLogo}})
+	if err == nil {
+		t.Fatalf("backupTargets() error = nil, want the logo file-set failure; targets = %v", targets)
+	}
+	if len(targets) != 0 {
+		t.Fatalf("backupTargets() = %v with error %v, want no partial target list", targets, err)
 	}
 }
 
@@ -1461,7 +1485,7 @@ func TestComponentPathsIncludeGentleLogoOnV1Runtime(t *testing.T) {
 		Agents:     []model.AgentID{model.AgentOpenCode},
 		Components: []model.ComponentID{model.ComponentOpenCodeGentleLogo},
 	}
-	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeGlobal, selection, resolveAdapters([]model.AgentID{model.AgentOpenCode}), model.ComponentOpenCodeGentleLogo)
+	paths := verificationComponentPaths(home, workspace, ScopeGlobal, selection, resolveAdapters([]model.AgentID{model.AgentOpenCode}), model.ComponentOpenCodeGentleLogo)
 
 	want := []string{
 		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.js"),
