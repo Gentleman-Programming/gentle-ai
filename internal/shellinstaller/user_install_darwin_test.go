@@ -375,6 +375,31 @@ func TestDarwinLaunchLimitsExecInPlaceWithoutSecondGroup(t *testing.T) {
 	}
 }
 
+// Launched Pi, like owned commands, never inherits a launcher's inheritable
+// descriptors.
+func TestDarwinLaunchLimitsSealInheritedDescriptors(t *testing.T) {
+	leaked, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leaked.Close()
+	fd := leaked.Fd()
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_SETFD, 0); errno != 0 {
+		t.Fatal(errno)
+	}
+	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", fmt.Sprintf("if [ -e /dev/fd/%d ]; then echo inherited; fi", fd))
+	cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	limited, err := userLaunchLimits(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := userLaunchGroup(cmd, nil, limited); err != nil || stdout.Len() != 0 {
+		t.Fatalf("launched command inherited launcher descriptor %d: %q, %v", fd, stdout.String(), err)
+	}
+}
+
 // A launched Pi that exits 125 keeps its status; a wrapper that stops before
 // attesting its limits (here its chain is replaced by the bare refusal exit)
 // is a precise refusal.

@@ -189,11 +189,53 @@ func userSupervise(ctx context.Context, limits userLimits, env []string, stdin i
 	return userSuperviseIn(ctx, limits, "", env, stdin, stdout, stderr, argv...)
 }
 
+// userSealInheritedDescriptors marks every descriptor above stderr
+// close-on-exec. Go opens its own descriptors that way, but a launcher (a CI
+// runner agent, a terminal multiplexer) can leave inheritable ones that would
+// otherwise reach owned commands. Linux owned work starts from systemd's clean
+// descriptor table instead.
+func userSealInheritedDescriptors() error {
+	// Names only: stat on /dev/fd entries fails for the listing's own descriptor.
+	directory, err := os.Open("/dev/fd")
+	if err != nil {
+		return privateError("filesystem", err)
+	}
+	names, err := directory.Readdirnames(-1)
+	if closeErr := directory.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return privateError("filesystem", err)
+	}
+	for _, name := range names {
+		fd, err := strconv.Atoi(name)
+		if err != nil || fd < 3 {
+			continue
+		}
+		flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+		if errors.Is(err, unix.EBADF) {
+			continue // The directory listing's own descriptor, already closed.
+		}
+		if err != nil {
+			return privateError("filesystem", err)
+		}
+		if flags&unix.FD_CLOEXEC == 0 {
+			if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, flags|unix.FD_CLOEXEC); err != nil && !errors.Is(err, unix.EBADF) {
+				return privateError("filesystem", err)
+			}
+		}
+	}
+	return nil
+}
+
 // userSuperviseIn is userSupervise in working directory dir; empty inherits
 // the supervisor's.
 func userSuperviseIn(ctx context.Context, limits userLimits, dir string, env []string, stdin io.Reader, stdout, stderr io.Writer, argv ...string) error {
 	if ctx == nil || ctx.Err() != nil {
 		return privateError("canceled", context.Canceled)
+	}
+	if err := userSealInheritedDescriptors(); err != nil {
+		return err
 	}
 	if len(argv) == 0 || !filepath.IsAbs(argv[0]) || filepath.Clean(argv[0]) != argv[0] || limits.Deadline < 0 {
 		return privateError("refused", errors.New("owned command must be an absolute path with a non-negative deadline"))

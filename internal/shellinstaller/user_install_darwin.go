@@ -138,6 +138,9 @@ func userLaunchLimits(cmd *exec.Cmd) (func(error) error, error) {
 	if err := userLimitsEnvironment(cmd.Env); err != nil {
 		return nil, err
 	}
+	if err := userSealInheritedDescriptors(); err != nil {
+		return nil, err
+	}
 	limits, err := userDarwinLimits(0)
 	if err != nil {
 		return nil, err

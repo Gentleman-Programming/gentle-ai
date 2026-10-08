@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -297,6 +298,33 @@ func TestDarwinSuperviseCommandExit125IsNotARefusal(t *testing.T) {
 	probe := `fd=3; while [ $fd -lt 256 ]; do if [ -e /dev/fd/$fd ]; then echo $fd; fi; fd=$((fd+1)); done`
 	if err := userSupervise(context.Background(), limits, nil, nil, &stdout, nil, "/bin/sh", "-c", probe); err != nil || stdout.Len() != 0 {
 		t.Fatalf("command inherited descriptors %q: %v", stdout.String(), err)
+	}
+}
+
+// A launcher (a CI runner agent, a terminal multiplexer) may leave descriptors
+// open without close-on-exec; owned commands must not inherit them.
+func TestDarwinSuperviseDoesNotLeakInheritedDescriptors(t *testing.T) {
+	limits, err := userDarwinLimits(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaked, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leaked.Close()
+	fd := int(leaked.Fd())
+	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, 0); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	probe := fmt.Sprintf(`if [ -e /dev/fd/%d ]; then echo inherited; fi`, fd)
+	if err := userSupervise(context.Background(), limits, nil, nil, &stdout, nil, "/bin/sh", "-c", probe); err != nil || stdout.Len() != 0 {
+		t.Fatalf("owned command inherited launcher descriptor %d: %q, %v", fd, stdout.String(), err)
+	}
+	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+	if err != nil || flags&unix.FD_CLOEXEC == 0 {
+		t.Fatalf("inherited descriptor %d stayed inheritable: flags=%#x, %v", fd, flags, err)
 	}
 }
 
