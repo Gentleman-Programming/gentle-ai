@@ -70,7 +70,7 @@ func TestUserPinParity(t *testing.T) {
 		pattern string
 		want    []string
 	}{
-		{"bootstrap/archive", bootstrap, `(?m)^accepted=([a-f0-9]{64})\nverify_archive\(\) \{\n(?:[^\n]*\n){2}    test "\$\(sha256sum "\$1" \| cut -d ' ' -f1\)" = "\$accepted"`, []string{privateColdSHA}},
+		{"bootstrap/archive", bootstrap, `(?m)^    Linux\)\n        accepted=([a-f0-9]{64}) bytes=57224421\n        sha256=sha256sum$`, []string{privateColdSHA}},
 		{"guest/archive", python, `(?m)^NODE_SHA = '([a-f0-9]{64})'$`, []string{privateColdSHA}},
 		{"guest/archive-check", python, `(?m)^                require\(len\(raw\) == 57224421 and hashlib.sha256\(raw\).hexdigest\(\) == NODE_SHA, 'independent fixture Node pin'\)$`, nil},
 		{"workflow/user-archive", job[1], `(?m)^          printf '%s  %s\\n' ([a-f0-9]{64}) "\$RUNNER_TEMP/node.data" \| sha256sum -c -$`, []string{privateColdSHA}},

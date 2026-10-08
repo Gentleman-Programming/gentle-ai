@@ -3,9 +3,6 @@
 package shellinstaller
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -687,48 +684,6 @@ func userBootstrap(ctx context.Context, root, workspace string) error {
 		return fmt.Errorf("Node bootstrap: %w; bounded output: %s", err, output)
 	}
 	return nil
-}
-
-// Fixed acquisition pins, not mutable latest or independently published checksums.
-// Only this exact regular member is copied; no other archive path is materialized.
-func userToolMember(ctx context.Context, data []byte, pin, member string) ([]byte, error) {
-	if ctx.Err() != nil || len(data) > 32<<20 || fmt.Sprintf("%x", sha256.Sum256(data)) != pin || filepath.IsAbs(member) || filepath.Clean(member) != member || strings.HasPrefix(member, "../") {
-		return nil, privateError("source", ctx.Err())
-	}
-	gz, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	decoded, err := io.ReadAll(io.LimitReader(gz, (32<<20)+1))
-	if err = errors.Join(err, gz.Close(), ctx.Err()); err != nil || len(decoded) > 32<<20 {
-		return nil, privateError("source", err)
-	}
-	reader := tar.NewReader(bytes.NewReader(decoded))
-	var selected []byte
-	for i := 0; ; i++ {
-		h, err := reader.Next()
-		if err == io.EOF && len(selected) > 0 && ctx.Err() == nil {
-			return selected, nil
-		}
-		if err != nil || i >= 4096 || ctx.Err() != nil {
-			return nil, privateError("source", errors.Join(err, ctx.Err()))
-		}
-		if h.Name != member {
-			continue
-		}
-		if selected != nil || (h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA) || h.Size <= 0 || h.Size > 32<<20 {
-			return nil, privateError("source", nil)
-		}
-		selected, err = io.ReadAll(reader)
-		if err != nil || int64(len(selected)) != h.Size {
-			return nil, privateError("source", err)
-		}
-	}
-}
-
-type userToolSource struct {
-	name, repo, tag, stem, pin string
-	size                       int64
 }
 
 var userToolSources = []userToolSource{
