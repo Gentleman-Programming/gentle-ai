@@ -30,7 +30,7 @@ import time
 sys.dont_write_bytecode = True
 
 SCHEMA = 'gentle-shell-macos-qualification/v1'
-# Whole-run budget. The workflow step (25 min) and job (45 min) deadlines nest
+# Whole-run budget. The workflow step (25 min) and job (55 min) deadlines nest
 # around it with margin, so a stuck command is reported here, never by a runner kill.
 WHOLE_RUN_SECONDS = 1320
 INSPECT_SECONDS = 180

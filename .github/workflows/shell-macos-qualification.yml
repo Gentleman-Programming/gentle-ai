@@ -1,7 +1,8 @@
 name: Gentle Shell macOS qualification
 
 # macOS runners bill ~10x Linux minutes (see the Darwin Runtime job in ci.yml),
-# so this native lane runs only when the macOS installer surface changes.
+# so this native lane runs only when the macOS installer surface changes,
+# including the dependency set and the CLI entry that dispatches `shell`.
 on:
   pull_request:
     branches: [main]
@@ -18,6 +19,10 @@ on:
       - 'scripts/normalize-private-optional-platform-closure.mjs'
       - 'e2e/shell-macos-*'
       - 'docs/gentle-shell-macos-install.md'
+      - 'internal/app/app.go'
+      - 'cmd/gentle-ai/main.go'
+      - 'go.mod'
+      - 'go.sum'
       - '.github/workflows/shell-macos-qualification.yml'
   push:
     branches: [main]
@@ -34,14 +39,20 @@ on:
       - 'scripts/normalize-private-optional-platform-closure.mjs'
       - 'e2e/shell-macos-*'
       - 'docs/gentle-shell-macos-install.md'
+      - 'internal/app/app.go'
+      - 'cmd/gentle-ai/main.go'
+      - 'go.mod'
+      - 'go.sum'
       - '.github/workflows/shell-macos-qualification.yml'
   workflow_dispatch:
 
 permissions: {}
 
+# Only superseded pull request runs are cancelled: every push to main keeps
+# its own receipt, because support is declared per exact candidate.
 concurrency:
-  group: shell-macos-qualification-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: shell-macos-qualification-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   macos-native:

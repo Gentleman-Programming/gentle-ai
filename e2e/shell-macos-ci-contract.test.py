@@ -20,6 +20,15 @@ REQUIRED_PATHS = [
     'scripts/bootstrap-gentle-shell-private-node.sh',
     'scripts/provision-gentle-shell-private-global.mjs',
     'scripts/runtime_helpers.go',
+    'scripts/user_helpers.go',
+    'scripts/user-global-graph.mjs',
+    'scripts/user-locks/**',
+    'scripts/complete-generated-lock-sri.mjs',
+    'scripts/normalize-private-optional-platform-closure.mjs',
+    'internal/app/app.go',
+    'cmd/gentle-ai/main.go',
+    'go.mod',
+    'go.sum',
     'e2e/shell-macos-*',
     'docs/gentle-shell-macos-install.md',
     '.github/workflows/shell-macos-qualification.yml',
@@ -117,7 +126,10 @@ class MacOSQualificationContract(unittest.TestCase):
         self.assertEqual(scalar([line for line in self.lines if indent(line) == 0], 'permissions'), '{}')
         self.assertEqual(self.text.count('runs-on:'), 1)
         self.assertEqual(scalar(self.lines, 'runs-on'), 'macos-latest')
-        self.assertIn('cancel-in-progress: true', self.text)
+        # Only superseded pull request runs may be cancelled; each push keeps its own receipt.
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", self.text)
+        self.assertIn('github.event.pull_request.number || github.sha }}', self.text)
+        self.assertNotIn('cancel-in-progress: true', self.text)
         self.assertIn("github.repository == 'Gentleman-Programming/gentle-ai'", self.text)
         self.assertNotIn('actions/checkout', self.text)
         self.assertNotIn('secrets.', self.text)
