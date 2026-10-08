@@ -26,7 +26,7 @@ func userLaunchGroup(cmd *exec.Cmd, stdin io.Reader, readback func(error) error)
 		}
 	}()
 	cmd.WaitDelay = 2 * time.Second
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.Cancel = func() error { return userKillGroup(cmd.Process.Pid, syscall.SIGKILL) }
 	if err := cmd.Start(); err != nil {
 		return err
 	}

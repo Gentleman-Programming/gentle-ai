@@ -68,8 +68,13 @@ func TestLinuxFlowHooksKeepExactBehavior(t *testing.T) {
 	}
 	cmd := exec.CommandContext(context.Background(), "/bin/true", "x")
 	before := append([]string(nil), cmd.Args...)
-	if err := userLaunchLimits(cmd); err != nil || cmd.Path != "/bin/true" || !reflect.DeepEqual(cmd.Args, before) || cmd.SysProcAttr != nil {
+	limited, err := userLaunchLimits(cmd)
+	if err != nil || cmd.Path != "/bin/true" || !reflect.DeepEqual(cmd.Args, before) || cmd.SysProcAttr != nil || cmd.ExtraFiles != nil {
 		t.Fatalf("Linux launch limits hook changed the command: %v %q %q", err, cmd.Path, cmd.Args)
+	}
+	status := &exec.ExitError{}
+	if limited(nil) != nil || limited(status) != error(status) {
+		t.Fatal("Linux launch limits result must return the wait status unchanged")
 	}
 	self, selfErr := userExecutable()
 	want, wantErr := os.Executable()

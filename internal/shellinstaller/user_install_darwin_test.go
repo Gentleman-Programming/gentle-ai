@@ -382,7 +382,8 @@ func TestDarwinOwnedRunSupervisesWithLimitsAndBoundedOutput(t *testing.T) {
 func TestDarwinLaunchLimitsExecInPlaceWithoutSecondGroup(t *testing.T) {
 	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", "ulimit -f; umask; ulimit -t; echo $$ $(ps -o pgid= -p $$)")
 	cmd.Env = []string{"PATH=/usr/bin:/bin"}
-	if err := userLaunchLimits(cmd); err != nil {
+	limited, err := userLaunchLimits(cmd)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if cmd.Path != userLimitsShell || len(cmd.Args) != 7 || cmd.Args[3] != userLimitsName || cmd.Args[4] != "/bin/sh" || cmd.Args[5] != "-c" {
@@ -390,7 +391,7 @@ func TestDarwinLaunchLimitsExecInPlaceWithoutSecondGroup(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	if err := userLaunchGroup(cmd, nil, func(err error) error { return err }); err != nil {
+	if err := userLaunchGroup(cmd, nil, limited); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
@@ -402,8 +403,34 @@ func TestDarwinLaunchLimitsExecInPlaceWithoutSecondGroup(t *testing.T) {
 	}
 	refused := exec.Command("/usr/bin/true")
 	refused.Env = []string{"BASH_FUNC_ulimit%%=() { :; }"}
-	if err := userLaunchLimits(refused); err == nil || refused.Path != "/usr/bin/true" {
+	if _, err := userLaunchLimits(refused); err == nil || refused.Path != "/usr/bin/true" || refused.ExtraFiles != nil {
 		t.Fatalf("limits-altering launch environment accepted: %v", err)
+	}
+}
+
+// A launched Pi that exits 125 keeps its status; a wrapper that stops before
+// attesting its limits (here its chain is replaced by the bare refusal exit)
+// is a precise refusal.
+func TestDarwinLaunchLimitsTellRefusalFromExit125(t *testing.T) {
+	run := func(refuse bool) error {
+		cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", "exit 125")
+		cmd.Env = []string{"PATH=/usr/bin:/bin"}
+		limited, err := userLaunchLimits(cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if refuse {
+			cmd.Args[2] = "exit 125"
+		}
+		return userLaunchGroup(cmd, nil, limited)
+	}
+	var exit *exec.ExitError
+	var failure *PrivateRuntimeError
+	if err := run(false); !errors.As(err, &exit) || exit.ExitCode() != 125 || errors.As(err, &failure) {
+		t.Fatalf("launched exit 125 = %v, want the plain command status", err)
+	}
+	if err := run(true); !errors.As(err, &failure) || failure.Kind != "refused" {
+		t.Fatalf("unattested wrapper exit 125 = %v, want a refusal", err)
 	}
 }
 

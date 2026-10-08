@@ -143,25 +143,34 @@ func userOwnedRun(ctx context.Context, cmd *exec.Cmd, cancel context.CancelFunc)
 // userLaunchLimits applies the darwin rlimits to the launched Pi without a
 // second process group: /bin/sh sets them on itself and execs Node in place,
 // so the single userLaunchGroup group that owns the terminal stays Pi's and
-// its kill reaches Pi. A launched session has no CPU deadline.
-func userLaunchLimits(cmd *exec.Cmd) error {
+// its kill reaches Pi. A launched session has no CPU deadline. The returned
+// result classifies the wait status and must run once on every path after a
+// successful call; with a nil error it only releases the attestation pipe.
+func userLaunchLimits(cmd *exec.Cmd) (func(error) error, error) {
 	if cmd.Err != nil || len(cmd.Args) == 0 || !filepath.IsAbs(cmd.Path) {
-		return privateError("refused", errors.Join(cmd.Err, errors.New("owned launch must name an absolute command")))
+		return nil, privateError("refused", errors.Join(cmd.Err, errors.New("owned launch must name an absolute command")))
 	}
 	if err := userLimitsEnvironment(cmd.Env); err != nil {
-		return err
+		return nil, err
 	}
 	limits, err := userDarwinLimits(0)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	script, err := userLimitsScript(limits)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	witness, err := userLimitsAttach(cmd)
+	if err != nil {
+		return nil, err
 	}
 	cmd.Args = append([]string{userLimitsShell, "-c", script, userLimitsName, cmd.Path}, cmd.Args[1:]...)
 	cmd.Path = userLimitsShell
-	return nil
+	return func(waitErr error) error {
+		defer witness.close()
+		return witness.result(waitErr)
+	}, nil
 }
 
 // The darwin bootstrap stops at a stage (BSD mv cannot rename without

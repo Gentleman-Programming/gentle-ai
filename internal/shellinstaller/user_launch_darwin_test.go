@@ -114,3 +114,16 @@ func TestDarwinKillGroupCountsZombieMembersLikeLinux(t *testing.T) {
 		t.Fatalf("emptied group = %v, want ESRCH", err)
 	}
 }
+
+// The launch group's Cancel runs while the leader may already be a zombie the
+// Wait has not reaped; it must answer as Linux does, not with darwin's EPERM.
+func TestDarwinLaunchGroupCancelSignalsZombieGroupLikeLinux(t *testing.T) {
+	cmd := exec.CommandContext(context.Background(), "/usr/bin/true")
+	if err := userLaunchGroup(cmd, nil, func(err error) error { return err }); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Process = userZombieGroup(t)
+	if err := cmd.Cancel(); err != nil {
+		t.Fatalf("cancel of a zombie-only launch group = %v, want the Linux answer nil", err)
+	}
+}

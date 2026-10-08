@@ -431,8 +431,8 @@ func userOwnedRun(ctx context.Context, cmd *exec.Cmd, cancel context.CancelFunc)
 }
 
 // The launched Pi already runs inside the qualified unit's limits.
-func userLaunchLimits(*exec.Cmd) error {
-	return nil
+func userLaunchLimits(*exec.Cmd) (func(error) error, error) {
+	return func(err error) error { return err }, nil
 }
 
 // /proc/self/exe already names the physical executable.

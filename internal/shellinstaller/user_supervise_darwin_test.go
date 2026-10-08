@@ -203,6 +203,20 @@ func TestDarwinSuperviseRefusesBeforeStart(t *testing.T) {
 		"startup file": func() error {
 			return userSupervise(context.Background(), limits, []string{"BASH_ENV=/dev/null"}, nil, nil, nil, touch...)
 		},
+		// Older bash exports functions as __BASH_FUNC<name>()=...
+		"legacy exported function": func() error {
+			return userSupervise(context.Background(), limits, []string{"__BASH_FUNC<ulimit>()=() { :; }"}, nil, nil, nil, touch...)
+		},
+		"posix startup file": func() error {
+			return userSupervise(context.Background(), limits, []string{"ENV=/dev/null"}, nil, nil, nil, touch...)
+		},
+		// Imported xtrace or errexit state changes how the wrapper chain runs.
+		"shell options": func() error {
+			return userSupervise(context.Background(), limits, []string{"SHELLOPTS=xtrace"}, nil, nil, nil, touch...)
+		},
+		"bash options": func() error {
+			return userSupervise(context.Background(), limits, []string{"BASHOPTS=expand_aliases"}, nil, nil, nil, touch...)
+		},
 	} {
 		if err := run(); err == nil {
 			t.Fatalf("%s: supervise must refuse", name)
@@ -213,26 +227,76 @@ func TestDarwinSuperviseRefusesBeforeStart(t *testing.T) {
 	}
 }
 
+// userRefusableAbove returns a limit an unprivileged process cannot raise to
+// from hard, or false when hard is already unlimited: RLIM_INFINITY plus any
+// headroom is no longer a finite limit.
+func userRefusableAbove(hard uint64) (uint64, bool) {
+	if hard >= unix.RLIM_INFINITY-1000 {
+		return 0, false
+	}
+	return hard + 1000, true
+}
+
+func TestDarwinRefusableLimitAvoidsInfinity(t *testing.T) {
+	for _, hard := range []uint64{unix.RLIM_INFINITY, unix.RLIM_INFINITY - 1, ^uint64(0)} {
+		if value, ok := userRefusableAbove(hard); ok {
+			t.Fatalf("hard limit %#x has no refusable value above it, got %#x", hard, value)
+		}
+	}
+	if value, ok := userRefusableAbove(2666); !ok || value != 3666 {
+		t.Fatalf("finite hard limit 2666 = %d, %v", value, ok)
+	}
+}
+
 func TestDarwinSuperviseWrapperFailsClosedOnRefusedLimit(t *testing.T) {
 	limits, err := userDarwinLimits(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var hard unix.Rlimit
-	if err := unix.Getrlimit(unix.RLIMIT_NPROC, &hard); err != nil {
+	var nproc, nofile unix.Rlimit
+	if err := errors.Join(unix.Getrlimit(unix.RLIMIT_NPROC, &nproc), unix.Getrlimit(unix.RLIMIT_NOFILE, &nofile)); err != nil {
 		t.Fatal(err)
 	}
-	// An unprivileged process cannot raise RLIMIT_NPROC above its hard limit.
-	limits.Processes = hard.Max + 1000
+	// An unprivileged process cannot raise a hard limit; only a finite one has
+	// a value above it.
+	if value, ok := userRefusableAbove(nproc.Max); ok {
+		limits.Processes = value
+	} else if value, ok := userRefusableAbove(nofile.Max); ok {
+		limits.DescriptorsMax = value
+	} else {
+		t.Skip("RLIMIT_NPROC and RLIMIT_NOFILE hard limits are unlimited; no limit can be refused")
+	}
 	marker := filepath.Join(t.TempDir(), "ran")
 	var stderr bytes.Buffer
 	err = userSupervise(context.Background(), limits, nil, nil, nil, &stderr, "/usr/bin/touch", marker)
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 125 {
-		t.Fatalf("refused ulimit = %v, want wrapper exit 125; stderr %q", err, stderr.String())
+	if userSuperviseTestKind(t, err, "refused"); !errors.As(err, &exit) || exit.ExitCode() != 125 {
+		t.Fatalf("refused ulimit = %v, want a refusal wrapping wrapper exit 125; stderr %q", err, stderr.String())
 	}
 	if _, err := os.Lstat(marker); !os.IsNotExist(err) {
 		t.Fatalf("command ran without its limits: %v", err)
+	}
+}
+
+// Exit 125 is also an ordinary command status: once the wrapper attested its
+// limits, the command's own 125 passes through unchanged.
+func TestDarwinSuperviseCommandExit125IsNotARefusal(t *testing.T) {
+	limits, err := userDarwinLimits(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = userSupervise(context.Background(), limits, nil, nil, nil, nil, "/bin/sh", "-c", "exit 125")
+	var exit *exec.ExitError
+	var failure *PrivateRuntimeError
+	if !errors.As(err, &exit) || exit.ExitCode() != 125 || errors.As(err, &failure) {
+		t.Fatalf("command exit 125 = %v, want the plain command status", err)
+	}
+	// The attestation pipe reaches the command under no descriptor number;
+	// bash 3.2 would keep a copy as descriptor 10 after `exec "$@" 3>&-`.
+	var stdout bytes.Buffer
+	probe := `fd=3; while [ $fd -lt 256 ]; do if [ -e /dev/fd/$fd ]; then echo $fd; fi; fd=$((fd+1)); done`
+	if err := userSupervise(context.Background(), limits, nil, nil, &stdout, nil, "/bin/sh", "-c", probe); err != nil || stdout.Len() != 0 {
+		t.Fatalf("command inherited descriptors %q: %v", stdout.String(), err)
 	}
 }
 

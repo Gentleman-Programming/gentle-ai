@@ -594,11 +594,20 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 		return err
 	}
 	cmd := userLaunchCommand(ctx, root, manifest, cli, args)
-	if err := userLaunchLimits(cmd); err != nil {
+	limited, err := userLaunchLimits(cmd)
+	if err != nil {
 		return err
 	}
+	settled := false
+	defer func() {
+		if !settled {
+			_ = limited(nil) // Start failed: release the limits attestation.
+		}
+	}()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	return userLaunchGroup(cmd, stdin, func(err error) error {
+		settled = true
+		err = limited(err)
 		if readbackErr := userVerifyGlobal(context.Background(), root, manifest.Prefix, manifest.Agent, manifest.Prefix, root, manifest.Mode); readbackErr != nil {
 			failure := privateError("uncertain", errors.Join(err, readbackErr))
 			failure.Workspace, failure.Destination = root, manifest.Prefix

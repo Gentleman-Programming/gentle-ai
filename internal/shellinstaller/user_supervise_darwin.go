@@ -99,7 +99,12 @@ func userDarwinLimits(deadline time.Duration) (userLimits, error) {
 
 // userLimitsScript renders only generated decimal literals; the command and its
 // arguments reach the shell as "$@", never as script text. Any refused ulimit
-// stops the chain before exec and exits 125 without running the command.
+// stops the chain before exec and exits 125 without running the command. Once
+// every limit applied, the wrapper attests it on descriptor 3 and closes that
+// descriptor for the command, so userLimitsWitness tells a refused limit from
+// a command that itself exits 125. The close is its own exec: bash 3.2 runs
+// `exec "$@" 3>&-` by saving descriptor 3 as an inheritable descriptor 10 that
+// the command and its descendants would keep.
 // /bin/sh is bash on stock macOS and counts -f in 1024-byte blocks. A host whose
 // /private/var/select/sh is dash refuses -u (fail closed); zsh counts -f in
 // 512-byte blocks, a stricter 2 GiB cap.
@@ -114,8 +119,51 @@ func userLimitsScript(limits userLimits) (string, error) {
 	}
 	// Soft before hard: lowering the hard limit below an inherited soft limit is EINVAL.
 	steps = append(steps, "command ulimit -u "+decimal(limits.Processes), "command ulimit -S -n "+decimal(limits.Descriptors),
-		"command ulimit -H -n "+decimal(limits.DescriptorsMax), "command ulimit -f "+decimal(limits.FileBytes/1024), "command umask 077", `exec "$@"`)
+		"command ulimit -H -n "+decimal(limits.DescriptorsMax), "command ulimit -f "+decimal(limits.FileBytes/1024), "command umask 077",
+		"command printf "+userLimitsAttested+" >&3", "exec 3>&-", `exec "$@"`)
 	return strings.Join(steps, " && ") + "; exit 125", nil
+}
+
+const userLimitsAttested = "limits-applied"
+
+// userLimitsWitness is the attestation pipe of one limits wrapper. Attach it to
+// the command before start; result is its post-Wait classification and close
+// releases both ends on every path.
+type userLimitsWitness struct{ read, write *os.File }
+
+func userLimitsAttach(cmd *exec.Cmd) (*userLimitsWitness, error) {
+	if len(cmd.ExtraFiles) != 0 {
+		return nil, privateError("refused", errors.New("limits wrapper owns descriptor 3"))
+	}
+	read, write, err := os.Pipe()
+	if err != nil {
+		return nil, privateError("start", err)
+	}
+	cmd.ExtraFiles = []*os.File{write}
+	return &userLimitsWitness{read, write}, nil
+}
+
+// result maps a wrapper exit 125 without attestation to a precise refusal; any
+// other status, attested or not, is returned unchanged. The wrapper wrote any
+// attestation before it exited or exec'd, so a bounded read sees it without
+// waiting for EOF from a descendant that might still hold the descriptor.
+func (w *userLimitsWitness) result(waitErr error) error {
+	w.write.Close()
+	attested := make([]byte, len(userLimitsAttested))
+	readErr := w.read.SetReadDeadline(time.Now().Add(time.Second))
+	if readErr == nil {
+		_, readErr = io.ReadFull(w.read, attested)
+	}
+	var exit *exec.ExitError
+	if errors.As(waitErr, &exit) && exit.ExitCode() == 125 && (readErr != nil || string(attested) != userLimitsAttested) {
+		return privateError("refused", errors.Join(waitErr, readErr, errors.New("the kernel refused an owned process limit before the command ran")))
+	}
+	return waitErr
+}
+
+func (w *userLimitsWitness) close() {
+	w.read.Close()
+	w.write.Close()
 }
 
 // userLimitsEnvironment refuses variables that make the wrapper shell run code
@@ -164,7 +212,13 @@ func userSuperviseIn(ctx context.Context, limits userLimits, dir string, env []s
 	// A nil Env would inherit the supervisor's environment; owned work gets exactly env.
 	cmd.Env = append([]string{}, env...)
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = dir, stdin, stdout, stderr
+	witness, err := userLimitsAttach(cmd)
+	if err != nil {
+		return err
+	}
+	defer witness.close()
 	return userLaunchGroup(cmd, stdin, func(waitErr error) error {
+		waitErr = witness.result(waitErr)
 		switch {
 		case errors.Is(waitErr, exec.ErrWaitDelay):
 			// The group is empty, yet something outside it still holds the owned stdio.
