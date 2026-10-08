@@ -136,6 +136,16 @@ func isExclusivePiCodeGraphPending(err error) bool {
 	return false
 }
 
+// piCodeGraphConfiguredOutcome maps a verification failure into the status
+// contract. Only the exclusive pending sentinel reports configured: the MCP
+// capability was validated and the pending manual action remains authoritative.
+func piCodeGraphConfiguredOutcome(err error) (bool, string) {
+	if isExclusivePiCodeGraphPending(err) {
+		return true, piCodeGraphPendingAction
+	}
+	return false, err.Error()
+}
+
 // PiCodeGraphEffectiveMCPProbe initializes the configured MCP server through
 // the installed Pi adapter contract and returns its observed tools/list data.
 type PiCodeGraphEffectiveMCPProbe func(mcpPath string) (PiCodeGraphMCPProbeResult, error)
@@ -265,13 +275,10 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 			probe = probePiCodeGraphMCP
 		}
 	}
-	if err = verifyPiCodeGraphWithProbe(effectiveMCPPath, result.Children, probe); err != nil {
-		result, err = PreservePiCodeGraphPending(result, err)
-		if err != nil {
-			return result, err
-		}
-	} else {
-		result.MCP, err = verifyPiMCPWithProbe(effectiveMCPPath, probe)
+	verification, verifyErr := verifyPiCodeGraphWithProbe(effectiveMCPPath, result.Children, probe)
+	result.MCP = verification
+	if verifyErr != nil {
+		result, err = PreservePiCodeGraphPending(result, verifyErr)
 		if err != nil {
 			return result, err
 		}
@@ -445,30 +452,27 @@ func stripPiCodeGraphBlocks(body string) (string, error) {
 	return body, nil
 }
 
-func verifyPiCodeGraph(mcpPath string, children []PiCodeGraphChild) error {
+func verifyPiCodeGraph(mcpPath string, children []PiCodeGraphChild) (PiCodeGraphMCPVerification, error) {
 	return verifyPiCodeGraphWithProbe(mcpPath, children, piCodeGraphEffectiveMCPProbe)
 }
 
-func verifyPiCodeGraphWithProbe(mcpPath string, children []PiCodeGraphChild, probe PiCodeGraphEffectiveMCPProbe) error {
+func verifyPiCodeGraphWithProbe(mcpPath string, children []PiCodeGraphChild, probe PiCodeGraphEffectiveMCPProbe) (PiCodeGraphMCPVerification, error) {
 	for _, child := range children {
 		if child.Classification == PiChildMisconfigured {
-			return fmt.Errorf("Pi child %q is misconfigured: %s", child.Name, child.Reason)
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi child %q is misconfigured: %s", child.Name, child.Reason)
 		}
 		if child.Classification == PiChildUnavailable {
 			continue
 		}
 		body, err := os.ReadFile(child.Target)
 		if err != nil || !strings.Contains(string(body), piCodeGraphGuidanceMarker) {
-			return fmt.Errorf("Pi child %q lacks CodeGraph lazy-init guidance", child.Name)
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi child %q lacks CodeGraph lazy-init guidance", child.Name)
 		}
 		if child.Classification == PiChildCompatible && (!strings.Contains(string(body), piCodeGraphToolMarker) || !slices.Contains(child.Tools, "bash") || !slices.Contains(child.Tools, "mcp")) {
-			return fmt.Errorf("Pi child %q lacks verified CodeGraph tools", child.Name)
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi child %q lacks verified CodeGraph tools", child.Name)
 		}
 	}
-	if _, err := verifyPiMCPWithProbe(mcpPath, probe); err != nil {
-		return err
-	}
-	return nil
+	return verifyPiMCPWithProbe(mcpPath, probe)
 }
 
 func verifyPiMCP(mcpPath string) (PiCodeGraphMCPVerification, error) {
@@ -671,8 +675,9 @@ func inspectPiCodeGraph(homeDir, workspaceDir string) (bool, string, []PiCodeGra
 		if _, err := os.Stat(paths.Manifest); err != nil {
 			return false, "no effective Pi children were discovered and no Gentle-AI ownership record exists", nil
 		}
-		if err := verifyPiCodeGraph(paths.MCPConfig, nil); err != nil {
-			return false, err.Error(), nil
+		if _, err := verifyPiCodeGraph(paths.MCPConfig, nil); err != nil {
+			configured, reason := piCodeGraphConfiguredOutcome(err)
+			return configured, reason, nil
 		}
 		return true, "verified Pi MCP transport; no effective children were discovered", nil
 	}
@@ -699,8 +704,9 @@ func inspectPiCodeGraph(homeDir, workspaceDir string) (bool, string, []PiCodeGra
 		}
 		reports = append(reports, PiCodeGraphChild{Name: child.Name, Source: child.Source, Target: child.Target, Tools: tools, Classification: classification})
 	}
-	if err := verifyPiCodeGraph(paths.MCPConfig, reports); err != nil {
-		return false, err.Error(), reports
+	if _, err := verifyPiCodeGraph(paths.MCPConfig, reports); err != nil {
+		configured, reason := piCodeGraphConfiguredOutcome(err)
+		return configured, reason, reports
 	}
 	return true, "verified Pi MCP transport and every effective child", reports
 }
