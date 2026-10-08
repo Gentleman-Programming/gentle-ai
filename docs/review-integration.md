@@ -125,7 +125,7 @@ Without the flags, START and the persisted authority are unchanged. Authority th
 The agent names the 4R lenses pertinent to what it touched and how, instead of taking the tier default (one `review-reliability` lens for `medium`, all four for `high`). `--lenses` takes a comma-separated list of `risk`, `resilience`, `readability`, and `reliability` (or their `review-` names). `--lenses-reason` is a non-empty one-line reason of at most 500 bytes. Both flags or neither, each at most once, never together with `--focus`.
 
 - START runs exactly the named lenses, in canonical 4R order, on a `medium` or `high` candidate. A `high` candidate may run fewer than four. A candidate that selects no lenses (structural readback) refuses a selection.
-- START freezes the reason with the authority (`lens_selection_reason` in the state and in its START binding) and binds it into the capture phase revision. Replaying START on the same lineage with a different selection is an `atomic_start_conflict`.
+- START freezes the reason with the authority (`lens_selection_reason` in the state and in its START binding) and binds it into the capture phase revision. Replaying START on an active lineage keeps its frozen selection: a resume that names a different selection or reason replays the existing authority and returns the frozen `selected_lenses`. Any other immutable difference is still an `atomic_start_conflict`.
 - Recovery successors inherit the selection and its reason. A relayed consent answer repeats both flags.
 
 Without the flags, START keeps the tier default and the persisted authority is unchanged. Authority that carries a selection is not readable by older binaries; see the request-context compatibility note above.

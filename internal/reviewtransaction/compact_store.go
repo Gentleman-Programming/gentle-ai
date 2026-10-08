@@ -2637,3 +2637,26 @@ func compactTransportDigest(transport CompactTransport) string {
 	sum := sha256.Sum256(append([]byte("gentle-ai.review-transport/v2\x00"), payload...))
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
+
+// AdoptFrozenLensSelection makes a resumed START keep the lens selection its
+// active lineage froze. When the record is an active atomic START authority
+// and the request differs from its frozen binding only in the agent's lens
+// selection (selected lenses and their reason), the request adopts the frozen
+// selection so the exact atomic START replays instead of conflicting. Any
+// other immutable difference is left untouched and still conflicts.
+func (request *CompactAtomicStartRequest) AdoptFrozenLensSelection(record CompactRecord) bool {
+	existing := record.State.InitialAtomicStart
+	if existing == nil || record.HistoricalCompat || !compactAtomicStartActive(record.State.State) {
+		return false
+	}
+	candidate := cloneCompactAtomicStartBinding(request.Binding)
+	candidate.SelectedLenses = append([]string(nil), existing.SelectedLenses...)
+	candidate.LensSelectionReason = existing.LensSelectionReason
+	if compactAtomicStartMismatch(*existing, candidate) != "" || compactAtomicStartMismatch(*existing, request.Binding) == "" {
+		return false
+	}
+	request.Binding = candidate
+	request.State.SelectedLenses = append([]string(nil), existing.SelectedLenses...)
+	request.State.LensSelectionReason = existing.LensSelectionReason
+	return true
+}

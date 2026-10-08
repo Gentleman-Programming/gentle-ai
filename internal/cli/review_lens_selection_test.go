@@ -17,7 +17,10 @@ const lensSelectionReasonFixture = "changes credential parsing and the retry loo
 // the agent chooses the pertinent 4R lenses from what it touched and how, on
 // any reviewed tier. START runs exactly those lenses in canonical order,
 // freezes the selection reason with the authority and its START binding, and
-// resuming the lineage with another selection is a conflict.
+// resuming the lineage keeps that frozen selection: a resume that names
+// another selection replays the existing authority instead of conflicting
+// (gentle-shell#1207 field report), while any other immutable difference
+// still conflicts.
 func TestReviewStartRunsTheLensesTheAgentSelected(t *testing.T) {
 	for _, tt := range []struct {
 		name, lineage string
@@ -66,15 +69,33 @@ func TestReviewStartRunsTheLensesTheAgentSelected(t *testing.T) {
 			}
 
 			output.Reset()
-			conflicting := append([]string{
+			resumed := append([]string{
+				"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", started.LineageID,
+				"--lenses", "readability", "--lenses-reason", "a different reason the resuming agent wrote",
+			}, tt.extra[2:]...)
+			if err := RunReview(boundNegotiatedStartArgs(t, resumed), &output); err != nil {
+				t.Fatalf("resume with another selection did not replay the lineage: %v\n%s", negotiatedReviewStartFailure(err, output.String()), output.String())
+			}
+			replayed := decodeNegotiatedReviewStart(t, output.Bytes())
+			if replayed.LineageID != started.LineageID || !reflect.DeepEqual(replayed.SelectedLenses, tt.wantLenses) {
+				t.Fatalf("resume = lineage %q lenses %v, want %q with the frozen %v", replayed.LineageID, replayed.SelectedLenses, started.LineageID, tt.wantLenses)
+			}
+			after := loadRequestContextRecord(t, repo, started.LineageID)
+			if after.Revision != record.Revision || after.State.LensSelectionReason != lensSelectionReasonFixture {
+				t.Fatalf("resume rewrote the frozen authority: revision changed=%v reason %q", after.Revision != record.Revision, after.State.LensSelectionReason)
+			}
+
+			output.Reset()
+			conflicting := []string{
 				"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", started.LineageID,
 				"--lenses", "readability", "--lenses-reason", lensSelectionReasonFixture,
-			}, tt.extra[2:]...)
+				"--escalate-item", "1", "--escalate-reason", "a different escalation on resume",
+			}
 			err := RunReview(boundNegotiatedStartArgs(t, conflicting), &output)
 			if err == nil || !strings.Contains(err.Error(), "atomic_start_conflict") {
-				t.Fatalf("START resumed with a different selection: %v\n%s", err, output.String())
+				t.Fatalf("resume with another immutable field did not conflict: %v\n%s", err, output.String())
 			}
-			if after := loadRequestContextRecord(t, repo, started.LineageID); after.Revision != record.Revision {
+			if final := loadRequestContextRecord(t, repo, started.LineageID); final.Revision != record.Revision {
 				t.Fatal("a refused resume rewrote the frozen authority")
 			}
 		})
