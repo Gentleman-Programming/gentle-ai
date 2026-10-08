@@ -34,12 +34,26 @@ func AssetDirectory(agent model.AgentID) (string, error) {
 	return major.PluginAssetDirectory()
 }
 
+// UserOwnedPathError reports a plugin path whose bytes or type Gentle AI cannot
+// prove it wrote. The path is preserved; callers may scope the refusal to the
+// plugin convergence instead of aborting unrelated work (issue #5393).
+type UserOwnedPathError struct {
+	Path    string
+	message string
+}
+
+func (e *UserOwnedPathError) Error() string { return e.message }
+
+func userOwnedPath(path, format string) error {
+	return &UserOwnedPathError{Path: path, message: fmt.Sprintf(format, path)}
+}
+
 // ValidateReplacement refuses, before any plugin changes, every path Install
 // would replace or remove unless it is a regular file holding bytes a Gentle AI
 // release shipped for that name. Any other bytes are user-owned.
 func ValidateReplacement(dir string, agent model.AgentID) error {
 	if info, err := os.Lstat(dir); err == nil && !info.IsDir() {
-		return fmt.Errorf("OpenCode plugin directory %s is not a directory; user path preserved; move or delete it to let Gentle AI install its managed plugins", dir)
+		return userOwnedPath(dir, "OpenCode plugin directory %s is not a directory; user path preserved; move or delete it to let Gentle AI install its managed plugins")
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -53,14 +67,14 @@ func ValidateReplacement(dir string, agent model.AgentID) error {
 			return err
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("OpenCode plugin %s is not a regular file; user path preserved; move or delete it to let Gentle AI install its managed plugins", path)
+			return userOwnedPath(path, "OpenCode plugin %s is not a regular file; user path preserved; move or delete it to let Gentle AI install its managed plugins")
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
 		if !ReleasedPlugin(name, data) {
-			return fmt.Errorf("OpenCode plugin %s does not match any Gentle AI release; custom bytes preserved; move or delete it to let Gentle AI install its managed plugins", path)
+			return userOwnedPath(path, "OpenCode plugin %s does not match any Gentle AI release; custom bytes preserved; move or delete it to let Gentle AI install its managed plugins")
 		}
 	}
 	return nil

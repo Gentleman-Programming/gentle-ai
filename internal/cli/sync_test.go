@@ -7254,3 +7254,46 @@ func TestPostSyncVerificationRequiresKilocodeRetiredPluginRemoved(t *testing.T) 
 	}
 	t.Fatalf("no post-sync check for retired Kilocode plugin %s; checks = %v", stale, report.Checks)
 }
+
+// Issue #5393: a hand-edited managed OpenCode plugin is refused and preserved,
+// but the refusal is scoped to that agent's managed plugins. Every other sync
+// step still runs, and the run ends as a partial sync naming the plugin.
+func TestSyncDriftedOpenCodePluginIsScopedAndTheRestOfSyncRuns(t *testing.T) {
+	home, _ := partialSyncTestHome(t, "1.18.30", nil)
+	if _, err := RunSync([]string{"--agents", "claude-code,opencode"}); err != nil {
+		t.Fatalf("first RunSync() error = %v", err)
+	}
+	plugin := filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts")
+	drifted := append([]byte(readTextFile(t, plugin)), []byte("// my local edit\n")...)
+	mustWriteFile(t, plugin, drifted)
+	claudePrompt := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.Remove(claudePrompt); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := RunSync([]string{"--agents", "claude-code,opencode"})
+	var partial *PartialSyncError
+	if !errors.As(err, &partial) {
+		t.Fatalf("sync error = %v, want *PartialSyncError", err)
+	}
+	for _, want := range []string{"opencode managed plugins were skipped", plugin, "does not match any Gentle AI release", "then re-run `gentle-ai sync`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("partial sync error missing %q: %s", want, err)
+		}
+	}
+	if got, readErr := os.ReadFile(plugin); readErr != nil || !bytes.Equal(got, drifted) {
+		t.Errorf("drifted plugin bytes were not preserved: %v", readErr)
+	}
+	if _, statErr := os.Stat(claudePrompt); statErr != nil {
+		t.Errorf("a later sync step did not run after the plugin refusal: %v", statErr)
+	}
+	if len(result.SkippedAgents) != 1 || result.SkippedAgents[0].Agent != model.AgentOpenCode || result.SkippedAgents[0].Part != "managed plugins" {
+		t.Errorf("skipped agents = %#v, want OpenCode managed plugins", result.SkippedAgents)
+	}
+	report := RenderSyncReport(result)
+	for _, want := range []string{"Agents skipped: opencode (managed plugins)", "does not match any Gentle AI release"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("sync report missing %q:\n%s", want, report)
+		}
+	}
+}
