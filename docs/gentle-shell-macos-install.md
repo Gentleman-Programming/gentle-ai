@@ -1,6 +1,6 @@
 # Gentle Shell on macOS
 
-**Source candidate only, not a release guide.** On an Apple silicon Mac with macOS 14 or newer, `gentle-ai shell install` creates a private Gentle Shell in **Separate** or **Shared** mode: stock Pi 1.0.0, Gentle/native 4.0.0 and Node 24.18.0/npm, all from pinned artifacts. `gentle-ai shell recover` restores Shared preimages. Modes, confirmations and recovery follow the [Linux contract](gentle-shell-linux-install.md); this page lists what differs on macOS. Native macOS qualification evidence is still pending.
+**Source candidate only, not a release guide.** On an Apple silicon Mac with macOS 14 or newer, `gentle-ai shell install` creates a private Gentle Shell in **Separate** or **Shared** mode: stock Pi 1.0.0, Gentle/native 4.0.0 and Node 24.18.0/npm, all from pinned artifacts. `gentle-ai shell recover` restores Shared preimages. Modes, confirmations and recovery follow the [Linux contract](gentle-shell-linux-install.md); this page lists what differs on macOS. Support is declared only by a passing [native macOS qualification](evidence/shell-macos-install-qualification.md) receipt for the exact candidate.
 
 ## Quick path
 
