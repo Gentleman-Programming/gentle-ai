@@ -484,15 +484,20 @@ func TestInstallGentleLogoWritesLocalTUIPluginAndRegistersAbsolutePath(t *testin
 	for _, snippet := range []string{
 		`id = "gentle-logo"`,
 		`home_logo`,
-		`const plugin = { id: "gentle-logo", tui }`,
-		`export default plugin`,
+		// V2 module shape (issue #5364): Plugin.define default export whose
+		// shim maps setup onto the server entry the V2 loader validates.
+		`Plugin.define({ id, setup, tui })`,
+		`export default`,
+		`server: mod.setup`,
+		// Defensive slot registration: never assume the V2 slots API exists.
+		`api.slots && typeof api.slots.register === "function"`,
 	} {
 		if !strings.Contains(pluginContent, snippet) {
 			t.Fatalf("plugin missing snippet %q", snippet)
 		}
 	}
-	if strings.Contains(pluginContent, "server") {
-		t.Fatalf("plugin must not export or define server shape")
+	if !strings.Contains(pluginContent, `import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"`) {
+		t.Fatalf("plugin must type its TUI contract from @opencode-ai/plugin/tui")
 	}
 	for _, forbidden := range []string{"TuiThemeCurrent", "ctx.theme", "props.theme"} {
 		if strings.Contains(pluginContent, forbidden) {

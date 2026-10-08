@@ -4178,11 +4178,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if adapter.Agent() != model.AgentOpenCode {
 				break
 			}
-			// OpenCode 2.x omits the logo (opencodeplugin.UnsupportedLogoError),
-			// so there are no logo files to back up or verify.
-			if major, err := opencodeactivation.DetectRuntimeMajor(context.Background()); err == nil && major == opencodeactivation.RuntimeV2 {
-				break
-			}
+			// The logo installs on every supported runtime since the V2-shaped
+			// module ships home_logo via api.slots (issue #5364), so its files
+			// are backed up and verified like any other managed file.
 			paths = append(paths,
 				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 				filepath.Join(homeDir, ".config", "opencode", "tui.json"),

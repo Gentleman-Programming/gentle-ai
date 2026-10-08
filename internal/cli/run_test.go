@@ -1402,3 +1402,32 @@ func TestOpenCodeTelemetryOrdinaryInstall(t *testing.T) {
 		})
 	}
 }
+
+// TestComponentPathsIncludeGentleLogoOnV2Runtime pins issue #5364: OpenCode
+// 2.x no longer omits the gentle-logo, so its managed files must appear in
+// backup and verification target lists like any other component's files.
+func TestComponentPathsIncludeGentleLogoOnV2Runtime(t *testing.T) {
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.4")}, nil
+	}
+
+	home := t.TempDir()
+	workspace := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentOpenCodeGentleLogo},
+	}
+	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeGlobal, selection, resolveAdapters([]model.AgentID{model.AgentOpenCode}), model.ComponentOpenCodeGentleLogo)
+
+	want := []string{
+		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+		filepath.Join(home, ".config", "opencode", "tui.json"),
+	}
+	for _, target := range want {
+		if !slices.Contains(paths, target) {
+			t.Fatalf("V2 logo target %q missing from paths %#v", target, paths)
+		}
+	}
+}

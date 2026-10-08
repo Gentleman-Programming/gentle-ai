@@ -25,15 +25,6 @@ type Definition struct {
 	Description string
 }
 
-// UnsupportedLogoError reports the accepted V2 omission without installing or
-// relocating branding. Pipeline callers classify this as skipped, not success.
-type UnsupportedLogoError struct{}
-
-func (UnsupportedLogoError) Error() string {
-	return "OpenCode V2 logo skipped: no equivalent home_logo slot; existing branding and configuration preserved"
-}
-func (e UnsupportedLogoError) SkipReason() string { return e.Error() }
-
 type Result struct {
 	Changed bool
 	Files   []string
@@ -67,11 +58,23 @@ const gentleLogoPluginFile = "gentle-logo.tsx"
 
 const gentleLogoPluginSource = `// @ts-nocheck
 /** @jsxImportSource @opentui/solid */
-import type { TuiPlugin } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo } from "solid-js"
 
 const id = "gentle-logo"
+
+// Local shim (V2 module shape, issue #5364): OpenCode 2.x validates plugin
+// modules against the server-side hook contract, so expose the optional
+// setup entry as the server hook when the module does not define one of its own.
+const Plugin = {
+  define(mod: TuiPluginModule) {
+    if (mod.setup && !mod.server) {
+      return { ...mod, server: mod.setup }
+    }
+    return mod
+  },
+}
 
 const roseArt = [
   "             ⣠⣾⣷⣶⣦⣤⣤⣄⣠⣄⣀  ⢀⣀⣀",
@@ -112,20 +115,27 @@ const Logo = () => {
   )
 }
 
-const tui: TuiPlugin = async (api) => {
-  api.slots.register({
-    id,
-    order: 100,
-    slots: {
-      home_logo() {
-        return <Logo />
+const tui: TuiPlugin = async (api: TuiPluginApi) => {
+  // Defensive guard: older runtimes may not expose the slots API, and the
+  // logo is decorative, so its absence must never break the TUI boot.
+  if (api.slots && typeof api.slots.register === "function") {
+    api.slots.register({
+      id,
+      order: 100,
+      slots: {
+        home_logo() {
+          return <Logo />
+        },
       },
-    },
-  })
+    })
+  }
 }
 
-const plugin = { id: "gentle-logo", tui }
-export default plugin
+// The V2 loader requires a server-side entry to accept the module; the logo
+// is TUI-only, so setup is intentionally a no-op.
+const setup = async () => {}
+
+export default Plugin.define({ id, setup, tui })
 `
 
 func DefinitionFor(id model.OpenCodeCommunityPluginID) (Definition, bool) {
@@ -143,12 +153,10 @@ func Install(homeDir string, id model.OpenCodeCommunityPluginID) (Result, error)
 	if id != model.OpenCodePluginGentleLogo {
 		return Result{}, fmt.Errorf("OpenCode community plugin %q is not installable; existing configuration preserved", id)
 	}
-	major, err := opencode.DetectRuntimeMajor(context.Background())
-	if err != nil {
+	// Runtime detection remains a fail-closed pre-flight: an unresolvable
+	// runtime still blocks every managed asset, including the logo.
+	if _, err := opencode.DetectRuntimeMajor(context.Background()); err != nil {
 		return Result{}, err
-	}
-	if major == opencode.RuntimeV2 {
-		return Result{}, UnsupportedLogoError{}
 	}
 
 	return installGentleLogo(homeDir)

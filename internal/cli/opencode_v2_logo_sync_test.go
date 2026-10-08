@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,9 +12,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
 )
 
-// Issue #4940: OpenCode 2.x omits the Gentle logo by design; install and sync
-// must not then fail verification by expecting the logo files never written.
-func TestOpenCodeV2SyncWithGentleLogoSkipsItsVerification(t *testing.T) {
+// Issue #5364: OpenCode 2.x receives the Gentle logo like any other runtime.
+// A full install followed by sync must write the V2-shaped plugin, register
+// it in tui.json, and leave the managed files in place for backup and
+// verification (whose target lists now include them on V2).
+func TestOpenCodeV2SyncWithGentleLogoInstallsAndVerifies(t *testing.T) {
 	home := t.TempDir()
 	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
@@ -37,7 +40,28 @@ func TestOpenCodeV2SyncWithGentleLogoSkipsItsVerification(t *testing.T) {
 	if _, err := RunSyncWithSelection(home, selection); err != nil {
 		t.Fatalf("sync on OpenCode 2.x with the Gentle logo selected: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")); !os.IsNotExist(err) {
-		t.Fatalf("OpenCode 2.x received the logo plugin: %v", err)
+
+	pluginPath := filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
+	if _, err := os.Lstat(pluginPath); err != nil {
+		t.Fatalf("OpenCode 2.x did not receive the logo plugin: %v", err)
+	}
+	configData, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "tui.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(tui.json) error = %v", err)
+	}
+	var config struct {
+		Plugin []string `json:"plugin"`
+	}
+	if err := json.Unmarshal(configData, &config); err != nil {
+		t.Fatalf("Unmarshal(tui.json) error = %v", err)
+	}
+	found := false
+	for _, registered := range config.Plugin {
+		if registered == pluginPath {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("tui.json plugin registrations = %#v, want %q", config.Plugin, pluginPath)
 	}
 }
