@@ -24,8 +24,8 @@ Objective: triage and fix the defects beta testers reported against gentle-ai ma
 | T4 | S3 | inline | done | published contracts/review-integration/v2/schemas/review-acknowledged.schema.json; RED TestPublishedReviewAcknowledgedSchemaValidatesBurnEnvelope (invalid file url) -> GREEN |
 | T5 | S4 | inline | done | local cause: documented `go build` reports `gentle-ai dev`, the plugin refuses non-semver as "binary unavailable"; battery now refuses unversioned binaries early, CONTRIBUTING documents a versioned build; OpenCode lane drives the refuter role slot. Tester's `immutable_review_transport_unavailable` not reproduced in the sandboxed battery |
 | T6 | S5 | inline (gentle-pi worktree ~/work/gentle-pi-worktrees/beta-feedback, branch fix/start-risk-reason-codes) | done | root cause: gentle-pi RISK_REASON_CODES/RISK_SIGNALS lacked dangerous_sink and agent_escalation that start-v4.schema.json publishes; reproduced with a real committed-range START (decode error `start.risk_reasons[0].code is unsupported`). gentle-pi 2b72e138f; pnpm test 5410 tests, 0 fail |
-| T7 | S6 | inline | GREEN, suite pending | RED reproduced the issue error via RunSync; UserOwnedPathError scopes the refusal to the agent's managed plugins, rest of sync runs, PartialSyncError names "opencode managed plugins were skipped" |
-| T8 | S7, S8 | inline | pending | |
+| T7 | S6 | inline | done (PR #5396) | RED reproduced the issue error via RunSync; UserOwnedPathError scopes the refusal to the agent's managed plugins, rest of sync runs, PartialSyncError names "opencode managed plugins were skipped" |
+| T8 | S7, S8 | inline | done | commented #5372, #5373 (fixed on main; patch decision open), #5374 (findings), #5375 (approved); labels status:approved+type:bug on #5374/#5375/#5393 |
 | T9 | S9 | inline | done | beta-testers.html slide 4 (clone launcher `--link --package-root`, verified take-over message; `GENTLE_PI_GENTLE_AI_DEV_BINARY` per session; `/gentle:dev-binary` global), slide 11 (repository_root), limitations; gist b5853eb8 rev 88dc442d |
 
 ## Log
@@ -34,3 +34,6 @@ Objective: triage and fix the defects beta testers reported against gentle-ai ma
 - L2: battery started on main `b15198ba` (log `/tmp/battery-main.log`).
 - L3: battery after fixes: 33 checks, 0 failed (binary built with -X main.version=4.0.0-dev).
 - L4: Pi relay START repro: scratch repo, auth/session.py with subprocess; STATUS --next-transition -> START consent/v3 decodes; granted START/v4 fails gentle-pi decode on risk_reasons code dangerous_sink. dangerous_sink exists since 0b459051 (2026-09-25), so stable gentle-pi 4.0.0 + pinned gentle-ai 4.0.0 is also affected for dangerous-sink candidates.
+- L5 (2026-10-08, user, verbatim): "dale" — push, open PRs, approve #5375. PRs: gentle-ai #5395 (S1-S4), #5396 (S6), gentle-shell issue #1928 / PR #1929 (S5).
+- L6: independent verifier (gentle-ai-verify): S1-S6 PASS, no blockers. Advisories: only first drifted plugin named and skip covers all managed plugins of the agent; partial error wording "the other selected agents were synced"; OpenCode plugin still says ENOENT for non-semver --version. Gentle Shell CI caught stale generated runtime modules (scripts/build-runtime-modules.mjs --write), fixed in 561157e21.
+- Next: merge on green CI; gentle-shell 4.0.1 patch for dangerous_sink; decide v4.0.x for #5372/#5373; follow-ups for the advisories.
