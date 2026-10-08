@@ -78,7 +78,30 @@ Kiro Judgment Day agents are generated with YAML frontmatter including:
 - `model`
 - `includeMcpJson: true`
 
-The `model` value is injected during sync from Kiro model assignments, keyed by agent name or `default` (`auto|opus|sonnet|haiku|minimax|glm|deepseek|qwen`) to Kiro-native model IDs.
+The `model` value is injected during sync from Kiro model assignments, keyed by agent name or `default`, and resolved to a Kiro-native model ID:
+
+| Alias | Kiro model ID |
+|-------|---------------|
+| `auto` | `auto` |
+| `opus` | `claude-opus-5.5` |
+| `sonnet` | `claude-sonnet-5.5` |
+| `haiku` | `claude-haiku-4.5` |
+| `luna` | `gpt-5.6-luna` |
+| `terra` | `gpt-5.6-terra` |
+| `sol` | `gpt-5.6-sol` |
+| `minimax` | `minimax-m2.5` |
+| `glm` | `glm-5` |
+| `deepseek` | `deepseek-3.2` |
+| `qwen` | `qwen3-coder-next` |
+
+The model presets never assign GPT-5.6 Sol or Terra; both stay available in the custom picker.
+
+| Preset | Judgment Day judges A / B | Fix agent | Default |
+|--------|---------------------------|-----------|---------|
+| `balanced` | Sonnet 5.5 / Luna | Sonnet 5.5 | Auto |
+| `performance` | Opus 5.5 / Opus 5.5 | Sonnet 5.5 | Sonnet 5.5 |
+| `economy` | Luna / Luna | Luna | Luna |
+| `open-weight` | GLM-5 / Qwen3 Coder Next | Qwen3 Coder Next | Qwen3 Coder Next |
 
 ---
 
