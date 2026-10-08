@@ -17,6 +17,7 @@ parent=$(dirname -- "$destination")
 name=$(basename -- "$destination")
 case "$name" in ''|.|..|*[!A-Za-z0-9_.-]*) fail 'invalid destination';; esac
 # One fixed official archive per kernel; beside it only utility spellings differ.
+handoff=
 case "$(uname -s)" in
     Linux)
         accepted=783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8 bytes=57224421
@@ -44,12 +45,9 @@ case "$(uname -s)" in
                 my $status = $?; alarm 0;
                 exit($late ? 124 : $status & 127 ? 128 + ($status & 127) : $status >> 8)' "$@"
         }
-        # BSD mv has no -T: a directory raced into place would adopt the stage as
-        # a child, so publication also proves the destination is the stage itself.
-        publish() {
-            mv -n "$1" "$2" && test ! -e "$1" && test ! -L "$2" &&
-                test -f "$2/BOOTSTRAP-SHA256SUMS" && test ! -e "$2/node"
-        }
+        # BSD mv has no no-replace rename: a directory raced into place would adopt
+        # the stage as a child, so the installer publishes with RENAME_EXCL instead.
+        handoff=stage
         ;;
     *) fail 'unsupported kernel';;
 esac
@@ -133,6 +131,14 @@ printf 'accepted-archive-sha256=%s\nbytes=%s\nNode=24.18.0\nnpm=11.16.0\n' "$acc
 mv "$stage/inventory" "$stage/node/BOOTSTRAP-SHA256SUMS"
 private_parent && test "$(directory_preimage "$parent")" = "$parent_preimage" || fail 'parent preimage changed'
 test ! -e "$destination" && test ! -L "$destination" || fail 'destination appeared'
+if test "$handoff" = stage; then
+    # Only the verified tree stays; the caller owns its publication and container.
+    find "$stage" -mindepth 1 -maxdepth 1 ! -name node -exec rm -rf -- {} + || fail 'stage cleanup failed'
+    staged=$stage/node
+    stage=
+    printf 'Node bootstrap staged: Node=24.18.0 npm=11.16.0 package-install=not-run launch=not-run Ready=false stage=%s\n' "$staged"
+    exit 0
+fi
 publish "$stage/node" "$destination" >"$stage/diagnostic" 2>&1 || fail 'publication failed; inspect destination'
 test ! -e "$stage/node" || fail 'publication refused'
 # Publication can precede a transport/cleanup failure: callers must inspect state.

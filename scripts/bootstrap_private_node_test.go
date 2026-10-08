@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -89,6 +90,9 @@ func TestBootstrapPublishesPinnedArchive(t *testing.T) {
 	if archive == "" {
 		t.Skip("GENTLE_SHELL_NODE_ARCHIVE names no downloaded publisher archive")
 	}
+	if runtime.GOOS == "darwin" {
+		t.Skip("darwin leaves the verified tree staged; see TestBootstrapDarwinStagesPinnedArchive")
+	}
 	destination, output, err := bootstrapRun(t, archive)
 	if err != nil || output != "Node bootstrap only: Node=24.18.0 npm=11.16.0 package-install=not-run launch=not-run Ready=false\n" {
 		t.Fatalf("bootstrap = %v, %q", err, output)
@@ -99,5 +103,42 @@ func TestBootstrapPublishesPinnedArchive(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(destination, "node")); !os.IsNotExist(err) {
 		t.Fatal("stage published inside an existing destination")
+	}
+}
+
+// Opt-in: BSD mv cannot rename without replacement, so darwin never publishes
+// from the shell and reports the verified tree for an atomic Go publication.
+func TestBootstrapDarwinStagesPinnedArchive(t *testing.T) {
+	archive := os.Getenv("GENTLE_SHELL_NODE_ARCHIVE")
+	if archive == "" {
+		t.Skip("GENTLE_SHELL_NODE_ARCHIVE names no downloaded publisher archive")
+	}
+	if runtime.GOOS != "darwin" {
+		t.Skip("only darwin stages instead of publishing")
+	}
+	destination, output, err := bootstrapRun(t, archive)
+	match := regexp.MustCompile(`^Node bootstrap staged: Node=24\.18\.0 npm=11\.16\.0 package-install=not-run launch=not-run Ready=false stage=(.+)\n$`).FindStringSubmatch(output)
+	if err != nil || match == nil {
+		t.Fatalf("bootstrap = %v, %q", err, output)
+	}
+	stage := match[1]
+	container := filepath.Dir(stage)
+	if filepath.Base(stage) != "node" || filepath.Dir(container) != filepath.Dir(destination) ||
+		!regexp.MustCompile(`^\.gentle-node-stage\.[A-Za-z0-9]{8}$`).MatchString(filepath.Base(container)) {
+		t.Fatalf("stage = %q outside the private parent of %q", stage, destination)
+	}
+	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
+		t.Fatalf("darwin bootstrap published with mv: %v", err)
+	}
+	entries, err := os.ReadDir(container)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "node" || !entries[0].IsDir() {
+		t.Fatalf("stage container = %v, %v; want only the verified tree", err, entries)
+	}
+	provenance, err := os.ReadFile(filepath.Join(stage, "BOOTSTRAP-PROVENANCE"))
+	if err != nil || !strings.Contains(string(provenance), "\nNode=24.18.0\nnpm=11.16.0\n") {
+		t.Fatalf("provenance = %v, %q", err, provenance)
+	}
+	if _, err := os.Stat(filepath.Join(stage, "BOOTSTRAP-SHA256SUMS")); err != nil {
+		t.Fatalf("staged inventory: %v", err)
 	}
 }
