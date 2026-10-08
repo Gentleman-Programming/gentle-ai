@@ -10,7 +10,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 )
 
-// Linux Separate/Shared review model; shell_install_view.go renders it.
+// Linux and macOS review model; shell_install_view.go renders it.
 // Confirmation quits the TUI so installation runs on a restored terminal.
 type shellInstallModel struct {
 	cancel    context.CancelFunc
@@ -93,7 +93,7 @@ func (m shellInstallModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m shellInstallModel) content() string {
-	rows := []string{"Gentle Shell Linux user installer", "Target: " + m.req.Destination, "Mode: " + m.req.Mode, "Shared prefix: " + m.req.SharedPrefix, "Shared agent: " + m.req.SharedAgent,
+	rows := []string{shellInstallTitle, "Target: " + m.req.Destination, "Mode: " + m.req.Mode, "Shared prefix: " + m.req.SharedPrefix, "Shared agent: " + m.req.SharedAgent,
 		"Commands: " + m.req.Destination + "/bin/gentle-shell and " + m.req.Destination + "/bin/pi", "Tab selects field; arrows change mode; Enter reviews; Escape cancels."}
 	rows[m.field+1] = "> " + rows[m.field+1]
 	if m.review {

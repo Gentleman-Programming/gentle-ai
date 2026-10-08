@@ -20,7 +20,6 @@ import (
 )
 
 // Darwin guards behind the per-OS hooks the shared POSIX primitives call.
-// Darwin entry points still refuse in user_install_unsupported.go.
 
 func userDarwinKernelCheck() error {
 	var name unix.Utsname

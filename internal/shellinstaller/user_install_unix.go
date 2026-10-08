@@ -235,7 +235,7 @@ func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 			return "", err
 		}
 		owner := st.Sys().(*syscall.Stat_t).Uid
-		trustedTmp := current == "/tmp" && owner == 0 && st.Mode()&os.ModeSticky != 0
+		trustedTmp := current == userTrustedTmp && owner == 0 && st.Mode()&os.ModeSticky != 0
 		if (owner != 0 && owner != uint32(os.Getuid())) || (st.Mode().Perm()&0022 != 0 && !trustedTmp) {
 			return "", privateError("source", fmt.Errorf("supervisor ancestor refused: path=%q owner=%d mode=%#o", current, owner, st.Mode().Perm()))
 		}

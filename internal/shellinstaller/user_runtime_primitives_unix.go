@@ -169,7 +169,7 @@ func privateRun(ctx context.Context, cmd *exec.Cmd, cancel context.CancelFunc) (
 
 func privateColdClient() (*http.Client, error) {
 	roots, err := x509.SystemCertPool()
-	if err != nil || roots == nil || len(roots.Subjects()) == 0 {
+	if err != nil || roots == nil || privateRootsEmpty(roots) {
 		return nil, privateError("acquisition", errors.Join(err, errors.New("system TLS roots unavailable")))
 	}
 	transport := &http.Transport{

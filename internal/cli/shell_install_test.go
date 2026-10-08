@@ -66,8 +66,8 @@ func TestShellInstallRefusalHelpIsRunnable(t *testing.T) {
 }
 
 func TestShellInstallConfirmationRefusalHasNoEffects(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("physical user selection is Linux amd64 only")
+	if platform := runtime.GOOS + "/" + runtime.GOARCH; platform != "linux/amd64" && platform != "darwin/arm64" {
+		t.Skip("physical user selection is Linux amd64 or macOS arm64 only")
 	}
 	parent := t.TempDir()
 	if err := os.Chmod(parent, 0700); err != nil {

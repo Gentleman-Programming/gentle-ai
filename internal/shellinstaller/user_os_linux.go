@@ -3,6 +3,7 @@
 package shellinstaller
 
 import (
+	"crypto/x509"
 	"os"
 	"strings"
 	"syscall"
@@ -25,6 +26,10 @@ func userRenameNoReplace(from, to string) error {
 	return unix.Renameat2(unix.AT_FDCWD, from, unix.AT_FDCWD, to, unix.RENAME_NOREPLACE)
 }
 
+// userTrustedTmp is the root-owned sticky directory userSupervisorSHA accepts
+// as a supervisor ancestor.
+const userTrustedTmp = "/tmp"
+
 // Linux checks the operator path exactly as given; the strict EvalSymlinks
 // checks refuse every symlink.
 func userCanonicalPath(path string) (string, error) {
@@ -42,4 +47,9 @@ func privateExtendedMetadata(string, os.FileInfo, bool) error {
 
 func userSync(file userSyncedFile) error {
 	return file.Sync()
+}
+
+// privateRootsEmpty reports a system pool without any trust anchor.
+func privateRootsEmpty(roots *x509.CertPool) bool {
+	return len(roots.Subjects()) == 0
 }

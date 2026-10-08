@@ -50,11 +50,11 @@ func TestUserConfirmationKeepsLinuxFiveValueBinding(t *testing.T) {
 }
 
 func TestUserInstallUnsupportedPlatformRefusesCommonAPI(t *testing.T) {
-	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
+	if runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		t.Skip("platform has a native backend")
 	}
 	check := UserKernelCheck()
-	if check == nil || !strings.Contains(check.Error(), "Linux amd64") || !strings.Contains(check.Error(), "Windows 11 x64") {
+	if check == nil || !strings.Contains(check.Error(), "Linux amd64") || !strings.Contains(check.Error(), "macOS 14+ arm64") || !strings.Contains(check.Error(), "Windows 11 x64") {
 		t.Fatalf("unsupported platform refusal is inaccurate: %v", check)
 	}
 	req := UserInstallRequest{Destination: t.TempDir() + "/shell", Mode: "separate"}

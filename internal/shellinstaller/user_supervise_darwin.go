@@ -136,6 +136,12 @@ func userLimitsEnvironment(env []string) error {
 // group member survives. Descendants that left the group are not contained;
 // see userSupervisionLimitation.
 func userSupervise(ctx context.Context, limits userLimits, env []string, stdin io.Reader, stdout, stderr io.Writer, argv ...string) error {
+	return userSuperviseIn(ctx, limits, "", env, stdin, stdout, stderr, argv...)
+}
+
+// userSuperviseIn is userSupervise in working directory dir; empty inherits
+// the supervisor's.
+func userSuperviseIn(ctx context.Context, limits userLimits, dir string, env []string, stdin io.Reader, stdout, stderr io.Writer, argv ...string) error {
 	if ctx == nil || ctx.Err() != nil {
 		return privateError("canceled", context.Canceled)
 	}
@@ -157,7 +163,7 @@ func userSupervise(ctx context.Context, limits userLimits, env []string, stdin i
 	cmd := exec.CommandContext(ctx, userLimitsShell, append([]string{"-c", script, userLimitsName}, argv...)...)
 	// A nil Env would inherit the supervisor's environment; owned work gets exactly env.
 	cmd.Env = append([]string{}, env...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
+	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = dir, stdin, stdout, stderr
 	return userLaunchGroup(cmd, stdin, func(waitErr error) error {
 		switch {
 		case errors.Is(waitErr, exec.ErrWaitDelay):

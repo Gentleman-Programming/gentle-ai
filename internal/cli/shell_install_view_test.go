@@ -3,7 +3,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -64,7 +63,7 @@ func TestShellInstallReviewFitsAndScrolls(t *testing.T) {
 				}
 				next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyHome})
 				m = next.(shellInstallModel)
-				if cmd != nil || !strings.Contains(m.View(), "Gentle Shell Linux user installer") {
+				if cmd != nil || !strings.Contains(m.View(), shellInstallTitle) {
 					t.Fatal("Home did not return to the beginning")
 				}
 			})
@@ -262,29 +261,8 @@ func TestShellInstallReviewPhysicalBounds(t *testing.T) {
 	}
 }
 
-// Linux help, selection, terminal handoff and cancellation contracts.
-
-func TestShellInstallHelpHasNoEffects(t *testing.T) {
-	var output bytes.Buffer
-	if err := RunShell([]string{"install", "--help"}, &output); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), "--inspect") || !strings.Contains(output.String(), "existing delegated") {
-		t.Fatalf("missing consent or prerequisites: %q", output.String())
-	}
-}
-
-func TestShellInstallHelpDisclosesAgentHelpers(t *testing.T) {
-	var output bytes.Buffer
-	if err := RunShell([]string{"--help"}, &output); err != nil {
-		t.Fatal(err)
-	}
-	for _, expected := range []string{"pinned fd and rg helpers to AGENT/bin", "selected --agent (Shared)", "channel selection is Windows-only"} {
-		if !strings.Contains(output.String(), expected) {
-			t.Fatalf("help hides %q: %s", expected, output.String())
-		}
-	}
-}
+// Selection, terminal handoff and cancellation contracts; help contracts live
+// in shell_install_help_{darwin,}_test.go.
 
 func TestShellInstallTUIEditAndCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

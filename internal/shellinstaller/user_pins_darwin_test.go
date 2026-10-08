@@ -21,8 +21,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
 )
 
 // Independent literals: changing production pins cannot silently change the controls.
@@ -199,5 +204,51 @@ func TestDarwinPinnedArtifacts(t *testing.T) {
 		if _, err := userToolMember(context.Background(), darwinAltered(data), source.pin, source.stem+"/"+source.name); err == nil {
 			t.Fatalf("one-byte-altered %s archive accepted", source.name)
 		}
+	}
+}
+
+// The provisioner's live darwin roles must equal the compiled Go authority:
+// the native readback pins and the npm platform used for optional packages.
+func TestDarwinProvisionPinParity(t *testing.T) {
+	files, err := assets.ReadUserAssets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := files["provision.mjs"]
+	native := `(?m)^    if \(process.platform === 'darwin'\) \{\n      const manifest = '([^'\n]+)';\n      if \(binary.length !== ([0-9]+) \|\| digest\(binary\) !== '([a-f0-9]{64})' \|\| !read\(path.join\(version, 'integrity.json'\)\).equals\(Buffer.from\(manifest\)\)\) reject\('native independent readback'\);\n      return;\n    \}$`
+	platform := `(?m)^  const platform = process.platform === '(darwin)' \? \{ os: '(darwin)', cpu: '(arm64)', libc: (null) \} : \{ os: 'linux', cpu: 'x64', libc: 'glibc' \};$`
+	equal := func(source []byte, pattern string, want ...string) bool {
+		matches := regexp.MustCompile(pattern).FindAllSubmatch(source, 2)
+		if len(matches) != 1 || len(matches[0]) != len(want)+1 {
+			return false
+		}
+		for i, value := range want {
+			if string(matches[0][i+1]) != value {
+				return false
+			}
+		}
+		return true
+	}
+	for name, role := range map[string]struct {
+		pattern string
+		want    []string
+	}{
+		"native":   {native, []string{strings.ReplaceAll(userNativeManifest, "\n", `\n`), strconv.FormatInt(userBinarySize, 10), userBinarySHA}},
+		"platform": {platform, []string{"darwin", "darwin", "arm64", "null"}},
+	} {
+		if !equal(source, role.pattern, role.want...) {
+			t.Fatalf("%s: live darwin provision role differs from compiled Go authority (or is missing/ambiguous)", name)
+		}
+		indices := regexp.MustCompile(role.pattern).FindSubmatchIndex(source)
+		for i := range role.want {
+			mutated := append([]byte(nil), source...)
+			mutated[indices[2+2*i]] ^= 1
+			if equal(mutated, role.pattern, role.want...) {
+				t.Fatalf("%s: mutated live role %d accepted", name, i)
+			}
+		}
+	}
+	if !strings.Contains(string(source), "actualPaths: actual, platform }, {") {
+		t.Fatal("optional-closure normalization does not use the selected platform")
 	}
 }

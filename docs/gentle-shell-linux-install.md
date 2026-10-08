@@ -2,6 +2,8 @@
 
 **Source candidate only, not a release guide.** Use an authorized, pinned Linux amd64 build in a bounded Guest. It targets stock Pi 1.0.0 and Gentle/native 4.0.0 with independently pinned modern roots and Node 24.18.0/npm. This is not runtime proof or release readiness; see [qualification evidence and limits](evidence/shell-linux-install-qualification.md).
 
+Other platforms: [macOS (Separate only)](gentle-shell-macos-install.md) and [Windows](gentle-shell-windows-install.md).
+
 ## Requirements
 
 - Non-root Linux amd64; an already-qualified execution boundary or an existing delegated **systemd user manager >=254**. No sudo, system-manager, new-delegation or container fallback.

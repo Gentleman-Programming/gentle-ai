@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package cli
 
@@ -21,5 +21,33 @@ func TestShellInstallHelpDisclosesSharedAgentTools(t *testing.T) {
 		if !strings.Contains(output.String(), "\n"+disclosure+"\n") {
 			t.Fatalf("help %q omits the exact Shared tool disclosure: %q", args, output.String())
 		}
+	}
+}
+
+func TestShellInstallHelpHasNoEffects(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunShell([]string{"install", "--help"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "--inspect") || !strings.Contains(output.String(), "existing delegated") {
+		t.Fatalf("missing consent or prerequisites: %q", output.String())
+	}
+}
+
+func TestShellInstallHelpDisclosesAgentHelpers(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunShell([]string{"--help"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"pinned fd and rg helpers to AGENT/bin", "selected --agent (Shared)", "channel selection is Windows-only"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("help hides %q: %s", expected, output.String())
+		}
+	}
+}
+
+func TestShellInstallTUIIdentifiesLinux(t *testing.T) {
+	if shellInstallTitle != "Gentle Shell Linux user installer" {
+		t.Fatalf("Linux installer TUI title = %q", shellInstallTitle)
 	}
 }

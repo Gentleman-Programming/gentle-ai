@@ -3,7 +3,10 @@
 package shellinstaller
 
 import (
+	"context"
 	"os"
+	"os/exec"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -51,5 +54,32 @@ func TestLinuxPathHooksKeepExactBehavior(t *testing.T) {
 	}
 	if err := privateExtendedMetadata("/owned", nil, true); err != nil {
 		t.Fatalf("Linux extended metadata hook = %v, want no-op", err)
+	}
+}
+
+// The darwin flow hooks are identities on Linux: the unit already supplies
+// the limits, the bootstrap publishes Node and /proc/self/exe is physical.
+func TestLinuxFlowHooksKeepExactBehavior(t *testing.T) {
+	if userTrustedTmp != "/tmp" {
+		t.Fatalf("trusted sticky directory = %q, want /tmp", userTrustedTmp)
+	}
+	if err := userBootstrapPublish(context.Background(), "Node bootstrap only\n", "/owned/runtime/node"); err != nil {
+		t.Fatalf("Linux bootstrap publication hook = %v, want no-op", err)
+	}
+	cmd := exec.CommandContext(context.Background(), "/bin/true", "x")
+	before := append([]string(nil), cmd.Args...)
+	if err := userLaunchLimits(cmd); err != nil || cmd.Path != "/bin/true" || !reflect.DeepEqual(cmd.Args, before) || cmd.SysProcAttr != nil {
+		t.Fatalf("Linux launch limits hook changed the command: %v %q %q", err, cmd.Path, cmd.Args)
+	}
+	self, selfErr := userExecutable()
+	want, wantErr := os.Executable()
+	if self != want || (selfErr == nil) != (wantErr == nil) {
+		t.Fatalf("Linux executable hook = %q %v, want %q %v", self, selfErr, want, wantErr)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	output, err := userOwnedRun(ctx, exec.CommandContext(ctx, "/bin/sh", "-c", "echo owned"), cancel)
+	if err != nil || output != "owned\n" {
+		t.Fatalf("Linux owned run = %q %v, want privateRun output", output, err)
 	}
 }
