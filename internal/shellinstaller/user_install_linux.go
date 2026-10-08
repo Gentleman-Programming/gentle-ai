@@ -86,11 +86,11 @@ func ValidateUserInstall(req UserInstallRequest) error {
 		}
 		return nil
 	}
-	if req.SharedPrefix == req.SharedAgent || strings.HasPrefix(req.SharedPrefix, req.SharedAgent+"/") || strings.HasPrefix(req.SharedAgent, req.SharedPrefix+"/") {
+	if userPathsOverlap(req.SharedPrefix, req.SharedAgent) {
 		return errors.New("shared prefix and agent must be disjoint")
 	}
 	for _, path := range []string{req.SharedPrefix, req.SharedAgent} {
-		if !userSelectionPath(path) || path == req.Destination || strings.HasPrefix(path, req.Destination+"/") || strings.HasPrefix(req.Destination, path+"/") {
+		if !userSelectionPath(path) || userPathsOverlap(path, req.Destination) {
 			return privateError("refused", errors.New("shared paths must use the supported target character set and remain disjoint from the target in both directions"))
 		}
 		selected, err := privateDirectory(path)

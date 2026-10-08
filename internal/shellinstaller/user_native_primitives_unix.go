@@ -58,6 +58,9 @@ func privateNativeDirectory(path string) error {
 	if err != nil || canonicalErr != nil || canonical != path || (info.Mode() != os.ModeDir|0700 && info.Mode() != os.ModeDir|0755) || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
 		return privateError("source", errors.Join(err, canonicalErr))
 	}
+	if err := privateExtendedMetadata(path, info, true); err != nil {
+		return privateError("source", err)
+	}
 	return nil
 }
 

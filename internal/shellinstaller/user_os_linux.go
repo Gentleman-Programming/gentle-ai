@@ -3,6 +3,8 @@
 package shellinstaller
 
 import (
+	"os"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -21,4 +23,23 @@ func userTermios(fd int) (*unix.Termios, error) {
 // Publication refuses an existing destination atomically instead of replacing it.
 func userRenameNoReplace(from, to string) error {
 	return unix.Renameat2(unix.AT_FDCWD, from, unix.AT_FDCWD, to, unix.RENAME_NOREPLACE)
+}
+
+// Linux checks the operator path exactly as given; the strict EvalSymlinks
+// checks refuse every symlink.
+func userCanonicalPath(path string) (string, error) {
+	return path, nil
+}
+
+func userPathsOverlap(a, b string) bool {
+	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
+// Linux mode bits and ownership already describe every checked entry.
+func privateExtendedMetadata(string, os.FileInfo, bool) error {
+	return nil
+}
+
+func userSync(file userSyncedFile) error {
+	return file.Sync()
 }

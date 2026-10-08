@@ -32,6 +32,9 @@ func privateDirectory(path string) (os.FileInfo, error) {
 	if err != nil || canonicalErr != nil || canonical != path || !info.IsDir() || info.Mode() != os.ModeDir|0700 || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
 		return nil, privateError("filesystem", errors.Join(err, canonicalErr))
 	}
+	if err := privateExtendedMetadata(path, info, false); err != nil {
+		return nil, privateError("filesystem", err)
+	}
 	return info, nil
 }
 
@@ -53,6 +56,9 @@ func privatePhysical(path string) (os.FileInfo, error) {
 	canonical, canonicalErr := filepath.EvalSymlinks(path)
 	if err != nil || canonicalErr != nil || canonical != path || !info.Mode().IsRegular() {
 		return nil, privateError("filesystem", errors.Join(err, canonicalErr))
+	}
+	if err := privateExtendedMetadata(path, info, true); err != nil {
+		return nil, privateError("filesystem", err)
 	}
 	return info, nil
 }

@@ -20,8 +20,9 @@ func TestUnixStatTimesReadKernelTimestamps(t *testing.T) {
 	if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	want := time.Unix(1700000000, 123456789)
-	if err := os.Chtimes(path, want, want); err != nil {
+	// Distinct atime and mtime catch a seam that returns the access time.
+	atime, want := time.Unix(1600000000, 0), time.Unix(1700000000, 123456789)
+	if err := os.Chtimes(path, atime, want); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Lstat(path)
@@ -30,7 +31,7 @@ func TestUnixStatTimesReadKernelTimestamps(t *testing.T) {
 	}
 	mtime, ctime := privateStatTimes(info.Sys().(*syscall.Stat_t))
 	if got := time.Unix(mtime.Unix()); !got.Equal(info.ModTime()) || got.Unix() != want.Unix() {
-		t.Fatalf("mtime = %v, ModTime = %v, want seconds %d", got, info.ModTime(), want.Unix())
+		t.Fatalf("mtime = %v, ModTime = %v, want seconds %d, not atime %d", got, info.ModTime(), want.Unix(), atime.Unix())
 	}
 	if ctime.Sec <= 0 || ctime == mtime {
 		t.Fatalf("ctime = %v must be a real change time distinct from the forged mtime %v", ctime, mtime)

@@ -34,3 +34,22 @@ func openTestTerminal(t *testing.T) *os.File {
 	t.Cleanup(func() { _ = terminal.Close() })
 	return terminal
 }
+
+func TestLinuxPathHooksKeepExactBehavior(t *testing.T) {
+	if got, err := userCanonicalPath("/tmp/Gentle"); err != nil || got != "/tmp/Gentle" {
+		t.Fatalf("canonical = %q, %v; Linux must check the operator path as given", got, err)
+	}
+	for _, pair := range [][2]string{{"/a/b", "/a/b"}, {"/a/b", "/a/b/c"}, {"/a/b/c", "/a/b"}} {
+		if !userPathsOverlap(pair[0], pair[1]) {
+			t.Fatalf("overlap not detected for %q and %q", pair[0], pair[1])
+		}
+	}
+	for _, pair := range [][2]string{{"/a/b", "/a/B"}, {"/a/b", "/a/bc"}, {"/a/b", "/a/c"}} {
+		if userPathsOverlap(pair[0], pair[1]) {
+			t.Fatalf("case-sensitive Linux paths %q and %q reported as overlapping", pair[0], pair[1])
+		}
+	}
+	if err := privateExtendedMetadata("/owned", nil, true); err != nil {
+		t.Fatalf("Linux extended metadata hook = %v, want no-op", err)
+	}
+}

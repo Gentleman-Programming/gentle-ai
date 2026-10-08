@@ -184,7 +184,7 @@ func userWriteWithSync(path string, data []byte, mode os.FileMode, open func(str
 	if n != len(data) {
 		writeErr = errors.Join(writeErr, io.ErrShortWrite)
 	}
-	err = errors.Join(writeErr, file.Sync(), file.Close())
+	err = errors.Join(writeErr, userSync(file), file.Close())
 	if err != nil {
 		return privateError("source", err)
 	}
@@ -192,7 +192,7 @@ func userWriteWithSync(path string, data []byte, mode os.FileMode, open func(str
 	if err != nil {
 		return err
 	}
-	return errors.Join(directory.Sync(), directory.Close())
+	return errors.Join(userSync(directory), directory.Close())
 }
 
 func userDirectorySync(path string) error {
@@ -200,7 +200,7 @@ func userDirectorySync(path string) error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(directory.Sync(), directory.Close())
+	return errors.Join(userSync(directory), directory.Close())
 }
 
 func userSourceFile(ctx context.Context, path string, size int64, pin string) (string, error) {
