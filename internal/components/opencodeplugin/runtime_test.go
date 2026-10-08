@@ -33,34 +33,37 @@ func TestV2RuntimeInstallsGentleLogoAndLegacyPluginsStillRefuse(t *testing.T) {
 		if !result.Changed {
 			t.Fatal("Install(gentle-logo) changed = false, want true")
 		}
-		pluginPath := filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
-		data, err := os.ReadFile(pluginPath)
+		configDir := filepath.Join(home, ".config", "opencode")
+		pluginData, err := os.ReadFile(filepath.Join(configDir, "tui-plugins", "gentle-logo.js"))
 		if err != nil {
-			t.Fatalf("ReadFile(plugin) error = %v", err)
+			t.Fatalf("ReadFile(bundle) error = %v", err)
 		}
-		content := string(data)
+		content := string(pluginData)
 		for _, snippet := range []string{
-			`Plugin.define({ id, setup, tui })`,
-			`export default`,
-			`home_logo`,
-			`typeof api.slots.register === "function"`,
+			"home.footer",
+			"home_logo",
+			"gentle-logo",
+			"as default",
 		} {
 			if !strings.Contains(content, snippet) {
-				t.Fatalf("V2 plugin source missing snippet %q", snippet)
+				t.Fatalf("bundled plugin source missing snippet %q", snippet)
 			}
 		}
-		configData, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "tui.json"))
+		if _, err := os.Stat(filepath.Join(configDir, "tui-plugins", "gentle-logo", "tui.js")); err != nil {
+			t.Fatalf("V2 bridge directory missing: %v", err)
+		}
+		configData, err := os.ReadFile(filepath.Join(configDir, "cli.json"))
 		if err != nil {
-			t.Fatalf("ReadFile(tui.json) error = %v", err)
+			t.Fatalf("ReadFile(cli.json) error = %v", err)
 		}
 		var config struct {
-			Plugin []string `json:"plugin"`
+			Plugins []string `json:"plugins"`
 		}
 		if err := json.Unmarshal(configData, &config); err != nil {
-			t.Fatalf("Unmarshal(tui.json) error = %v", err)
+			t.Fatalf("Unmarshal(cli.json) error = %v", err)
 		}
-		if len(config.Plugin) != 1 || config.Plugin[0] != pluginPath {
-			t.Fatalf("tui.json plugin registrations = %#v, want [%q]", config.Plugin, pluginPath)
+		if len(config.Plugins) != 1 || config.Plugins[0] != "./tui-plugins/gentle-logo" {
+			t.Fatalf("cli.json plugins = %#v, want [./tui-plugins/gentle-logo]", config.Plugins)
 		}
 	})
 

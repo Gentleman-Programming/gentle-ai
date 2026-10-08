@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
@@ -54,89 +55,137 @@ var legacySDDEngramDefinition = Definition{
 	Description: "OpenCode TUI for SDD profiles and Engram memories",
 }
 
+const gentleLogoBundleFile = "gentle-logo.js"
+
+// gentleLogoPluginFile is the T1-era TSX artifact name, still referenced by
+// the uninstall path until the uninstaller learns the T2 layout.
 const gentleLogoPluginFile = "gentle-logo.tsx"
 
-const gentleLogoPluginSource = `// @ts-nocheck
-/** @jsxImportSource @opentui/solid */
-import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
-import { useTerminalDimensions } from "@opentui/solid"
-import { createMemo } from "solid-js"
+// OpenCode configuration file names and registration entries, mirroring the
+// cortex-ia reference installer (issue #5364): V2 loads cli.json plus the
+// managed opencode.jsonc plugins array with a relative directory package;
+// V1 loads tui.jsonc/tui.json with a relative bundle path.
+const (
+	gentleLogoBridgeDir   = "gentle-logo"
+	gentleLogoV1Entry     = "./tui-plugins/gentle-logo.js"
+	gentleLogoV2Entry     = "./tui-plugins/gentle-logo"
+	cliConfigName         = "cli.json"
+	tuiJSONCName          = "tui.jsonc"
+	tuiJSONName           = "tui.json"
+	opencodeJSONCName     = "opencode.jsonc"
+	opencodeJSONName      = "opencode.json"
+	cliSchemaV2           = "https://opencode.ai/v2/cli.json"
+	tuiSchemaV1           = "https://opencode.ai/tui.json"
+	opencodeSchemaV2      = "https://opencode.ai/config.json"
+	bridgeTUIFileName     = "tui.js"
+	bridgeManifestName    = "package.json"
+	bridgeTUIFileContent  = "// OpenCode v2 directory bridge for the gentle-logo TUI plugin\nexport * from \"../gentle-logo.js\";\nexport { default } from \"../gentle-logo.js\";\n"
+	bridgeManifestContent = "{\n  \"name\": \"gentle-logo-tui\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"exports\": {\n    \".\": \"./tui.js\",\n    \"./tui\": \"./tui.js\"\n  }\n}\n"
+)
 
-const id = "gentle-logo"
+// openCodeGeneration is the OpenCode configuration generation that owns the
+// config directory. Durable artifacts OpenCode itself wrote (cli.json is V2;
+// tui.jsonc/tui.json are V1) win over the version probe, and the product
+// default is V2, mirroring the cortex-ia reference installer.
+type openCodeGeneration int
 
-// Local shim (V2 module shape, issue #5364): OpenCode 2.x validates plugin
-// modules against the server-side hook contract, so expose the optional
-// setup entry as the server hook when the module does not define one of its own.
-const Plugin = {
-  define(mod: TuiPluginModule) {
-    if (mod.setup && !mod.server) {
-      return { ...mod, server: mod.setup }
-    }
-    return mod
-  },
+const (
+	generationV1 openCodeGeneration = iota
+	generationV2
+)
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
-const roseArt = [
-  "             ⣠⣾⣷⣶⣦⣤⣤⣄⣠⣄⣀  ⢀⣀⣀",
-  "          ⢀⣴⣿⣿⠿⣋⣭⣭⣯⣭⣍⣭⣿⣟⠛⠛⠿⠿⣿⣷⣄",
-  "      ⢀⣴⣾⡟⢻⣿⡟⠁⣼⣿⠏⣵⢻⣿⣻⣿⣿⢿⡻⣿⣿⣶⡌⢿⣿⣷⣦⣤⡄",
-  "   ⣤⣶⣾⣿⣿⠏ ⠈⢿⣄ ⢹⣏⠠⠟⣾⣿⣿⣿⣿⣿⠷⣏⣼⠟⢡⣿⡟⠋⢻⣿⣿⡄",
-  "   ⠈⣿⣿⣿⣿⡆   ⣽⢧⡘⠈⠳⣦⣍⠛⠛⢦⣉⣴⣛⣫⣭⣴⡟⠋  ⣾⣿⣿⡿",
-  "   ⢀⠹⣿⣿⣿⣷⣤⡄ ⠋ ⠙⢆ ⣠⠴⠟⠛⣛⣛⣛⠟⠋⠁⠺⡇ ⣀⣴⣿⣿⡟⠁",
-  "   ⠈⣀⠈⠛⠷⠿⣿⣿⣷⣤⣀ ⢠⠋   ⠈⠉⠉    ⣠⣴⣥⠾⠛⠉⣰⣿⣷",
-  "          ⠹⣯⣝⠛⠛⠷⢶⣤⣤⣀   ⢀⡠⠖⠋⠉⢉⣀⣀⣴⣾⣿⠿⠟⠃ ⠠⠦",
-  "⠁       ⠖  ⠘⠻⢿⣦⣄⡀  ⠉⠛⢦⠠⢊⠤⠴⢒⣛⣛⣩⣽⡿⠟⠁⢀⡀",
-  "⠲⠶⣦⠴⠶⠶⠶⠶⡶⠶⢶⣤⣄⡀⠨⠭⠽⠟⣓⢦⣀⠈⢇⡥⠖⠛⠋⠉⠉⠉    ⠈  ⢠⡤",
-  "  ⠈⢷ ⠐⠂⢤⣽⣄ ⠰⡎⠙⠳⣄⡀ ⠈⢣⠘⢦⠋⣀⡬⠟⠛⠛⠉⢀⣀⣀⣠⡤⠄⠃",
-  "   ⠈⢳⣀⡒⠉⠉⣉⠙⡲⣽⣄ ⣏⠳⡄ ⠘⡇ ⡾⠁ ⢀⡤⠖⣻⣿⡏⢡⡎ ⠰⠄",
-  "     ⠛⠻⢦⣄⣉⡁⣀⣀⣈⣙⣺⣌⡇⢠⢀⡇⡾  ⣴⣿⡷⠊ ⢲⣠⠟",
-  "          ⠈⠉    ⠈⠳⡄⣸⢱⠇⢀⣰⣯⣭⣥⠭⠾⠛⠃",
-  "                  ⡷⠡⡯⢖⠉   ⢠⠤",
-  "                ⡠⢊⡴⠤⠂⠃ ⠒",
-  "             ⢀⡴⢪⠔⣉⠔⠋",
-  "               ⠐⠈",
-]
-
-const compactArt = ["✦ Gentle AI ✦"]
-
-const Logo = () => {
-  const dim = useTerminalDimensions()
-  const lines = createMemo(() => {
-    const term = dim()
-    return term.height >= roseArt.length + 6 && term.width >= 64 ? roseArt : compactArt
-  })
-
-  return (
-    <box flexDirection="column" alignItems="center">
-      {lines().map((line) => (
-        <text fg="magenta">{line}</text>
-      ))}
-    </box>
-  )
+// detectOpenCodeGeneration applies the durable-artifact-first cascade. The
+// probed major only breaks ties for an otherwise empty config directory.
+func detectOpenCodeGeneration(configDir string, major opencode.RuntimeMajor) openCodeGeneration {
+	if fileExists(filepath.Join(configDir, cliConfigName)) {
+		return generationV2
+	}
+	if fileExists(filepath.Join(configDir, tuiJSONCName)) || fileExists(filepath.Join(configDir, tuiJSONName)) {
+		return generationV1
+	}
+	if major == opencode.RuntimeV1 {
+		return generationV1
+	}
+	return generationV2
 }
 
-const tui: TuiPlugin = async (api: TuiPluginApi) => {
-  // Defensive guard: older runtimes may not expose the slots API, and the
-  // logo is decorative, so its absence must never break the TUI boot.
-  if (api.slots && typeof api.slots.register === "function") {
-    api.slots.register({
-      id,
-      order: 100,
-      slots: {
-        home_logo() {
-          return <Logo />
-        },
-      },
-    })
-  }
+// v1TUIConfigPath mirrors the V1 cascade: an existing tui.jsonc wins, then
+// tui.json, and a fresh V1 home materializes tui.jsonc.
+func v1TUIConfigPath(configDir string) string {
+	jsonc := filepath.Join(configDir, tuiJSONCName)
+	if fileExists(jsonc) {
+		return jsonc
+	}
+	jsonPath := filepath.Join(configDir, tuiJSONName)
+	if fileExists(jsonPath) {
+		return jsonPath
+	}
+	return jsonc
 }
 
-// The V2 loader requires a server-side entry to accept the module; the logo
-// is TUI-only, so setup is intentionally a no-op.
-const setup = async () => {}
+// managedOpenCodeConfigPath follows the MCP manager's load precedence: JSONC
+// is loaded after JSON and therefore owns conflicting keys when both exist.
+func managedOpenCodeConfigPath(configDir string) string {
+	jsonc := filepath.Join(configDir, opencodeJSONCName)
+	if fileExists(jsonc) {
+		return jsonc
+	}
+	jsonPath := filepath.Join(configDir, opencodeJSONName)
+	if fileExists(jsonPath) {
+		return jsonPath
+	}
+	return jsonc
+}
 
-export default Plugin.define({ id, setup, tui })
-`
+// ManagedLogoFiles returns the managed gentle-logo file set for the detected
+// OpenCode generation: the pre-built bundle, the V2 bridge directory and
+// registration files, or the V1 registration file. Callers use it for backup
+// and verification target lists, so it mirrors exactly what Install writes.
+func ManagedLogoFiles(homeDir string) ([]string, error) {
+	major, err := opencode.DetectRuntimeMajor(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	configDir := filepath.Join(homeDir, ".config", "opencode")
+	pluginDir := filepath.Join(configDir, "tui-plugins")
+	files := []string{filepath.Join(pluginDir, gentleLogoBundleFile)}
+	if detectOpenCodeGeneration(configDir, major) == generationV2 {
+		bridgeDir := filepath.Join(pluginDir, gentleLogoBridgeDir)
+		files = append(files,
+			filepath.Join(bridgeDir, bridgeTUIFileName),
+			filepath.Join(bridgeDir, bridgeManifestName),
+			filepath.Join(configDir, cliConfigName),
+			managedOpenCodeConfigPath(configDir),
+		)
+		if tuiPath := filepath.Join(configDir, tuiJSONName); fileExists(tuiPath) {
+			files = append(files, tuiPath)
+		}
+		return files, nil
+	}
+	files = append(files, v1TUIConfigPath(configDir))
+	if primary := v1TUIConfigPath(configDir); filepath.Base(primary) == tuiJSONCName {
+		if jsonPath := filepath.Join(configDir, tuiJSONName); fileExists(jsonPath) {
+			files = append(files, jsonPath)
+		}
+	}
+	return files, nil
+}
+
+// EmbeddedBundle returns the go:embedded pre-built gentle-logo ESM bundle.
+// OpenCode never transpiles TSX, so the committed build artifact produced by
+// internal/tuiassets is the only plugin payload the installer ships.
+func EmbeddedBundle() ([]byte, error) {
+	data, err := assets.Read("tui/" + gentleLogoBundleFile)
+	if err != nil {
+		return nil, fmt.Errorf("read embedded gentle-logo bundle: %w", err)
+	}
+	return []byte(data), nil
+}
 
 func DefinitionFor(id model.OpenCodeCommunityPluginID) (Definition, bool) {
 	if id == model.OpenCodePluginSDDEngramManage {
@@ -155,70 +204,352 @@ func Install(homeDir string, id model.OpenCodeCommunityPluginID) (Result, error)
 	}
 	// Runtime detection remains a fail-closed pre-flight: an unresolvable
 	// runtime still blocks every managed asset, including the logo.
-	if _, err := opencode.DetectRuntimeMajor(context.Background()); err != nil {
+	major, err := opencode.DetectRuntimeMajor(context.Background())
+	if err != nil {
 		return Result{}, err
 	}
 
-	return installGentleLogo(homeDir)
+	return installGentleLogo(homeDir, major)
 }
 
-func installGentleLogo(homeDir string) (Result, error) {
-	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
-	pluginPath := filepath.Join(opencodeDir, "tui-plugins", gentleLogoPluginFile)
-	tuiPath := filepath.Join(opencodeDir, "tui.json")
-
-	prior, err := capturePriorFile(pluginPath)
+// installGentleLogo ships the pre-built bundle and registers it with the
+// OpenCode generation that owns the config directory (issue #5364): V2 gets
+// the bridge directory package registered in cli.json and the managed
+// opencode.jsonc plugins union; V1 gets the relative bundle path in
+// tui.json(c). Every touched file is captured first so a failure compensates
+// as one recoverable operation (#1678), including the landed-with-error
+// window of WriteFileAtomic (#1676).
+func installGentleLogo(homeDir string, major opencode.RuntimeMajor) (Result, error) {
+	bundle, err := EmbeddedBundle()
 	if err != nil {
-		return Result{}, fmt.Errorf("capture prior Gentle Logo TUI plugin state: %w", err)
+		return Result{}, err
 	}
-	tuiPrior, err := capturePriorFile(tuiPath)
-	if err != nil {
-		return Result{}, fmt.Errorf("capture prior OpenCode TUI config state: %w", err)
-	}
+	configDir := filepath.Join(homeDir, ".config", "opencode")
+	pluginDir := filepath.Join(configDir, "tui-plugins")
+	generation := detectOpenCodeGeneration(configDir, major)
+	paths := managedLogoPaths(configDir, generation)
 
-	pluginWrite, err := writeFileAtomicFn(pluginPath, []byte(gentleLogoPluginSource), 0o644)
-	if err != nil {
-		// WriteFileAtomic can publish the replacement and still return an
-		// error (#1676), so compensate the source before returning;
-		// tui.json has not been touched at this point.
-		restoreErr := prior.restore(pluginPath)
-		if restoreErr != nil {
-			return Result{}, errors.Join(
-				fmt.Errorf("write Gentle Logo TUI plugin: %w", err),
-				fmt.Errorf("roll back Gentle Logo TUI plugin, the previous state could not be restored: %w", restoreErr),
-			)
+	priors := make(map[string]priorFile, len(paths))
+	for _, path := range paths {
+		prior, err := capturePriorFile(path)
+		if err != nil {
+			return Result{}, fmt.Errorf("capture prior Gentle Logo TUI plugin state for %s: %w", path, err)
 		}
-		return Result{}, fmt.Errorf("write Gentle Logo TUI plugin: %w", err)
+		priors[path] = prior
 	}
-	tuiChanged, err := ensureTUIPluginFn(tuiPath, pluginPath)
-	if err != nil {
-		// WriteFileAtomic can report the replacement as landed even when it
-		// returns an error (#1676), so compensate both files unconditionally;
-		// restoring a tui.json write that never landed is a no-op.
-		restoreErr := prior.restore(pluginPath)
-		tuiRestoreErr := tuiPrior.restore(tuiPath)
-		if restoreErr != nil || tuiRestoreErr != nil {
-			joined := []error{fmt.Errorf("register Gentle Logo TUI plugin: %w", err)}
-			if restoreErr != nil {
-				joined = append(joined, fmt.Errorf("roll back Gentle Logo TUI plugin, the previous state could not be restored: %w", restoreErr))
+	rollback := func(cause error) error {
+		joined := []error{cause}
+		for path, prior := range priors {
+			if restoreErr := prior.restore(path); restoreErr != nil {
+				joined = append(joined, fmt.Errorf("roll back %s, the previous state could not be restored: %w", path, restoreErr))
 			}
-			if tuiRestoreErr != nil {
-				joined = append(joined, fmt.Errorf("roll back OpenCode TUI config, the previous state could not be restored: %w", tuiRestoreErr))
-			}
-			return Result{}, errors.Join(joined...)
 		}
-		return Result{}, fmt.Errorf("register Gentle Logo TUI plugin: %w", err)
+		if len(joined) == 1 {
+			return cause
+		}
+		return errors.Join(joined...)
 	}
 
-	return Result{
-		Changed: pluginWrite.Changed || tuiChanged,
-		Files:   []string{pluginPath, tuiPath},
-	}, nil
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		return Result{}, rollback(fmt.Errorf("create OpenCode tui-plugins directory: %w", err))
+	}
+	bundleWrite, err := writeFileAtomicFn(filepath.Join(pluginDir, gentleLogoBundleFile), bundle, 0o644)
+	if err != nil {
+		return Result{}, rollback(fmt.Errorf("write gentle-logo bundle: %w", err))
+	}
+	changed := bundleWrite.Changed
+
+	if generation == generationV2 {
+		bridgeDir := filepath.Join(pluginDir, gentleLogoBridgeDir)
+		if err := os.MkdirAll(bridgeDir, 0o755); err != nil {
+			return Result{}, rollback(fmt.Errorf("create gentle-logo bridge directory: %w", err))
+		}
+		tuiChanged, err := writeIfChanged(filepath.Join(bridgeDir, bridgeTUIFileName), []byte(bridgeTUIFileContent))
+		if err != nil {
+			return Result{}, rollback(fmt.Errorf("write gentle-logo bridge tui.js: %w", err))
+		}
+		manifestChanged, err := writeIfChanged(filepath.Join(bridgeDir, bridgeManifestName), []byte(bridgeManifestContent))
+		if err != nil {
+			return Result{}, rollback(fmt.Errorf("write gentle-logo bridge package.json: %w", err))
+		}
+		changed = changed || tuiChanged || manifestChanged
+
+		cliChanged, err := upsertPluginRegistration(filepath.Join(configDir, cliConfigName), gentleLogoV2Entry, cliSchemaV2, "plugins")
+		if err != nil {
+			return Result{}, rollback(fmt.Errorf("register gentle-logo in cli.json: %w", err))
+		}
+		changed = changed || cliChanged
+
+		opencodeChanged, err := unionOpenCodePlugins(managedOpenCodeConfigPath(configDir))
+		if err != nil {
+			return Result{}, rollback(fmt.Errorf("union gentle-logo into the managed OpenCode config: %w", err))
+		}
+		changed = changed || opencodeChanged
+
+		tuiRetired, err := retireGentleLogoEntries(filepath.Join(configDir, tuiJSONName))
+		if err != nil {
+			return Result{}, rollback(fmt.Errorf("retire stale gentle-logo registration in tui.json: %w", err))
+		}
+		changed = changed || tuiRetired
+		return Result{Changed: changed, Files: paths}, nil
+	}
+
+	registeredChanged, err := upsertV1PluginRegistration(configDir)
+	if err != nil {
+		return Result{}, rollback(fmt.Errorf("register gentle-logo in the OpenCode TUI config: %w", err))
+	}
+	return Result{Changed: changed || registeredChanged, Files: paths}, nil
 }
 
-// ensureTUIPluginFn is a package-level seam so tests can inject a failing
-// registration, mirroring the syncDirFn/renameFn seams in filemerge.
-var ensureTUIPluginFn = ensureTUIPlugin
+// managedLogoPaths lists every file an install of the given generation
+// writes or touches, in the same order ManagedLogoFiles reports them.
+func managedLogoPaths(configDir string, generation openCodeGeneration) []string {
+	pluginDir := filepath.Join(configDir, "tui-plugins")
+	paths := []string{filepath.Join(pluginDir, gentleLogoBundleFile)}
+	if generation == generationV2 {
+		bridgeDir := filepath.Join(pluginDir, gentleLogoBridgeDir)
+		paths = append(paths,
+			filepath.Join(bridgeDir, bridgeTUIFileName),
+			filepath.Join(bridgeDir, bridgeManifestName),
+			filepath.Join(configDir, cliConfigName),
+			managedOpenCodeConfigPath(configDir),
+		)
+		if tuiPath := filepath.Join(configDir, tuiJSONName); fileExists(tuiPath) {
+			paths = append(paths, tuiPath)
+		}
+		return paths
+	}
+	primary := v1TUIConfigPath(configDir)
+	paths = append(paths, primary)
+	if filepath.Base(primary) == tuiJSONCName {
+		if jsonPath := filepath.Join(configDir, tuiJSONName); fileExists(jsonPath) {
+			paths = append(paths, jsonPath)
+		}
+	}
+	return paths
+}
+
+// writeIfChanged publishes content through the atomic write path only when
+// the bytes differ, so idempotent installs report no change.
+func writeIfChanged(path string, content []byte) (bool, error) {
+	if existing, err := os.ReadFile(path); err == nil {
+		if bytes.Equal(existing, content) {
+			return false, nil
+		}
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	wr, err := writeFileAtomicFn(path, content, 0o644)
+	if err != nil {
+		return wr.Changed, err
+	}
+	return wr.Changed, nil
+}
+
+// isGentleLogoEntry reports whether a configured plugin entry is owned by the
+// gentle-logo installer: the V1/V2 relative entries or any path whose base
+// name is one of the managed artifacts (including the T1-era .tsx file).
+func isGentleLogoEntry(value string) bool {
+	if value == gentleLogoV1Entry || value == gentleLogoV2Entry {
+		return true
+	}
+	normalized := strings.ReplaceAll(filepath.ToSlash(value), "\\", "/")
+	base := normalized[strings.LastIndex(normalized, "/")+1:]
+	switch base {
+	case "gentle-logo", "gentle-logo.js", "gentle-logo.tsx":
+		return true
+	}
+	return false
+}
+
+// pluginEntries collects the plugin entries configured under both the V1
+// "plugin" key and the V2 "plugins" key, refusing non-array values.
+func pluginEntries(root map[string]any) ([]any, error) {
+	var entries []any
+	for _, key := range []string{"plugin", "plugins"} {
+		configured, exists := root[key]
+		if !exists || configured == nil {
+			continue
+		}
+		values, ok := configured.([]any)
+		if !ok {
+			return nil, fmt.Errorf("OpenCode config %q must be an array", key)
+		}
+		entries = append(entries, values...)
+	}
+	return entries, nil
+}
+
+func filterGentleLogoEntries(entries []any) []any {
+	kept := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		if value, ok := entry.(string); ok && isGentleLogoEntry(value) {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
+}
+
+// mergeAndWriteConfig merges the overlay into the existing JSON/JSONC
+// document (JSONC comments outside touched values are preserved) and
+// publishes it through the atomic write path.
+func mergeAndWriteConfig(path string, raw []byte, overlay map[string]any) (bool, error) {
+	if strings.HasSuffix(path, ".jsonc") && len(bytes.TrimSpace(raw)) == 0 {
+		// Seed an empty JSONC object so the comment-preserving rewrite
+		// produces the same bytes on the first and every later install;
+		// merging into an empty base would normalize to plain JSON and
+		// reformat on the next run, breaking idempotency.
+		raw = []byte("{}")
+	}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		return false, err
+	}
+	merged, err := filemerge.MergeJSONObjectsForPath(path, raw, overlayJSON)
+	if err != nil {
+		return false, err
+	}
+	wr, err := writeFileAtomicFn(path, merged, 0o644)
+	if err != nil {
+		return wr.Changed, err
+	}
+	return wr.Changed, nil
+}
+
+// upsertPluginRegistration ensures the config file's plugin list contains
+// exactly one occurrence of entry, preserving every other entry. An empty
+// pluginsKey auto-detects the existing key (defaulting to V1's "plugin");
+// a non-empty key is forced, as cli.json always uses the V2 "plugins" key.
+func upsertPluginRegistration(path, entry, schema, pluginsKey string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", path, err)
+	}
+	entries, err := pluginEntries(root)
+	if err != nil {
+		return false, err
+	}
+	entries = filterGentleLogoEntries(entries)
+	found := false
+	for _, configured := range entries {
+		if value, ok := configured.(string); ok && value == entry {
+			found = true
+			break
+		}
+	}
+	if !found {
+		entries = append(entries, entry)
+	}
+	if pluginsKey == "" {
+		pluginsKey = "plugin"
+		if _, exists := root["plugins"]; exists {
+			pluginsKey = "plugins"
+		}
+	}
+	return mergeAndWriteConfig(path, raw, map[string]any{"$schema": schema, pluginsKey: entries})
+}
+
+// unionOpenCodePlugins applies the durable V2 channel: the managed
+// opencode.jsonc plugins array is rebuilt as a union so third-party entries
+// survive and exactly one gentle-logo entry remains (cortex-ia parity).
+func unionOpenCodePlugins(path string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		if strings.HasSuffix(path, ".jsonc") {
+			return false, fmt.Errorf("parse %s: %w", path, err)
+		}
+		// Plain opencode.json follows the shared settings-merge tolerance:
+		// the installer backup already snapshotted the file, and the merge
+		// below proceeds from an empty base rather than aborting the install.
+		root = map[string]any{}
+	}
+	configured, exists := root["plugins"]
+	if exists && configured != nil {
+		values, ok := configured.([]any)
+		if !ok {
+			return false, fmt.Errorf("OpenCode config plugins must be an array")
+		}
+		root["plugins"] = filterGentleLogoEntries(values)
+	}
+	return mergeAndWriteConfig(path, raw, map[string]any{"$schema": opencodeSchemaV2, "plugins": appendPluginEntry(root, gentleLogoV2Entry)})
+}
+
+// appendPluginEntry appends entry to the plugins array exactly once. It
+// expects gentle-logo entries to have been filtered already.
+func appendPluginEntry(root map[string]any, entry string) []any {
+	entries, _ := root["plugins"].([]any)
+	for _, configured := range entries {
+		if value, ok := configured.(string); ok && value == entry {
+			return entries
+		}
+	}
+	return append(entries, entry)
+}
+
+// upsertV1PluginRegistration registers the relative bundle path in the V1
+// tui.jsonc/tui.json cascade: an existing tui.jsonc wins and tui.json, when
+// it also exists, is kept in sync as a secondary target.
+func upsertV1PluginRegistration(configDir string) (bool, error) {
+	primary := v1TUIConfigPath(configDir)
+	primaryChanged, err := upsertPluginRegistration(primary, gentleLogoV1Entry, tuiSchemaV1, "")
+	if err != nil {
+		return false, err
+	}
+	secondaryChanged := false
+	if filepath.Base(primary) == tuiJSONCName {
+		secondary := filepath.Join(configDir, tuiJSONName)
+		if fileExists(secondary) {
+			secondaryChanged, err = upsertPluginRegistration(secondary, gentleLogoV1Entry, tuiSchemaV1, "")
+			if err != nil {
+				return false, err
+			}
+		}
+	}
+	return primaryChanged || secondaryChanged, nil
+}
+
+// retireGentleLogoEntries removes every gentle-logo registration from the
+// V1-era tui.json without touching the user's other entries. It is a no-op
+// when the file does not exist or holds no gentle-logo entries.
+func retireGentleLogoEntries(path string) (bool, error) {
+	if !fileExists(path) {
+		return false, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", path, err)
+	}
+	entries, err := pluginEntries(root)
+	if err != nil {
+		return false, err
+	}
+	kept := filterGentleLogoEntries(entries)
+	if len(kept) == len(entries) {
+		return false, nil
+	}
+	pluginKey := "plugins"
+	if _, exists := root["plugins"]; !exists {
+		pluginKey = "plugin"
+	}
+	overlay := map[string]any{pluginKey: kept}
+	if schema, exists := root["$schema"]; exists {
+		overlay["$schema"] = schema
+	}
+	return mergeAndWriteConfig(path, raw, overlay)
+}
 
 // writeFileAtomicFn is the source-write seam for installGentleLogo, so tests
 // can exercise the landed-with-error window of WriteFileAtomic (#1676).

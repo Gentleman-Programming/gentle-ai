@@ -4178,13 +4178,17 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if adapter.Agent() != model.AgentOpenCode {
 				break
 			}
-			// The logo installs on every supported runtime since the V2-shaped
-			// module ships home_logo via api.slots (issue #5364), so its files
-			// are backed up and verified like any other managed file.
-			paths = append(paths,
-				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
-				filepath.Join(homeDir, ".config", "opencode", "tui.json"),
-			)
+			// The logo's managed file set depends on the OpenCode generation
+			// that owns the config directory (issue #5364): V2 ships the
+			// pre-built bundle plus the bridge directory registered in
+			// cli.json and the managed opencode.jsonc; V1 ships the bundle
+			// registered in tui.json(c). An unresolvable runtime fails the
+			// install step itself, so there is nothing to back up or verify.
+			logoFiles, err := opencodeplugin.ManagedLogoFiles(homeDir)
+			if err != nil {
+				break
+			}
+			paths = append(paths, logoFiles...)
 		}
 	}
 

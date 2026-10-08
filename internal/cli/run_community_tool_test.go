@@ -172,8 +172,8 @@ func TestBackupTargetsIncludeGentleLogoComponentPaths(t *testing.T) {
 	}
 
 	for _, path := range []string{
-		filepath.Join(home, ".config", "opencode", "tui.json"),
-		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+		filepath.Join(home, ".config", "opencode", "tui.jsonc"),
+		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.js"),
 	} {
 		if !slices.Contains(targets, path) {
 			t.Fatalf("backup targets = %v, missing selected plugin path %q", targets, path)

@@ -1757,8 +1757,8 @@ func TestComponentPathsOpenCodeGentleLogoMatchesSelectedAdapter(t *testing.T) {
 	}{
 		{model.AgentClaudeCode, []string{}},
 		{model.AgentOpenCode, []string{
-			filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
-			filepath.Join(home, ".config", "opencode", "tui.json"),
+			filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.js"),
+			filepath.Join(home, ".config", "opencode", "tui.jsonc"),
 		}},
 	} {
 		paths := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, model.Selection{}, resolveAdapters([]model.AgentID{tt.agent}), model.ComponentOpenCodeGentleLogo)
