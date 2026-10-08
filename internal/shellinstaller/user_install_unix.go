@@ -300,12 +300,12 @@ func userForeground(cmd *exec.Cmd, stdin io.Reader) (func() error, error) {
 // userReapGroup kills the owned process group after Wait and returns nil only
 // once the kernel reports no member remains; every other outcome is uncertain.
 func userReapGroup(pid int, waitErr error) error {
-	killErr := syscall.Kill(-pid, syscall.SIGKILL)
+	killErr := userKillGroup(pid, syscall.SIGKILL)
 	if killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
 		return privateError("uncertain", errors.Join(waitErr, killErr))
 	}
 	for attempts := 0; attempts < 20; attempts++ {
-		if probeErr := syscall.Kill(-pid, 0); errors.Is(probeErr, syscall.ESRCH) {
+		if probeErr := userKillGroup(pid, userReapProbe); errors.Is(probeErr, syscall.ESRCH) {
 			return nil
 		} else if probeErr != nil {
 			return privateError("uncertain", errors.Join(waitErr, probeErr))

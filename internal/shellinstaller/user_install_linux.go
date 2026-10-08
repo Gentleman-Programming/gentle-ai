@@ -936,6 +936,16 @@ func userLaunchCommand(ctx context.Context, root string, manifest userManifest, 
 	return cmd // Empty Dir inherits the caller's project, not the installer stage.
 }
 
+// userReapProbe only checks for members: Linux delivers a group SIGKILL to a
+// member forked concurrently with it.
+const userReapProbe syscall.Signal = 0
+
+// userKillGroup signals every member of process group pgid. Linux counts
+// zombie members, so a zombie-only group answers 0 until it is reaped.
+func userKillGroup(pgid int, sig syscall.Signal) error {
+	return syscall.Kill(-pgid, sig)
+}
+
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	manifest, err := userReadManifest(ctx, root)
 	if err != nil {
@@ -953,28 +963,12 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	}
 	cmd := userLaunchCommand(ctx, root, manifest, cli, args)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
-	restore, err := userForeground(cmd, stdin)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if restoreErr := restore(); restoreErr != nil {
-			err = privateError("uncertain", errors.Join(err, restoreErr))
+	return userLaunchGroup(cmd, stdin, func(err error) error {
+		if readbackErr := userVerifyGlobal(context.Background(), root, manifest.Prefix, manifest.Agent, manifest.Prefix, root, manifest.Mode); readbackErr != nil {
+			failure := privateError("uncertain", errors.Join(err, readbackErr))
+			failure.Workspace, failure.Destination = root, manifest.Prefix
+			return failure
 		}
-	}()
-	cmd.WaitDelay = 2 * time.Second
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	if err := cmd.Start(); err != nil {
 		return err
-	}
-	err = cmd.Wait()
-	if reapErr := userReapGroup(cmd.Process.Pid, err); reapErr != nil {
-		return reapErr
-	}
-	if readbackErr := userVerifyGlobal(context.Background(), root, manifest.Prefix, manifest.Agent, manifest.Prefix, root, manifest.Mode); readbackErr != nil {
-		failure := privateError("uncertain", errors.Join(err, readbackErr))
-		failure.Workspace, failure.Destination = root, manifest.Prefix
-		return failure
-	}
-	return err
+	})
 }
