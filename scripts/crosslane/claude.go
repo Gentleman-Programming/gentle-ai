@@ -119,6 +119,14 @@ func (b *battery) prepareClaudeProcessFixture() ([]string, string, error) {
 set -eu
 prompt_path="${GENTLE_AI_CROSSLANE_CLAUDE_PROMPT:?}"
 cat > "$prompt_path"
+# Deterministic severe claims are routed through the provider refuter, which
+# spawns this same binary: corroborate every supplied claim.
+if grep -q 'gentle-ai.review-provider-refuter-request/v1' "$prompt_path"; then
+  request_hash=$(grep -o '"request_hash":"sha256:[0-9a-f]*"' "$prompt_path" | head -n 1 | sed 's/.*"\(sha256:[0-9a-f]*\)"/\1/')
+  results=$(grep -o '"finding_id":"[^"]*"' "$prompt_path" | sort -u | sed 's/"finding_id":"\([^"]*\)"/{"finding_id":"\1","outcome":"corroborated","proof_refs":["src\/claude.js:4-6"]}/' | paste -sd, -)
+  printf '%s\n' '{"refuter_request_hash":"'"$request_hash"'","results":['"$results"']}'
+  exit 0
+fi
 subject_hash=$(sed -n 's/.*"subject_hash"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$prompt_path" | head -n 1)
 if [ -z "$subject_hash" ]; then
   echo "fixture did not receive a provider subject hash" >&2

@@ -179,10 +179,10 @@ chmod +x docker-test.sh
 
 The cross-lane battery ([`scripts/cross-lane-battery.sh`](scripts/cross-lane-battery.sh), implemented in [`scripts/crosslane/`](scripts/crosslane/)) is a local, out-of-CI regression net. It drives one real `gentle-ai` binary end to end across the supported agent-host review integration boundaries. It is deliberately not wired into CI because its optional tiers spend real reviewer model runs and real host sessions.
 
-Build a binary first, then run the tier you can afford:
+Build a binary first, then run the tier you can afford. The binary must report a semver version: the OpenCode transport plugin refuses `gentle-ai dev`, so the battery stops early on an unversioned build. Any version at or above the plugin minimum (2.0.0) works.
 
 ```bash
-go build -o /tmp/gentle-ai ./cmd/gentle-ai
+go build -ldflags "-X main.version=$(git describe --tags --abbrev=0 | sed s/^v//)-dev" -o /tmp/gentle-ai ./cmd/gentle-ai
 ./scripts/cross-lane-battery.sh --binary /tmp/gentle-ai [--with-model] [--with-host] [--keep-work]
 ```
 

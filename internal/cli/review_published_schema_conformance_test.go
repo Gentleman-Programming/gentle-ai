@@ -251,3 +251,26 @@ func TestPublishedLastEventClosureSchemaRejectsNonStatusCorrectionContinuation(t
 		t.Fatalf("published last-event closure schema accepted non-STATUS correction continuation: %#v", closure)
 	}
 }
+
+func TestPublishedReviewAcknowledgedSchemaValidatesBurnEnvelope(t *testing.T) {
+	var output bytes.Buffer
+	if err := encodeReviewJSON(&output, reviewAcknowledgedResult{
+		Schema: reviewAcknowledgedSchema, Operation: "review/acknowledge-approved", Action: "acknowledged",
+		LineageID: "review-0123456789abcdef", TargetIdentity: "sha256:" + string(bytes.Repeat([]byte("a"), 64)),
+		ConsumedRevision: "sha256:" + string(bytes.Repeat([]byte("b"), 64)), Authority: "burned",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	schema := compileWholePublishedReviewSchema(t, "v2", "review-acknowledged.schema.json")
+	validatePublishedReviewSchema(t, schema, output.Bytes())
+	envelope := decodeJSONObjectCopy(t, output.Bytes())
+	envelope["authority"] = "active"
+	if err := schema.Validate(envelope); err == nil {
+		t.Fatal("published review-acknowledged schema accepted an unburned authority")
+	}
+	envelope = decodeJSONObjectCopy(t, output.Bytes())
+	delete(envelope, "consumed_revision")
+	if err := schema.Validate(envelope); err == nil {
+		t.Fatal("published review-acknowledged schema accepted an envelope without consumed_revision")
+	}
+}
