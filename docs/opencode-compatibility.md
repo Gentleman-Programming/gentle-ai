@@ -11,7 +11,7 @@ version evidence refuses incompatible writes rather than assuming V2.
 | --- | --- | --- |
 | Config, model references and permissions | Existing behavior retained | Native config/profile/MCP handling and permission-preserving merges tested |
 | Managed plugins | Existing assets retained | Four assets: telemetry, model catalog, skill registry and review transport |
-| Gentle logo | Existing placement unchanged | Explicitly skipped; no equivalent `home_logo` slot, no relocation or config writes |
+| Gentle logo | Existing placement unchanged | Installed as a bundled ESM TUI plugin; renders via the V2 `home.footer` slot surface (V1 keeps the `home_logo` slot) |
 | Community TUI plugins | Existing integration retained | Compatibility unproven; installation/update refuses, not silently omitted |
 | Native review | Existing V1 capability path retained | Admitted only for a V2 runtime whose managed plugin declares the V2 relay contract (see below) |
 
