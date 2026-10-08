@@ -2258,13 +2258,21 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 		return false, err
 	}
 	task := map[string]any{}
+	agents, _ := root["agent"].(map[string]any)
+	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
+	current, _ := orchestrator["permission"].(map[string]any)
+	// Delegate only to Gentle AI agents: without a wildcard deny the
+	// orchestrator can pick OpenCode's built-in explore/general subagents,
+	// which lack the skill tool. OpenCode applies the last matching rule, and
+	// "*" sorts before every agent name, so the wildcard precedes the grants.
+	// A wildcard rule the user already set is kept.
+	if currentTask, _ := current["task"].(map[string]any); currentTask["*"] == nil {
+		task["*"] = "deny"
+	}
 	for _, name := range opencodeagents.Roles(agent) {
 		task[name] = "allow"
 	}
 	permission := map[string]any{"task": task}
-	agents, _ := root["agent"].(map[string]any)
-	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
-	current, _ := orchestrator["permission"].(map[string]any)
 	if _, set := current["question"]; !set && !userDeniesQuestion(root, orchestrator) {
 		permission["question"] = "allow"
 	}

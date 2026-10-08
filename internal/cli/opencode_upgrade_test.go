@@ -241,3 +241,101 @@ func TestOpenCodeInstallKeepsUserQuestionRule(t *testing.T) {
 		})
 	}
 }
+
+// The orchestrator delegates only to Gentle AI agents: a wildcard deny keeps
+// OpenCode's built-in explore/general subagents (which lack the skill tool)
+// from replacing gentle-ai-explore. OpenCode applies the last matching rule,
+// so the wildcard must precede the grants in the written document.
+func TestOpenCodeOrchestratorDeniesNonGentleSubagents(t *testing.T) {
+	for _, command := range []string{"install", "sync"} {
+		for _, version := range openCodeRuntimeVersions {
+			t.Run(command+"/"+version, func(t *testing.T) {
+				home := installTestHome(t)
+				stubOpenCodeRuntimeVersion(t, home, version)
+				var err error
+				if command == "install" {
+					_, err = RunInstall([]string{"--agent", "opencode", "--component", "persona"}, system.DetectionResult{})
+				} else {
+					if _, err = RunInstall([]string{"--agent", "opencode", "--component", "persona"}, system.DetectionResult{}); err == nil {
+						_, err = RunSync([]string{"--agent", "opencode"})
+					}
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				root, err := filemerge.UnmarshalJSONObject(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				agents, _ := root["agent"].(map[string]any)
+				assertOpenCodeOrchestratorPermissions(t, agents)
+				task := agents["gentle-orchestrator"].(map[string]any)["permission"].(map[string]any)["task"].(map[string]any)
+				if task["*"] != "deny" {
+					t.Fatalf("orchestrator task permission = %#v, want \"*\": \"deny\" before the Gentle AI grants", task)
+				}
+				text := string(raw)
+				wildcard := strings.Index(text, `"*": "deny"`)
+				grant := strings.Index(text, `"gentle-ai-explore": "allow"`)
+				if wildcard < 0 || grant < 0 || wildcard > grant {
+					t.Fatalf("wildcard deny must precede the grants (last match wins):\n%s", text)
+				}
+			})
+		}
+	}
+}
+
+func TestOpenCodeInstallKeepsUserTaskWildcardRule(t *testing.T) {
+	home := installTestHome(t)
+	path := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"agent":{"gentle-orchestrator":{"permission":{"task":{"*":"ask"}}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RunInstall([]string{"--agent", "opencode", "--component", "persona"}, system.DetectionResult{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := root["agent"].(map[string]any)["gentle-orchestrator"].(map[string]any)["permission"].(map[string]any)["task"].(map[string]any)
+	if task["*"] != "ask" {
+		t.Fatalf("user task wildcard rule replaced: %#v", task["*"])
+	}
+}
+
+func TestOpenCodeSyncAddsWildcardDenyBeforeExistingGrants(t *testing.T) {
+	home := installTestHome(t)
+	stubOpenCodeRuntimeVersion(t, home, "2.0.23")
+	path := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"agent":{"gentle-orchestrator":{"permission":{"question":"allow","task":{"gentle-ai-explore":"allow","review-risk":"allow"}}}}}`
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RunInstall([]string{"--agent", "opencode", "--component", "persona"}, system.DetectionResult{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	wildcard := strings.Index(text, `"*": "deny"`)
+	grant := strings.Index(text, `"gentle-ai-explore": "allow"`)
+	if wildcard < 0 || grant < 0 || wildcard > grant {
+		t.Fatalf("wildcard deny must precede existing grants (last match wins):\n%s", text)
+	}
+}
