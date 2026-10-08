@@ -299,6 +299,41 @@ def real_home_snapshot(home):
     return rows
 
 
+def real_home_children(home):
+    """Child names with identity and mtime under each watched directory, names only."""
+    children = {}
+    for relative in REAL_HOME_WATCH:
+        directory = os.path.join(home, relative)
+        if not os.path.isdir(directory) or os.path.islink(directory):
+            continue
+        entries = {}
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            continue
+        for name in names:
+            try:
+                info = os.lstat(os.path.join(directory, name))
+                entries[name] = (info.st_ino, info.st_mtime_ns)
+            except OSError:
+                entries[name] = None
+        children[relative] = entries
+    return children
+
+
+def real_home_changes(before, after, limit=30):
+    """Which children were added, removed or modified, so a failure is attributable."""
+    report = {}
+    for relative in sorted(set(before) | set(after)):
+        old, new = before.get(relative, {}), after.get(relative, {})
+        added = sorted(set(new) - set(old))[:limit]
+        removed = sorted(set(old) - set(new))[:limit]
+        modified = sorted(name for name in set(old) & set(new) if old[name] != new[name])[:limit]
+        if added or removed or modified:
+            report[relative] = {'added': added, 'removed': removed, 'modified': modified}
+    return report
+
+
 def write_file(path, data, mode):
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     with os.fdopen(descriptor, 'wb') as handle:
@@ -349,6 +384,7 @@ def prepare(arguments):
 def qualify(context):
     real_home = pwd.getpwuid(os.getuid()).pw_dir
     home_before = real_home_snapshot(real_home)
+    home_children_before = real_home_children(real_home)
 
     separate = os.path.join(context.work, 'separate')
     manifest = install(context, 'separate', separate)
@@ -458,6 +494,8 @@ def qualify(context):
     checkpoint('real-home')
     home_after = real_home_snapshot(real_home)
     changed = sorted(key for key in home_before if home_before[key] != home_after[key])
+    if changed:
+        RECEIPT['realHomeChanges'] = real_home_changes(home_children_before, real_home_children(real_home))
     require(not changed, 'real HOME changed at %s' % changed)
     reached('real-home', watchedEntries=len(REAL_HOME_WATCH))
 
