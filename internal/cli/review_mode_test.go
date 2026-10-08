@@ -1230,6 +1230,9 @@ func stubReviewConsole(t *testing.T, interactive bool, answer string) *bytes.Buf
 func reviewModeHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
+	if err := os.Chmod(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	return home
