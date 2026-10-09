@@ -97,6 +97,12 @@ func TestIsSupportedAgentAcceptsHermes(t *testing.T) {
 	}
 }
 
+func TestIsSupportedAgentAcceptsGitHubCopilotCLI(t *testing.T) {
+	if !IsSupportedAgent(model.AgentGitHubCopilotCLI) {
+		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentGitHubCopilotCLI)
+	}
+}
+
 func TestAllAgentsIncludesConductor(t *testing.T) {
 	agents := AllAgents()
 

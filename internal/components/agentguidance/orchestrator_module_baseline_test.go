@@ -75,6 +75,8 @@ var moduleVariantInputs = []moduleVariantInput{
 	{id: "openclaw/small", agent: model.AgentOpenClaw, capability: "small", asset: "generic/orchestrator.md"},
 	{id: "trae-ide/capable", agent: model.AgentTrae, asset: "generic/orchestrator.md"},
 	{id: "trae-ide/small", agent: model.AgentTrae, capability: "small", asset: "generic/orchestrator.md"},
+	{id: "github-copilot-cli/capable", agent: model.AgentGitHubCopilotCLI, asset: "generic/orchestrator.md"},
+	{id: "github-copilot-cli/small", agent: model.AgentGitHubCopilotCLI, capability: "small", asset: "generic/orchestrator.md"},
 }
 
 type moduleVariant struct {
@@ -253,7 +255,7 @@ func TestOrchestratorModuleBaseline(t *testing.T) {
 	if renders["opencode/v2"] == renders["opencode/v1"] || !strings.Contains(renders["opencode/v2"], "`subagent`") {
 		t.Error("OpenCode v2 no longer binds the review contract to its own tool names")
 	}
-	for _, agent := range []string{"vscode-copilot", "openclaw", "trae-ide"} {
+	for _, agent := range []string{"vscode-copilot", "openclaw", "trae-ide", "github-copilot-cli"} {
 		capable, small := renders[agent+"/capable"], renders[agent+"/small"]
 		if capable == small || strings.Contains(capable, "(Small Model)") || !strings.Contains(small, "(Small Model)") {
 			t.Errorf("%s does not keep distinct capable and small generic variants", agent)
