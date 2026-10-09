@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/decision-v1.schema.json",
+  "title": "Gentle AI review decision question",
+  "description": "The typed, runnable decision question the native STATUS projection carries for a compact authority paused at decision_required. Two complete choices, each with the exact runnable `gentle-ai review decide` invocation bound to the current expected revision.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "lineage_id",
+    "expected_revision",
+    "state",
+    "headline",
+    "reason",
+    "evidence",
+    "choices"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.review-decision/v1"
+    },
+    "lineage_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expected_revision": {
+      "$ref": "#/$defs/sha256"
+    },
+    "state": {
+      "const": "decision_required"
+    },
+    "headline": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence": {
+      "$ref": "#/$defs/decision_evidence"
+    },
+    "choices": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/continue_choice"
+        },
+        {
+          "$ref": "#/$defs/stop_choice"
+        }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "decision_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "cause",
+        "finding_ids",
+        "attempted_evidence",
+        "missing_evidence",
+        "recommendation",
+        "next_action",
+        "bounded_cost"
+      ],
+      "properties": {
+        "reason": {
+          "const": "evidence_inconclusive"
+        },
+        "cause": {
+          "enum": [
+            "unresolved_severe_findings",
+            "missing_refuter_outcome",
+            "insufficient_evidence",
+            "unknown_causality"
+          ]
+        },
+        "finding_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "attempted_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "missing_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "recommendation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "next_action": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bounded_cost": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "continue_choice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "answer",
+        "label",
+        "effect",
+        "invocation"
+      ],
+      "properties": {
+        "answer": {
+          "const": "continue"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "effect": {
+          "type": "string",
+          "minLength": 1
+        },
+        "invocation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "stop_choice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "answer",
+        "label",
+        "effect",
+        "invocation"
+      ],
+      "properties": {
+        "answer": {
+          "const": "stop"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "effect": {
+          "type": "string",
+          "minLength": 1
+        },
+        "invocation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

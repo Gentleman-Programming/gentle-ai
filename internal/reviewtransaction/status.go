@@ -395,6 +395,11 @@ func authorityStatusForState(state State) AuthorityStatus {
 		return AuthorityStatusEscalated
 	case StateInvalidated:
 		return AuthorityStatusInvalidated
+	case StateDecisionRequired:
+		// #1380: a paused decision is active-family authority — still eligible
+		// as discovery/gate context, never terminal — and its exit is review
+		// decide, mapped explicitly so the contract cannot drift by default.
+		return AuthorityStatusActive
 	default:
 		return AuthorityStatusActive
 	}

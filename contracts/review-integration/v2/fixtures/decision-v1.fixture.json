@@ -1,0 +1,38 @@
+{
+  "schema": "gentle-ai.review-decision/v1",
+  "lineage_id": "review-decision-fixture",
+  "expected_revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "state": "decision_required",
+  "headline": "This review needs a human decision.",
+  "reason": "The admitted review evidence could not resolve every finding, so the engine paused instead of escalating on its own.",
+  "evidence": {
+    "reason": "evidence_inconclusive",
+    "cause": "unresolved_severe_findings",
+    "finding_ids": [
+      "R3-001"
+    ],
+    "attempted_evidence": [
+      "admitted review lens results"
+    ],
+    "missing_evidence": [
+      "conclusive_outcome:R3-001"
+    ],
+    "recommendation": "A human decides whether this review continues or stops.",
+    "next_action": "review decide (continue|stop) with the current lineage and expected revision",
+    "bounded_cost": "one decide invocation; no reviewer recapture and no additional reviewer work"
+  },
+  "choices": [
+    {
+      "answer": "continue",
+      "label": "Continue the review",
+      "effect": "Resumes this lineage as reviewing with the answered question cleared; the admitted captures stay bound.",
+      "invocation": "gentle-ai review decide --cwd \u003crepo\u003e --lineage review-decision-fixture --expected-revision sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --decision continue --actor \u003cactor\u003e --reason \u003creason\u003e"
+    },
+    {
+      "answer": "stop",
+      "label": "Stop this review",
+      "effect": "Escalates this lineage with the frozen question and decision journal retained; delivery then follows ordinary repository policy.",
+      "invocation": "gentle-ai review decide --cwd \u003crepo\u003e --lineage review-decision-fixture --expected-revision sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --decision stop --actor \u003cactor\u003e --reason \u003creason\u003e"
+    }
+  ]
+}
