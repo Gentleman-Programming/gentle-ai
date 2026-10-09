@@ -3771,6 +3771,23 @@ func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, sele
 		if component == model.ComponentSDD {
 			continue
 		}
+		if component == model.ComponentOpenCodeGentleLogo {
+			// The logo's managed file set depends on the OpenCode generation
+			// that owns the config directory (issue #5364): V2 ships the
+			// pre-built bundle plus the bridge directory registered in
+			// cli.json and the managed opencode.jsonc; V1 ships the bundle
+			// registered in tui.json(c). Backup snapshotting must fail
+			// closed: applying changes without the complete logo file set
+			// would leave a partial rollback snapshot.
+			logoFiles, err := opencodeplugin.ManagedLogoFiles(homeDir)
+			if err != nil {
+				return nil, fmt.Errorf("resolve gentle-logo backup targets: %w", err)
+			}
+			for _, file := range logoFiles {
+				paths[file] = struct{}{}
+			}
+			continue
+		}
 		for _, path := range componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
@@ -4014,6 +4031,12 @@ func routingGuidancePathsWithClaudeModules(homeDir, workspaceDir string, scope I
 	return paths
 }
 
+// componentPathsWithWorkspaceScoped lists the managed file paths a component
+// writes for the selected adapters, resolving workspace scoping per adapter.
+// The gentle-logo file set is intentionally absent: it depends on the
+// detected OpenCode generation, so it is appended by the backup snapshot
+// (fail-closed, via opencodeplugin.ManagedLogoFiles) and by
+// verificationComponentPaths (best-effort) instead.
 func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
@@ -4200,19 +4223,6 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			}
 		case model.ComponentClaudeTheme:
 			paths = append(paths, theme.VisualThemePaths(homeDir, adapter)...)
-		case model.ComponentOpenCodeGentleLogo:
-			if adapter.Agent() != model.AgentOpenCode {
-				break
-			}
-			// OpenCode 2.x omits the logo (opencodeplugin.UnsupportedLogoError),
-			// so there are no logo files to back up or verify.
-			if major, err := opencodeactivation.DetectRuntimeMajor(context.Background()); err == nil && major == opencodeactivation.RuntimeV2 {
-				break
-			}
-			paths = append(paths,
-				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
-				filepath.Join(homeDir, ".config", "opencode", "tui.json"),
-			)
 		}
 	}
 
@@ -4405,9 +4415,29 @@ func openCodeSDDPluginPaths(adapter agents.Adapter, targetDir string) []string {
 // mcp.json from active health checks. Pi Engram is native-only (gentle-engram),
 // so Engram provisioning writes mcp.json only to migrate mcp-adapter.json
 // servers and its absence is healthy (#5103). The shared component path
-// inventory retains both for snapshots and rollback of user-owned files.
+// inventory retains both for snapshots and rollback of user-owned files. The
+// gentle-logo file set is appended directly because post-apply verification
+// only runs after a successful install whose runtime probe already passed,
+// so the set is resolvable here; the error-propagating fail-closed path is
+// the backup snapshot in installBackupTargets.
 func verificationComponentPaths(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component)
+	if component == model.ComponentOpenCodeGentleLogo {
+		for _, adapter := range adapters {
+			if adapter.Agent() != model.AgentOpenCode {
+				continue
+			}
+			// Post-apply verification only runs after a successful install
+			// whose runtime probe already passed, so the file set is
+			// resolvable here; the error-propagating fail-closed path is the
+			// backup snapshot in installBackupTargets.
+			if logoFiles, err := opencodeplugin.ManagedLogoFiles(homeDir); err == nil {
+				paths = append(paths, logoFiles...)
+			}
+			break
+		}
+		return paths
+	}
 	if component != model.ComponentEngram {
 		return paths
 	}
@@ -4445,6 +4475,9 @@ type postApplyVerificationInput struct {
 	State        *runtimeState
 }
 
+// runPostApplyVerification re-checks every file the resolved plan was about
+// to write after the pipeline applied it, so a partially applied install
+// surfaces as a failed verification report instead of silent breakage.
 func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(input.Resolved.Agents)

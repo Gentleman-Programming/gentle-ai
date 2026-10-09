@@ -1402,3 +1402,101 @@ func TestOpenCodeTelemetryOrdinaryInstall(t *testing.T) {
 		})
 	}
 }
+
+// TestComponentPathsIncludeGentleLogoOnV2Runtime pins issue #5364: OpenCode
+// 2.x receives the pre-built bundle, the bridge directory, and the
+// cli.json/opencode.jsonc registrations, so those managed files must appear
+// in backup and verification target lists like any other component's files.
+func TestComponentPathsIncludeGentleLogoOnV2Runtime(t *testing.T) {
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("2.0.4")}, nil
+	}
+
+	home := t.TempDir()
+	workspace := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentOpenCodeGentleLogo},
+	}
+	paths := verificationComponentPaths(home, workspace, ScopeGlobal, selection, resolveAdapters([]model.AgentID{model.AgentOpenCode}), model.ComponentOpenCodeGentleLogo)
+
+	want := []string{
+		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.js"),
+		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo", "tui.js"),
+		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo", "package.json"),
+		filepath.Join(home, ".config", "opencode", "cli.json"),
+		filepath.Join(home, ".config", "opencode", "opencode.jsonc"),
+	}
+	for _, target := range want {
+		if !slices.Contains(paths, target) {
+			t.Fatalf("V2 logo target %q missing from paths %#v", target, paths)
+		}
+	}
+	if slices.Contains(paths, filepath.Join(home, ".config", "opencode", "tui.json")) {
+		t.Fatal("V2 target list must not require tui.json when it does not exist")
+	}
+}
+
+// TestBackupTargetsFailClosedWhenLogoFileSetUnavailable pins the fail-closed
+// backup contract (issue #5364 corrections): when the gentle-logo managed
+// file set cannot be computed (here: an unresolvable runtime), backup target
+// building returns the error instead of a partial snapshot list.
+func TestBackupTargetsFailClosedWhenLogoFileSetUnavailable(t *testing.T) {
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("not-a-version")}, nil
+	}
+
+	home := t.TempDir()
+	targets, err := backupTargets(home, "", ScopeGlobal, model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentOpenCodeGentleLogo},
+	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}, OrderedComponents: []model.ComponentID{model.ComponentOpenCodeGentleLogo}})
+	if err == nil {
+		t.Fatalf("backupTargets() error = nil, want the logo file-set failure; targets = %v", targets)
+	}
+	if len(targets) != 0 {
+		t.Fatalf("backupTargets() = %v with error %v, want no partial target list", targets, err)
+	}
+}
+
+// TestComponentPathsIncludeGentleLogoOnV1Runtime pins the V1 half of issue
+// #5364: the bundle plus the tui.json registration file are the managed
+// file set when the runtime (or an existing tui.json) selects V1.
+func TestComponentPathsIncludeGentleLogoOnV1Runtime(t *testing.T) {
+	oldVersion := opencodeactivation.VersionRunnerOverride
+	t.Cleanup(func() { opencodeactivation.VersionRunnerOverride = oldVersion })
+	opencodeactivation.VersionRunnerOverride = func(context.Context, opencodeactivation.Command) (opencodeactivation.CommandOutput, error) {
+		return opencodeactivation.CommandOutput{Stdout: []byte("1.18.30")}, nil
+	}
+
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".config", "opencode", "tui.json"), []byte(`{"$schema":"https://opencode.ai/tui.json","plugin":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentOpenCodeGentleLogo},
+	}
+	paths := verificationComponentPaths(home, workspace, ScopeGlobal, selection, resolveAdapters([]model.AgentID{model.AgentOpenCode}), model.ComponentOpenCodeGentleLogo)
+
+	want := []string{
+		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.js"),
+		filepath.Join(home, ".config", "opencode", "tui.json"),
+	}
+	for _, target := range want {
+		if !slices.Contains(paths, target) {
+			t.Fatalf("V1 logo target %q missing from paths %#v", target, paths)
+		}
+	}
+	if slices.Contains(paths, filepath.Join(home, ".config", "opencode", "cli.json")) {
+		t.Fatal("V1 target list must not require cli.json")
+	}
+}
