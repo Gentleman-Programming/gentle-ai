@@ -212,6 +212,12 @@ func TestCodeGraphFailureDoesNotLeaveEarlierOpenCodePluginRegistration(t *testin
 	if _, err := os.Stat(tuiPath); !os.IsNotExist(err) {
 		t.Fatalf("OpenCode plugin registration remains after CodeGraph failure: %v", err)
 	}
+	// A fresh V1 home materializes tui.jsonc, so the leaked registration this
+	// test guards against would land there now.
+	tuiJSONCPath := filepath.Join(home, ".config", "opencode", "tui.jsonc")
+	if _, err := os.Stat(tuiJSONCPath); !os.IsNotExist(err) {
+		t.Fatalf("OpenCode plugin registration remains after CodeGraph failure: %v", err)
+	}
 }
 
 func TestInstallRollbackRestoresSelectedOpenCodePluginPathsAfterPluginRegistration(t *testing.T) {
@@ -224,11 +230,17 @@ func TestInstallRollbackRestoresSelectedOpenCodePluginPathsAfterPluginRegistrati
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			home := t.TempDir()
-			tuiPath := filepath.Join(home, ".config", "opencode", "tui.json")
-			logoPath := filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
+			configDir := filepath.Join(home, ".config", "opencode")
+			// T2 V1 cascade (issue #5364): a fresh home materializes
+			// tui.jsonc; a pre-existing tui.json wins as the primary
+			// target. The managed plugin file is the pre-built bundle.
+			tuiPath := filepath.Join(configDir, "tui.jsonc")
+			logoPath := filepath.Join(configDir, "tui-plugins", "gentle-logo.js")
+			logoEntry := "./tui-plugins/gentle-logo.js"
 			originalTUI := []byte("{\n  \"plugin\": [\"existing-plugin\"]\n}\n")
 			originalLogo := []byte("pre-existing Gentle Logo bytes\n")
 			if test.preexisting {
+				tuiPath = filepath.Join(configDir, "tui.json")
 				mustWriteFile(t, tuiPath, originalTUI)
 				mustWriteFile(t, logoPath, originalLogo)
 			}
@@ -255,6 +267,7 @@ func TestInstallRollbackRestoresSelectedOpenCodePluginPathsAfterPluginRegistrati
 			plan.Apply = append(plan.Apply, failAfterPluginRegistrationStep{
 				codeGraphSucceeded: &codeGraphSucceeded,
 				tuiPath:            tuiPath,
+				logoEntry:          logoEntry,
 				logoPath:           logoPath,
 			})
 			result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
@@ -286,6 +299,7 @@ func TestInstallRollbackRestoresSelectedOpenCodePluginPathsAfterPluginRegistrati
 type failAfterPluginRegistrationStep struct {
 	codeGraphSucceeded *bool
 	tuiPath            string
+	logoEntry          string
 	logoPath           string
 }
 
@@ -305,7 +319,7 @@ func (s failAfterPluginRegistrationStep) Run() error {
 	if err := json.Unmarshal(tui, &config); err != nil {
 		return fmt.Errorf("decode plugin registration %q: %w", s.tuiPath, err)
 	}
-	for _, plugin := range []string{s.logoPath} {
+	for _, plugin := range []string{s.logoEntry} {
 		if !slices.Contains(config.Plugin, plugin) {
 			return fmt.Errorf("plugin registration %q is missing exact plugin %q", s.tuiPath, plugin)
 		}
@@ -343,8 +357,9 @@ func TestSuccessfulCodeGraphReconciliationStillRegistersOpenCodePlugin(t *testin
 		t.Fatalf("install pipeline error = %v", result.Err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "tui.json"))
-	if err != nil || !strings.Contains(string(data), "gentle-logo.tsx") {
+	// A fresh V1 home materializes tui.jsonc with the relative bundle entry.
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "tui.jsonc"))
+	if err != nil || !strings.Contains(string(data), "./tui-plugins/gentle-logo.js") {
 		t.Fatalf("OpenCode plugin registration = %q, %v; want successful registration", data, err)
 	}
 }

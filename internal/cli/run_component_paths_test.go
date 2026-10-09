@@ -1963,8 +1963,12 @@ func assertInstallPrepareRefusal(t *testing.T, result pipeline.ExecutionResult, 
 			t.Fatalf("telemetry runtime asset created by a refused install: %s (%v)", path, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "tui.json")); !os.IsNotExist(err) {
-		t.Fatalf("plugin tui.json created by a refused install: %v", err)
+	// A fresh V1 home materializes tui.jsonc; the T1-era tui.json must also
+	// stay absent. Neither config may be created by a refused install.
+	for _, name := range []string{"tui.json", "tui.jsonc"} {
+		if _, err := os.Stat(filepath.Join(home, ".config", "opencode", name)); !os.IsNotExist(err) {
+			t.Fatalf("plugin %s created by a refused install: %v", name, err)
+		}
 	}
 }
 
