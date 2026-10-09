@@ -71,7 +71,7 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 | Focused test and suite of the change being made | ✅ once each | — |
 | High-risk change, or long suites, builds, installs, or native review actions of a large task | — | ✅ independent verifier or fresh per-action worker |
 
-Route read-only mapping to the installed `gentle-ai-explore` agent, implementation or command execution to the installed `gentle-ai-worker` agent, and read-only technical verification to the installed `gentle-ai-verify` agent.
+Route read-only mapping to the installed `gentle-ai-explore` agent, implementation or command execution to the installed `gentle-ai-worker` agent, read-only technical verification to the installed `gentle-ai-verify` agent, and security analysis or Sec-TDD work to the installed `gentle-ai-security` agent.
 
 Keep each delegated writer bounded, with a short synthesized handoff. Delegation is mandatory only when a mechanism's own trigger fires.
 

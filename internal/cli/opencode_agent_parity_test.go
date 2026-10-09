@@ -26,7 +26,7 @@ var openCodeAgentConfigAllowedKeys = map[string]bool{
 // ported from Gentle Shell's global agents, plus the two review provider
 // roles retained across the SDD retirement.
 var openCodeParityAgentNames = []string{
-	"gentle-ai-explore", "gentle-ai-verify", "gentle-ai-worker",
+	"gentle-ai-explore", "gentle-ai-security", "gentle-ai-verify", "gentle-ai-worker",
 	"jd-judge-a", "jd-judge-b", "jd-fix-agent",
 	"review-risk", "review-readability", "review-reliability", "review-resilience",
 	"review-refuter", "review-validator",
@@ -85,7 +85,7 @@ func TestOpenCodeInstallWritesParityAgentsWithoutManagedByMarker(t *testing.T) {
 	permission, _ := orchestrator["permission"].(map[string]any)
 	task, _ := permission["task"].(map[string]any)
 	for _, name := range []string{
-		"gentle-ai-explore", "gentle-ai-verify", "gentle-ai-worker",
+		"gentle-ai-explore", "gentle-ai-security", "gentle-ai-verify", "gentle-ai-worker",
 		"jd-judge-a", "jd-judge-b", "jd-fix-agent",
 		"review-risk", "review-readability", "review-reliability", "review-resilience",
 	} {
