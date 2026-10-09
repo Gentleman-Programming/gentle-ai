@@ -156,6 +156,12 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"disclose unresolved uncertainty and pause affected unsafe decisions",
 			"Neither research nor a proposal is mandatory",
 		}},
+		{"design-minimality pass before writer brief", []string{
+			"between exploration and implementation, run a design-minimality pass before composing the writer brief",
+			"Apply the minimality ladder (YAGNI -> reuse -> stdlib -> platform -> dependency -> minimum new code)",
+			"estimate authored-line footprint, record deliberate deferrals, required tests, and boundary invariants",
+			"pass the complete minimal plan and constraints as the writer brief",
+		}},
 		{"adaptive research and product questions", []string{
 			"Establish the problem, intended outcome, constraints, and current evidence; inspect relevant code",
 			"Adapt depth to uncertainty and consequence, not a fixed questionnaire or mandatory rounds",

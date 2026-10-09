@@ -1401,8 +1401,8 @@ func TestEmbeddedAssetCount(t *testing.T) {
 
 	// Only retained skills with embedded files count; deleted SDD directories
 	// contain no embedded assets.
-	if skillDirs != 16 {
-		t.Fatalf("expected 16 retained skill directories, got %d", skillDirs)
+	if skillDirs != 17 {
+		t.Fatalf("expected 17 retained skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.

@@ -75,6 +75,7 @@ func RenderRouting(agent model.AgentID) (string, error) {
 		"- **Delegated direct:** understanding that needs more evidence or more than approximately %d sequential lookups takes one read-only explorer, then task size is re-evaluated; a writer is delegated only by the Writer trigger.\n",
 		routing.DelegatedDirect.ApproxSequentialLookupLimit,
 	)
+	output.WriteString("  - **Design-minimality pass:** between exploration and implementation, run a design-minimality pass before composing the writer brief. Apply the minimality ladder (YAGNI -> reuse -> stdlib -> platform -> dependency -> minimum new code), estimate authored-line footprint, record deliberate deferrals, required tests, and boundary invariants, and pass the complete minimal plan and constraints as the writer brief.\n")
 	output.WriteString("- File count, changed lines, size, or perceived risk alone never forces a heavier route.\n")
 	if rdd {
 		output.WriteString("- These are implementation routes, not a ban on per-action delegation. Tests, builds, installs, and review actors may still use fresh workers without changing the selected route.\n")
