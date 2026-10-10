@@ -43,7 +43,25 @@ var piCodeGraphEffectiveMCPProbe PiCodeGraphEffectiveMCPProbe = probePiCodeGraph
 // verification remains separate capability evidence.
 var ErrPiCodeGraphAdapterHealthUnavailable = errors.New("Pi MCP adapter health is not machine-verifiable")
 
+// piCodeGraphProbeIncompleteError marks a capability probe whose transport
+// closed before any capability verdict was reached (#2146). It deliberately
+// does not satisfy errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable): that
+// sentinel means "capability verified, adapter health unverifiable", and its
+// pending action says exactly that. A probe that never answered verified
+// nothing, so it carries its own pending reason instead of borrowing that
+// claim.
+type piCodeGraphProbeIncompleteError struct {
+	cause error
+}
+
+func (err *piCodeGraphProbeIncompleteError) Error() string { return err.cause.Error() }
+func (err *piCodeGraphProbeIncompleteError) Unwrap() error { return err.cause }
+
 const piCodeGraphPendingAction = "Pi CodeGraph integration remains pending: CodeGraph configuration was installed and preserved, and direct MCP capability was verified. Pi adapter activation health cannot be machine-verified on the detected Pi version."
+
+// piCodeGraphProbeIncompleteAction is the pending reason for a probe that
+// closed before answering. It must not claim capability verification.
+const piCodeGraphProbeIncompleteAction = "Pi CodeGraph integration remains pending: CodeGraph configuration was installed and preserved, but the MCP capability probe did not complete because the CodeGraph MCP server closed during initialization. No capability was verified. Re-run gentle-ai sync once the CodeGraph MCP server starts reliably."
 
 type PiChildClassification string
 
@@ -102,38 +120,54 @@ type PiCodeGraphMCPProbeResult struct {
 	Tools            []PiCodeGraphMCPTool
 }
 
-// PreservePiCodeGraphPending converts only unavailable adapter-health evidence
-// into the manual action used while Pi has no verifiable health signal.
+// PreservePiCodeGraphPending converts an exclusively pending verification
+// failure into the manual action that describes its reason, so the pipeline
+// completes with the configuration preserved. Unavailable adapter health and an
+// incomplete capability probe each carry their own action text.
 func PreservePiCodeGraphPending(result PiCodeGraphResult, err error) (PiCodeGraphResult, error) {
-	if !isExclusivePiCodeGraphPending(err) {
+	action, pending := piCodeGraphPendingManualAction(err)
+	if !pending {
 		return result, err
 	}
-	if !slices.Contains(result.ManualActions, piCodeGraphPendingAction) {
-		result.ManualActions = append(result.ManualActions, piCodeGraphPendingAction)
+	if !slices.Contains(result.ManualActions, action) {
+		result.ManualActions = append(result.ManualActions, action)
 	}
 	return result, nil
 }
 
-func isExclusivePiCodeGraphPending(err error) bool {
+// piCodeGraphPendingManualAction reports whether err is exclusively pending and
+// returns the manual action that describes its reason. A tree that carries any
+// fatal child, or that mixes pending reasons, stays fatal: no single action
+// describes it honestly.
+//
+// The type is inspected at each level rather than with errors.As or errors.Is,
+// so one pending child can never promote a joined error to pending.
+func piCodeGraphPendingManualAction(err error) (string, bool) {
+	if _, ok := err.(*piCodeGraphProbeIncompleteError); ok {
+		return piCodeGraphProbeIncompleteAction, true
+	}
 	if err == ErrPiCodeGraphAdapterHealthUnavailable {
-		return true
+		return piCodeGraphPendingAction, true
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		children := joined.Unwrap()
 		if len(children) == 0 {
-			return false
+			return "", false
 		}
+		action := ""
 		for _, child := range children {
-			if !isExclusivePiCodeGraphPending(child) {
-				return false
+			childAction, childPending := piCodeGraphPendingManualAction(child)
+			if !childPending || (action != "" && action != childAction) {
+				return "", false
 			}
+			action = childAction
 		}
-		return true
+		return action, true
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		return isExclusivePiCodeGraphPending(wrapped.Unwrap())
+		return piCodeGraphPendingManualAction(wrapped.Unwrap())
 	}
-	return false
+	return "", false
 }
 
 // PiCodeGraphEffectiveMCPProbe initializes the configured MCP server through
@@ -479,8 +513,24 @@ func verifyPiMCPWithProbe(mcpPath string, probe PiCodeGraphEffectiveMCPProbe) (P
 		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe is not configured")
 	}
 	result, err := probe(mcpPath)
-	if err != nil && !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
-		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", err)
+	if err != nil {
+		failure := piCodeGraphProbeFailure(err)
+		// A transport closure is its own pending reason. Handle it before the
+		// adapter-health tolerance below: errors.Is matches any child of a join,
+		// so a probe that closed AND reported unverifiable health would otherwise
+		// collapse to the sentinel alone and claim a verified capability it never
+		// observed.
+		if failure != err {
+			if errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+				// Two pending reasons have no single honest action, so the join stays
+				// fatal (see piCodeGraphPendingManualAction).
+				return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", errors.Join(ErrPiCodeGraphAdapterHealthUnavailable, failure))
+			}
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", failure)
+		}
+		if !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", failure)
+		}
 	}
 	if !result.AdapterAvailable || !result.Initialized {
 		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe did not observe an available adapter and initialized server")
@@ -493,6 +543,17 @@ func verifyPiMCPWithProbe(mcpPath string, probe PiCodeGraphEffectiveMCPProbe) (P
 		return verification, ErrPiCodeGraphAdapterHealthUnavailable
 	}
 	return verification, nil
+}
+
+// piCodeGraphProbeFailure preserves err and, when the probe transport closed
+// before it could answer, marks it as an incomplete probe. Only a genuine
+// closure counts: an unrelated error whose text merely mentions EOF stays a
+// fatal probe failure.
+func piCodeGraphProbeFailure(err error) error {
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return err
+	}
+	return &piCodeGraphProbeIncompleteError{cause: err}
 }
 
 // probePiCodeGraphMCP verifies the configured CodeGraph stdio server directly.
@@ -696,7 +757,7 @@ func inspectPiCodeGraphCapability(mcpPath string, children []PiCodeGraphChild) (
 	if err == nil {
 		return AgentStatusConfigured, "verified Pi MCP transport and every effective child"
 	}
-	if isExclusivePiCodeGraphPending(err) && verification.Adapter && verification.ReadOnlyExplore {
+	if _, pending := piCodeGraphPendingManualAction(err); pending && verification.Adapter && verification.ReadOnlyExplore {
 		return AgentStatusPending, "direct MCP capability verified; " + err.Error()
 	}
 	return AgentStatusMissing, err.Error()
