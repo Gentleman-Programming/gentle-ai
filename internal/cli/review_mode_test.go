@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,306 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
+
+// This exercises the Go CLI entry point, not a distributed native binary.
+func TestReviewModeGlobalOnlyCLIFlag(t *testing.T) {
+	home := reviewModeHome(t)
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--global-only", "--json"}, &output); err != nil {
+		t.Fatalf("global-only CLI status: %v", err)
+	}
+	result := decodeReviewModeResult(t, output.Bytes())
+	if result.Schema != ReviewModeSchema || result.Scope != reviewModeScopeGlobal ||
+		result.Status.Schema != reviewtransaction.RDDModeStatusSchema ||
+		result.Status.Effective != reviewtransaction.RDDModeOn || result.Status.Source != reviewtransaction.RDDModeSourceDefault ||
+		result.Status.Global != reviewtransaction.RDDModeUnset || result.Status.CloneLocal != reviewtransaction.RDDModeUnset ||
+		result.Status.Revision != "" || result.Status.Reach != "" {
+		t.Fatalf("global-only default = %#v", result)
+	}
+	if entries, err := os.ReadDir(home); err != nil || len(entries) != 0 {
+		t.Fatalf("status wrote home: %v, %v", entries, err)
+	}
+}
+
+func TestReviewModeGlobalOnlyIgnoresAncestorCloneOff(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Git fixture integration")
+	}
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	staging := filepath.Join(repo, "fresh-staging")
+	if err := os.Mkdir(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--scope", "clone", "--cwd", repo, "--json"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	clone := decodeReviewModeResult(t, output.Bytes()).Status
+	record, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}}); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := os.Stat(state.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		operation string
+		mode      reviewtransaction.RDDMode
+	}{
+		{"enable", reviewtransaction.RDDModeOn}, {"status", reviewtransaction.RDDModeOn},
+		{"disable", reviewtransaction.RDDModeOff}, {"status", reviewtransaction.RDDModeOff},
+		{"enable", reviewtransaction.RDDModeOn},
+	} {
+		output.Reset()
+		if err := RunReviewMode([]string{step.operation, "--global-only", "--scope", "global", "--cwd", staging, "--json"}, &output); err != nil {
+			t.Fatal(err)
+		}
+		result := decodeReviewModeResult(t, output.Bytes())
+		if result.Scope != reviewModeScopeGlobal || result.Operation != step.operation ||
+			result.Status.Global != step.mode || result.Status.Effective != step.mode ||
+			result.Status.Source != reviewtransaction.RDDModeSourceGlobal || result.Status.CloneLocal != reviewtransaction.RDDModeUnset ||
+			result.Status.Revision != "" || result.Status.Reach != "" {
+			t.Fatalf("global-only %s = %#v", step.operation, result)
+		}
+	}
+	persisted, err := state.Read(home)
+	if err != nil || persisted.RDDMode != "on" || persisted.RDDModeRecordedAt == nil ||
+		len(persisted.InstalledAgents) != 1 || persisted.InstalledAgents[0] != "opencode" {
+		t.Fatalf("real state writer lost fields: %#v, %v", persisted, err)
+	}
+	if info, err := os.Stat(state.Path(home)); err != nil || info.Mode().Perm() != baseline.Mode().Perm() {
+		t.Fatalf("global state changed existing writer permissions: %v, %v", info, err)
+	}
+	if info, err := os.Stat(home); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
+		t.Fatalf("HOME fixture lost private containment: %v, %v", info, err)
+	}
+	// Ordinary status AND ordinary global writes still resolve both sources.
+	for _, operation := range []string{"status", "enable"} {
+		output.Reset()
+		if err := RunReviewMode([]string{operation, "--cwd", staging, "--json"}, &output); err != nil {
+			t.Fatal(err)
+		}
+		status := decodeReviewModeResult(t, output.Bytes()).Status
+		if status.Effective != reviewtransaction.RDDModeOff || status.Source != reviewtransaction.RDDModeSourceCloneLocal ||
+			status.Global != reviewtransaction.RDDModeOn || status.CloneLocal != reviewtransaction.RDDModeOff || status.Revision != clone.Revision {
+			t.Fatalf("ordinary %s changed contract: %#v", operation, status)
+		}
+	}
+	if after, err := os.ReadFile(record); err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("clone record changed: %v", err)
+	}
+	if entries, err := os.ReadDir(staging); err != nil || len(entries) != 0 {
+		t.Fatalf("global-only touched staging: %v, %v", entries, err)
+	}
+}
+
+func TestReviewModeGlobalOnlyNeverResolvesRepository(t *testing.T) {
+	if testing.Short() || runtime.GOOS == "windows" {
+		t.Skip("POSIX unreadable Git metadata integration")
+	}
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	metadata := filepath.Join(repo, ".git")
+	if err := os.Chmod(metadata, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(metadata, 0o755) })
+	// Test-only shim: observe invocation, not Git's repository classification.
+	// The embedded path remains reachable through the sanitized child env.
+	bin := t.TempDir()
+	trace := filepath.Join(bin, "git-calls")
+	shim := "#!/bin/sh\nprintf 'git\\n' >> " + quotePOSIXShellToken(trace) + "\nexit 128\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	var output bytes.Buffer
+	// Ordinary status may fall back successfully; it must still attempt Git.
+	_ = RunReviewMode([]string{"status", "--cwd", repo}, &output)
+	if calls, err := os.ReadFile(trace); err != nil || len(calls) == 0 {
+		t.Fatalf("negative control did not observe Git: %q, %v", calls, err)
+	}
+	if err := os.WriteFile(trace, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, cwd := range []string{repo, filepath.Join(t.TempDir(), "nonexistent")} {
+		if err := state.Write(home, state.InstallState{RDDMode: "unknown"}); err != nil {
+			t.Fatal(err)
+		}
+		output.Reset()
+		err := RunReviewMode([]string{"status", "--global-only", "--cwd", cwd}, &output)
+		var unreadable *ReviewModeUnreadableError
+		if !errors.As(err, &unreadable) || len(unreadable.Scopes) != 1 {
+			t.Fatalf("missing global refusal: %v", err)
+		}
+		// Follow both printed continuations under unusable Git metadata/cwd.
+		for _, command := range unreadable.Scopes[0].commands() {
+			if err := state.Write(home, state.InstallState{RDDMode: "unknown"}); err != nil {
+				t.Fatal(err)
+			}
+			output.Reset()
+			args := append(strings.Fields(strings.Trim(command, "`"))[3:], "--cwd", cwd)
+			if err := RunReviewMode(args, &output); err != nil {
+				t.Fatalf("printed recovery %s failed: %v", command, err)
+			}
+		}
+		for _, operation := range []string{"enable", "status", "disable"} {
+			output.Reset()
+			if err := RunReviewMode([]string{operation, "--global-only", "--cwd", cwd, "--json"}, &output); err != nil {
+				t.Fatalf("%s with unusable cwd %s: %v", operation, cwd, err)
+			}
+			want := reviewtransaction.RDDModeOn
+			if operation == "disable" {
+				want = reviewtransaction.RDDModeOff
+			}
+			result := decodeReviewModeResult(t, output.Bytes())
+			if result.Scope != reviewModeScopeGlobal || result.Status.Global != want || result.Status.Effective != want ||
+				result.Status.Source != reviewtransaction.RDDModeSourceGlobal || result.Status.CloneLocal != reviewtransaction.RDDModeUnset || result.Status.Revision != "" {
+				t.Fatalf("global-only %s = %#v", operation, result)
+			}
+			if calls, err := os.ReadFile(trace); err != nil || len(calls) != 0 {
+				t.Fatalf("global-only invoked Git: %q, %v", calls, err)
+			}
+		}
+	}
+}
+
+func TestReviewModeGlobalOnlyPrevalidationDoesNotWrite(t *testing.T) {
+	for _, operation := range []string{"enable", "disable", "status"} {
+		for _, suffix := range [][]string{{"--scope", "clone"}, {"--expected-revision="}, {"--expected-revision=token"}, {"--scope=team"}, {"unexpected"}} {
+			t.Run(operation+strings.Join(suffix, " "), func(t *testing.T) {
+				home := reviewModeHome(t)
+				args := append([]string{operation, "--global-only"}, suffix...)
+				var output bytes.Buffer
+				if err := RunReviewMode(args, &output); err == nil {
+					t.Fatalf("accepted unsupported arguments: %v", args)
+				} else if (suffix[0] == "--scope" || strings.HasPrefix(suffix[0], "--expected-revision")) && !strings.Contains(err.Error(), "gentle-ai review mode help") {
+					t.Fatalf("global-only refusal omitted runnable help: %v", err)
+				}
+				if entries, err := os.ReadDir(home); err != nil || len(entries) != 0 {
+					t.Fatalf("prevalidation wrote home: %v, %v", entries, err)
+				}
+			})
+		}
+	}
+}
+
+func TestReviewModeGlobalOnlySourceValidation(t *testing.T) {
+	for _, scenario := range []string{"missing-state", "nonexistent-home", "missing-home", "unknown", "malformed", "unreadable", "off", "whitespace-on"} {
+		t.Run(scenario, func(t *testing.T) {
+			home := reviewModeHome(t)
+			if scenario == "unreadable" && runtime.GOOS == "windows" {
+				t.Skip("POSIX file permissions")
+			}
+			switch scenario {
+			case "nonexistent-home":
+				home = filepath.Join(home, "absent")
+			case "missing-home":
+				home = ""
+			case "unknown", "off", "whitespace-on", "malformed", "unreadable":
+				mode := map[string]string{"unknown": "sometimes", "off": "off", "whitespace-on": " on "}[scenario]
+				if err := state.Write(home, state.InstallState{RDDMode: mode}); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "unreadable" {
+					if err := os.Chmod(state.Path(home), 0); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(state.Path(home), 0o600) })
+				}
+				if scenario == "malformed" {
+					if err := os.WriteFile(state.Path(home), []byte("{"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			var before []byte
+			if home != "" {
+				before, _ = os.ReadFile(state.Path(home))
+			}
+			var output bytes.Buffer
+			err := RunReviewMode([]string{"status", "--global-only", "--cwd", "invalid", "--json"}, &output)
+			wantErr := scenario == "unknown" || scenario == "malformed" || scenario == "unreadable" || scenario == "missing-home"
+			if (err != nil) != wantErr {
+				t.Fatalf("status error = %v", err)
+			}
+			status := decodeReviewModeResult(t, output.Bytes()).Status
+			if wantErr && (status.Effective != reviewtransaction.RDDModeOff || status.CloneLocal != reviewtransaction.RDDModeUnset || status.Revision != "") {
+				t.Fatalf("invalid source did not fail closed: %#v", status)
+			}
+			if scenario == "unknown" {
+				var unreadable *ReviewModeUnreadableError
+				if !errors.Is(err, reviewtransaction.ErrRDDModeUnknown) || !errors.As(err, &unreadable) ||
+					len(unreadable.Scopes) != 1 || unreadable.Scopes[0].Scope != reviewModeScopeGlobal ||
+					unreadable.Scopes[0].Path != state.Path(home) || unreadable.Scopes[0].Repo != "" {
+					t.Fatalf("unknown global refusal = %v", err)
+				}
+				for _, verb := range []string{"enable", "disable"} {
+					if !strings.Contains(err.Error(), "gentle-ai review mode "+verb+" --scope=global --global-only") {
+						t.Fatalf("missing global repair command: %v", err)
+					}
+				}
+			}
+			if !wantErr {
+				want := reviewtransaction.RDDModeOn
+				if scenario == "off" {
+					want = reviewtransaction.RDDModeOff
+				}
+				if status.Effective != want {
+					t.Fatalf("global status = %#v", status)
+				}
+			}
+			if scenario == "malformed" || scenario == "missing-home" {
+				for _, operation := range []string{"enable", "disable"} {
+					output.Reset()
+					if err := RunReviewMode([]string{operation, "--global-only"}, &output); err == nil {
+						t.Fatalf("%s accepted unusable global state", operation)
+					}
+				}
+			}
+			if home != "" && scenario != "unreadable" {
+				after, readErr := os.ReadFile(state.Path(home))
+				if !bytes.Equal(before, after) || (before == nil && !errors.Is(readErr, os.ErrNotExist)) {
+					t.Fatalf("status changed source: %v", readErr)
+				}
+			}
+		})
+	}
+}
+
+func TestReviewModeGlobalOnlyUsesInstallStateLock(t *testing.T) {
+	home := reviewModeHome(t)
+	lock, err := reviewtransaction.AcquireAuthorityFileLock(mustInstallStateLockPath(t, home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Release() })
+	var statusOutput bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--global-only", "--json"}, &statusOutput); err != nil {
+		t.Fatalf("read-only status acquired a write lock: %v", err)
+	}
+	for _, operation := range []string{"enable", "disable"} {
+		var output bytes.Buffer
+		err := RunReviewMode([]string{operation, "--global-only", "--json"}, &output)
+		if !errors.Is(err, reviewtransaction.ErrStoreLockContended) {
+			t.Fatalf("%s bypassed state lock: %v", operation, err)
+		}
+		if _, err := state.Read(home); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("contended write persisted state: %v", err)
+		}
+	}
+}
 
 func TestReviewModeCloneEnableExplainsExplicitGlobalOff(t *testing.T) {
 	reviewModeHome(t)
@@ -39,7 +340,7 @@ func TestReviewModeHelpDescribesDefaultOnAndOptOut(t *testing.T) {
 	if err := RunReviewMode([]string{"help"}, &output); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"on by default", "opt out", "gentle-ai review mode disable", "Any off wins", "status is read-only"} {
+	for _, want := range []string{"on by default", "opt out", "gentle-ai review mode disable", "Any off wins", "status is read-only", "--global-only", "global-source view", "clone-local off still wins"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("help missing %q: %s", want, output.String())
 		}
@@ -949,6 +1250,9 @@ func stubReviewConsole(t *testing.T, interactive bool, answer string) *bytes.Buf
 func reviewModeHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
+	if err := os.Chmod(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	return home
