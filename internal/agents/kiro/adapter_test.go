@@ -243,25 +243,9 @@ func TestAdapter_EmbeddedSubAgentsDir(t *testing.T) {
 }
 
 func TestAdapter_KiroModelID(t *testing.T) {
-	adapter := NewAdapter()
-	tests := []struct {
-		alias model.KiroModelAlias
-		want  string
-	}{
-		{model.KiroModelAuto, "auto"},
-		{model.KiroModelOpus, "claude-opus-4.8"},
-		{model.KiroModelSonnet, "claude-sonnet-4.6"},
-		{model.KiroModelHaiku, "claude-haiku-4.5"},
-		{model.KiroModelMiniMax, "minimax-m2.5"},
-		{model.KiroModelGLM, "glm-5"},
-		{model.KiroModelDeepSeek, "deepseek-3.2"},
-		{model.KiroModelQwen, "qwen3-coder-next"},
-		{"unknown", "claude-sonnet-4.6"},
-	}
-	for _, tt := range tests {
-		if got := adapter.KiroModelID(tt.alias); got != tt.want {
-			t.Errorf("KiroModelID(%q) = %v, want %v", tt.alias, got, tt.want)
-		}
+	// The alias-to-ID table is owned by model.KiroModelID; the adapter only delegates.
+	if got := NewAdapter().KiroModelID(model.KiroModelLuna); got != "gpt-5.6-luna" {
+		t.Errorf("KiroModelID(luna) = %q, want gpt-5.6-luna", got)
 	}
 }
 
