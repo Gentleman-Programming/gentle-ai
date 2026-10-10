@@ -2158,6 +2158,82 @@ func TestWelcomeMenu_UninstallNavigation_WithOpenCodeDetected(t *testing.T) {
 	}
 }
 
+// TestWelcomeNavigationAndViewDoNotRescanAgentBuilderEngines verifies that
+// navigating the Welcome menu and rendering it does not rescan PATH for agent builder engines.
+func TestWelcomeNavigationAndViewDoNotRescanAgentBuilderEngines(t *testing.T) {
+	original := detectAgentBuilderEnginesFn
+	checks := 0
+	detectAgentBuilderEnginesFn = func() []model.AgentID {
+		checks++
+		return []model.AgentID{model.AgentClaudeCode}
+	}
+	t.Cleanup(func() { detectAgentBuilderEnginesFn = original })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	if checks != 1 {
+		t.Fatalf("availability checks after construction = %d, want 1", checks)
+	}
+
+	for range 10 {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(Model)
+		_ = m.View()
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+		m = updated.(Model)
+		_ = m.View()
+	}
+
+	if checks != 1 {
+		t.Errorf("availability checks after Welcome navigation and rendering = %d, want 1", checks)
+	}
+}
+
+// TestWelcomeCreateAgentUsesCachedEngineSnapshot verifies that selecting
+// Create Agent uses the cached engine availability snapshot without rescanning PATH.
+func TestWelcomeCreateAgentUsesCachedEngineSnapshot(t *testing.T) {
+	original := detectAgentBuilderEnginesFn
+	checks := 0
+	detectAgentBuilderEnginesFn = func() []model.AgentID {
+		checks++
+		return []model.AgentID{model.AgentClaudeCode}
+	}
+	t.Cleanup(func() { detectAgentBuilderEnginesFn = original })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Cursor = 5
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+
+	if m.Screen != ScreenAgentBuilderEngine {
+		t.Fatalf("screen = %v, want ScreenAgentBuilderEngine", m.Screen)
+	}
+	if !slices.Equal(m.AgentBuilder.AvailableEngines, []model.AgentID{model.AgentClaudeCode}) {
+		t.Errorf("available engines = %v, want [%s]", m.AgentBuilder.AvailableEngines, model.AgentClaudeCode)
+	}
+	if checks != 1 {
+		t.Errorf("availability checks after entering Create Agent = %d, want 1", checks)
+	}
+}
+
+// BenchmarkWelcomeKeyUpdateWithSlowEngineAvailability measures key update latency
+// during Welcome navigation when engine availability detection is slow.
+func BenchmarkWelcomeKeyUpdateWithSlowEngineAvailability(b *testing.B) {
+	original := detectAgentBuilderEnginesFn
+	detectAgentBuilderEnginesFn = func() []model.AgentID {
+		time.Sleep(10 * time.Millisecond)
+		return []model.AgentID{model.AgentClaudeCode}
+	}
+	b.Cleanup(func() { detectAgentBuilderEnginesFn = original })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	keyDown := tea.KeyMsg{Type: tea.KeyDown}
+	b.ResetTimer()
+	for b.Loop() {
+		updated, _ := m.Update(keyDown)
+		m = updated.(Model)
+	}
+}
+
 // TestWelcomeMenu_OptionCount verifies the 12 retained welcome options.
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
