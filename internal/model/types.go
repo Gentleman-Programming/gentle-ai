@@ -114,6 +114,7 @@ type EngramUninstallScope string
 const (
 	EngramUninstallScopeGlobal  EngramUninstallScope = "global"
 	EngramUninstallScopeProject EngramUninstallScope = "project"
+	EngramUninstallScopeNone    EngramUninstallScope = "none"
 )
 
 type SkillID string
