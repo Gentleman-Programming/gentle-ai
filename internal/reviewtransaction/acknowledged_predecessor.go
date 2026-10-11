@@ -20,6 +20,7 @@ import "context"
 // a delivery gate from it, must prefer live authority, and must offer the
 // review whenever this returns an error.
 func AcknowledgedPassivePredecessor(ctx context.Context, repo string, live Snapshot) (bool, error) {
+	defer StartStatusPhase(ctx, StatusPhasePredecessorConsumptionAncestry)()
 	if live.Kind != TargetBaseDiff || len(live.IntendedUntracked) != 0 || len(live.Paths) == 0 {
 		return false, nil
 	}
