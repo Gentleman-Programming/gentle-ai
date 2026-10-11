@@ -103,6 +103,8 @@ The model presets never assign GPT-5.6 Sol or Terra; both stay available in the 
 | `economy` | Luna / Luna | Luna | Luna |
 | `open-weight` | GLM-5 / Qwen3 Coder Next | Qwen3 Coder Next | Qwen3 Coder Next |
 
+`balanced`, `performance`, and `economy` assign models that require a paid Kiro plan (Claude Opus 5.5, Claude Sonnet 5.5, and GPT-5.6 Luna). On Kiro Free, use `open-weight`, or use `custom` with Free-plan models (`auto`, `minimax`, `glm`, `deepseek`, `qwen`). See [Kiro models](https://kiro.dev/docs/models/) for current plan availability.
+
 ---
 
 ## Config Paths by Platform
