@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 // RestoreFunc is the function signature for restoring a backup from its manifest.
@@ -246,8 +247,12 @@ func listBackupsFromDir(homeDir string) []backup.Manifest {
 	return manifests
 }
 
-// backupRootDir returns the path to the backup directory under homeDir.
+// backupRootDir returns the path to the backup directory under homeDir, or
+// under GENTLE_AI_HOME when set.
 func backupRootDir(homeDir string) string {
+	if os.Getenv(state.HomeEnv) != "" {
+		return state.BackupsDir(homeDir)
+	}
 	return homeDir + "/.gentle-ai/backups"
 }
 

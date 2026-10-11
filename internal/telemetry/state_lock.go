@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 // lockFileExclusive is a package-level var so tests can sabotage the
@@ -63,7 +65,7 @@ func lockState(homeDir string) (func(), error) {
 	mu := statePathLock(key)
 	mu.Lock()
 
-	dir := filepath.Join(homeDir, stateDir)
+	dir := state.Dir(homeDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		mu.Unlock()
 		return nil, err

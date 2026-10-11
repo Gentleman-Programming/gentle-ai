@@ -476,7 +476,7 @@ type syncRuntime struct {
 // created because the shared compatibility tree is global-only.
 func newSyncRuntimeWithScope(homeDir string, selection model.Selection, scope InstallScope) (*syncRuntime, error) {
 	workspaceDir, _ := os.Getwd()
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	backupRoot := state.BackupsDir(homeDir)
 	state := &runtimeState{}
 	if scope == ScopeWorkspace {
 		snapshotDir, err := os.MkdirTemp("", "gentle-ai-rollback-*")
@@ -1046,7 +1046,7 @@ func syncPersonaPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Ins
 			if scope == ScopeWorkspace {
 				continue
 			}
-			paths = append(paths, persona.PiPersonaConfigPath(homeDir))
+			paths = append(paths, persona.PiGlobalPersonaConfigPath(homeDir))
 			continue
 		}
 		targetDir := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
@@ -1588,7 +1588,7 @@ func (s componentSyncStep) Run() error {
 		// remains an install-only concern.
 		for _, adapter := range adapters {
 			if adapter.Agent() == model.AgentPi {
-				res, err := persona.InjectPiPersona(s.homeDir, s.selection.Persona)
+				res, err := persona.InjectPiPersonaAt(persona.PiGlobalPersonaConfigPath(s.homeDir), s.selection.Persona)
 				if err != nil {
 					return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
 				}

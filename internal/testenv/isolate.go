@@ -10,6 +10,9 @@ import "os"
 //   - PI_CODING_AGENT_DIR (internal/agents/pi.AgentConfigPath)
 //   - OPENCODE_CONFIG_DIR (internal/opencode.ResolveRuntimeConfigForHome)
 //   - XDG_CONFIG_HOME (OpenCode config resolution when homeDir is the OS home)
+//   - GENTLE_AI_HOME, GENTLE_AI_PI_CONFIG_DIR, GENTLE_AI_ENGRAM_BIN (isolated
+//     installs: a bundled Gentle Shell exports them to its agent, so a test run
+//     from there would otherwise write into that real prefix)
 //
 // Inherited overrides can redirect tests into external configuration instead
 // of their own temp home. Tests that mock HOME can satisfy OpenCode's
@@ -19,6 +22,9 @@ var overrideEnvVars = []string{
 	"PI_CODING_AGENT_DIR",
 	"OPENCODE_CONFIG_DIR",
 	"XDG_CONFIG_HOME",
+	"GENTLE_AI_HOME",
+	"GENTLE_AI_PI_CONFIG_DIR",
+	"GENTLE_AI_ENGRAM_BIN",
 }
 
 // Isolate unsets every known agent runtime-dir override environment

@@ -250,6 +250,9 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 	if input.DryRun {
 		return result, nil
 	}
+	if err := validateCallerEngramRuns(resolved.OrderedComponents); err != nil {
+		return result, err
+	}
 
 	if input.Scope == ScopeGlobal {
 		fmt.Fprintf(os.Stderr,
@@ -650,7 +653,26 @@ func goInstallBinDirFromGoEnv() (string, error) {
 
 const engramBetaGoInstallPackage = "github.com/Gentleman-Programming/engram/cmd/engram@main"
 
+// validateCallerEngramRuns proves a caller-supplied Engram binary runs before
+// anything is installed, when the plan applies Engram.
+func validateCallerEngramRuns(components []model.ComponentID) error {
+	bin, ok := engram.CallerBinary()
+	if !ok || !slices.Contains(components, model.ComponentEngram) {
+		return nil
+	}
+	if err := engram.ValidateCallerBinary(); err != nil {
+		return err
+	}
+	if _, err := verifyEngramVersionCommand(bin); err != nil {
+		return fmt.Errorf("%s=%s does not run: %w", system.EngramBinEnv, bin, err)
+	}
+	return nil
+}
+
 func betaEngramRequiresGo(channel InstallChannel, component model.ComponentID) bool {
+	if _, ok := engram.CallerBinary(); ok {
+		return false
+	}
 	return channel.IsBeta() && component == model.ComponentEngram
 }
 
@@ -798,7 +820,7 @@ func (s *runtimeState) compatibilityChangedFiles() []string {
 }
 
 func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	backupRoot := state.BackupsDir(homeDir)
 	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, resolved.OrderedComponents, selection)
 	if err != nil {
 		return nil, err
@@ -3074,7 +3096,11 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentEngram:
 		engramCommand := "engram"
 		var installErr error
-		if betaEngramRequiresGo(s.channel, s.component) {
+		if callerBinary, ok := engram.CallerBinary(); ok {
+			// A caller-supplied Engram is used as is: no brew, download, go
+			// install or PATH change. RunPreparedInstall already checked it runs.
+			engramCommand = callerBinary
+		} else if betaEngramRequiresGo(s.channel, s.component) {
 			binaryPath, err := installBetaEngramFromMain()
 			if err != nil {
 				return fmt.Errorf("install beta engram from main: %w", err)
@@ -3269,8 +3295,8 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentPersona:
 		for _, adapter := range adapters {
 			if adapter.Agent() == model.AgentPi {
-				for _, rootDir := range piPersonaConfigRoots(s.homeDir, s.workspaceDir, s.scope) {
-					if _, err := persona.InjectPiPersona(rootDir, s.selection.Persona); err != nil {
+				for _, path := range piPersonaConfigPaths(s.homeDir, s.workspaceDir, s.scope) {
+					if _, err := persona.InjectPiPersonaAt(path, s.selection.Persona); err != nil {
 						return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 					}
 				}
@@ -4311,19 +4337,17 @@ func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScop
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
 }
 
-// piPersonaConfigRoots returns the roots whose Pi persona state is managed by
-// install. Like every scoped component, global install writes only to home.
-func piPersonaConfigRoots(homeDir, workspaceDir string, scope InstallScope) []string {
-	return []string{ResolveAgentConfigDir(scope, homeDir, workspaceDir)}
-}
-
+// piPersonaConfigPaths returns the Pi persona state files managed by install.
+// Like every scoped component, global install writes only the global file,
+// which GENTLE_AI_PI_CONFIG_DIR may relocate; workspace install writes only
+// the workspace file.
 func piPersonaConfigPaths(homeDir, workspaceDir string, scope InstallScope) []string {
-	roots := piPersonaConfigRoots(homeDir, workspaceDir, scope)
-	paths := make([]string, 0, len(roots))
-	for _, root := range roots {
-		paths = append(paths, persona.PiPersonaConfigPath(root))
+	// The scope decides, not the folder: a workspace install whose workspace is
+	// the home folder still writes the workspace persona file.
+	if scope == ScopeGlobal {
+		return []string{persona.PiGlobalPersonaConfigPath(homeDir)}
 	}
-	return paths
+	return []string{persona.PiPersonaConfigPath(ResolveAgentConfigDir(scope, homeDir, workspaceDir))}
 }
 
 func nativeReviewCodeGraphGuidanceMarkdown(homeDir string, selected []model.CommunityToolID) string {

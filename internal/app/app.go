@@ -183,6 +183,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 		parsedUpgrade = &parsed
 	}
 
+	if err := validateIsolationEnv(); err != nil {
+		return err
+	}
+
 	if err := ensureCurrentOSSupported(); err != nil {
 		return err
 	}
@@ -1166,7 +1170,7 @@ func ListBackups() []backup.Manifest {
 		return nil
 	}
 
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	backupRoot := state.BackupsDir(homeDir)
 	entries, err := os.ReadDir(backupRoot)
 	if err != nil {
 		return nil

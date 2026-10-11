@@ -10,6 +10,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -27,11 +28,20 @@ func PiPersonaConfigPath(rootDir string) string {
 	return filepath.Join(rootDir, ".pi", "gentle-ai", "persona.json")
 }
 
-// InjectPiPersona writes the small runtime config consumed by gentle-pi.
-// Custom personas remain user-owned and therefore intentionally do nothing.
-func InjectPiPersona(rootDir string, persona model.PersonaID) (InjectionResult, error) {
-	if strings.TrimSpace(rootDir) == "" {
-		return InjectionResult{}, fmt.Errorf("Pi persona root must not be empty")
+// PiGlobalPersonaConfigPath returns the persona state path of a global
+// install: persona.json in gentle-pi's config folder, which
+// GENTLE_AI_PI_CONFIG_DIR relocates (default <homeDir>/.pi/gentle-ai).
+func PiGlobalPersonaConfigPath(homeDir string) string {
+	return filepath.Join(piagent.GentlePiConfigDir(homeDir), "persona.json")
+}
+
+// InjectPiPersonaAt writes the small runtime config consumed by gentle-pi to
+// an exact persona.json path (PiPersonaConfigPath for a workspace,
+// PiGlobalPersonaConfigPath for a global install). Custom personas remain
+// user-owned and therefore intentionally do nothing.
+func InjectPiPersonaAt(path string, persona model.PersonaID) (InjectionResult, error) {
+	if strings.TrimSpace(path) == "" {
+		return InjectionResult{}, fmt.Errorf("Pi persona path must not be empty")
 	}
 	if persona == model.PersonaCustom {
 		return InjectionResult{}, nil
@@ -49,7 +59,6 @@ func InjectPiPersona(rootDir string, persona model.PersonaID) (InjectionResult, 
 	}
 	content = append(content, '\n')
 
-	path := PiPersonaConfigPath(rootDir)
 	writeResult, err := filemerge.WriteFileAtomic(path, content, 0o644)
 	if err != nil {
 		return InjectionResult{}, err

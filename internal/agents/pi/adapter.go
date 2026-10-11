@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
@@ -109,10 +110,10 @@ type CodeGraphPathSet struct {
 // cross-contamination with the default global Pi manifest.
 func CodeGraphPaths(homeDir string) CodeGraphPathSet {
 	agentDir := AgentConfigPath(homeDir)
-	manifest := filepath.Join(homeDir, ".gentle-ai", "pi-codegraph.json")
+	manifest := filepath.Join(state.Dir(homeDir), "pi-codegraph.json")
 	if defaultDir := filepath.Join(ConfigPath(homeDir), "agent"); filepath.Clean(agentDir) != filepath.Clean(defaultDir) {
 		sum := sha256.Sum256([]byte(filepath.Clean(agentDir)))
-		manifest = filepath.Join(homeDir, ".gentle-ai", fmt.Sprintf("pi-codegraph-%x.json", sum[:8]))
+		manifest = filepath.Join(state.Dir(homeDir), fmt.Sprintf("pi-codegraph-%x.json", sum[:8]))
 	}
 	return CodeGraphPathSet{
 		AgentDir:  agentDir,

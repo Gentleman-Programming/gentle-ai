@@ -221,7 +221,7 @@ func rejectAmbiguousPersonaKeys(data []byte) error {
 
 // Path returns the absolute path to the state file for the given home directory.
 func Path(homeDir string) string {
-	return filepath.Join(homeDir, stateDir, stateFile)
+	return filepath.Join(Dir(homeDir), stateFile)
 }
 
 // Read reads and unmarshals the state file from the given home directory.
@@ -329,7 +329,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 // Write persists the full install state to disk under the given home directory.
 // It creates the .gentle-ai directory if it does not already exist.
 func Write(homeDir string, s InstallState) error {
-	dir := filepath.Join(homeDir, stateDir)
+	dir := Dir(homeDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
