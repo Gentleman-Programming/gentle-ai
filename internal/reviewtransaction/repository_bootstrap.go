@@ -16,8 +16,20 @@ import (
 // SnapshotBuilder and every lower-level repository boundary remain read-only:
 // callers that need lifecycle preparation must opt in at this boundary.
 func PrepareReviewRepositoryRoot(ctx context.Context, workspace string) (string, error) {
+	return PrepareReviewRepositoryRootWithTiming(ctx, workspace, nil)
+}
+
+// PrepareReviewRepositoryRootWithTiming is the timed variant of
+// PrepareReviewRepositoryRoot.
+func PrepareReviewRepositoryRootWithTiming(ctx context.Context, workspace string, timing *TargetStatusTiming) (string, error) {
 	builder := SnapshotBuilder{Repo: workspace}
-	root, resolveErr := builder.ResolveRepositoryRoot(ctx)
+	var resolveErr error
+	var root string
+	if timing != nil {
+		root, resolveErr = builder.ResolveRepositoryRootWithTiming(ctx, timing)
+	} else {
+		root, resolveErr = builder.ResolveRepositoryRoot(ctx)
+	}
 	if resolveErr == nil {
 		return root, nil
 	}
@@ -44,7 +56,10 @@ func PrepareReviewRepositoryRoot(ctx context.Context, workspace string) (string,
 	if _, initErr := runGitIsolated(ctx, workspace, nil, nil, "init", "--quiet"); initErr != nil {
 		return "", initErr
 	}
-	return (SnapshotBuilder{Repo: workspace}).ResolveRepositoryRoot(ctx)
+	if timing != nil {
+		return builder.ResolveRepositoryRootWithTiming(ctx, timing)
+	}
+	return builder.ResolveRepositoryRoot(ctx)
 }
 
 // ReviewRootResolutionReportsNoRepository reports the bounded Git discovery

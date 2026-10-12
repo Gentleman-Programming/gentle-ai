@@ -123,6 +123,7 @@ type ReviewTargetStatusResult struct {
 	// committed range that only adds passive content to an acknowledged
 	// candidate (#4739). It selects the STOP reason, never authority.
 	passiveDeltaAfterAcknowledgement bool
+	TimingDiagnostics               *reviewtransaction.TargetStatusTiming                         `json:"timing_diagnostics,omitempty"`
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -243,6 +244,9 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 			IntendedUntrackedProof:  native.Projection.IntendedUntrackedProof,
 			InitialSnapshotIdentity: native.Projection.InitialSnapshotIdentity, CurrentSnapshotIdentity: native.Projection.CurrentSnapshotIdentity,
 		},
+	}
+	if native.TimingDiagnostics != nil {
+		result.TimingDiagnostics = native.TimingDiagnostics
 	}
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {

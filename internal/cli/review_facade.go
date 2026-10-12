@@ -794,6 +794,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	repairActor := flags.String("repair-actor", "", "authorized classified repair actor")
 	repairReason := flags.String("repair-reason", "", "authorized classified repair reason")
 	repairAuthorization := flags.String("repair-authorization", "", "exact classified repair authorization binding")
+	timing := flags.Bool("timing", false, "enable native STATUS phase timing diagnostics")
 	untrackedScope := reviewSingleValueFlag{}
 	intendedUntracked := reviewRepeatedPathFlag{}
 	expectedUntrackedInventory := reviewSingleValueFlag{}
@@ -1102,7 +1103,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			if pendingLineage != "" {
 				native, liveSnapshot, err = reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
-					Target: target, LineageID: pendingLineage, PrePR: prePR,
+					Target: target, LineageID: pendingLineage, PrePR: prePR, TimingEnabled: *timing,
 				})
 				if err != nil {
 					return fmt.Errorf("assess negotiated review target: %w", err)
@@ -1125,7 +1126,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					}
 					startOccupied = occupied
 					if occupied {
-						assessed, _, assessErr := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{Target: target, LineageID: startLineage, PrePR: prePR})
+						assessed, _, assessErr := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{Target: target, LineageID: startLineage, PrePR: prePR, TimingEnabled: *timing})
 						if assessErr != nil {
 							return fmt.Errorf("assess terminal review target: %w", assessErr)
 						}
@@ -1155,7 +1156,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 		} else {
 			native, liveSnapshot, err = reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
-				Target: target, LineageID: *lineage, PrePR: prePR,
+				Target: target, LineageID: *lineage, PrePR: prePR, TimingEnabled: *timing,
 			})
 			if err != nil {
 				return fmt.Errorf("assess negotiated review target: %w", err)
@@ -1171,7 +1172,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			target.IntendedUntracked = intendedScope.Intended
 			native, liveSnapshot, err = reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
-				Target: target, LineageID: *lineage, PrePR: prePR,
+				Target: target, LineageID: *lineage, PrePR: prePR, TimingEnabled: *timing,
 			})
 			if err != nil {
 				return fmt.Errorf("reassess negotiated review target: %w", err)
@@ -1609,7 +1610,7 @@ func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, build
 	if live.Kind != reviewtransaction.TargetCurrentChanges || len(live.Paths) != 0 {
 		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
 	}
-	base, err := reviewtransaction.ResolveCommittedRangeBase(ctx, root)
+	base, err := reviewtransaction.ResolveCommittedRangeBase(ctx, root, nil)
 	if err != nil || base == "" {
 		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
 	}
