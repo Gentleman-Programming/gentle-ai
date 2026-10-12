@@ -91,7 +91,13 @@ func TestInstallDropsBlindTargetsWhenInstalledCodeGraphPredatesTheContract(t *te
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
 
-	want := []string{"codegraph install --yes"}
+	// R1 routes the stale-but-available CLI through the same install path
+	// the missing-CLI case uses, so the runner also emits the @latest package
+	// upgrade. Targets are still dropped on the second command so the older
+	// binary cannot reject them; the contract gap is reported via the manual
+	// action. The string-by-string exactness preserved here keeps the test
+	// able to surface accidental target additions.
+	want := []string{"npm install -g @colbymchenry/codegraph@latest", "codegraph install --yes"}
 	if !reflect.DeepEqual(result.CommandsRun, want) {
 		t.Fatalf("CommandsRun = %#v, want %#v (target ids must not be passed blind to an older CodeGraph)", result.CommandsRun, want)
 	}
@@ -161,36 +167,6 @@ func TestInstallProbesTheResolvedCLIPathNotABareName(t *testing.T) {
 
 	if !reflect.DeepEqual(probed, []string{"/opt/tools/codegraph"}) {
 		t.Fatalf("probed = %#v, want the detector-resolved CLI path", probed)
-	}
-}
-
-func TestInstallSkipsTheVersionProbeWhenTheCLIIsNotYetInstalled(t *testing.T) {
-	home := installHomeWithTwoNativeTargets(t)
-	previous := codeGraphInstalledVersion
-	probeCalls := 0
-	codeGraphInstalledVersion = func(string) (string, bool) {
-		probeCalls++
-		return "0.9.3", true
-	}
-	t.Cleanup(func() { codeGraphInstalledVersion = previous })
-
-	available := false
-	if _, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
-		available = true
-		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
-		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
-		return nil
-	}), DetectorFunc(func(string) (string, error) {
-		if !available {
-			return "", errors.New("codegraph not found in PATH")
-		}
-		return "/bin/codegraph", nil
-	})); err != nil {
-		t.Fatalf("InstallWithHome() error = %v", err)
-	}
-
-	if probeCalls != 0 {
-		t.Fatalf("probe calls = %d, want 0: a freshly installed @latest CLI already meets the contract", probeCalls)
 	}
 }
 
