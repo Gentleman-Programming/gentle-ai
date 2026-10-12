@@ -317,6 +317,7 @@ func TestCodeGraphGuidanceContainsLazyInitAndUsageRules(t *testing.T) {
 		"hard ordering rule",
 		"Create Git worktrees that may need CodeGraph under the user's home directory",
 		"<repo-parent>/<repo-name>-worktrees/<worktree-name>",
+		"`<repo-parent>` is the immediate parent directory of the repository root",
 		"Never place a CodeGraph-dependent worktree under `/tmp`, `/var/tmp`, or `/tmp/opencode`",
 		"generic temporary-work guidance does not override this rule",
 		"Every worktree needs its own `.codegraph/` index",
