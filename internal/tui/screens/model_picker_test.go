@@ -36,7 +36,7 @@ func pickerRowIndex(t *testing.T, state ModelPickerState, agent string) int {
 
 func TestModelPickerRowsOfferInstalledAgentsWithoutRetiredSDD(t *testing.T) {
 	rows := ModelPickerRows()
-	want := []string{"gentle-orchestrator", "--- Gentle AI agents ---", "gentle-ai-explore", "gentle-ai-verify", "gentle-ai-worker", "--- Judgment Day ---", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "--- Review agents ---", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator", "--- OpenCode native agents ---", "general", "explore"}
+	want := []string{"gentle-orchestrator", "--- Gentle AI agents ---", "gentle-ai-explore", "gentle-ai-security", "gentle-ai-verify", "gentle-ai-worker", "--- Judgment Day ---", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "--- Review agents ---", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator", "--- OpenCode native agents ---", "general", "explore"}
 	if !reflect.DeepEqual(rows, want) {
 		t.Fatalf("active OpenCode rows = %v, want %v", rows, want)
 	}

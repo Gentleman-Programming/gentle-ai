@@ -624,7 +624,7 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 		t.Fatalf("ReadDir(opencode/agents) error = %v", err)
 	}
 	wantAgents := map[string]bool{
-		"gentle-ai-explore.md": true, "gentle-ai-verify.md": true, "gentle-ai-worker.md": true,
+		"gentle-ai-explore.md": true, "gentle-ai-security.md": true, "gentle-ai-verify.md": true, "gentle-ai-worker.md": true,
 		"jd-judge-a.md": true, "jd-judge-b.md": true, "jd-fix-agent.md": true,
 		"review-risk.md": true, "review-readability.md": true, "review-reliability.md": true, "review-resilience.md": true,
 	}

@@ -421,7 +421,7 @@ func managedConfigPriority(path string) int {
 func managedOpenCodeAgentKeys() []string {
 	keys := []string{
 		"gentle-orchestrator", "sdd-orchestrator", ReviewRefuterAgent, ReviewValidatorAgent,
-		"gentle-ai-explore", "gentle-ai-verify", "gentle-ai-worker",
+		"gentle-ai-explore", "gentle-ai-security", "gentle-ai-verify", "gentle-ai-worker",
 		"review-risk", "review-readability", "review-reliability", "review-resilience",
 	}
 	keys = append(keys, SDDPhases()...)

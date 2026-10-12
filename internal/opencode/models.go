@@ -121,6 +121,7 @@ func JDPhases() []string {
 func GentleAIODDPhases() []string {
 	return []string{
 		"gentle-ai-explore",
+		"gentle-ai-security",
 		"gentle-ai-verify",
 		"gentle-ai-worker",
 	}
