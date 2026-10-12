@@ -18,9 +18,12 @@ var ShellCandidateNotAuthorized = errors.New("shell candidate not authorized: ex
 // candidate is authorized to proceed. It is the single gate that
 // enforces the protected provisioning/consent/verification design.
 //
-// For production/host contexts: ALWAYS returns ShellCandidateNotAuthorized.
-// The gate NEVER accepts host context, env vars, PATH fallback, launcher
-// metadata, or any host-derived values as proof.
+// Sensitive modes ("gentle-shell", "pi") are C6-protected: they ALWAYS
+// return ShellCandidateNotAuthorized in production/host contexts. The gate
+// NEVER accepts host context, env vars, PATH fallback, launcher metadata, or
+// any host-derived values as proof. Ordinary installation modes ("separate",
+// "shared", and any other mode outside the C6 scope) are NOT gated: the gate
+// returns nil and preserves the pre-gate production behavior.
 //
 // For test contexts: accepts ONLY a valid *shellinstaller.ProvisionedContext
 // carried via context.Value with key gateContextKey. The context must be
@@ -39,7 +42,9 @@ func GateShellInstallCandidate(ctx context.Context, mode string) error {
 	case "pi":
 		expectedScope = "pi-takeover-e2e"
 	default:
-		return ShellCandidateNotAuthorized
+		// Ordinary installation modes are outside the C6 protected scope;
+		// preserve pre-gate production behavior.
+		return nil
 	}
 
 	// Extract ProvisionedContext from context (test-only seam)

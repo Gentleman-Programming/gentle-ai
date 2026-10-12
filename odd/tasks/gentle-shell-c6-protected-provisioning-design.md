@@ -150,3 +150,8 @@ ok  github.com/gentleman-programming/gentle-ai/v4/internal/cli            (all 1
 - W18 gate, `Profile.Validate`, T1/T3/T2a source unchanged
 
 **Design phase complete. Ready for next phase: real provisioner adapter implementation.
+
+## Review Corrections (RDD review-d110027d + successor review-dbc804aa52ea0f1b)
+
+1. **R3-build-tag-mismatch (CRITICAL, fixed in 1cc3e0d0)**: gate imports linux-only `ProvisionedContext` from untagged file → tagged gate+test `//go:build linux`, added `shell_install_gate_other.go` (`//go:build !linux`) fail-closed stub with identical sentinel.
+2. **R3-gate-blocks-all-real-installs (CRITICAL)**: the gate call made `gentle-ai shell install` unreachable for every real user (base ran `RunUserEntry` directly after token confirmation). User decision: gate applies ONLY to sensitive C6 modes (`gentle-shell`, `pi`); ordinary modes pass through ungated. Stub mirrors the same split. Warnings recorded, not blocking: `R3-test-seam-exported-in-production-build`, `R3-no-run-shell-gate-integration-test`, plus predecessor's `R3-consent-negative-ttl`, `R3-verification-synthetic-hash`, `R3-synthetic-instance-uniqueness` (follow-ups for the real-provisioner phase).

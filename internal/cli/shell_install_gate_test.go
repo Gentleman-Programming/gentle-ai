@@ -44,14 +44,18 @@ func TestGateShellInstallCandidateFailClosedWrongType(t *testing.T) {
 	}
 }
 
-func TestGateShellInstallCandidateInvalidMode(t *testing.T) {
+func TestGateShellInstallCandidateOrdinaryModeNotGated(t *testing.T) {
 	ctx := context.Background()
-	err := GateShellInstallCandidate(ctx, "invalid-mode")
-	if err == nil {
-		t.Fatal("expected error for invalid mode")
+	// Ordinary installation modes are outside the C6 protected scope and
+	// preserve pre-gate production behavior: the gate must not block them.
+	for _, mode := range []string{"separate", "shared", "invalid-mode"} {
+		if err := GateShellInstallCandidate(ctx, mode); err != nil {
+			t.Fatalf("mode %q must not be gated: %v", mode, err)
+		}
 	}
-	if !errors.Is(err, ShellCandidateNotAuthorized) {
-		t.Fatalf("wrong error: %v", err)
+	// Sensitive modes stay fail-closed without a provisioned context.
+	if err := GateShellInstallCandidate(ctx, "gentle-shell"); !errors.Is(err, ShellCandidateNotAuthorized) {
+		t.Fatalf("sensitive mode must fail closed: %v", err)
 	}
 }
 
