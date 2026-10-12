@@ -8,7 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 //go:embed pirelay.mts
@@ -26,6 +29,17 @@ func piReviewEnvironment(operatorHome, operatorPath string) ([]string, string) {
 	agentDir := os.Getenv("PI_CODING_AGENT_DIR")
 	if agentDir == "" {
 		agentDir = filepath.Join(operatorHome, ".pi", "agent")
+	}
+	if runtime.GOOS == "windows" {
+		return system.SanitizeCommandEnvironment(os.Environ(), []string{
+			"PI_CODING_AGENT_DIR",
+			"GENTLE_PI_REVIEW_RELAY_CONTRACT",
+		}, map[string]string{
+			"HOME":                            operatorHome,
+			"PATH":                            operatorPath,
+			"PI_CODING_AGENT_DIR":             agentDir,
+			"GENTLE_PI_REVIEW_RELAY_CONTRACT": "gentle-pi.review-relay/v1",
+		}), ""
 	}
 	return []string{"HOME=" + operatorHome, "PATH=" + operatorPath, "PI_CODING_AGENT_DIR=" + agentDir, "GENTLE_PI_REVIEW_RELAY_CONTRACT=gentle-pi.review-relay/v1"}, ""
 }

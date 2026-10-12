@@ -506,7 +506,7 @@ func probePiCodeGraphMCP(string) (PiCodeGraphMCPProbeResult, error) {
 
 func probePiCodeGraphMCPContext(ctx context.Context) (probeResult PiCodeGraphMCPProbeResult, returnErr error) {
 	command := exec.CommandContext(ctx, "codegraph", "serve", "--mcp")
-	system.EnsureCommandDir(command)
+	system.ConfigureCommandProcess(command, "codegraph", []string{"serve", "--mcp"})
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return PiCodeGraphMCPProbeResult{}, err
