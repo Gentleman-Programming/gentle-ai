@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"net/url"
 	"os"
 	"os/exec"
 	"sort"
@@ -54,8 +53,11 @@ type CatalogError struct{ Kind CatalogErrorKind }
 func (e *CatalogError) Error() string { return string(e.Kind) }
 
 // DiscoverCatalog reads OpenCode's effective provider catalog for projectDir.
+// Live discovery routes each attempt by command: the V2 api invocation uses
+// the file-backed runner (piped stdout truncates on real V2 hosts), while
+// the version probe and the V1 stream keep the pipe-based runner.
 func DiscoverCatalog(ctx context.Context, projectDir string) (map[string]Provider, error) {
-	return DiscoverCatalogWithRunner(ctx, projectDir, runCatalogCommand)
+	return DiscoverCatalogWithRunner(ctx, projectDir, discoverCatalogCommandRunner)
 }
 
 // waitErrorReader is the contract for stream readers that surface the child's
@@ -68,12 +70,13 @@ type waitErrorReader interface {
 	WaitError() error
 }
 
-// DiscoverCatalogWithRunner parses the streamed catalog and classifies the
-// outcome. The child's exit status takes precedence over downstream parse
-// classification: a non-zero exit surfaces as command_failed (or timeout),
-// never masked by malformed/unsupported_schema. The exception is a genuine
-// output overflow, which keeps its own category — matching the pre-streaming
-// cmd.Run() semantics where overflow was detected during cmd.Run() itself.
+// DiscoverCatalogWithRunner probes the runtime major version first, then
+// reads the matching catalog: the V2 api envelope through the injected
+// runner (live wiring selects the file-backed transport for it), and the
+// V1 `models --verbose` stream otherwise. When the V2 attempt fails after
+// its bounded cold-start retry, discovery falls back to the V1 stream; when
+// both fail, the V1 error is surfaced because it is the path the installed
+// binary actually documents.
 func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner CommandRunner) (map[string]Provider, error) {
 	ctx, cancel := context.WithTimeout(ctx, catalogTimeout)
 	defer cancel()
@@ -85,12 +88,26 @@ func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner Co
 	if versionErr != nil {
 		return nil, versionErr
 	}
-	args := []string{"models", "--verbose"}
-	if major == RuntimeV2 {
-		args = []string{"api", "get", "/api/model?location%5Bdirectory%5D=" + url.QueryEscape(projectDir)}
+	if major != RuntimeV2 {
+		return discoverVerboseCatalog(ctx, projectDir, runner, cancel)
 	}
+	providers, apiErr := discoverAPICatalog(ctx, projectDir, runner)
+	if apiErr == nil {
+		return providers, nil
+	}
+	return discoverVerboseCatalog(ctx, projectDir, runner, cancel)
+}
+
+// discoverVerboseCatalog runs the V1 `models --verbose` stream path. It
+// classifies the outcome and honors the child's exit status over downstream
+// parse classification: a non-zero exit surfaces as command_failed (or
+// timeout), never masked by malformed/unsupported_schema. The exception is a
+// genuine output overflow, which keeps its own category — matching the
+// pre-streaming cmd.Run() semantics where overflow was detected during
+// cmd.Run() itself.
+func discoverVerboseCatalog(ctx context.Context, projectDir string, runner CommandRunner, cancel context.CancelFunc) (map[string]Provider, error) {
 	limit := maxCatalogOutput
-	r, err := runner(ctx, Command{Path: "opencode", Args: args, Dir: projectDir})
+	r, err := runner(ctx, Command{Path: "opencode", Args: []string{"models", "--verbose"}, Dir: projectDir})
 	if err != nil {
 		return nil, catalogCommandError(ctx, err)
 	}
@@ -98,13 +115,7 @@ func DiscoverCatalogWithRunner(ctx context.Context, projectDir string, runner Co
 		defer closer.Close()
 	}
 	limitReader := &countingLimitReader{r: r, limit: int64(limit), cancel: cancel}
-	var providers map[string]Provider
-	var parseErr error
-	if major == RuntimeV2 {
-		providers, parseErr = parseV2ModelAPI(limitReader)
-	} else {
-		providers, parseErr = parseVerboseCatalog(limitReader)
-	}
+	providers, parseErr := parseVerboseCatalog(limitReader)
 	if parseErr != nil {
 		var catalogErr *CatalogError
 		if errors.As(parseErr, &catalogErr) && catalogErr.Kind == CatalogErrorOutputTooLarge {
@@ -145,7 +156,10 @@ func readCatalogVersion(ctx context.Context, r io.Reader) (RuntimeMajor, error) 
 
 // parseV2ModelAPI consumes the location-scoped V2 API response. Its explicit
 // tools capability is required; model IDs alone cannot establish suitability
-// for the SDD picker.
+// for the SDD picker. Reasoning intent lives in the optional
+// compatibility.requireReasoning field — the capabilities object carries no
+// reasoning flag on real hosts. Cost selects the first untiered entry as the
+// base rate; tiered entries describe context-window discounts.
 func parseV2ModelAPI(r io.Reader) (map[string]Provider, error) {
 	var response struct {
 		Data []struct {
@@ -156,14 +170,16 @@ func parseV2ModelAPI(r io.Reader) (map[string]Provider, error) {
 			Family       string `json:"family"`
 			Enabled      *bool  `json:"enabled"`
 			Capabilities *struct {
-				Tools     *bool `json:"tools"`
-				Reasoning *bool `json:"reasoning"`
+				Tools *bool `json:"tools"`
 			} `json:"capabilities"`
+			Compatibility *struct {
+				RequireReasoning *bool `json:"requireReasoning"`
+			} `json:"compatibility"`
 			Variants []struct {
 				ID string `json:"id"`
 			} `json:"variants"`
-			Limit ModelLimit  `json:"limit"`
-			Cost  []ModelCost `json:"cost"`
+			Limit ModelLimit     `json:"limit"`
+			Cost  []apiModelCost `json:"cost"`
 		} `json:"data"`
 	}
 	decoder := json.NewDecoder(r)
@@ -201,16 +217,37 @@ func parseV2ModelAPI(r io.Reader) (map[string]Provider, error) {
 		}
 		sortVariants(variants)
 		model := Model{ID: raw.ID, Name: raw.Name, Family: raw.Family, ToolCall: *raw.Capabilities.Tools, Limit: raw.Limit, Variants: variants}
-		if raw.Capabilities.Reasoning != nil {
-			model.Reasoning = *raw.Capabilities.Reasoning
+		if raw.Compatibility != nil && raw.Compatibility.RequireReasoning != nil {
+			model.Reasoning = *raw.Compatibility.RequireReasoning
 		}
-		if len(raw.Cost) > 0 {
-			model.Cost = raw.Cost[0]
-		}
+		model.Cost = apiBaseCost(raw.Cost)
 		provider.Models[raw.ID] = model
 		providers[raw.ProviderID] = provider
 	}
 	return providers, nil
+}
+
+// apiModelCost is one entry of the V2 cost array. Tier is typed as any so a
+// tiered entry (e.g. {"type":"context","size":272000}) is distinguishable
+// from an absent tier: only a non-nil value marks a tiered price.
+type apiModelCost struct {
+	Tier   any     `json:"tier"`
+	Input  float64 `json:"input"`
+	Output float64 `json:"output"`
+}
+
+// apiBaseCost selects the untiered cost entry as the model's base price.
+// When every entry is tiered the first one is the closest available base.
+func apiBaseCost(entries []apiModelCost) ModelCost {
+	for _, entry := range entries {
+		if entry.Tier == nil {
+			return ModelCost{Input: entry.Input, Output: entry.Output}
+		}
+	}
+	if len(entries) > 0 {
+		return ModelCost{Input: entries[0].Input, Output: entries[0].Output}
+	}
+	return ModelCost{}
 }
 
 func catalogJSONError(err error) error {
