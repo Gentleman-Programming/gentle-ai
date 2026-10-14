@@ -24,6 +24,7 @@ func canonicalPath(t *testing.T, path string) string {
 func TestPathsHonorCodexHomeOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	override := t.TempDir()
 	t.Setenv("CODEX_HOME", override)
@@ -54,6 +55,7 @@ func TestPathsHonorCodexHomeOverride(t *testing.T) {
 func TestDetectReportsConfigUnderCodexHomeOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	override := t.TempDir()
 	t.Setenv("CODEX_HOME", override)
@@ -78,6 +80,7 @@ func TestDetectReportsConfigUnderCodexHomeOverride(t *testing.T) {
 func TestPathsPreserveIsolatedHomeUnderOverride(t *testing.T) {
 	realHome := t.TempDir()
 	t.Setenv("HOME", realHome)
+	t.Setenv("USERPROFILE", realHome)
 
 	override := t.TempDir()
 	t.Setenv("CODEX_HOME", override)

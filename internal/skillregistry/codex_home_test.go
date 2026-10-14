@@ -13,6 +13,7 @@ import (
 func TestUserSkillDirs_CodexHonorsCodexHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	override := t.TempDir()
 	t.Setenv("CODEX_HOME", override)
@@ -39,6 +40,7 @@ func TestUserSkillDirs_CodexHonorsCodexHome(t *testing.T) {
 func TestUserSkillDirs_CodexPreservesIsolatedHomeUnderOverride(t *testing.T) {
 	realHome := t.TempDir()
 	t.Setenv("HOME", realHome)
+	t.Setenv("USERPROFILE", realHome)
 
 	override := t.TempDir()
 	t.Setenv("CODEX_HOME", override)

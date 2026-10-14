@@ -296,6 +296,7 @@ func TestScanConfigs_KimiLegacyFallback(t *testing.T) {
 func TestScanConfigs_CodexHonorsCodexHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 
 	override := t.TempDir()
 	t.Setenv("CODEX_HOME", override)
@@ -327,6 +328,7 @@ func TestScanConfigs_CodexHonorsCodexHome(t *testing.T) {
 func TestScanConfigs_CodexPreservesIsolatedHomeUnderOverride(t *testing.T) {
 	realHome := t.TempDir()
 	t.Setenv("HOME", realHome)
+	t.Setenv("USERPROFILE", realHome)
 
 	override := t.TempDir()
 	t.Setenv("CODEX_HOME", override)
