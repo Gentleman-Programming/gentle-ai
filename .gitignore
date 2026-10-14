@@ -37,3 +37,7 @@ dist/
 # Engram local runtime state (project sync chunks are intentionally versioned)
 .engram/engram.db
 .engram/cloud.json
+
+# Python
+__pycache__/
+*.pyc
