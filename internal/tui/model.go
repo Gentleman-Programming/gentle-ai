@@ -4579,7 +4579,7 @@ func agentBuilderSkillsDirIn(home string, agentID model.AgentID) (string, bool) 
 	case model.AgentGeminiCLI:
 		return filepath.Join(home, ".gemini", "skills"), true
 	case model.AgentCodex:
-		return filepath.Join(home, ".codex", "skills"), true
+		return filepath.Join(system.CodexConfigDir(home), "skills"), true
 	case model.AgentKimi:
 		if info, err := osStatPathFn(filepath.Join(home, ".kimi-code")); err != nil {
 			if !os.IsNotExist(err) {
