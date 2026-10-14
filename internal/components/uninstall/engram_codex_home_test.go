@@ -23,6 +23,7 @@ func TestComponentOperationsEngram_CodexHonorsCodexHomeOverride(t *testing.T) {
 
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
 
 	override := t.TempDir()
 	t.Setenv("CODEX_HOME", override)
