@@ -32,6 +32,7 @@ import (
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type Manager interface {
@@ -1164,8 +1165,8 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 	case model.StrategyTOMLFile:
 		targets = append(targets,
 			adapter.MCPConfigPath(homeDir, "engram"),
-			filepath.Join(homeDir, ".codex", "engram-instructions.md"),
-			filepath.Join(homeDir, ".codex", "engram-compact-prompt.md"),
+			filepath.Join(system.CodexConfigDir(homeDir), "engram-instructions.md"),
+			filepath.Join(system.CodexConfigDir(homeDir), "engram-compact-prompt.md"),
 		)
 	}
 	return targets
@@ -1197,8 +1198,8 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 		return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "engram"})}
 	case model.StrategyTOMLFile:
 		configPath := adapter.MCPConfigPath(homeDir, "engram")
-		instructionsPath := filepath.Join(homeDir, ".codex", "engram-instructions.md")
-		compactPath := filepath.Join(homeDir, ".codex", "engram-compact-prompt.md")
+		instructionsPath := filepath.Join(system.CodexConfigDir(homeDir), "engram-instructions.md")
+		compactPath := filepath.Join(system.CodexConfigDir(homeDir), "engram-compact-prompt.md")
 		return []operation{
 			rewriteTOMLFile(configPath, cleanCodexTOML),
 			removeFile(instructionsPath),
