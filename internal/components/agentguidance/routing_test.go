@@ -159,8 +159,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 		{"adaptive research and product questions", []string{
 			"Establish the problem, intended outcome, constraints, and current evidence; inspect relevant code",
 			"Adapt depth to uncertainty and consequence, not a fixed questionnaire or mandatory rounds",
-			"The parent owns product decisions",
-			"ask one focused user question only for a real unresolved product decision, then stop and wait",
+			"The parent owns product and foundation decisions",
 			"Workers return gaps to the parent rather than assuming choices",
 			"forward these research instructions to a fresh general exploration/research worker through existing delegation",
 			"do not create a specialized research agent",
@@ -643,6 +642,65 @@ func TestRenderRoutingIsDeterministic(t *testing.T) {
 	}
 }
 
+// Gap-driven clarification: the harness asked one question at a time, limited
+// questions to product decisions, and so silently assumed scope, stack,
+// architecture, data, deployment, and credentials; deferred ideas were
+// implemented right away. These canonical texts are mirrored byte-identical by
+// gentle-pi, so they are pinned verbatim.
+func TestRenderRoutingResolvesGapsWithGroupedQuestionsAndDefersFutureIdeas(t *testing.T) {
+	t.Parallel()
+
+	canonical := []string{
+		"3. **Resolve uncertainty.** Recommend optional research only for a named uncertainty. From the exploration, list the gaps the request and the repository leave open, and ask only those that block now or a foreseeable later task and are costly to undo (scope, stack, architecture, data, deployment, security-relevant configuration); answer the rest from evidence or record a visible default assumption. Ask them in one grouped questionnaire, a question alone first only when its answer changes the others; then stop and wait. Use at most one scoped read-only assumption challenge for a high-consequence unproven premise.\n",
+		"The parent owns product and foundation decisions. After exploring, list the gaps the request, the repository, and the installed tools leave open, and classify each: answered by evidence, do not ask; blocks now or a foreseeable later task and is costly to undo once code depends on it (scope or audience, stack, architecture, data store, deployment target, security-relevant configuration), ask; cheap to change, choose a sensible default and record it as a visible assumption the user can correct. Ask about a later task upfront as a possibility, record the answer with the condition it depends on, and ask again only if that condition changes. Clarification is complete when no costly blocking gap remains, not when every gap is closed; when more than about five gaps qualify, ask the root decision (objective or scope) first. Use the structured question tool when available: group independent questions into one questionnaire, and ask a question alone first only when its answer changes the others. Each question offers the recommended option with its reason, a relevant alternative, \"Decide for me\" (choose and record the assumption), and \"Explain each option\" (explain each option didactically, then ask only that question again); free text stays available. When a better result needs a tool that is not installed, recommend it as an option in that questionnaire and never install without consent. Never leave generated services with empty or default credentials: generate secrets into an ignored environment file and commit only a placeholder example. Workers return gaps to the parent rather than assuming choices.",
+		"- **Ask trigger:** open gaps that block now or a foreseeable later task and are costly to undo get one grouped questionnaire (a question alone first only when its answer changes the others); stop and wait.\n",
+		"`## Future` holds ideas the user explicitly defers; they never become `S#` or tasks.",
+		"When the user frames something as a later idea, do not implement or prepare it: record it under `## Future` in the current feature document, let it inform choices that would otherwise block it, and surface it only at that feature's close, on its resume, and when new work touches the same area; the user plans, keeps, or discards each item. Small work without a document reports a deferred idea in its closing report.",
+		"7. **Close.** Report the verified outcome, every failed, skipped, or pending check, and the next step. Present the feature's `## Future` items and let the user plan, keep, or discard each.",
+	}
+	retired := []string{
+		"one focused user question",
+		"The parent owns product decisions:",
+		"an open product or design decision gets",
+	}
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			t.Parallel()
+
+			rendered, err := RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
+			for _, want := range canonical {
+				if !strings.Contains(rendered, want) {
+					t.Errorf("RenderRouting(%q) is missing canonical text %q", agent.ID, want)
+				}
+			}
+			for _, old := range retired {
+				if strings.Contains(rendered, old) {
+					t.Errorf("RenderRouting(%q) keeps retired text %q", agent.ID, old)
+				}
+			}
+
+			// The feature document places `## Future` between `## Tasks` and
+			// `## Log`, in the protocol step and in its long form.
+			for _, section := range []string{"5. **Track before the first write.**", "- Keep `odd/tasks/<feature-name>.md`"} {
+				start := strings.Index(rendered, section)
+				if start < 0 {
+					t.Fatalf("RenderRouting(%q) is missing %q", agent.ID, section)
+				}
+				line := rendered[start:]
+				line = line[:strings.Index(line, "\n")]
+				tasks, future, log := strings.Index(line, "`## Tasks`"), strings.Index(line, "`## Future`"), strings.Index(line, "`## Log`")
+				if tasks < 0 || future <= tasks || log <= future {
+					t.Errorf("RenderRouting(%q) %q orders sections Tasks=%d Future=%d Log=%d, want Tasks < Future < Log", agent.ID, section, tasks, future, log)
+				}
+			}
+		})
+	}
+}
+
 // TestRenderRoutingOpensWithTheODDProtocol pins Organic Driven Development
 // (ODD) as the orchestrator's predefined, mandatory default workflow: the
 // ordered protocol must render before topology selection, in step order, for
@@ -796,9 +854,12 @@ func TestUsageGuideDescribesTheSpecByReferenceFeatureDocument(t *testing.T) {
 	for _, clause := range []string{
 		"`## Specs`",
 		"`## Tasks`",
+		"`## Future`",
 		"`## Log`",
 		"exact strings, error messages, and examples verbatim",
 		"`L1` is your original request verbatim",
+		"ideas you explicitly defer",
+		"one grouped questionnaire",
 		"A requirement change rewrites only the affected spec and reopens only its task",
 		"never a paraphrase of your request",
 		"runs the spec's examples you authorized, against isolated state when they mutate data",

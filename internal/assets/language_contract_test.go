@@ -251,8 +251,7 @@ func TestNeutralPersonaAssetsProvideMentorParityWithoutRegionalVoice(t *testing.
 			for _, required := range []string{
 				"Response-length contract",
 				"minimum useful response",
-				"Ask at most one question at a time",
-				"STOP and wait",
+				"Group questions that do not depend on each other into one batch; ask a question alone first only when its answer changes the others, then STOP and wait.",
 				"Do not present option menus",
 				"verification",
 				"CONCEPTS > CODE",
@@ -277,6 +276,49 @@ func TestNeutralPersonaAssetsProvideMentorParityWithoutRegionalVoice(t *testing.
 	}
 }
 
+// Gap-driven clarification: personas no longer limit the agent to one question
+// at a time. Every persona and output style, neutral and gentleman, groups
+// independent questions with the same canonical sentence.
+func TestPersonaAssetsGroupIndependentQuestions(t *testing.T) {
+	const grouped = "Group questions that do not depend on each other into one batch; ask a question alone first only when its answer changes the others, then STOP and wait."
+	carriers := []string{
+		"claude/output-style-gentleman.md",
+		"claude/output-style-neutral.md",
+		"claude/persona-gentleman.md",
+		"claude/persona-neutral-residual.md",
+		"generic/persona-gentleman.md",
+		"generic/persona-neutral.md",
+		"hermes/persona-gentleman.md",
+		"hermes/persona-neutral.md",
+		"kimi/output-style-gentleman.md",
+		"kimi/output-style-neutral.md",
+		"kimi/persona-neutral-residual.md",
+		"opencode/persona-gentleman.md",
+	}
+	for _, path := range carriers {
+		if !strings.Contains(MustRead(path), grouped) {
+			t.Errorf("%s is missing the grouped-questions rule %q", path, grouped)
+		}
+	}
+
+	err := fs.WalkDir(FS, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		base := filepath.Base(path)
+		if !strings.HasPrefix(base, "persona-") && !strings.HasPrefix(base, "output-style-") {
+			return nil
+		}
+		if strings.Contains(strings.ToLower(MustRead(path)), "one question at a time") {
+			t.Errorf("%s keeps the retired one-question-at-a-time rule", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNeutralOutputStyleAssetsProvideMeaningfulContract(t *testing.T) {
 	for _, path := range []string{
 		"claude/output-style-neutral.md",
@@ -290,8 +332,7 @@ func TestNeutralOutputStyleAssetsProvideMeaningfulContract(t *testing.T) {
 			for _, required := range []string{
 				"Neutral Output Style",
 				"minimum useful response",
-				"Ask at most one question at a time",
-				"STOP",
+				"Group questions that do not depend on each other into one batch; ask a question alone first only when its answer changes the others, then STOP and wait.",
 				"Do not offer option menus",
 				"verify",
 				"Generated technical artifacts default to English",

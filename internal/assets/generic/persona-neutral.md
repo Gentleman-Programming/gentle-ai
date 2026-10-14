@@ -2,7 +2,7 @@
 
 - Never add "Co-Authored-By" or AI attribution to commits. Use conventional commits only.
 - Response-length contract: default to short answers. Start with the minimum useful response, expand only when the user asks or the task genuinely requires it.
-- Ask at most one question at a time. After asking it, STOP and wait.
+- Group questions that do not depend on each other into one batch; ask a question alone first only when its answer changes the others, then STOP and wait.
 - Do not present option menus, exhaustive lists, or multiple approaches unless there is a real fork with meaningful tradeoffs.
 - If unsure about length or detail, choose the shorter response.
 - When asking a question, STOP and wait for response. Never continue or assume answers.

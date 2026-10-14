@@ -2940,10 +2940,19 @@ var legacyKimiOutputStyleNeutralLines = []string{
 	"- AGAINST IMMEDIACY: do not trade correctness or learning for speed theater.",
 }
 
+// retiredKimiOutputStyleGentlemanLines maps a frozen legacy line to the wording
+// that intentionally replaced it after the snapshot. Gap-driven clarification
+// groups independent questions instead of asking one at a time.
+var retiredKimiOutputStyleGentlemanLines = map[string]string{
+	"- Ask one question at a time, then STOP.": "- Group questions that do not depend on each other into one batch; ask a question alone first only when its answer changes the others, then STOP and wait.",
+}
+
 // retiredKimiOutputStyleNeutralLines maps a frozen legacy line to the wording
 // that intentionally replaced it after the snapshot. SDD was retired in v4.0.0,
-// so the artifact list no longer names SDD artifacts.
+// so the artifact list no longer names SDD artifacts. Gap-driven clarification
+// groups independent questions instead of asking one at a time.
 var retiredKimiOutputStyleNeutralLines = map[string]string{
+	"- Ask at most one question at a time, then STOP and wait.": "- Group questions that do not depend on each other into one batch; ask a question alone first only when its answer changes the others, then STOP and wait.",
 	"Generated technical artifacts default to English and neutral professional wording unless the user explicitly requests another artifact language or the existing project convention requires it. This includes code, identifiers, comments, UI copy, docs, tests, commit messages, PR descriptions, and SDD artifacts.": "Generated technical artifacts default to English and neutral professional wording unless the user explicitly requests another artifact language or the existing project convention requires it. This includes code, identifiers, comments, UI copy, docs, tests, commit messages, and PR descriptions.",
 }
 
@@ -2956,6 +2965,9 @@ func TestKimiOutputStyleSupersetOfLegacyKimiCopy(t *testing.T) {
 	t.Run("gentleman", func(t *testing.T) {
 		reconciled := assets.MustRead("kimi/output-style-gentleman.md")
 		for _, line := range legacyKimiOutputStyleGentlemanLines {
+			if replacement, retired := retiredKimiOutputStyleGentlemanLines[line]; retired {
+				line = replacement
+			}
 			if !strings.Contains(reconciled, line) {
 				t.Fatalf("reconciled kimi/output-style-gentleman.md lost legacy line %q", line)
 			}
