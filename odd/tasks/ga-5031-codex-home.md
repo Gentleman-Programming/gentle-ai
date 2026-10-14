@@ -66,3 +66,18 @@ https://github.com/Gentleman-Programming/gentle-ai/issues/5031#issuecomment-6178
 L2 (2026-10-14, user): "si" — aprobado iniciar implementación ODD: feature doc,
 branch `fix/5031-codex-home` desde upstream/main (e37030bbf), test-first por
 tarea. Worktree: ~/gentleman/gentle-ai-5031.
+
+L3 (2026-10-14, implementation complete): 4 work-unit commits on
+fix/5031-codex-home from upstream/main e37030bbf —
+599572e69 (T1 adapter, RED->GREEN), 850d283c9 (T2 config_scan),
+44c0bf676 (T3 engram inject+uninstall symmetry), 497b882c8
+(T4 skillregistry+tui). T5 verification: consolidated suite ok across
+6 packages (agents/codex, system, components/engram,
+components/uninstall, skillregistry, tui); gofmt clean; go vet clean;
+S5 scope intact (cwd-based registry entry untouched at registry.go:103;
+zero hardcoded <home>/.codex joins remain in issue sites; doctor.go,
+crosslane, legacyassets untouched). Native assess (committed range vs
+e37030bbf): risk medium (executable_change adapter.go), 12 paths / 467
+lines, reviewDue false (under_budget) — no native review started per
+entry rule; writer self-verification stands per returned plan. NOT
+pushed; PR is the user's decision.
