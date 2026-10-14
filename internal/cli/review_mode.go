@@ -45,8 +45,9 @@ type ReviewModeResult struct {
 // never mutates, and enabling applies to future candidates only.
 func RunReviewMode(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>] [--expected-revision <revision>] [--json]")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>] [--expected-revision <revision>] [--global-only] [--json]")
 		_, _ = fmt.Fprintln(stdout, "User-owned switch. Receipt-driven development is on by default: run 'gentle-ai review mode disable' to opt out. Any off wins: a repository may disable it for this clone but can never require it, and no other clone inherits the override. status is read-only and reports both sources plus the effective mode. Enabling applies to future candidates only.")
+		_, _ = fmt.Fprintln(stdout, "--global-only reads or writes only the global HOME source, without repository resolution; it requires global scope and no --expected-revision. This is a global-source view, not a project override: clone-local off still wins in ordinary status and later review operations.")
 		return nil
 	}
 	operation := args[0]
@@ -60,6 +61,7 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 	cwd := flags.String("cwd", ".", "repository path")
 	scope := flags.String("scope", reviewModeScopeGlobal, "mode source to write: global or clone")
 	expectedRevision := flags.String("expected-revision", "", "exact clone-local revision this write replaces")
+	globalOnly := flags.Bool("global-only", false, "read/write only the global HOME source; no repository resolution or project override (global scope only)")
 	emitJSON := flags.Bool("json", false, "emit the machine-readable review mode result")
 	if err := parseReviewFlags(flags, args[1:]); err != nil {
 		return err
@@ -82,11 +84,16 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 			revisionProvided = true
 		}
 	})
+	if *globalOnly && (selectedScope != reviewModeScopeGlobal || revisionProvided) {
+		return errors.New("--global-only requires --scope global (the default) and cannot be combined with --expected-revision; run `gentle-ai review mode help` for supported combinations")
+	}
 
 	ctx := context.Background()
 	result := ReviewModeResult{Schema: ReviewModeSchema, Operation: operation, Scope: selectedScope}
 	var err error
-	if operation == "status" {
+	if *globalOnly {
+		result.Status, err = runGlobalOnlyReviewMode(operation)
+	} else if operation == "status" {
 		result.Scope = reviewModeScopeBoth
 		result.Status, err = ReviewModeStatus(ctx, *cwd)
 	} else if selectedScope == reviewModeScopeGlobal {
@@ -129,6 +136,35 @@ func reviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDMo
 	return status, reviewModeUnreadable(ctx, repo, global, err)
 }
 
+// runGlobalOnlyReviewMode deliberately never resolves a repository, including
+// when constructing a refusal. The ordinary two-source API remains unchanged.
+func runGlobalOnlyReviewMode(operation string) (reviewtransaction.RDDModeStatus, error) {
+	disabled := reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Effective: reviewtransaction.RDDModeOff}
+	if operation != "status" {
+		if err := writeGlobalRDDMode(operation); err != nil {
+			return disabled, err
+		}
+	}
+	global, err := readGlobalRDDMode()
+	if err != nil {
+		return disabled, err
+	}
+	status := globalOnlyReviewModeStatus(global)
+	if reviewtransaction.RDDModeValueUnintelligible(global.Value) {
+		status.Source = reviewtransaction.RDDModeSourceGlobal
+		cause := fmt.Errorf("%w: %q", reviewtransaction.ErrRDDModeUnknown, global.Value)
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return status, cause
+		}
+		return status, &ReviewModeUnreadableError{
+			Scopes: []ReviewModeUnreadableScope{{Scope: reviewModeScopeGlobal, Path: state.Path(home), GlobalOnly: true}},
+			Cause:  cause,
+		}
+	}
+	return status, nil
+}
+
 func globalOnlyReviewModeStatus(global reviewtransaction.RDDGlobalMode) reviewtransaction.RDDModeStatus {
 	status := reviewtransaction.RDDModeStatus{
 		Schema:     reviewtransaction.RDDModeStatusSchema,
@@ -156,9 +192,10 @@ func globalOnlyReviewModeStatus(global reviewtransaction.RDDGlobalMode) reviewtr
 // cannot be read as a mode, the file that holds it, and the repository that
 // file belongs to.
 type ReviewModeUnreadableScope struct {
-	Scope string
-	Path  string
-	Repo  string
+	Scope      string
+	Path       string
+	Repo       string
+	GlobalOnly bool
 }
 
 func (scope ReviewModeUnreadableScope) label() string {
@@ -173,6 +210,9 @@ func (scope ReviewModeUnreadableScope) label() string {
 // to, because a clone-local record is only reachable through its own clone.
 func (scope ReviewModeUnreadableScope) commands() []string {
 	suffix := " --scope=" + scope.Scope
+	if scope.GlobalOnly {
+		suffix += " --global-only"
+	}
 	if scope.Scope == reviewModeScopeClone {
 		suffix += " --cwd " + scope.Repo
 	}
