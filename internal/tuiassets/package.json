@@ -1,0 +1,17 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup --config tsup.config.ts"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.18",
+    "@opentui/core": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "@types/node": "22.19.19",
+    "esbuild-plugin-solid": "0.6.0",
+    "solid-js": "1.9.12",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3"
+  }
+}
