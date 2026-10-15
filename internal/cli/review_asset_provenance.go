@@ -111,6 +111,7 @@ func checkManagedReviewerAssets() managedAssetProvenance {
 // continuation instead of falling through to operation_outcome_unknown. The
 // callers carry no runtime agent, so the continuation syncs every agent.
 func authorizeManagedReviewerAssets() error {
+	// guard:population managed-asset-provenance fail-closed: Only a recorded digest that disagrees with this binary's embedded digest, or one this binary cannot derive to compare, is refused; homes with no state or no recorded digest pass, and the refusal never mutates authority.
 	if provenance := checkManagedReviewerAssets(); provenance.stale() {
 		continuation := managedAssetsContinuation("", provenance.staleAssetIdentities())
 		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, provenance.refusal(), continuation)
