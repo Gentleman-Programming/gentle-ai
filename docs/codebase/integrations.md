@@ -45,7 +45,7 @@ Community tools and OpenCode plugins are different integration paths:
 
 Gentle-AI no longer installs or upgrades external OpenCode community plugins (`sub-agent-statusline`, `sdd-engram-plugin`). They are unmaintained and do not work on OpenCode V2. `gentle-ai uninstall opencode-plugin <id>` still removes registrations left by older installations.
 
-For Gentle Logo, Gentle-AI writes the managed local TUI plugin file under `~/.config/opencode/tui-plugins/` and registers that path in `~/.config/opencode/tui.json`. OpenCode owns runtime loading.
+For Gentle Logo, Gentle-AI writes the managed local TUI plugin file under ~/.config/opencode/tui-plugins/ and registers it per OpenCode generation: V1 registers the path in ~/.config/opencode/tui.json or tui.jsonc (V2 never uses tui.json), while V2 registers the ./tui-plugins/gentle-logo directory package in cli.json (plugins[]) and the managed opencode.jsonc plugin union. OpenCode owns runtime loading.
 
 ## Contributor checklist
 
