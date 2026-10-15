@@ -214,6 +214,61 @@ func TestManagedAssetsGateRefusalIsTypedForEveryCaller(t *testing.T) {
 	}
 }
 
+// TestManagedAssetsRefusalHonorsV1FailureSchema pins the contract split: the
+// published v1 failure schema forbids `continuation`, so a managed_assets_outdated
+// refusal negotiated under v1 publishes the typed code alone, while v2 keeps
+// the continuation it requires. Before this, START under v1 emitted an
+// envelope its own published schema rejects, and the shared mutation gate
+// would have extended that to negotiated repair.
+func TestManagedAssetsRefusalHonorsV1FailureSchema(t *testing.T) {
+	v1Schema := compileWholePublishedReviewSchema(t, "v1", "failure.schema.json")
+	t.Run("start", func(t *testing.T) {
+		home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+		writeReviewStartCandidate(t, repo, "docs/stale-assets.md", "# Candidate\n", 0o644)
+		staleManagedReviewerAssets(t, home)
+		var output bytes.Buffer
+		err := RunReview(boundNegotiatedStartArgs(t, []string{
+			"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--agent", "opencode", "--consent", "granted",
+		}), &output)
+		if err == nil {
+			t.Fatalf("stale managed assets START succeeded: %s", output.String())
+		}
+		failure := decodeReviewIntegrationFailure(t, output.Bytes())
+		if failure.Contract != ReviewIntegrationContractV1 || failure.Code != "managed_assets_outdated" ||
+			failure.MutationOutcome != ReviewMutationNotStarted || failure.Continuation != nil {
+			t.Fatalf("v1 stale managed assets failure = %#v", failure)
+		}
+		validatePublishedReviewSchema(t, v1Schema, output.Bytes())
+		requireManagedAssetProvenanceNoError(t, failure.Validate())
+	})
+	t.Run("repair gate", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		staleManagedReviewerAssets(t, home)
+		for _, contract := range []string{ReviewIntegrationContractV1, ReviewIntegrationContractV2} {
+			failure := newReviewIntegrationFailure("review.repair", []string{"--contract", contract}, authorizeManagedReviewerAssets())
+			if failure.Code != "managed_assets_outdated" || (failure.Continuation != nil) != (contract == ReviewIntegrationContractV2) {
+				t.Fatalf("%s repair gate failure = %#v", contract, failure)
+			}
+			requireManagedAssetProvenanceNoError(t, failure.Validate())
+			if contract == ReviewIntegrationContractV1 {
+				var output bytes.Buffer
+				requireManagedAssetProvenanceNoError(t, emitReviewIntegrationFailure(&output, failure))
+				validatePublishedReviewSchema(t, v1Schema, output.Bytes())
+			}
+		}
+	})
+	t.Run("validate rejects a v1 continuation", func(t *testing.T) {
+		failure := newReviewIntegrationPreflightFailure("review.start", "managed_assets_outdated", reviewPreflightManagedAssetsReason.Message)
+		failure.NextAction = reviewPreflightManagedAssetsReason.NextAction
+		failure.Continuation = managedAssetsContinuation("", []string{"sha256:stale"})
+		if err := failure.Validate(); err == nil {
+			t.Fatal("Validate accepted a continuation under the v1 failure contract")
+		}
+	})
+}
+
 func TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts(t *testing.T) {
 	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/current-assets.md", "# Candidate\n", 0o644)
