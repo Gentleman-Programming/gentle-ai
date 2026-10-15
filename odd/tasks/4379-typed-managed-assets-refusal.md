@@ -38,10 +38,10 @@ v2.
 
 ## Tasks
 
-- T1 (S2, S4) inline: typed refusal from `authorizeManagedReviewerAssets`; RED e2e capture-result + gate classification. Commit: pending.
-- T2 (S1, S3) inline: refusal text names recorded and embedded digests. Commit: pending.
-- T3 (S6) inline: contract-aware continuation (v2 only) in the preflight envelope and `Validate`. Commit: pending.
-- T4 (all) inline: focused + full `internal/cli`, gofmtcheck, diff check, docs sweep. Commit: n/a (evidence only).
+- [x] T1 (S2, S4) inline: typed refusal from `authorizeManagedReviewerAssets`; RED e2e capture-result + gate classification. Commit: `ff6baacaf`.
+- [x] T2 (S1, S3) inline: refusal text names recorded and embedded digests. Commit: `a97c5ec97`.
+- [x] T3 (S6) inline: contract-aware continuation (v2 only) in the preflight envelope and `Validate`. Commit: `c81b7495d`.
+- [x] T4 (all) inline: full `go test ./...`, gofmtcheck, diff check, docs sweep (`docs/review-integration.md` stop-reason row). Commit: docs + this document (see git log).
 
 ## Log
 
@@ -54,6 +54,40 @@ review-integration/v1` and a stale digest emits a failure carrying
 'continuation' not allowed"). Pre-existing for START; T1 alone would extend it
 to negotiated `repair` under v1, which today emits a valid
 `operation_outcome_unknown`. Hence T3.
+
+L4. Evidence (2026-10-15):
+- T1 RED: `TestCaptureResultClassifiesStaleManagedAssetsAsTypedRefusal` got
+  `native_running`/`operation_outcome_unknown`/`mutation_outcome: unknown`,
+  no continuation (the reported shape); `TestManagedAssetsGateRefusalIsTypedForEveryCaller`
+  got `*errors.errorString`. GREEN after the gate returned
+  `reviewPreflightRefusalWithContinuation`; existing managed-asset guards
+  (START, STATUS, #4504 resume, executable anchoring, abandon/bundle-import
+  boundary) passed.
+- T2 RED: gate text lacked the digests. GREEN with
+  `managedAssetProvenance.refusal()` used by the gate and START; START's exact
+  cause assertion updated to the new text (requested, shared seam). No
+  consumer matches the exact text (grep of gentle-ai and gentle-shell); the old
+  sentence stays as prefix.
+- T3 RED: START v1 and repair-gate v1 envelopes carried `continuation`;
+  Validate accepted a v1 continuation. First GREEN attempt broke T1 because
+  collect captures are upgraded to v2 by `runReviewCollectCaptureCommand`
+  after classification; condition is now "contract v2 or CollectCapture".
+- Focused matrix (provenance, START, STATUS, transport, provider artifact,
+  failure contract, capture refusal envelopes): ok. Docs tests
+  (`TestEveryReviewStopReasonCodeHasADocsContinuation` family,
+  `TestReviewIntegrationDocumentationMatchesRuntimeContract`): ok.
+- Full suite: `go test ./...` on the branch fails only in
+  `internal/shellinstaller` (TestUserFrozenLockAcquisition,
+  TestUserManagerCapabilityHelperUsesExecutableCustody) and
+  `internal/reviewtransaction` (TestSnapshotIndexTemporaryPlacementAndCleanup,
+  TestSnapshotInspectionPreservesGitDirectoryMetadataWithUsableProcessTemp).
+  The identical four fail on a detached `upstream/main` worktree run
+  sequentially on this host (umask 0002 temp dirs), so they are pre-existing
+  and environmental. `internal/cli` exceeds the default 10m package timeout on
+  this host on both sides; with `-timeout 40m` it passes on the branch
+  (716s). Every other package: ok.
+- Follow-up noted, not changed: the static reason message says "before
+  starting review", which reads oddly on a capture refusal.
 
 L3. Facts: capture verbs publish only v2 failures (`Validate`); abandon,
 recover and bundle import are not negotiated (plain CLI error, text unchanged
