@@ -115,8 +115,10 @@ func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *tes
 		failure.NextAction != "stop" {
 		t.Fatalf("stale managed assets failure = %#v", failure)
 	}
-	if failure.Cause != managedAssetProvenanceRefusal {
-		t.Fatalf("stale managed assets cause = %q, want %q", failure.Cause, managedAssetProvenanceRefusal)
+	embedded, digestErr := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, digestErr)
+	if want := managedAssetProvenanceRefusal + " (recorded digest sha256:stale, this binary embeds " + embedded + ")"; failure.Cause != want {
+		t.Fatalf("stale managed assets cause = %q, want %q", failure.Cause, want)
 	}
 	// #3299, #4170: the failure names the exact candidate-preserving sync
 	// continuation instead of leaving the caller to guess "run sync" from the
@@ -194,8 +196,13 @@ func TestManagedAssetsGateRefusalIsTypedForEveryCaller(t *testing.T) {
 	if !errors.As(err, &preflight) {
 		t.Fatalf("managed-asset gate error = %T %v, want a typed preflight refusal", err, err)
 	}
-	if err.Error() == "" || !strings.HasPrefix(err.Error(), managedAssetProvenanceRefusal) {
-		t.Fatalf("managed-asset gate text = %q, want prefix %q", err.Error(), managedAssetProvenanceRefusal)
+	// #4379 suggested fix: the refusal names both digests, so a sync run by
+	// a different binary than the one refusing is diagnosable at a glance.
+	embedded, digestErr := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, digestErr)
+	want := managedAssetProvenanceRefusal + " (recorded digest sha256:stale, this binary embeds " + embedded + ")"
+	if err.Error() != want {
+		t.Fatalf("managed-asset gate text = %q, want %q", err.Error(), want)
 	}
 	failure := newReviewIntegrationFailure("review.repair", []string{"--contract", ReviewIntegrationContractV2}, err)
 	if failure.Code != "managed_assets_outdated" || failure.Phase != "preflight" ||

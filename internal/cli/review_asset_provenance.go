@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
@@ -58,6 +57,23 @@ func (p managedAssetProvenance) staleAssetIdentities() []string {
 	return []string{p.installedDigest}
 }
 
+// refusal renders the stale-asset refusal naming both digests (#4379): the
+// recorded one and the one this binary embeds. When the sync that ran and the
+// binary that refuses are different builds (a global binary versus a pinned
+// relay), the disagreement is visible in the message instead of leaving the
+// caller to loop on `gentle-ai sync`. The refusing binary's own path travels
+// in the continuation command, which the cause privacy gate does not scrub.
+func (p managedAssetProvenance) refusal() error {
+	recorded, embedded := p.installedDigest, p.expectedDigest
+	if recorded == "" {
+		recorded = "unknown"
+	}
+	if embedded == "" {
+		embedded = "an underivable digest"
+	}
+	return fmt.Errorf("%s (recorded digest %s, this binary embeds %s)", managedAssetProvenanceRefusal, recorded, embedded)
+}
+
 // checkManagedReviewerAssets resolves the installed/expected digest pair
 // authorizeManagedReviewerAssets compares. Callers that must explain *which*
 // asset is stale -- a STATUS preflight or a START refusal's sync continuation
@@ -97,7 +113,7 @@ func checkManagedReviewerAssets() managedAssetProvenance {
 func authorizeManagedReviewerAssets() error {
 	if provenance := checkManagedReviewerAssets(); provenance.stale() {
 		continuation := managedAssetsContinuation("", provenance.staleAssetIdentities())
-		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, errors.New(managedAssetProvenanceRefusal), continuation)
+		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, provenance.refusal(), continuation)
 	}
 	return nil
 }

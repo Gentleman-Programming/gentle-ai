@@ -798,7 +798,7 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 	// offer) still needs the exact sync continuation, not just a refusal.
 	if provenance := checkManagedReviewerAssets(); provenance.stale() {
 		continuation := managedAssetsContinuation(runtimeAgent, provenance.staleAssetIdentities())
-		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, errors.New(managedAssetProvenanceRefusal), continuation)
+		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, provenance.refusal(), continuation)
 	}
 	if assessment.Level == reviewtransaction.RiskLow {
 		// Tier 0 is silent structural readback. Asking here would reintroduce
