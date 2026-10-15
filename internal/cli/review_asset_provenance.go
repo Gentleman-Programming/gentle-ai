@@ -88,9 +88,16 @@ func checkManagedReviewerAssets() managedAssetProvenance {
 // here, so there is nothing stale to protect against and nothing this refusal
 // could tell the caller to repair. Refusing that shape would block every user
 // who never ran `gentle-ai install` from reviewing at all.
+//
+// #4379: the refusal is the same typed preflight START returns, so a verb that
+// mutates authority (capture-result, repair, ...) reports a not-started
+// managed_assets_outdated refusal with the executable-anchored sync
+// continuation instead of falling through to operation_outcome_unknown. The
+// callers carry no runtime agent, so the continuation syncs every agent.
 func authorizeManagedReviewerAssets() error {
-	if checkManagedReviewerAssets().stale() {
-		return errors.New(managedAssetProvenanceRefusal)
+	if provenance := checkManagedReviewerAssets(); provenance.stale() {
+		continuation := managedAssetsContinuation("", provenance.staleAssetIdentities())
+		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, errors.New(managedAssetProvenanceRefusal), continuation)
 	}
 	return nil
 }
