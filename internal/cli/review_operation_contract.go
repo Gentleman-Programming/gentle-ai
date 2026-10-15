@@ -983,7 +983,13 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			preflightFailure.RetrySafe = false
 		}
 		preflightFailure.Cause = reviewIntegrationFailureCause(preflight)
-		preflightFailure.Continuation = preflight.continuation
+		// The published v1 failure schema forbids `continuation`; only v2
+		// defines it (#4379). A v1 caller still gets the typed code. Collect
+		// captures publish only v2 (their dispatcher upgrades the identity
+		// after this classifier), so they keep it too.
+		if metadata, _ := reviewIntegrationOperationByName(operation); preflightFailure.Contract == ReviewIntegrationContractV2 || metadata.CollectCapture {
+			preflightFailure.Continuation = preflight.continuation
+		}
 		return preflightFailure
 	}
 	var legacy *reviewtransaction.LegacyReadOnlyError
@@ -1510,7 +1516,10 @@ func (failure ReviewIntegrationFailure) Validate() error {
 			return errors.New("exact negotiated review repair replay is incomplete")
 		}
 	}
-	if (failure.Code == "managed_assets_outdated") != (failure.Continuation != nil) {
+	if legacyContract && failure.Continuation != nil {
+		return errors.New("v1 negotiated review failures carry no continuation") // refusal:by-design world-action: the published v1 failure schema forbids continuation, so attaching one is a construction bug that requires a code fix, not an operator command
+	}
+	if nativeGitContract && (failure.Code == "managed_assets_outdated") != (failure.Continuation != nil) {
 		return errors.New("managed_assets_outdated failures must carry exactly the sync continuation") // refusal:by-design world-action: a producer that pairs this code with no continuation, or attaches one to any other code, built a malformed envelope and requires a code fix, not an operator command
 	}
 	if continuation := failure.Continuation; continuation != nil {
