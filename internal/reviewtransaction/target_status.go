@@ -253,6 +253,7 @@ func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([
 // Git fault -- is returned as an error so the caller keeps the truthful
 // fallback.
 func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error) {
+	defer StartStatusPhase(ctx, StatusPhaseImplicitBaseRangeDerivation)()
 	refOutput, err := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
 	if err != nil {
 		return "", err
@@ -303,6 +304,7 @@ func selectorlessCommittedBaseDiffMatchedPredecessor(ancestors []selectorlessCom
 }
 
 func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) ([]selectorlessCommittedBaseDiffCorrection, error) {
+	defer StartStatusPhase(ctx, StatusPhasePredecessorConsumptionAncestry)()
 	stores, err := DiscoverCompactStores(ctx, repo)
 	if err != nil {
 		return nil, err
