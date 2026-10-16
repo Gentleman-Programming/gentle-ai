@@ -49,6 +49,13 @@ func TestRenderABEngine_EmptyEngines_ShowsWarning(t *testing.T) {
 	}
 }
 
+func TestRenderABEngine_EmptyEngines_Detecting(t *testing.T) {
+	out := RenderABEngine([]model.AgentID{}, 0, true)
+	if !strings.Contains(out, "Scanning for supported AI agent binaries") {
+		t.Errorf("expected scanning message when detecting; output:\n%s", out)
+	}
+}
+
 func TestABEngineOptions_IncludesBack(t *testing.T) {
 	engines := []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}
 	opts := ABEngineOptions(engines)
