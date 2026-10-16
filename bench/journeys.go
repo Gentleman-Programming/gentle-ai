@@ -897,6 +897,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue3043Journeys()...)
 	journeys = append(journeys, issue3557Journeys()...)
 	journeys = append(journeys, issue3561Journeys()...)
+	journeys = append(journeys, issue3565Journeys()...)
 	journeys = append(journeys, repositoryContextJourneys()...)
 	journeys = append(journeys, providerCaptureRetryJourneys()...)
 	journeys = append(journeys, capturedProviderValidatorJourneys()...)

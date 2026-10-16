@@ -34,6 +34,7 @@ var gentleShellParityHeadings = []string{
 	// assets/orchestrator.md
 	"Identity Contract",
 	"Core Role",
+	"Authorized work continuity",
 	"Mental Model",
 	"Safety",
 	// assets/orchestrator-delegation.md
@@ -173,10 +174,11 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 				"Parallel writers follow the **Parallel writers** rule under `## Implementation Routing`: another repository's work goes in a fresh worktree based on its main",
 				// S5 explore only to decide or route.
 				"never explore files you will read anyway before writing inline",
-				// S8 verification timing and bounds.
-				"**Verification timing**: when the same model wrote several deliveries of one feature inline, run one independent verifier at the feature's end",
-				"verify per unit only when that unit is really high risk",
-				"always when a smaller-model profile wrote the code",
+				// S8 verification timing and bounds. pain-point-iteration S9 C1
+				// retired the smaller-model clause: per-unit verification follows
+				// a named high-risk item, never the writer's model.
+				"**Verification timing**: when several deliveries of one feature were written inline, run one independent verifier at the feature's end",
+				"verify per unit only when that unit names a high-risk item",
 				"**Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers",
 				"A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one.",
 				"A writer's self-review follows the same bound, then reports `partial`.",
@@ -252,8 +254,9 @@ func TestInstalledSmallGenericOrchestratorCarriesVerificationDiscipline(t *testi
 		"mktemp -d",
 		"never inside the workspace",
 		"silently ignoring an explicit option",
-		// S8 timing and bounds.
-		"**Verification timing**: when the same model wrote several deliveries of one feature inline, run one independent verifier at the feature's end",
+		// S8 timing and bounds; pain-point-iteration S9 C1 dropped "the same
+		// model" because the writer's model no longer decides verification.
+		"**Verification timing**: when several deliveries of one feature were written inline, run one independent verifier at the feature's end",
 		"**Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers",
 		"A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one.",
 	} {

@@ -4,6 +4,7 @@ package main
 // lifecycle journeys need the runner's isolated global opt-in; switch journeys are
 // deliberately untouched so they can prove their own mode transition.
 var coreJourneyReviewModes = map[string]ReviewPrecondition{
+	"j3565-skill-registry-dot-cwd":                                              reviewUntouched,
 	"j4772-committed-correction-dirty-commit":                                   reviewOptedIn,
 	"j4773-committed-correction-dirty-amend":                                    reviewOptedIn,
 	"j01-docs-happy-path":                                                       reviewOptedIn,

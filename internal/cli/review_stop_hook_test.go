@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // reviewStopHookTestPayload builds one Stop hook stdin payload. Extra fields
@@ -600,5 +603,44 @@ func TestReviewStopHookRemindsWhenConsentStaleMarkerExpired(t *testing.T) {
 	}
 	if decodeReviewStopHookResult(t, stdout.Bytes()).Decision != "block" {
 		t.Fatalf("expired consent-stale marker must restore the reminder: %s", stdout.String())
+	}
+}
+
+// #4670: with RDD off the stop hook has nothing to check, so a clone-local
+// switch location that fails validation must not turn every turn into an
+// error.
+func TestReviewStopHookSilentWhenRDDOffAndTheCloneOverrideCannotBeValidated(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stageReviewStopHookCandidate(t, repo)
+	if err := RunReviewMode([]string{"disable", "--cwd", repo}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	unvalidatableReviewModeSwitchRoot(t, repo)
+
+	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-off-unvalidatable", repo, false, nil))
+	var stdout, stderr bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("runReviewStopHook: %v\nstderr: %s", err, stderr.String())
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("expected silence, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(reviewStopHookStateFile(home, "sess-off-unvalidatable")); !os.IsNotExist(err) {
+		t.Fatalf("expected no reminder state file while RDD is off, stat err=%v", err)
+	}
+}
+
+// #4670 S3: a review authority that cannot live on this filesystem means no
+// review can start here, so the reminder has nothing to point at. The hook
+// stays quiet for that typed refusal and still fails on anything else.
+func TestReviewStopHookQuietOnlyForAnUnsupportedAuthorityFilesystem(t *testing.T) {
+	unsupported := fmt.Errorf("resolve review mode: %w",
+		&reviewtransaction.UnsupportedAuthorityFilesystemError{Path: `\\server\share\repo\.git`, Remote: true})
+	if !reviewStopHookAuthorityUnsupported(unsupported) {
+		t.Fatalf("typed unsupported-filesystem refusal was not recognised: %v", unsupported)
+	}
+	if reviewStopHookAuthorityUnsupported(errors.New("unsafe RAR authority path")) {
+		t.Fatal("an ordinary resolution failure was silenced")
 	}
 }

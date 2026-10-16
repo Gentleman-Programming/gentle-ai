@@ -145,6 +145,11 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 						failure.Message != wantMessage {
 						t.Fatalf("unsupported transport failure = %#v", failure)
 					}
+					// next_action stays "stop", so the bounded message must name
+					// the user-owned exit an agent can offer instead of a dead end.
+					if !strings.Contains(failure.Message, "`gentle-ai review mode disable --scope clone --cwd <repo>`") {
+						t.Fatalf("unsupported transport message %q does not name the user-owned exit", failure.Message)
+					}
 				})
 			}
 		})

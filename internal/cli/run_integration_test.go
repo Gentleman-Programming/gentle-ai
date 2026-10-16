@@ -303,6 +303,54 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsNativePiAndOpenCodeMCP(t *tes
 	}
 }
 
+// TestRunInstallPiExcludePackageSkipsExcludedSource proves an excluded
+// managed Pi package never reaches `pi install` while the rest of the stack
+// still installs.
+func TestRunInstallPiExcludePackageSkipsExcludedSource(t *testing.T) {
+	t.Setenv(PiExcludePackagesEnv, "")
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	}
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	})
+	t.Cleanup(restorePreflightLookPath)
+
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}
+
+	if _, err := RunInstall([]string{
+		"--agent", "pi",
+		"--component", "engram",
+		"--pi-exclude-package", "npm:gentle-pi",
+	}, system.DetectionResult{}); err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if stringSliceContains(commands, "pi install npm:gentle-pi") {
+		t.Fatalf("commands install the excluded npm:gentle-pi; got %v", commands)
+	}
+	for _, want := range []string{"pi install npm:gentle-engram", "pi install npm:pi-web-access", "pi install npm:pi-btw"} {
+		if !stringSliceContains(commands, want) {
+			t.Fatalf("commands missing %q; got %v", want, commands)
+		}
+	}
+}
+
 // TestRunInstallEngramForPiTargetsConfiguredAgentDirectory proves that
 // setting PI_CODING_AGENT_DIR (as gentle-shell does for its isolated Pi home)
 // makes install target that directory instead of the real ~/.pi, and leaves

@@ -139,7 +139,7 @@ func TestOrchestratorModuleCoreKeepsAuthorityAndSafety(t *testing.T) {
 	for _, required := range []string{
 		"### Identity Contract", "### Lossless Blocking Prompts (MANDATORY)",
 		"#### Gentle AI Provider Defect Handoff (MANDATORY)", "When delegating, forward this contract",
-		"#### Mandatory Delegation Triggers", "#### Delegated Verification Gate (MANDATORY)",
+		"#### Delegation Triggers", "#### Delegated Verification Gate (MANDATORY)", // S9 C4 renamed the heading
 		"#### Native Checking Contract", "#### Review Execution Contract\n\n" + testModuleContract,
 		"#### 1. Inline Direct", "Inline evidence uses one parallel batch", "#### 2. Simple Delegation",
 		"### Allowed edit surfaces (MANDATORY)", "### Delivery strategy",
@@ -180,8 +180,11 @@ func TestOrchestratorModuleCoreKeepsCriticalPolicy(t *testing.T) {
 		name, body string
 		clauses    []string
 	}{
+		// pain-point-iteration S9 C1: the gate follows the same rule with RDD on
+		// or off, but no longer the native tier alone (only a named item adds a
+		// verifier), so its opening clause changed.
 		{"Delegated Verification Gate", sharedOrchestratorSection(shared, "Delegated Verification Gate (MANDATORY)"), []string{
-			"follows the native risk tier whether receipt-driven development (RDD) is on or off", "**Risk tier**",
+			"follows the same rule whether receipt-driven development (RDD) is on or off", "**Risk tier**",
 			"**RDD on**", "never replaces or skips the tier's verification", "**Verify handoff**", "The writer receives `## Verification`",
 		}},
 		{"Simple Delegation", strings.TrimSpace(routing[start:end]), []string{

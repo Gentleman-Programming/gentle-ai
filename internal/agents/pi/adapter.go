@@ -76,6 +76,26 @@ func ManagedPackageSources() []string {
 	return slices.Clone(managedPackageSources)
 }
 
+// ValidateExcludedPackageSources accepts only exact managed sources a caller
+// may skip at install time. The Engram source is required by the stack.
+func ValidateExcludedPackageSources(values []string) error {
+	allowed := make([]string, 0, len(managedPackageSources))
+	for _, source := range managedPackageSources {
+		if source != piGentleEngramPackageSource {
+			allowed = append(allowed, source)
+		}
+	}
+	for _, value := range values {
+		if value == piGentleEngramPackageSource {
+			return fmt.Errorf("package %q cannot be excluded: it provides Engram memory for the Pi stack", value)
+		}
+		if !slices.Contains(allowed, value) {
+			return fmt.Errorf("unknown Pi package %q; allowed values: %s", value, strings.Join(allowed, ", "))
+		}
+	}
+	return nil
+}
+
 // UninstallPackageSources returns every Pi package source an uninstall should
 // remove: the managed sources plus the retired pi-mcp-adapter, which older
 // Gentle AI releases installed and which may still be present.
@@ -294,11 +314,15 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 // PrepareInstall preserves the configured Engram source before Pi can replace
 // it. Compatible duplicates are normalized; conflicting declarations abort
 // without writes. The caller must snapshot settings before this preparation.
-func (a *Adapter) PrepareInstall(profile system.PlatformProfile, homeDir string) ([][]string, error) {
+// Excluded sources (validated by ValidateExcludedPackageSources) are skipped.
+func (a *Adapter) PrepareInstall(profile system.PlatformProfile, homeDir string, excluded ...string) ([][]string, error) {
 	commands, err := a.InstallCommand(profile)
 	if err != nil {
 		return nil, err
 	}
+	commands = slices.DeleteFunc(commands, func(command []string) bool {
+		return slices.Contains(excluded, command[2])
+	})
 	settings, packages, source, err := a.readInstallSettings(homeDir)
 	if err != nil {
 		return nil, err

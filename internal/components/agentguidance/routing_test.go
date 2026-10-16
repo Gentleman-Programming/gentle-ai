@@ -31,6 +31,59 @@ func TestRoutingIncludesApplicableTestFirstPolicy(t *testing.T) {
 	}
 }
 
+// C7: blind reviewers flagged test scratch and tool caches in delivered diffs,
+// so the shared test-first policy keeps scratch outside the worktree and
+// forwards that rule to workers with the rest of the test discipline.
+func TestRenderRoutingKeepsTestScratchOutOfTheWorktree(t *testing.T) {
+	t.Parallel()
+
+	const rule = "Keep test scratch state (temporary directories, `HOME`, `TMPDIR`, tool caches) outside the worktree in a `mktemp -d` directory; when it must live inside the worktree, use a path git excludes and remove it before finishing, so no tool cache or scratch path remains in the change. Subagents never delete scratch: they report its exact paths, and the parent removes outside scratch after use, including the paths a worker or verifier reports. Forward the applicable runner, this test discipline"
+	for _, agent := range catalog.AllAgents() {
+		rendered, err := RenderRouting(agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(rendered, rule) {
+			t.Errorf("%s routing is missing the test scratch rule", agent.ID)
+		}
+		for _, retired := range []string{".test-tmp", "TMPDIR=$PWD"} {
+			if strings.Contains(rendered, retired) {
+				t.Errorf("%s routing still points scratch into the worktree: %q", agent.ID, retired)
+			}
+		}
+	}
+}
+
+// pain-point-iteration S14: commit per reviewable slice, not per task. A
+// per-task commit rule made models commit every small task (branch plus seven
+// commits on a six-task feature); about 400-line slices keep the native review
+// candidate inside the reviewer context, and a high-risk unit still gets its
+// own commit so review can take it alone. RDD runtimes carry the canon byte
+// for byte; runtimes without RDD name verification instead of native review,
+// as step 7 already does.
+func TestRenderRoutingCommitsWorkUnitsInReviewableSlices(t *testing.T) {
+	t.Parallel()
+
+	const rule = "Commit work units in reviewable slices of about 400 authored changed lines on the feature branch (branch first when on the default branch), with tests and docs alongside the behavior and a Conventional Commit message; a unit whose Risk line names a high-risk item gets its own commit so native review can take it alone, and the last slice closes the feature. Record the commit that holds each task in the feature document as evidence."
+	oddRule := strings.Replace(rule, "so native review can take it alone", "so verification can take it alone", 1)
+	for _, agent := range catalog.AllAgents() {
+		rendered, err := RenderRouting(agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := oddRule
+		if model.SupportsReceiptDrivenDevelopment(agent.ID) {
+			want = rule
+		}
+		if !strings.Contains(rendered, want) {
+			t.Errorf("%s routing is missing the reviewable-slice commit rule", agent.ID)
+		}
+		if strings.Contains(rendered, "Every tracked task closes with at least one work-unit commit") {
+			t.Errorf("%s routing still commits per task", agent.ID)
+		}
+	}
+}
+
 // supportedAgentCount guards the catalog itself: routing renders for every
 // supported adapter (including the catalog-only Conductor, which simply never
 // gets written), so a silently shrinking catalog must fail here instead of
@@ -315,7 +368,7 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			guard := strings.Index(rendered, "First establish whether the requested outcome explicitly authorizes a change.")
+			guard := strings.Index(rendered, piStep(agent.ID, "First establish whether the requested outcome explicitly authorizes a change."))
 			organic := strings.Index(rendered, "### Organic Driven Development")
 			if guard < 0 || organic <= guard {
 				t.Fatal("ODD must follow the mutation-authorization guard")
@@ -339,8 +392,8 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 }
 
 // TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt pins the
-// work-unit commit contract: every task closes with a commit on the feature
-// branch, and the native review candidate is that commit or the PR slice it
+// work-unit commit contract: work units are committed in reviewable slices on
+// the feature branch, and the native review candidate is that commit or the PR slice it
 // belongs to, bounded to the previous reviewed boundary, rather than a TODO
 // checkbox or the accumulated branch. It also pins the per-tier assessment
 // contract (passive/low stays silent, high or an unavailable assessment
@@ -355,12 +408,14 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		name    string
 		clauses []string
 	}{
-		{"work-unit commit closes each task", []string{
-			"closes with at least one work-unit commit on the feature branch",
+		// S14: commit per reviewable slice, not per task.
+		{"work units are committed in reviewable slices", []string{
+			"Commit work units in reviewable slices of about 400 authored changed lines on the feature branch",
 			"branch first when on the default branch",
 			"tests and docs alongside the behavior",
-			"using a Conventional Commit message",
-			"record the commit identity in the feature document as evidence",
+			"a Conventional Commit message",
+			"a unit whose Risk line names a high-risk item gets its own commit so",
+			"Record the commit that holds each task in the feature document as evidence",
 			"Work-unit commits on the feature branch are part of authorized large ODD implementation",
 			"push, pull request creation, and merge remain the user's decisions under ordinary repository policy",
 		}},
@@ -399,15 +454,24 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			"`under_budget` stays pending in the slice until a later commit reaches the budget",
 			"`already_reviewed` means this exact range is already covered by terminal authority",
 		}},
-		{"boundaries advance and outcomes are recorded per task", []string{
+		// S14: commit per reviewable slice; a high-risk commit is reviewed
+		// alone only after the open medium slice before it is closed.
+		{"a high-risk unit closes the open slice first", []string{
+			"When a high-risk unit follows pending `under_budget` commits, close the open slice first, assessing and reviewing it as the slice, so the high-risk commit is then reviewed alone against the new boundary",
+		}},
+		// S14: commit per reviewable slice; a commit may hold several tasks,
+		// so the assessment outcome is recorded per commit.
+		{"boundaries advance and outcomes are recorded per commit", []string{
 			"The first boundary is the branch point, and every reviewed boundary becomes the next base",
-			"Record per task the assessed tier and outcome: granted, declined, passive, under budget, already reviewed, or unavailable",
+			"Record per commit the assessed tier and outcome: granted, declined, passive, under budget, already reviewed, or unavailable",
 			"An unavailable or failed assessment never lowers the tier: treat the commit as due and run the preflight STATUS with `--base-ref <last reviewed boundary> --committed-only`",
 			"Never infer low risk from a failed assessment",
 		}},
 	}
 	// Runtimes without receipt-driven development verify each work unit by
-	// risk instead of assessing it for native review.
+	// risk instead of assessing it for native review. pain-point-iteration S9
+	// C1 changed the verifier clauses: only a named high-risk item adds the
+	// independent verifier, and an unclear change no longer counts as high.
 	oddTests := []struct {
 		name    string
 		clauses []string
@@ -415,9 +479,9 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		{"verify each work unit by risk", []string{
 			"Verification covers a work-unit commit or a PR slice, never a TODO checkbox and never the accumulated feature branch.",
 			"Verify each work-unit commit in proportion to its risk",
-			"an added independent verifier for high-risk changes by the Task Size list",
+			"an added independent verifier only when a named Task Size high-risk item applies",
 			"Record per task the risk tier you applied and the checks you observed",
-			"count an unclear change as high only when a bounded look cannot tell whether the list applies",
+			"an unclear change never adds a verifier by itself",
 		}},
 	}
 
@@ -438,7 +502,7 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			for _, tt := range applicable {
 				t.Run(tt.name, func(t *testing.T) {
 					for _, clause := range tt.clauses {
-						clause = strings.ReplaceAll(clause, "<runtime>", string(agent.ID))
+						clause = piStep(agent.ID, strings.ReplaceAll(clause, "<runtime>", string(agent.ID)))
 						if !strings.Contains(rendered, clause) {
 							t.Errorf("missing work-unit commit instruction %q", clause)
 						}
@@ -461,7 +525,7 @@ func TestRenderRoutingAuthorizesOutcomesBeforeSelectingTopology(t *testing.T) {
 				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
 			}
 
-			guard := "First establish whether the requested outcome explicitly authorizes a change."
+			guard := piStep(agent.ID, "First establish whether the requested outcome explicitly authorizes a change.")
 			guardOffset := strings.Index(rendered, guard)
 			topologyOffset := strings.Index(rendered, "**Direct inline:**")
 			if guardOffset < 0 || topologyOffset < 0 || guardOffset > topologyOffset {
@@ -475,7 +539,7 @@ func TestRenderRoutingAuthorizesOutcomesBeforeSelectingTopology(t *testing.T) {
 				"After explicit change intent is established",
 				"Every authorized change takes exactly one implementation route: direct inline or delegated direct.",
 			} {
-				if !strings.Contains(rendered, want) {
+				if want = piStep(agent.ID, want); !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing outcome-authorization clause %q:\n%s", agent.ID, want, rendered)
 				}
 			}
@@ -588,8 +652,10 @@ func TestRenderRoutingIsSemanticallyEqualAcrossAgents(t *testing.T) {
 
 	// Routing is semantically equal across every runtime that shares an RDD
 	// capability: RDD runtimes carry the review clauses, the rest do not.
-	referenceAgent := map[bool]model.AgentID{}
-	references := map[bool][]string{}
+	// Pi renders Gentle Shell's own ODD steps, so it forms its own group.
+	type routingGroup struct{ rdd, pi bool }
+	referenceAgent := map[routingGroup]model.AgentID{}
+	references := map[routingGroup][]string{}
 
 	for _, agent := range catalog.AllAgents() {
 		rendered, err := RenderRouting(agent.ID)
@@ -605,7 +671,7 @@ func TestRenderRoutingIsSemanticallyEqualAcrossAgents(t *testing.T) {
 			t.Fatalf("RenderRouting(%q) carries no routing semantics", agent.ID)
 		}
 
-		group := model.SupportsReceiptDrivenDevelopment(agent.ID)
+		group := routingGroup{rdd: model.SupportsReceiptDrivenDevelopment(agent.ID), pi: agent.ID == model.AgentPi}
 		reference := references[group]
 		if reference == nil {
 			referenceAgent[group] = agent.ID
@@ -674,6 +740,7 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 			}
 			previous := -1
 			for _, want := range orderedSubstrings {
+				want = piStep(agent.ID, want)
 				at := strings.Index(rendered, want)
 				if at < 0 {
 					t.Fatalf("RenderRouting(%q) is missing %q:\n%s", agent.ID, want, rendered)
@@ -691,7 +758,7 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 				"Never describe this workflow only when asked about it: run it.",
 				"Resume an interrupted feature with `mem_context`",
 			} {
-				if !strings.Contains(rendered, want) {
+				if want = piStep(agent.ID, want); !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing ODD default-workflow clause %q:\n%s", agent.ID, want, rendered)
 				}
 			}
@@ -725,8 +792,10 @@ func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 			}
 
 			for _, want := range []string{
-				"### Mandatory Delegation Triggers",
-				"These triggers are mandatory, not advisory",
+				// pain-point-iteration S9 C4: a trigger is mandatory only once its
+				// condition truly holds; none holds by default, inline when in doubt.
+				"### Delegation Triggers",
+				"Each trigger holds only when its condition truly holds, and only then is it mandatory, not advisory; no trigger holds by default, and when in doubt work inline.",
 				"stop and delegate through the runtime's subagent mechanism",
 				"executing past a fired trigger inline is a routing defect",
 				"**Mapping trigger:** when understanding exceeds the inline batch budget",
@@ -739,7 +808,7 @@ func TestRenderRoutingMakesDelegationMandatory(t *testing.T) {
 				"record the chosen route per task",
 				"so skipped delegation is observable instead of silent",
 				"These triggers only choose between direct inline and delegated direct inside the organic flow",
-				"honoring its mandatory delegation triggers",
+				"honoring its delegation triggers when their conditions truly hold",
 			} {
 				if !strings.Contains(rendered, want) {
 					t.Fatalf("RenderRouting(%q) is missing mandatory delegation clause %q:\n%s", agent.ID, want, rendered)
@@ -864,11 +933,17 @@ func TestRenderRoutingSizesTasksByUnderstandingRiskAndResumability(t *testing.T)
 				for _, want := range []string{
 					"--escalate-item <1-6> --escalate-reason",
 					"never lower it",
+					// pain-point-iteration S9 C1: the native tier decides native
+					// review only; it no longer "wins" for the independent verifier.
+					"When RDD is on, the native assess tier decides native review and you may only raise it; it never adds an independent verifier by itself, only a named high-risk item does.",
 				} {
 					if !strings.Contains(rendered, want) {
 						t.Fatalf("RenderRouting(%q) is missing agent escalation clause %q", agent.ID, want)
 					}
 				}
+			}
+			if strings.Contains(rendered, "that tier wins") {
+				t.Fatalf("RenderRouting(%q) keeps the retired native-tier-wins clause", agent.ID)
 			}
 		})
 	}
@@ -888,7 +963,10 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 	}{
 		{"S1 writer by reason", []string{
 			"**Writer trigger:** a writer is delegated only for a named reason",
-			"(a) parallelism: two or more independent units with disjoint edit surfaces, each clearly heavier than starting a subagent, launched together",
+			// pain-point-iteration S9 C4: a unit is an independent behavior with
+			// several minutes of work, never a test/doc/code split of one behavior.
+			"(a) parallelism: two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work (several files or roughly 100+ changed lines; a subagent spends one to two minutes reading before it writes), launched together",
+			"A unit is one independent piece of behavior with its code, tests, and docs together: never split one behavior into test, docs, and code writers, and a delivery that depends on another is not independent; several small independent changes run inline, one after another.",
 			"(b) context: the long-session backstop below",
 			"Never delegate a writer for size, a large task alone, file count, or a price ratio",
 			"Without a reason, the parent works inline, following its logbook",
@@ -896,6 +974,7 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 		}, []string{
 			"a large task delegates one writer per task",
 			"a large task delegates one bounded writer per task",
+			"each clearly heavier than starting a subagent",
 		}},
 		{"S2 parallel writers", []string{
 			"**Parallel writers:** work in another repository goes in a fresh worktree based on that repository's main",
@@ -934,12 +1013,21 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 			"For every existing command or option the change touches, add one test proving its previous behavior still holds",
 			"add no other cases",
 			"An existing behavior counts as touched when it shares the code you changed (options, parsers, helpers, validation)",
+			// pain-point-iteration S9 C8: the differential check compares old
+			// and new output of the commands that share the changed code.
+			"Before finishing, run a differential check: for each existing command that shares the code you changed, run it with the new or changed input (for example a new option passed to a sibling subcommand) against the previous code (a copy of the base commit in a `mktemp -d` scratch directory, never committed as a test; committed tests never read git history or a fixed commit) and against your change, and compare stdout, stderr, and exit code; any difference nobody asked for is a regression to fix and pin with a test.",
 			"Each test asserts every observable effect of the rule (output, exit code, persisted data), covers the cases the rule itself names, and goes through the public interface",
 			"When you add or change a command, option, or message, update the help text and docs",
 		}, []string{
 			"configured TDD mode",
 			"strict TDD is active",
 		}},
+		// pain-point-iteration S9 C3: parallel writers cannot see each other,
+		// so each writer prompt names the helpers that keep shared invariants.
+		{"S9 shared-state invariants", []string{
+			"**Invariants:** each writer prompt names the existing helpers its unit must reuse for shared state (for example the function that adds an entry other commands also add) and the invariants they keep (ordering, uniqueness, validation, normalization)",
+			"Whoever writes, inline or delegated, reuses the existing function for shared state and never re-implements that step with a different shape.",
+		}, nil},
 	}
 
 	for _, agent := range catalog.AllAgents() {
@@ -952,7 +1040,7 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 			}
 			for _, spec := range specs {
 				for _, want := range spec.required {
-					if !strings.Contains(rendered, want) {
+					if want = piStep(agent.ID, want); !strings.Contains(rendered, want) {
 						t.Errorf("%s: RenderRouting(%q) is missing %q", spec.name, agent.ID, want)
 					}
 				}
@@ -964,4 +1052,91 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 			}
 		})
 	}
+}
+
+// S15 (pain-point iteration): a bench run read two wishes in one message as separate deliverables and started
+// two writers for ~100-line units (USD 0.55 vs 0.20 inline); blind review found delivered tests pinning a fixed git
+// commit from the differential check. Every runtime gets the three corrections.
+func TestRenderRoutingKeepsSmallTasksInlineAndDifferentialChecksInScratch(t *testing.T) {
+	t.Parallel()
+
+	rules := []string{
+		"separate deliverables the user wants apart (never several features asked at once)",
+		"Units of about 100 changed lines or less always run inline: writing them costs less than starting workers.",
+		"a copy of the base commit in a `mktemp -d` scratch directory, never committed as a test; committed tests never read git history or a fixed commit",
+	}
+	for _, agent := range catalog.AllAgents() {
+		rendered, err := RenderRouting(agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rule := range rules {
+			if !strings.Contains(rendered, rule) {
+				t.Errorf("%s routing is missing %q", agent.ID, rule)
+			}
+		}
+		if strings.Contains(rendered, "(`git stash` or a copy of HEAD)") {
+			t.Errorf("%s routing still suggests git stash or a HEAD copy for the differential check", agent.ID)
+		}
+	}
+}
+
+// Pi's ODD steps carry Gentle Shell's own clauses (the visible `todo`
+// projection, routing through the orchestrator's Mechanisms, phase reporting,
+// and its asset pointers). gentle-ai renders them so Gentle Shell consumes one
+// source instead of adapting the canon by hand; no other runtime receives them.
+func TestRenderRoutingGivesPiItsOwnODDSteps(t *testing.T) {
+	t.Parallel()
+
+	piClauses := []string{
+		"then create or rebuild the visible `todo` list from the reconciled feature tasks",
+		"Route each task through the orchestrator's Mechanisms",
+		"update the file, mirror, and visible `todo` projection after every task transition and material plan change",
+		"Never end with a tracked task pending unless you quote the user's explicit stop.",
+		"native review runs only under the user-owned RDD switch.",
+		"Phase reporting: the Gentle Shell prompt label is inferred automatically",
+		"Detail for steps 3–7: `orchestrator-delegation.md` and `orchestrator-memory.md`.",
+	}
+	// The hedged-wording rule lives in Pi's step 1 and in the canonical step 7;
+	// each runtime must carry it exactly once.
+	const hedged = "they may stop you or resume later asks for notes and separate commits"
+
+	for _, agent := range catalog.AllAgents() {
+		rendered, err := RenderRouting(agent.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, clause := range piClauses {
+			if got, want := strings.Contains(rendered, clause), agent.ID == model.AgentPi; got != want {
+				t.Errorf("%s routing contains %q = %t, want %t", agent.ID, clause, got, want)
+			}
+		}
+		if count := strings.Count(rendered, hedged); count != 1 {
+			t.Errorf("%s routing carries the hedged-wording rule %d times, want 1", agent.ID, count)
+		}
+	}
+}
+
+// piStepWording maps a canonical ODD step clause to the wording of the same
+// rule in Pi's own steps (piODDSteps), so the clause tests above hold every
+// runtime to the rule while Pi keeps Gentle Shell's phrasing.
+var piStepWording = map[string]string{
+	"1. **Authorize.** First establish whether the requested outcome explicitly authorizes a change.":                      "1. **Authorize.** Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"First establish whether the requested outcome explicitly authorizes a change.":                                        "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"Investigation, explanation, review, audit, comparison, and solution-proposal or planning-only requests are read-only": "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"must not write or edit files, delegate a writer, invoke apply, or create implementation artifacts":                    "no writer, apply, or implementation artifacts",
+	"If change intent is ambiguous or conditional, ask one clarification and remain read-only until answered.":             "Ambiguous or conditional change intent (unclear whether a change is authorized at all) gets one clarification; stop and wait.",
+	"Size the task by the Task Size section below":                                                                         "Size the task by the orchestrator's Task Size section",
+	"push, pull request creation, and merge remain the user's decisions under ordinary repository policy":                  "push, pull request creation, and merge remain the user's decisions.",
+	"Hedged wording is not a stop": "that result is a valid stop, hedged wording is not",
+	"A tracked task ends pending only with the user's explicit stop or one **Needs your decision** result naming the open blockers or missing proof":                           "Never end with a tracked task pending unless you quote the user's explicit stop. An applicable quick check runs once; an unavailable verifier or subagent is reported as unavailable, never retried or escalated into extra ceremony. Partial, blocked, unavailable, or exhausted proof becomes one **Needs your decision** result naming the open blockers or missing proof",
+	"Explore only for a map you need to decide or route, never to read files you will read anyway before writing inline":                                                       "Do not delegate exploration of files you will read anyway to work inline; explore only for a map you need to decide or route.",
+	"Each test asserts every observable effect of the rule (output, exit code, persisted data), covers the cases the rule itself names, and goes through the public interface": "Each test asserts every observable effect of the rule it covers (exit code, exact stdout and stderr, and that rejected input leaves stored data and counters unchanged), covers the cases the rule itself names (its examples, boundaries, and errors), and checks through the public interface, never internal storage.",
+}
+
+func piStep(agent model.AgentID, clause string) string {
+	if pi, ok := piStepWording[clause]; ok && agent == model.AgentPi {
+		return pi
+	}
+	return clause
 }

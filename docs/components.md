@@ -87,6 +87,8 @@ For project initialization, the explicit agent working directory is the targetâ€
 
 `gentle-ai codegraph init --cwd <project-root>` requires that target to be a Git root and rejects unsafe locations. For a new nested project without local Git, initialize Git there first (`git -C <project-root> init`) as part of the requested project setup, then retry CodeGraph initialization at the same target. Do not substitute the parent repository or initialize Git merely to answer a codebase question.
 
+After each successful initialization, including one over an existing index, the command appends `.codegraph/` once to the worktree's local exclude file (`git rev-parse --git-path info/exclude`, shared by linked worktrees). CodeGraph's own `.codegraph/.gitignore` un-ignores itself, so without this the index directory would show up as untracked and leak into agents' diffs. Tracked files and `.gitignore` are never edited. When Git is unavailable or the target is not a Git work tree, the command prints a warning to stderr and initialization still succeeds.
+
 ---
 
 ## Skills

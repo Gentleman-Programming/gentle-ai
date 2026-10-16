@@ -145,11 +145,11 @@ A subagent costs a fresh session, uncached reads, and a handoff. So the orchestr
 | Reason | When it applies |
 | :--- | :--- |
 | **Exploration** | Understanding needs more than one inline batch (about 3 calls and 10k tokens) or more than about five sequential lookups; one read-only explorer returns a short map with `path:line` evidence |
-| **Parallel writers** | Two or more independent units with disjoint edit surfaces, each clearly heavier than starting a subagent |
+| **Parallel writers** | Two or more independent units of behavior (code, tests, and docs together) with disjoint edit surfaces, each needing several minutes of work: several files or roughly 100+ changed lines, because a subagent spends one to two minutes reading before it writes. A delivery that depends on another is not independent |
 | **Context backstop** | A long session hands its next bounded unit to a fresh worker |
-| **Independent verifier** | A high-risk change (data, security, shared contracts, concurrency, delivery, or no test that would catch a regression) |
+| **Independent verifier** | A change that names a high-risk item (data, security, shared contracts, concurrency, delivery, or no test that would catch a regression); never a native risk tier alone, an unclear or failed assessment, or the model that wrote the change |
 
-Without a reason the parent writes inline, following its feature document. File count, task size, or a model price ratio never decide the route on their own.
+A trigger holds only when its condition truly holds; none holds by default, and when in doubt the parent works inline. Without a reason the parent writes inline, following its feature document. File count, task size, or a model price ratio never decide the route on their own.
 
 **[Docs →](docs/trigger-rules.md)**
 

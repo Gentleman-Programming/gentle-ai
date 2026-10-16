@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+// The help text pins the full contract, including the local Git exclusion
+// init adds so the index never leaks into diffs (C7).
 func TestRunArgsCodeGraphHelp(t *testing.T) {
 	const want = `gentle-ai codegraph — Initialize a project's CodeGraph index
 
@@ -18,6 +20,8 @@ OPTIONS
 
 Running 'gentle-ai codegraph' or 'gentle-ai codegraph init' without arguments shows this help.
 Only 'init --cwd <project-root>' is supported; other CodeGraph commands are not forwarded.
+Initialization adds .codegraph/ to the worktree's local Git exclude file (never .gitignore)
+so the index stays out of git status; a failure there is reported and initialization continues.
 `
 	for _, args := range [][]string{
 		{"codegraph"},
