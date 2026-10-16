@@ -13,6 +13,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 )
 
+var (
+	shellInstallInspect = shellinstaller.InspectUserInstall
+	shellInstallEntry   = shellinstaller.RunUserEntry
+)
+
 // Platform contracts live in shell_install_platform_{windows,other}.go:
 // shellInstallHelp, shellInstallPlatformFlags, shellEntryValues,
 // shellInstallInspected and runShellInstallTUI.
@@ -44,12 +49,7 @@ func parseShellInstall(args []string, stdout io.Writer) (shellinstaller.UserInst
 // Dedicated early route, deliberately independent of the generic installer,
 // profile detector, self-update, gate and ordinary Gentle AI startup TUI.
 func RunShell(args []string, stdout io.Writer) (resultErr error) {
-	defer func() {
-		var failure *shellinstaller.PrivateRuntimeError
-		if errors.As(resultErr, &failure) && (failure.Workspace != "" || failure.Destination != "") {
-			resultErr = fmt.Errorf("%w\nPreserve evidence: workspace=%q destination/unit=%q\nFor shared installation recovery, inspect ROOT=workspace/installed or published destination with gentle-ai shell recover ROOT inspect", resultErr, failure.Workspace, failure.Destination)
-		}
-	}()
+	defer func() { resultErr = preserveShellFailure(resultErr) }()
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
 		_, err := io.WriteString(stdout, shellInstallHelp)
 		return err
@@ -62,12 +62,11 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 	default:
 		return fmt.Errorf("unknown shell command %q; run gentle-ai shell --help", args[0])
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	defer cancel()
-	self, err := os.Executable()
+	ctx, cancel, self, err := shellExecutionContext()
 	if err != nil {
 		return err
 	}
+	defer cancel()
 	if args[0] != "install" {
 		return shellinstaller.RunUserEntry(ctx, self, args, os.Stdin, stdout, os.Stderr)
 	}
@@ -81,7 +80,11 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 	if err != nil {
 		return err
 	}
-	token, err := shellinstaller.InspectUserInstall(req)
+	return runShellInstallRequest(ctx, self, req, inspect, stdout)
+}
+
+func runShellInstallRequest(ctx context.Context, self string, req shellinstaller.UserInstallRequest, inspect bool, stdout io.Writer) error {
+	token, err := shellInstallInspect(req)
 	if err != nil {
 		return err
 	}
@@ -92,5 +95,22 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 	if req.Confirmation != token {
 		return errors.New("inspect the physical selection first with --inspect, then pass its --confirm SHA256; run gentle-ai shell install --help for selection flags or gentle-ai shell install for interactive review")
 	}
-	return shellinstaller.RunUserEntry(ctx, self, append([]string{"install"}, shellEntryValues(req)...), os.Stdin, stdout, os.Stderr)
+	return shellInstallEntry(ctx, self, append([]string{"install"}, shellEntryValues(req)...), os.Stdin, stdout, os.Stderr)
+}
+
+func shellExecutionContext() (context.Context, context.CancelFunc, string, error) {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	self, err := os.Executable()
+	if err != nil {
+		cancel()
+	}
+	return ctx, cancel, self, err
+}
+
+func preserveShellFailure(err error) error {
+	var failure *shellinstaller.PrivateRuntimeError
+	if errors.As(err, &failure) && (failure.Workspace != "" || failure.Destination != "") {
+		return fmt.Errorf("%w\nPreserve evidence: workspace=%q destination/unit=%q\nFor shared installation recovery, inspect ROOT=workspace/installed or published destination with gentle-ai shell recover ROOT inspect", err, failure.Workspace, failure.Destination)
+	}
+	return err
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"io"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
@@ -41,4 +42,19 @@ func ShellInstallArguments(selection ShellInstallSelection) []string {
 		return nil
 	}
 	return append([]string{"install"}, shellEntryValues(selection.Request)...)
+}
+
+// RunShellInstallSelection runs only after the owning TUI restores its terminal.
+// Confirmed is not authority: the physical selection and token are checked again.
+func RunShellInstallSelection(selection ShellInstallSelection, stdout io.Writer) (resultErr error) {
+	if !selection.Confirmed {
+		return nil
+	}
+	defer func() { resultErr = preserveShellFailure(resultErr) }()
+	ctx, cancel, self, err := shellExecutionContext()
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	return runShellInstallRequest(ctx, self, selection.Request, false, stdout)
 }

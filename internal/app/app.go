@@ -39,6 +39,7 @@ var (
 	selfUpdateFn              = selfUpdate
 	ensureCurrentOSSupported  = system.EnsureCurrentOSSupported
 	detectSystem              = system.Detect
+	runShellInstallSelection  = cli.RunShellInstallSelection
 	runTUI                    = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
 		p := tea.NewProgram(m, opts...)
 		return p.Run()
@@ -274,7 +275,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 			printPostUpgradeDoctorAdvisory(stdout)
 		}
 
-		m := tui.NewModel(result, Version, installedState)
+		m := tui.NewModel(result, Version, installedState).WithShellInstaller()
 		m.ExecuteFn = tuiExecuteWithBackground
 		m.ExecuteSDKFn = tuiExecuteWithSDK
 		m.RestoreFn = tuiRestore
@@ -304,6 +305,14 @@ func RunArgs(args []string, stdout io.Writer) error {
 		finalModel, err := runTUI(m, tea.WithAltScreen())
 		if err != nil {
 			return err
+		}
+		// Bubble Tea has restored the terminal before any installer runs.
+		if selector, ok := finalModel.(interface {
+			ShellInstallSelection() cli.ShellInstallSelection
+		}); ok {
+			if selection := selector.ShellInstallSelection(); selection.Confirmed {
+				return runShellInstallSelection(selection, stdout)
+			}
 		}
 		if latestVersion, ok := gentleAIUpgradeVersionFromTUI(finalModel); ok {
 			return restartAfterGentleAIUpgrade(latestVersion, stdout)
