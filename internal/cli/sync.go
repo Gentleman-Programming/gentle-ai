@@ -833,6 +833,14 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		if adapter.Agent() == model.AgentCodex {
 			paths[filepath.Join(adapter.GlobalConfigDir(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)), "hooks.json")] = struct{}{}
 		}
+		if !workspace && adapter.Agent() == model.AgentID("command-code") {
+			if path := adapter.SettingsPath(homeDir); path != "" {
+				paths[path] = struct{}{}
+			}
+		}
+	}
+	if !workspace && containsAgent(selection.Agents, model.AgentID("command-code")) {
+		paths[filepath.Join(homeDir, ".commandcode", "settings.json")] = struct{}{}
 	}
 	if configDir := openCodeTelemetryConfigDir(homeDir, workspaceDir, scope, selection.Agents); configDir != "" {
 		for _, path := range telemetryruntime.ManagedPaths(configDir) {
