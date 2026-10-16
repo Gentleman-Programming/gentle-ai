@@ -41,7 +41,7 @@ func KiroModelID(alias KiroModelAlias) string {
 	case KiroModelHaiku:
 		return "claude-haiku-4.5"
 	case KiroModelMiniMax:
-		return "minimax-m2.5"
+		return "MiniMax-M3"
 	case KiroModelGLM:
 		return "glm-5"
 	case KiroModelDeepSeek:

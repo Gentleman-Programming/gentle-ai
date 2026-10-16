@@ -252,7 +252,7 @@ func TestAdapter_KiroModelID(t *testing.T) {
 		{model.KiroModelOpus, "claude-opus-4.8"},
 		{model.KiroModelSonnet, "claude-sonnet-4.6"},
 		{model.KiroModelHaiku, "claude-haiku-4.5"},
-		{model.KiroModelMiniMax, "minimax-m2.5"},
+		{model.KiroModelMiniMax, "MiniMax-M3"},
 		{model.KiroModelGLM, "glm-5"},
 		{model.KiroModelDeepSeek, "deepseek-3.2"},
 		{model.KiroModelQwen, "qwen3-coder-next"},

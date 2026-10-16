@@ -11,7 +11,7 @@ func TestKiroModelID(t *testing.T) {
 		{KiroModelOpus, "claude-opus-4.8"},
 		{KiroModelSonnet, "claude-sonnet-4.6"},
 		{KiroModelHaiku, "claude-haiku-4.5"},
-		{KiroModelMiniMax, "minimax-m2.5"},
+		{KiroModelMiniMax, "MiniMax-M3"},
 		{KiroModelGLM, "glm-5"},
 		{KiroModelDeepSeek, "deepseek-3.2"},
 		{KiroModelQwen, "qwen3-coder-next"},
