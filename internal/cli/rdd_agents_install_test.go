@@ -43,7 +43,7 @@ func TestFreshInstallShipsReviewAgentsOnlyToRDDRuntimes(t *testing.T) {
 		jd     bool
 	}{
 		{model.AgentClaudeCode, true, true},
-		{model.AgentCursor, false, false},
+		{model.AgentCursor, false, true},
 		{model.AgentKiroIDE, false, true},
 		{model.AgentKimi, false, false},
 	} {
@@ -137,7 +137,11 @@ func TestUpgradeRemovesOwnedReviewAgentsFromNonRDDRuntimes(t *testing.T) {
 				if got, err := os.ReadFile(user); err != nil || string(got) != "my own reviewer\n" {
 					t.Fatalf("user review agent = %q, %v; want preserved", got, err)
 				}
-				for _, name := range reviewassets.NativeAgentManifest[agent] {
+				names := reviewassets.NativeAgentManifest[agent]
+				if agent == model.AgentCursor {
+					names = []string{"jd-judge-a.md", "jd-judge-b.md", "jd-fix-agent.md"}
+				}
+				for _, name := range names {
 					if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 						t.Fatalf("retained agent %s missing after %s: %v", name, flow, err)
 					}

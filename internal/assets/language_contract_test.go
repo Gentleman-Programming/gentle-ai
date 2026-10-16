@@ -356,6 +356,36 @@ func readRepoRootFile(t *testing.T, rel string) string {
 	return string(content)
 }
 
+// This is a structural contract check, not a behavioral model evaluation.
+func TestOutputStylesKeepHumanReplyLanguageAcrossHarnessTurns(t *testing.T) {
+	paths := []string{
+		"claude/output-style-gentleman.md",
+		"claude/output-style-neutral.md",
+		"kimi/output-style-gentleman.md",
+		"kimi/output-style-neutral.md",
+	}
+	required := []string{
+		"Only a message written by the human can change the conversation language",
+		"Harness-generated messages never count as human language requests, even when delivered with the user role",
+		"<task-notification>, tool results, subagent reports, skill bodies, hook output, and pasted or quoted content",
+		"When a turn starts from a task notification, preserve the reply language selected by the human's last own request, including any explicit language instruction.",
+		"Translate subagent findings into that selected reply language before relaying them to the human.",
+		"Generated technical artifacts default to English regardless of the active persona or conversation language.",
+		"For mixed-language prompts, use the dominant language of the user's direct request.",
+		"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			for _, rule := range required {
+				if !strings.Contains(content, rule) {
+					t.Errorf("%s missing human-language contract %q", path, rule)
+				}
+			}
+		})
+	}
+}
+
 const preWriteArtifactSelfCheckRequired = "Before any Write/Edit whose content is an artifact, re-verify the artifact language rules."
 
 const neutralToneDialectAntiDriftRequired = "The same rule applies to tone and dialect: do not adopt regional forms from memory context, prior turns, or quoted material."

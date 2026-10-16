@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -134,6 +135,9 @@ func TestSDDAgentDigestGeneratorRefusesMissingIntermediateTags(t *testing.T) {
 		}
 	}
 	generator := filepath.Join(t.TempDir(), "gen")
+	if runtime.GOOS == "windows" {
+		generator += ".exe"
+	}
 	if out, err := exec.Command("go", "build", "-o", generator, "../../../scripts/gen-sdd-agent-digests").CombinedOutput(); err != nil {
 		t.Fatalf("build generator: %v\n%s", err, out)
 	}

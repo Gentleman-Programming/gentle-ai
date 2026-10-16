@@ -29,6 +29,9 @@ func RenderDryRun(result InstallResult) string {
 	if containsAgent(result.Resolved.Agents, model.AgentPi) {
 		_, _ = fmt.Fprintf(b, "Pi background intent: %s (policy effective: %s)\n", result.PiBackground.Intent, result.PiBackground.Effective)
 	}
+	if len(result.PiExcludedPackages) > 0 {
+		_, _ = fmt.Fprintf(b, "Pi excluded packages: %s\n", strings.Join(result.PiExcludedPackages, ","))
+	}
 	if containsAgent(result.Resolved.Agents, model.AgentOpenCode) && result.Background.Activation.Action != "" {
 		if result.Background.Effective == model.OpenCodeBackgroundOn {
 			_, _ = fmt.Fprintln(b, renderOpenCodeBackgroundRuntime(result.Background, result.BackgroundPolicyEnabled))

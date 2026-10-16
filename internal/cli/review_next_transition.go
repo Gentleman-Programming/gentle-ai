@@ -221,6 +221,9 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 				return reviewStopTransition("rdd_disabled")
 			}
 			if status.Action == reviewtransaction.TargetStatusActionStop && status.Replayability == reviewtransaction.ReplayabilityNotReplayable {
+				if status.passiveDeltaAfterAcknowledgement {
+					return reviewStopTransition("acknowledged_predecessor_passive_delta")
+				}
 				return reviewStopTransition("target_already_acknowledged")
 			}
 			if input.Selector != nil && input.Selector.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
@@ -955,6 +958,9 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 		arguments = append(arguments, ReviewTransitionArgument{Name: "consent", Value: string(reviewConsentModeRelay)})
 	}
 	arguments = append(arguments, reviewStartIntendedUntrackedArguments(intended)...)
+	// rdd-risk-gated S17: preflighted START options ride last, so a STATUS
+	// without them renders the exact vector it always did.
+	arguments = append(arguments, status.startOptions.arguments()...)
 	return arguments
 }
 

@@ -23,14 +23,13 @@ type WelcomeAdvisory struct {
 }
 
 // WelcomeOptions returns the welcome menu options.
-// Legacy profile discovery does not add a menu action; existing files are preserved.
 // When hasEngines is false, "Create your own Agent" is shown as disabled
 // (labelled "(no agents)") to signal that no supported AI engine is installed.
 // When inGitRepo is false, "Reset review store" is shown as disabled
 // (labelled "(requires a Git repository)") to signal the repository-scoped
 // precondition the action needs; the row still renders so the entry stays
 // discoverable and the navigation no-ops on it.
-func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, inGitRepo bool) []string {
+func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, inGitRepo bool) []string {
 	upgradeLabel := "Upgrade tools"
 	if updateCheckDone && update.HasUpdates(updateResults) {
 		upgradeLabel = "Upgrade tools ★"
@@ -61,21 +60,22 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 	opts = append(opts, resetLabel)
 	opts = append(opts, "Receipt-Driven Development")
 	opts = append(opts, "Managed uninstall")
-	opts = append(opts, "Community Tools/Plugins")
+	opts = append(opts, "Community Tools")
 	opts = append(opts, "Quit")
 
 	return opts
 }
 
-func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, inGitRepo bool) string {
-	return RenderWelcomeWithWidth(cursor, version, updateBanner, updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, inGitRepo, 0)
+func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, inGitRepo bool) string {
+	return RenderWelcomeWithWidth(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, inGitRepo, 0)
 }
 
-func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, inGitRepo bool, width int) string {
-	return RenderWelcomeWithAdvisory(cursor, version, updateBanner, updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, inGitRepo, width, 0, WelcomeAdvisory{})
+func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, inGitRepo bool, width int) string {
+	return RenderWelcomeWithAdvisory(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, inGitRepo, width, 0, WelcomeAdvisory{})
 }
 
-func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, inGitRepo bool, width int, height int, advisory WelcomeAdvisory) string {
+func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, inGitRepo bool, width int, height int, advisory WelcomeAdvisory) string {
+	options := WelcomeOptions(updateResults, updateCheckDone, hasEngines, inGitRepo)
 	render := func(includeLogo, includeOptional, compact bool) string {
 		var b strings.Builder
 
@@ -112,7 +112,6 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 		} else {
 			b.WriteString("\n\n")
 		}
-		options := WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, inGitRepo)
 		if compact {
 			b.WriteString(renderWelcomeOptions(options, cursor, width))
 		} else {
@@ -133,7 +132,7 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 		return welcomeFrameStyle(width).Render(b.String())
 	}
 	if width > 0 && width <= styles.FrameStyle.GetHorizontalBorderSize() {
-		return renderWelcomeMinimum(width, height, cursor)
+		return renderWelcomeMinimum(width, height, cursor, options)
 	}
 	fitsViewport := func(view string) bool {
 		return (width <= 0 || lipgloss.Width(view) <= width) &&
@@ -154,7 +153,7 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 	if !fitsViewport(view) {
 		// A viewport shorter than the compact menu still needs a safe, actionable
 		// state instead of allowing the terminal to clip the rendered content.
-		view = renderWelcomeMinimum(width, height, cursor)
+		view = renderWelcomeMinimum(width, height, cursor, options)
 	}
 	return view
 }
@@ -187,23 +186,31 @@ func renderWelcomeOptions(options []string, cursor int, width int) string {
 	return b.String()
 }
 
-func renderWelcomeMinimum(width int, height int, cursor int) string {
-	const primaryAction = "Start installation"
-	const compactPrimaryAction = "Go"
-	const narrowPrimaryAction = ">"
+func renderWelcomeMinimum(width int, height int, cursor int, options []string) string {
 	const compactHelp = "j/k, enter, q"
 	const narrowHelp = "q"
 
-	primaryLabel := primaryAction
-	if width > 0 && lipgloss.Width(primaryLabel) > width {
-		primaryLabel = compactPrimaryAction
-		if lipgloss.Width(primaryLabel) > width {
-			primaryLabel = narrowPrimaryAction
+	// Show the currently selected menu row so the minimum view remains
+	// consistent with the action Enter will perform. This surfaces disabled
+	// rows such as "Reset review store (requires a Git repository)".
+	selected := "Start installation"
+	if cursor >= 0 && cursor < len(options) {
+		selected = options[cursor]
+	}
+	// Preserve historical atomic fallbacks when the selected row cannot fit;
+	// this keeps the minimum view actionable on the tiniest viewports.
+	selectedLabel := selected
+	if width > 0 && lipgloss.Width(selectedLabel) > width {
+		if cursor == 0 {
+			selectedLabel = "Go"
+			if lipgloss.Width(selectedLabel) > width {
+				selectedLabel = ">"
+			}
 		}
 	}
-	primaryLines := wrapWelcomeLine(primaryLabel, width)
+	selectedLines := wrapWelcomeLine(selectedLabel, width)
 	helpLines := wrapWelcomeLine(welcomeHelpText, width)
-	if height > 0 && len(primaryLines)+len(helpLines) > height {
+	if height > 0 && len(selectedLines)+len(helpLines) > height {
 		helpLabel := compactHelp
 		if width > 0 && lipgloss.Width(helpLabel) > width {
 			helpLabel = narrowHelp
@@ -211,7 +218,7 @@ func renderWelcomeMinimum(width int, height int, cursor int) string {
 		helpLines = wrapWelcomeLine(helpLabel, width)
 	}
 
-	lines := append(primaryLines, helpLines...)
+	lines := append(selectedLines, helpLines...)
 	if height > 0 && len(lines) > height {
 		lines = lines[:height]
 	}
@@ -219,19 +226,15 @@ func renderWelcomeMinimum(width int, height int, cursor int) string {
 		return ""
 	}
 
-	primaryLineCount := len(primaryLines)
-	if primaryLineCount > len(lines) {
-		primaryLineCount = len(lines)
+	selectedLineCount := len(selectedLines)
+	if selectedLineCount > len(lines) {
+		selectedLineCount = len(lines)
 	}
-	primaryStyle := styles.UnselectedStyle
-	if cursor == 0 {
-		primaryStyle = styles.SelectedStyle
-	}
-	rendered := primaryStyle.Render(strings.Join(lines[:primaryLineCount], "\n"))
-	if primaryLineCount == len(lines) {
+	rendered := styles.SelectedStyle.Render(strings.Join(lines[:selectedLineCount], "\n"))
+	if selectedLineCount == len(lines) {
 		return rendered
 	}
-	return rendered + "\n" + styles.HelpStyle.Render(strings.Join(lines[primaryLineCount:], "\n"))
+	return rendered + "\n" + styles.HelpStyle.Render(strings.Join(lines[selectedLineCount:], "\n"))
 }
 
 func wrapWelcomeLine(text string, width int) []string {

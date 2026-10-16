@@ -1628,7 +1628,7 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 		t.Fatalf("backupTargets() error = %v", err)
 	}
 
-	routing, err := agentguidance.RoutingPaths(home, agent)
+	routing, err := agentguidance.RoutingPathsWithOptions(home, agent, agentguidance.RoutingOptions{})
 	if err != nil {
 		t.Fatalf("RoutingPaths(%q) error = %v", agent, err)
 	}
@@ -1705,6 +1705,7 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 			if tc.wantRoot == "workspace" {
 				root = workspace
 			}
+			// Retained routing hooks and Context7 cleanup share selected-scope settings.
 			wantSettings := adapters[0].SettingsPath(root)
 			if !containsPath(targets, wantSettings) {
 				t.Fatalf("backupTargets missing cleanup path %q; targets=%v", wantSettings, targets)
@@ -1719,8 +1720,9 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 			if root == workspace {
 				otherRoot = home
 			}
-			if !tc.sameWorkspace && containsPath(targets, adapters[0].SettingsPath(otherRoot)) {
-				t.Fatalf("backupTargets selected the wrong scope's cleanup path; targets=%v", targets)
+			otherSettings := adapters[0].SettingsPath(otherRoot)
+			if !tc.sameWorkspace && containsPath(targets, otherSettings) {
+				t.Fatalf("backupTargets selected settings outside install scope; targets=%v", targets)
 			}
 		})
 	}
@@ -2057,4 +2059,10 @@ func TestInstallPrepareValidationScopesRefusalsToSelectedWriters(t *testing.T) {
 			}
 		})
 	}
+}
+
+// backupTargets is the monolithic install snapshot plan these tests assert:
+// installBackupTargets without the Claude module opt-in.
+func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
+	return installBackupTargets(homeDir, workspaceDir, scope, selection, resolved, false)
 }

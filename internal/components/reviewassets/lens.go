@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
@@ -83,6 +84,8 @@ Report real user-impacting defects only. BLOCKER/CRITICAL need changed-hunk, cre
 - WARNING: proven non-blocking defect or follow-up risk.
 - SUGGESTION: optional concrete improvement.
 
+%s
+
 ## Evidence
 
 Each finding needs path:line or contiguous path:start-end, neutral claim, evidence class, causal disposition, and concrete proof. Never invent evidence or placeholders.
@@ -99,6 +102,6 @@ Status %q requires the complete unique unordered manifest set. Listing means len
 
 Required top-level fields: %s. Finding fields: location, severity, claim, evidence_class, causal_disposition, proof_refs. Emit no unknown fields or orchestration metadata.
 
-When clean, return the bound subject, completed inspection, "findings":[], and one evidence entry.`, title, input, focus, resultSchema, bindingMarker, envelope.CompletedInspectionStatus, strings.Join(envelope.RequiredTopLevelFields, ", "))
+When clean, return the bound subject, completed inspection, "findings":[], and one evidence entry.`, title, input, focus, reviewerprovider.SeverityRules, resultSchema, bindingMarker, envelope.CompletedInspectionStatus, strings.Join(envelope.RequiredTopLevelFields, ", "))
 	return prompt, true
 }

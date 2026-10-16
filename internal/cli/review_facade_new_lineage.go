@@ -8,14 +8,13 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
-// prepareReviewFacadeCompactAtomicStart freezes compact state and its immutable
-// worktree-bound START binding without opening authority storage. The caller
-// performs context preflight and live snapshot revalidation before the exact
-// CompactStore.CreateOrReplayAtomicStart boundary.
-func prepareReviewFacadeCompactAtomicStart(
+// prepareReviewFacadeCompactAtomicStartFor prepares the compact atomic START
+// request; a non-empty lensSelectionReason marks lenses as the agent's own
+// START --lenses choice.
+func prepareReviewFacadeCompactAtomicStartFor(
 	ctx context.Context, root, explicitLineage, policySource string,
 	target reviewtransaction.Target, snapshot reviewtransaction.Snapshot,
-	assessment reviewtransaction.RiskAssessment, changedLines int, lenses []string, runtimeAgent model.AgentID,
+	assessment reviewtransaction.RiskAssessment, changedLines int, lenses []string, lensSelectionReason string, runtimeAgent model.AgentID,
 ) (reviewtransaction.CompactAtomicStartRequest, error) {
 	lineage := explicitLineage
 	if lineage == "" {
@@ -34,7 +33,7 @@ func prepareReviewFacadeCompactAtomicStart(
 	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
 		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
 		Snapshot: snapshot, PolicyHash: policyHash, PolicyContent: &policyContent, RiskLevel: assessment.Level,
-		SelectedLenses: append([]string(nil), lenses...), OriginalChangedLines: &changedLines, RuntimeAgent: string(runtimeAgent),
+		SelectedLenses: append([]string(nil), lenses...), LensSelectionReason: lensSelectionReason, OriginalChangedLines: &changedLines, RuntimeAgent: string(runtimeAgent),
 	})
 	if err != nil {
 		return reviewtransaction.CompactAtomicStartRequest{}, fmt.Errorf("build compact atomic START state: %w", err)

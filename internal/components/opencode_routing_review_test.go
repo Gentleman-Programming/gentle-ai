@@ -13,7 +13,7 @@ func TestOpenCodeRetainsParentRoutingAndReview(t *testing.T) {
 	content := assets.MustRead("opencode/orchestrator.md")
 	for _, required := range []string{
 		"Organic Driven Development Is The Default Workflow",
-		"Mandatory Delegation Triggers",
+		"#### Delegation Triggers", // pain-point-iteration S9 C4 dropped "Mandatory" from the heading
 		"Review Execution Contract",
 		"Lossless Blocking Prompts",
 	} {

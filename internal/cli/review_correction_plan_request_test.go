@@ -70,6 +70,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
 				t.Fatal(err)
 			}
+			corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 			if tt.forecast > 0 {
 				captureCorrectionPlanFromCurrentStatus(t, repo, started.LineageID, tt.forecast)
 			}
@@ -156,6 +157,14 @@ func captureCorrectionPlanFromCurrentStatus(t *testing.T, cwd, lineage string, c
 	_, record, err := discoverCompactFacadeReview(context.Background(), root, lineage, false)
 	if err != nil {
 		t.Fatalf("discover correction authority for STATUS: %v", err)
+	}
+	if record.State.State == reviewtransaction.StateReviewing {
+		// A severe finding still awaits its refuter batch (L20); the host
+		// captures it before STATUS offers the correction plan.
+		corroborateRefuterClaimsForTest(t, root, lineage)
+		if _, record, err = discoverCompactFacadeReview(context.Background(), root, lineage, false); err != nil {
+			t.Fatalf("discover corroborated correction authority: %v", err)
+		}
 	}
 	args := []string{
 		"status", "--cwd", cwd, "--contract", ReviewIntegrationContractV2,
@@ -293,6 +302,7 @@ func closeReviewLineageIntoCorrectionRequired(t *testing.T, repo, lineage string
 	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
 		t.Fatal(err)
 	}
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 	return started.LineageID
 }
 

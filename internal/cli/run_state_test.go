@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
@@ -123,6 +127,88 @@ func TestRunInstallPersistsConfiguredSelection(t *testing.T) {
 	}
 	if got.ManagedAssetDigest != wantDigest {
 		t.Fatalf("managed asset digest = %q, want %q", got.ManagedAssetDigest, wantDigest)
+	}
+}
+
+func TestRunInstallExplicitSelectionThenSync(t *testing.T) {
+	lastCheck := time.Date(2026, 9, 30, 9, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name     string
+		existing *state.InstallState
+	}{
+		{name: "no prior state"},
+		{name: "update-check stub", existing: &state.InstallState{LastUpdateCheck: &lastCheck}},
+		{name: "legacy install without selection", existing: &state.InstallState{
+			InstalledAgents: []string{"claude-code"}, LastUpdateCheck: &lastCheck,
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			home := convergenceTestHome(t)
+			oldBackupHome := backup.UserHomeDirFn
+			backup.UserHomeDirFn = func() (string, error) { return home, nil }
+			t.Cleanup(func() { backup.UserHomeDirFn = oldBackupHome })
+			if tt.existing != nil {
+				if err := state.Write(home, *tt.existing); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			flags := InstallFlags{Agents: []string{"claude-code"}, Components: []string{"persona", "skills", "context7"}, Preset: "minimal"}
+			input, err := NormalizeInstallFlags(flags, system.DetectionResult{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			installed, err := RunInstall([]string{"--agent", "claude-code", "--component", "persona,skills,context7", "--preset", "minimal"}, system.DetectionResult{})
+			if err != nil || !installed.Verify.Ready {
+				t.Fatalf("RunInstall() error = %v, ready = %v", err, installed.Verify.Ready)
+			}
+			got, err := state.Read(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantComponents := []model.ComponentID{model.ComponentPersona, model.ComponentSkills, model.ComponentContext7}
+			if !got.SelectionConfigured || !slices.Equal(got.Components, wantComponents) || !slices.Equal(got.Skills, input.Selection.Skills) || got.Preset != model.PresetMinimal || !slices.Equal(got.InstalledAgents, []string{"claude-code"}) {
+				t.Fatalf("persisted selection = %#v, want explicit components, skills and minimal preset", got)
+			}
+			if tt.existing != nil && (got.LastUpdateCheck == nil || !got.LastUpdateCheck.Equal(lastCheck)) {
+				t.Fatalf("LastUpdateCheck = %v, want %v", got.LastUpdateCheck, lastCheck)
+			}
+			before := snapshotManagedTree(t, home)
+			synced, err := RunSync(nil)
+			if err != nil {
+				t.Fatalf("RunSync() error = %v", err)
+			}
+			if !slices.Equal(synced.Selection.Components, wantComponents) || !slices.Equal(synced.Selection.Skills, input.Selection.Skills) || synced.Selection.Preset != model.PresetMinimal {
+				t.Fatalf("sync selection = %#v, want recorded explicit selection", synced.Selection)
+			}
+			assertSameManagedTree(t, "sync after explicit install", before, snapshotManagedTree(t, home))
+			if synced.FilesChanged != 0 {
+				t.Errorf("sync changed %d files: %v", synced.FilesChanged, synced.ChangedFiles)
+			}
+		})
+	}
+}
+
+func TestRunInstallIncrementalSelectionPreservesUnspecifiedFields(t *testing.T) {
+	t.Chdir(t.TempDir())
+	home := convergenceTestHome(t)
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"cursor"}, SelectionConfigured: true,
+		Components: []model.ComponentID{model.ComponentSkills, model.ComponentContext7},
+		Skills:     []model.SkillID{model.SkillCommentWriter}, Preset: model.PresetCustom, Persona: "neutral",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RunInstall([]string{"--agent", "claude-code", "--component", "persona"}, system.DetectionResult{}); err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.SelectionConfigured || !slices.Equal(got.Components, []model.ComponentID{model.ComponentPersona}) || !slices.Equal(got.Skills, []model.SkillID{model.SkillCommentWriter}) || got.Preset != model.PresetCustom || got.Persona != "neutral" || !slices.Equal(got.InstalledAgents, []string{"cursor", "claude-code"}) {
+		t.Fatalf("incremental selection = %#v, want explicit components with existing skills, preset, persona and agents preserved", got)
 	}
 }
 

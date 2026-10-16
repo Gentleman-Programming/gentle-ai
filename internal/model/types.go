@@ -213,20 +213,6 @@ const (
 	SDDModeMulti  SDDModeID = "multi"
 )
 
-// SDDProfileStrategyID defines how sync handles OpenCode SDD profiles.
-type SDDProfileStrategyID string
-
-const (
-	// SDDProfileStrategyGeneratedMulti is the default/backward-compatible mode:
-	// named profiles coexist in opencode.json as suffixed agents and are detected
-	// from sdd-orchestrator-{name} keys during regular sync.
-	SDDProfileStrategyGeneratedMulti SDDProfileStrategyID = "generated-multi"
-	// SDDProfileStrategyExternalSingleActive supports external profile managers
-	// that keep profile state outside opencode.json and activate one runtime
-	// profile without requiring a restart.
-	SDDProfileStrategyExternalSingleActive SDDProfileStrategyID = "external-single-active"
-)
-
 type OpenCodeCommunityPluginID string
 
 const (
@@ -240,12 +226,3 @@ type CommunityToolID string
 const (
 	CommunityToolCodeGraph CommunityToolID = "codegraph"
 )
-
-// Profile represents a named SDD orchestrator configuration with model assignments.
-// The default profile (Name="" or Name="default") maps to the base sdd-orchestrator.
-// Named profiles generate sdd-orchestrator-{Name} + suffixed sub-agents.
-type Profile struct {
-	Name              string                     // e.g. "cheap", "premium"; empty = default
-	OrchestratorModel ModelAssignment            // orchestrator model
-	PhaseAssignments  map[string]ModelAssignment // key = phase name (e.g. "sdd-apply")
-}

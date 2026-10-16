@@ -1,0 +1,7 @@
+FROM --platform=linux/amd64 debian:bookworm-slim@sha256:f3034a6ec3c1205360777c4aae76234998866ad18806ae62b63a3f84ccad782b
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY user-install.test /tests
+RUN chmod 0555 /tests && mkdir -m 0700 /cold-root-owned
+USER 65532:65532
+ENTRYPOINT ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=/tmp", "TMPDIR=/tmp", "GENTLE_PRIVATE_GUEST=approved", "/tests"]

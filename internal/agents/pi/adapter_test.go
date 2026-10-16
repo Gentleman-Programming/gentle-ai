@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -701,7 +702,6 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 	want := [][]string{
 		{"pi", "install", "npm:gentle-pi"},
 		{"pi", "install", "npm:gentle-engram"},
-		{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"},
 		{"pi", "install", "npm:pi-web-access"},
 		{"pi", "install", "npm:pi-btw"},
 	}
@@ -710,7 +710,7 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 	}
 }
 
-func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t *testing.T) {
+func TestAdapterInstallCommandSequenceUsesPiWhenPnpmIsAvailable(t *testing.T) {
 	a := &Adapter{
 		lookPath: func(file string) (string, error) {
 			if file == "pnpm" {
@@ -725,9 +725,14 @@ func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t 
 		t.Fatalf("InstallCommand() error = %v", err)
 	}
 
-	want := []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
-	if !reflect.DeepEqual(commands[2], want) {
-		t.Fatalf("InstallCommand()[2] = %#v, want %#v", commands[2], want)
+	want := [][]string{
+		{"pi", "install", "npm:gentle-pi"},
+		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-web-access"},
+		{"pi", "install", "npm:pi-btw"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("InstallCommand() = %#v, want %#v", commands, want)
 	}
 }
 
@@ -826,5 +831,70 @@ func TestPrunePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
 	}
 	if !reflect.DeepEqual(settings.Packages, []string{"npm:pi-web-access", "npm:other@1.0.0"}) {
 		t.Fatalf("packages = %#v", settings.Packages)
+	}
+}
+
+func TestAdapterPrepareInstallSkipsExcludedPackageSources(t *testing.T) {
+	commands, err := NewAdapter().PrepareInstall(system.PlatformProfile{}, t.TempDir(), "npm:gentle-pi", "npm:pi-btw")
+	if err != nil {
+		t.Fatalf("PrepareInstall() error = %v", err)
+	}
+	want := [][]string{
+		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-web-access"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("PrepareInstall() = %#v, want %#v", commands, want)
+	}
+}
+
+func TestAdapterPrepareInstallWithoutExclusionKeepsFullSequence(t *testing.T) {
+	commands, err := NewAdapter().PrepareInstall(system.PlatformProfile{}, t.TempDir())
+	if err != nil {
+		t.Fatalf("PrepareInstall() error = %v", err)
+	}
+	want := [][]string{
+		{"pi", "install", "npm:gentle-pi"},
+		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-web-access"},
+		{"pi", "install", "npm:pi-btw"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("PrepareInstall() = %#v, want %#v", commands, want)
+	}
+}
+
+func TestValidateExcludedPackageSources(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		values  []string
+		errText string
+	}{
+		{name: "none"},
+		{name: "managed sources", values: []string{"npm:gentle-pi", "npm:pi-web-access", "npm:pi-btw"}},
+		{name: "unknown source names allowed values", values: []string{"npm:gentle-pi@2.5.0"}, errText: `unknown Pi package "npm:gentle-pi@2.5.0"; allowed values: npm:gentle-pi, npm:pi-web-access, npm:pi-btw`},
+		{name: "engram source is required", values: []string{"npm:gentle-engram"}, errText: `package "npm:gentle-engram" cannot be excluded`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateExcludedPackageSources(tt.values)
+			if tt.errText == "" {
+				if err != nil {
+					t.Fatalf("ValidateExcludedPackageSources(%v) error = %v", tt.values, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.errText) {
+				t.Fatalf("ValidateExcludedPackageSources(%v) error = %v, want %q", tt.values, err, tt.errText)
+			}
+		})
+	}
+}
+
+func TestUninstallPackageSourcesIgnoresInstallExclusion(t *testing.T) {
+	if _, err := NewAdapter().PrepareInstall(system.PlatformProfile{}, t.TempDir(), "npm:gentle-pi"); err != nil {
+		t.Fatalf("PrepareInstall() error = %v", err)
+	}
+	if got := UninstallPackageSources(); !slices.Contains(got, "npm:gentle-pi") || len(got) != len(managedPackageSources)+1 {
+		t.Fatalf("UninstallPackageSources() = %v, want the full managed list plus the retired adapter", got)
 	}
 }

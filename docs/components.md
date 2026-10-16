@@ -23,6 +23,35 @@ ODD (Organic Driven Development) is shared routing guidance, not a separate comp
 
 > **Since v4.0.0:** the SDD (Spec-Driven Development) component and its `sdd-*` skills are retired in favor of ODD. A legacy `sdd` selection persisted in state is still read, but install and sync no longer write its assets. A global install or sync also removes the native `sdd-*` sub-agents earlier releases rendered for Claude Code, Kiro, Cursor, and Kimi, proven by comparing each file with every released template; edited files are preserved and reported as manual actions. A Kimi `gentleman.yaml` inherited from v3.x declares every SDD subagent by path: when its bytes match a release, sync rewrites it first so the cleanup completes; when it was edited, sync keeps every SDD agent it references and reports one manual action naming it. For OpenCode and Kilocode, install and sync remove the `sdd-*` agent entries (including profile copies and the 3.7.0 plural `agents` map) and the `prompts/sdd/` files releases wrote; see [OpenCode compatibility](opencode-compatibility.md). For every runtime except Pi, install and sync also remove the retired `sdd-*` skills, the shared `_shared/sdd-*.md` and `_shared/openspec-convention.md` references (including the shared `~/.agents/skills` root outside Windows), the `/sdd-*` and `/gentle-sdd-*` slash commands, and the Claude Code `PreToolUse` hook that runs the removed `gentle-ai sdd-preflight-hook` command, each only when it matches what a release wrote. A workspace-scoped sync handles the workspace copies, including the Windsurf `.windsurf/workflows/sdd-new.md` workflow. An edited SDD skill keeps its whole directory and the shared SDD references it reads. A skills, skill, or `_shared` directory that is a symlink is never entered, and Claude Code settings that are a symlink or not strict JSON are never rewritten; both are reported with the exact file or hook to remove. Claude Code's `_shared/sdd-orchestrator-workflow.md` was rendered per installation: it is removed when it matches what a release's own writer renders with no model assignments or with one of that release's model presets, and kept and reported otherwise, for example when it carries model assignments you customized. For Codex, install and sync remove the `sdd-strong`, `sdd-mid`, and `sdd-cheap` `.config.toml` profiles when they hold exactly what a release wrote (only the `model` and `model_reasoning_effort` values may differ); a profile with anything else, including a profile left by downgrading to v1.36–v1.38, is kept and reported. They also remove the `<!-- gentle-ai:sdd-orchestrator -->` block from the lowercase `~/.codex/agents.md` that v1.7.10 to v1.31.0 wrote, when it is a separate file from `AGENTS.md`; a file that held only the block is left empty. For Kimi, they remove `~/.kimi/sdd-orchestrator.md` when it matches a release's render and the exact `{% include "sdd-orchestrator.md" ignore missing %}` line from `~/.kimi/KIMI.md`. A workspace-scoped sync retires the same Codex and Kimi files a workspace-scoped install wrote under the project and, since it refreshes no routing guidance for Claude Code or Codex, removes the v3.7.0 SDD orchestrator block from their project prompt files. Only one block whose markers each fill a line is removed; a file with an unmatched, repeated, or nested marker is kept unchanged and reported. Prompt files that are symlinks, or that sit in a symlinked `~/.codex` or `~/.kimi`, are never rewritten and are reported. Removed files are captured in the sync backup.
 
+## Explicit install modifiers
+
+Explicit `--persona` and `--skill` / `--skills` options require their consumer
+component in the resolved install plan: `persona` and `skills`, respectively.
+An orphaned modifier is rejected before self-update or any install files or state
+are written, including with `--dry-run`. The validated plan is reused for execution.
+The diagnostic names `gentle-ai install` as the continuation. Rerun it with the
+required `--component` added to your existing component list, or remove the
+modifier. Keep your other agents and flags unchanged; components are not added
+automatically.
+
+```bash
+gentle-ai install --agent claude-code --component theme,persona --persona neutral --dry-run
+gentle-ai install --agent claude-code --component skills --skill go-testing --dry-run
+```
+
+Implicit defaults do not require additional components. `--persona custom` remains
+an opt-out from managed persona and does not require `persona`. `--sdd-mode` remains
+retired and is not accepted by install.
+
+**Compatibility change:** commands that previously succeeded while silently
+ignoring an explicit modifier now fail with a diagnostic and a nonzero exit code.
+
+## Context7 sync behavior
+
+Install and sync add the agent-specific Context7 default when its server entry is absent. Existing entries are migrated only if the complete parsed entry exactly matches a known default written by a released gentle-ai version, such as the legacy unpinned or pinned `2.2.5` npx launcher. Key order and whitespace do not matter; extra or changed fields do. Custom commands, arguments, environment, URLs, headers, and different version pins (including `4.2.0` or `@latest`) are preserved untouched. Remove a customized entry explicitly to install the current default again.
+
+Claude Code cleans up an inert legacy `settings.json` entry only when it exactly matches a released managed default; customized entries are left alone.
+
 ## Primary remote-authorization guidance
 
 Always-installed agent guidance includes a canonical remote-operation boundary, independent of the optional persona and permissions components. Local-development access does not authorize remote execution, transfer, or discovery/reuse of ambient SSH agents, ControlMaster sockets, credentials, or sessions. Ask for explicit destination, operation, and credential/session authorization; authorized work remains allowed within stricter user/runtime restrictions.
@@ -46,11 +75,19 @@ gga install
 
 ## Optional Community Tools
 
-Community Tools are opt-in and are not included by presets or automatic detection. Select them from the installer’s **Community Tools/Plugins** screen.
+Community Tools are opt-in and are not included by presets or automatic detection. Select them from the installer’s **Community Tools** screen.
 
 | Tool | Behavior | Removal |
 |---|---|---|
 | CodeGraph | Installs its CLI and configures supported agent MCP/guidance integration. | Use CodeGraph’s upstream lifecycle commands. |
+
+### CodeGraph initialization workspace
+
+For project initialization, the explicit agent working directory is the target—not an enclosing Git repository. Check its local `.git` (directory or worktree file) and `.codegraph/` first. Ancestor Git-root discovery is only appropriate for an already-selected existing repository.
+
+`gentle-ai codegraph init --cwd <project-root>` requires that target to be a Git root and rejects unsafe locations. For a new nested project without local Git, initialize Git there first (`git -C <project-root> init`) as part of the requested project setup, then retry CodeGraph initialization at the same target. Do not substitute the parent repository or initialize Git merely to answer a codebase question.
+
+After each successful initialization, including one over an existing index, the command appends `.codegraph/` once to the worktree's local exclude file (`git rev-parse --git-path info/exclude`, shared by linked worktrees). CodeGraph's own `.codegraph/.gitignore` un-ignores itself, so without this the index directory would show up as untracked and leak into agents' diffs. Tracked files and `.gitignore` are never edited. When Git is unavailable or the target is not a Git work tree, the command prints a warning to stderr and initialization still succeeds.
 
 ---
 

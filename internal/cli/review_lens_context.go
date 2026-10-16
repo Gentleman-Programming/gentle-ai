@@ -19,8 +19,8 @@ import (
 )
 
 // reviewLensContextTimeout bounds the whole assembly, not one read. The surface
-// performs two discovery reads plus one patch read per authored path; generated
-// paths use immutable metadata from discovery. A reviewer that never launches
+// performs two discovery reads plus one patch read per authored or dependency
+// lock path; other generated paths use immutable metadata from discovery. A reviewer that never launches
 // is the correct outcome when the repository stops
 // answering partway through.
 const reviewLensContextTimeout = 120 * time.Second
@@ -94,6 +94,11 @@ type reviewLensContextBinding struct {
 	Revision          string `json:"revision"`
 	RepositoryContext string `json:"repository_context"`
 	SubjectHash       string `json:"subject_hash"`
+	// requestContext is the verbatim request START froze for this authority,
+	// or "" without one. It is never serialized into the binding line: the
+	// SubjectHash already commits to it through the capture phase revision,
+	// and it travels here only so every block for this slot renders it.
+	requestContext string
 }
 
 // reviewLensContextError is a typed, path-free refusal. Code is the first token
@@ -122,7 +127,15 @@ const (
 		"immutable candidate evidence is never truncated and retrying this exact candidate cannot succeed, so split it into a chained sequence of smaller reviewable commits, each under the budget, " +
 		"then refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
 		" and execute the returned transition for the reduced scope"
-	reviewLensContextEmptyPatchAction = "one content-changing path produced no patch bytes at all, which no legitimate candidate does; " +
+	// reviewLensContextStartRequestBudgetAction replaces the split remedy when
+	// the candidate alone fits and only the frozen request overflows.
+	reviewLensContextStartRequestBudgetAction = "no review authority was created, so nothing has to be abandoned or repaired; " +
+		"the candidate alone fits the budget and the --request-context file is the oversized part, and it is never truncated, " +
+		"so shorten the request file or omit --request-context, then run this same review start again"
+	// reviewLensContextStartRequestShareAction is appended to the split remedy
+	// when the request is part of an oversize the candidate also exceeds.
+	reviewLensContextStartRequestShareAction = "; the --request-context file counts against the same budget, so also shorten it or omit the flag"
+	reviewLensContextEmptyPatchAction        = "one content-changing path produced no patch bytes at all, which no legitimate candidate does; " +
 		"refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
 		" and run this operation again, and if the same path keeps producing no patch treat it as a native inspection defect and stop retrying"
 	reviewLensContextDeadlineAction = "refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
@@ -318,6 +331,7 @@ func reviewLensContextBudgetProbe(
 		_, assemblyErr := reviewLensContextBlock(assemblyContext, deps, inspector, reviewLensContextBinding{
 			Lineage: state.LineageID, Target: state.InitialSnapshot.Identity, Lens: lens, Order: order,
 			Revision: revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
+			requestContext: reviewFrozenRequestContext(state),
 		}, subject, frozen, state.RuntimeAgent)
 		var refusal *reviewLensContextError
 		if errors.As(assemblyErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
@@ -334,7 +348,7 @@ func reviewLensContextBudgetProbe(
 	if state.FrozenPolicyContent != nil {
 		frozenPolicy = *state.FrozenPolicyContent
 	}
-	if floorErr := reviewProviderRoleEnvelopeFloor(assemblyContext, repo, state.RuntimeAgent, frozenPolicy, state.InitialSnapshot); floorErr != nil {
+	if floorErr := reviewProviderRoleEnvelopeFloor(assemblyContext, repo, state.RuntimeAgent, frozenPolicy, reviewFrozenRequestContext(state), state.InitialSnapshot); floorErr != nil {
 		var refusal *reviewLensContextError
 		if errors.As(floorErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
 			return reviewLensContextOverBudget, nil
@@ -426,21 +440,46 @@ func reviewLensContextCompactAtomicStartBudgetRefusal(
 	if outcome != reviewLensContextOverBudget {
 		return nil
 	}
-	return reviewPreflightRefusal(reviewLensContextStartBudgetReason,
-		&reviewLensContextError{Code: "lens_context_budget_exceeded", Action: reviewLensContextStartBudgetAction})
+	reason, action := reviewLensContextStartBudgetReason, reviewLensContextStartBudgetAction
+	// A frozen request is charged against the same budget, so the remedy
+	// depends on whether the candidate alone fits: probing it without the
+	// request tells a request that must shrink from a candidate that must split.
+	if state.FrozenRequestContext != nil {
+		alone := state
+		alone.FrozenRequestContext = nil
+		if aloneOutcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, alone, revision, model.AgentID(state.RuntimeAgent)); aloneOutcome == reviewLensContextRepresentable {
+			reason, action = reviewLensContextStartRequestBudgetReason, reviewLensContextStartRequestBudgetAction
+		} else {
+			action += reviewLensContextStartRequestShareAction
+		}
+	}
+	return reviewPreflightRefusal(reason, &reviewLensContextError{Code: "lens_context_budget_exceeded", Action: action})
 }
 
 // reviewLensContextStartBudgetReason classifies START's budget refusal. The
 // default "correct the request you sent" shape would be an actively wrong
-// instruction here: no flag, projection, or lineage makes an over-budget
-// candidate representable, and raising the bound would only move the cliff.
-// The contract message stays inside the published 240-character bound and says
-// the two things a caller acts on -- that nothing was created, and that the
-// change has to be reviewed as smaller candidates. The exact runnable
-// continuation travels with the cause.
+// instruction here: no projection or lineage makes an over-budget candidate
+// representable, and raising the bound would only move the cliff. The one
+// flag that can is --request-context, when its file is part of the oversize;
+// that case is reviewLensContextStartRequestBudgetReason, or an extra remedy
+// sentence when the candidate alone also exceeds the budget. The contract
+// message stays inside the published 240-character bound and says the two
+// things a caller acts on -- that nothing was created, and that the change has
+// to be reviewed as smaller candidates. The exact runnable continuation
+// travels with the cause.
 var reviewLensContextStartBudgetReason = reviewPreflightReason{
 	Code:       "lens_context_budget_exceeded",
 	Message:    "The candidate's complete reviewer evidence exceeds the native context budget, so no review authority was created; review this change as smaller candidates that each fit under it.",
+	NextAction: "stop",
+}
+
+// reviewLensContextStartRequestBudgetReason is START's budget refusal when the
+// candidate alone fits and the frozen request is what overflows: splitting the
+// candidate cannot help, so the message names the request instead.
+var reviewLensContextStartRequestBudgetReason = reviewPreflightReason{
+	Code: "lens_context_budget_exceeded",
+	// refusal:by-design operator-knowledge: only the caller can shorten the request file it supplied
+	Message:    "The candidate fits the native context budget, but with the --request-context file it does not, so no review authority was created; shorten the request file or omit --request-context.",
 	NextAction: "stop",
 }
 
@@ -515,6 +554,7 @@ func resolveReviewLensAuthority(ctx context.Context, deps reviewLensContextDeps,
 		Binding: reviewLensContextBinding{
 			Lineage: binding.LineageID, Target: binding.TargetIdentity, Lens: state.SelectedLenses[order], Order: order,
 			Revision: binding.Revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
+			requestContext: reviewFrozenRequestContext(state),
 		},
 		Subject: subject, Frozen: frozen, Inspector: inspector, RuntimeAgent: state.RuntimeAgent,
 	}, nil
@@ -615,6 +655,12 @@ func reviewLensContextParseNumstat(payload []byte, manifest []reviewtransaction.
 	return stats, nil
 }
 
+// Accounting classification and semantic evidence policy are independent.
+// Both lens and non-lens roles must make the same omission decision.
+func reviewLensContextOmitsContent(entry reviewtransaction.ChangedPathManifestEntry) bool {
+	return entry.Generated && !reviewtransaction.IsDependencyLockCandidatePath(entry.Path)
+}
+
 func reviewLensContextGeneratedSummaryFor(index int, entry reviewtransaction.ChangedPathManifestEntry, frozen reviewtransaction.FrozenCandidateContext, stats map[string]reviewLensContextNumstatEntry) ([]byte, error) {
 	oldObjectID, newObjectID, ok := frozen.CandidatePathObjectIDs(index)
 	if !ok {
@@ -695,6 +741,13 @@ func reviewLensContextBlock(
 	if err := consume(reviewLensContextInstruction, reviewLensContextInstruction+"_END", []byte(instruction)); err != nil {
 		return nil, err
 	}
+	// The frozen request is part of the reviewer's prompt, so it is charged
+	// against the same budget and refused, never truncated, when it cannot fit.
+	if binding.requestContext != "" {
+		if err := consume(reviewLensContextRequestContext, reviewLensContextRequestContext+"_END", []byte(binding.requestContext)); err != nil {
+			return nil, err
+		}
+	}
 	if err := consume(reviewLensContextResultSchema, reviewLensContextResultSchema+"_END", []byte(reviewtransaction.ReviewerResultSchema)); err != nil {
 		return nil, err
 	}
@@ -718,7 +771,7 @@ func reviewLensContextBlock(
 		}
 	}
 	for index, entry := range frozen.ChangedPathManifest {
-		if entry.Generated {
+		if reviewLensContextOmitsContent(entry) {
 			payload, err := reviewLensContextGeneratedSummaryFor(index, entry, frozen, numstats)
 			if err != nil {
 				return nil, reviewLensContextInspectionFailure(ctx, err)
@@ -766,17 +819,19 @@ func reviewLensContextInstructionText(binding reviewLensContextBinding, paths in
 	}
 	return fmt.Sprintf(`You are the %s lens of one bounded Gentle AI review. %s
 
-Scope. The %s sections below are the complete and only view of this candidate: all %d changed paths are represented in the canonical manifest order carried by %s. Authored paths carry full immutable patches; generated paths carry immutable metadata summaries without content hunks. Do not read the working tree, the index, HEAD, or any other file, and do not run any command. Nothing outside these sections is part of this candidate, and anything you cannot see here is not evidence.
+Scope. The %s sections below are the complete and only view of this candidate: all %d changed paths are represented in the canonical manifest order carried by %s. Authored paths and dependency lockfiles carry full immutable patches; other generated paths carry immutable metadata summaries without content hunks. Do not read the working tree, the index, HEAD, or any other file, and do not run any command. Nothing outside these sections is part of this candidate, and anything you cannot see here is not evidence.
 
 Causality. Report only what this candidate caused. Give every BLOCKER or CRITICAL finding an evidence_class and a causal_disposition, and mark what the base already contained as pre-existing or base-only rather than as a blocker.
+
+%s%s
 
 Return. Emit exactly one JSON object and nothing else: no prose before or after it, no markdown fence, no task envelope. It must validate against the schema in %s. Set subject_hash to exactly %s -- this is the %s section's own subject_hash field above, and only that field; never echo a target or target_identity value carried elsewhere in this context, even though it is also a sha256: string. When you inspected the complete candidate, set inspection.status to "completed" and inspection.paths to the complete unique unordered set of every manifest path. When you could not inspect the candidate, set inspection.status to "unavailable", leave inspection.paths empty, and set inspection.reason to a non-empty explanation -- inspection.status and inspection.reason are the typed signal admission reads for this decision; evidence prose is not a substitute for them. Each finding location is one path:line or path:start-end inclusive span. findings and evidence must both be present, and evidence must be non-empty.
 
 Citations. Every finding location, and every path cited inside an evidence string or a proof_refs entry, must be a repository-relative path exactly as it appears in the changed-path manifest, optionally with :line or :start-end. Never cite absolute paths, bare file basenames without their directory, or non-path colon-number shapes such as host:port. Any token shaped like path:line is validated against the frozen repository, and one unknown path rejects the entire result. A finding whose causal_disposition is introduced, behavior-activated, or worsened must anchor its location entirely within lines this candidate changed: every line of a path:start-end span is validated as candidate-changed, one unchanged context line in the span rejects the entire result, and observations about unchanged code belong under pre-existing or base-only instead. When the candidate's own content contains a path-shaped literal that is not a real repository path (for example a traversal or fixture token inside a test), never reproduce that token in evidence or proof_refs: describe it in words and cite the manifest file and line that contain it.
 
 Honesty. If you could not inspect the candidate, set inspection.status to "unavailable" with a non-empty inspection.reason explaining why, and do not return a clean result: an access failure is not a completed inspection. Describing the failure only in evidence while leaving inspection.status as "completed" is a false completion: admission refuses it when the prose reports an inaccessible candidate, and otherwise cannot recover from it.`,
-		title, focus, reviewLensContextPatch, paths, reviewLensContextContextHeader,
-		reviewLensContextResultSchema, binding.SubjectHash, reviewLensContextBindingHeader), nil
+		title, focus, reviewLensContextPatch, paths, reviewLensContextContextHeader, reviewerprovider.SeverityRules,
+		reviewRequestContextInstruction(binding.requestContext), reviewLensContextResultSchema, binding.SubjectHash, reviewLensContextBindingHeader), nil
 }
 
 // reviewLensContextWriteLine writes one header plus its canonical one-line

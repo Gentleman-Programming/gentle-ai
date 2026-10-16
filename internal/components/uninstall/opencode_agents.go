@@ -109,11 +109,18 @@ func removeOpenCodeFamilyAgents(path string, agentID model.AgentID) operation {
 			permission, _ := orchestrator["permission"].(map[string]any)
 			questionOwned := installedQuestionShape(agentID, permission)
 			task, _ := permission["task"].(map[string]any)
+			grantsRemoved := false
 			for name := range removed {
 				if _, ok := task[name]; ok {
 					delete(task, name)
 					changed = true
+					grantsRemoved = true
 				}
+			}
+			// Install writes a wildcard deny beside its grants; once those
+			// grants are gone a lone wildcard deny is install's, not the user's.
+			if grantsRemoved && len(task) == 1 && task["*"] == "deny" {
+				delete(task, "*")
 			}
 			if len(task) == 0 && task != nil {
 				delete(permission, "task")

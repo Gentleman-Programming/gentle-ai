@@ -230,7 +230,7 @@ func TestRetiredSDDExplicitUninstallFailsWithoutWrites(t *testing.T) {
 			if kind == "partial" {
 				_, err = svc.PartialUninstall([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentSDD})
 			} else {
-				_, err = svc.PartialUninstallWithProfiles([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentSDD}, []string{"custom"}, model.EngramUninstallScopeGlobal)
+				_, err = svc.PartialUninstallWithEngramScope([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentSDD}, model.EngramUninstallScopeGlobal)
 			}
 			if err == nil || !strings.Contains(err.Error(), "retired") {
 				t.Fatalf("expected retired component rejection, got %v", err)
@@ -2516,8 +2516,12 @@ func TestPartialUninstallLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
 			if got := string(mustReadServiceFile(t, settingsPath)); got != tt.content {
 				t.Fatalf("native settings = %q, want bytes preserved %q", got, tt.content)
 			}
-			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != 0o600 {
-				t.Fatalf("native settings mode = %v, %v; want 0600", info, err)
+			wantMode := os.FileMode(0o600)
+			if runtime.GOOS == "windows" {
+				wantMode = 0o666 // Windows reports only the read-only attribute.
+			}
+			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != wantMode {
+				t.Fatalf("native settings mode = %v, %v; want %v", info, err, wantMode)
 			}
 			prompt := string(mustReadServiceFile(t, promptPath))
 			if strings.Contains(prompt, "gentle-ai:persona") || !strings.Contains(prompt, "My own rules.") {

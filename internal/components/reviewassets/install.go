@@ -26,6 +26,7 @@ import (
 var NativeAgentManifest = map[model.AgentID][]string{
 	model.AgentClaudeCode: {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md", "review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
 	model.AgentKiroIDE:    {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
+	model.AgentCursor:     {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
 	model.AgentKimi:       {"gentleman.yaml"},
 }
 

@@ -46,7 +46,7 @@ var linearRoutes = map[Screen]Route{
 	ScreenUninstallMode:           {Backward: ScreenWelcome},
 	ScreenUninstall:               {Backward: ScreenUninstallMode},
 	ScreenUninstallComponents:     {Backward: ScreenUninstall},
-	ScreenUninstallProfiles:       {Backward: ScreenUninstallComponents},
+	ScreenUninstallEngramScope:    {Backward: ScreenUninstallComponents},
 	ScreenUninstallResult:         {Backward: ScreenWelcome},
 	// ScreenUpdatePrompt appears before Welcome; Esc/back goes to Welcome.
 	ScreenUpdatePrompt: {Backward: ScreenWelcome},

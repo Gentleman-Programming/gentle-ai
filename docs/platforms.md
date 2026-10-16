@@ -66,6 +66,16 @@ Restart OpenCode after enabling managed activation. Start a new login shell so t
 
 ---
 
+## Gentle Shell installer
+
+`gentle-ai shell install` has its own platform contract, separate from the table above:
+
+| Platform | Guide |
+| --- | --- |
+| Linux amd64 | [Gentle Shell on Linux](gentle-shell-linux-install.md) |
+| macOS 14+ on Apple silicon | [Gentle Shell on macOS](gentle-shell-macos-install.md) |
+| Windows 11 x64 | [Gentle Shell on Windows](gentle-shell-windows-install.md) |
+
 ## Windows Notes
 
 - **Install from source** with Go 1.25.10+, pinned to the latest release:

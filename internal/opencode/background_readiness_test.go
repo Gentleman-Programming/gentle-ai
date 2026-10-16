@@ -499,6 +499,76 @@ func TestUnmodelableShellReportsUnknown(t *testing.T) {
 	}
 }
 
+// Use an explicit home alias so root canonicalization is exercised on every
+// filesystem, not just hosts whose temporary directory is itself a symlink.
+func TestResolveLoginShellActivationCanonicalizesAliasedRoot(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		target string
+		want   ActivationStatus
+	}{
+		{name: "legitimate launcher", target: "launcher", want: ActivationStatusReady},
+		{name: "external executable", target: "external", want: ActivationStatusShadowed},
+		{name: "prefix-sharing sibling", target: "sibling", want: ActivationStatusShadowed},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newReadinessFixture(t, "/bin/sh")
+			launcher := POSIXLauncherPath(fixture.home)
+			writeExecutable(t, launcher, posixLauncher(fixture.target))
+			alias := filepath.Join(t.TempDir(), "home-alias")
+			if err := os.Symlink(fixture.home, alias); err != nil {
+				t.Skipf("symlink creation unavailable: %v", err)
+			}
+			target := launcher
+			switch tt.target {
+			case "external":
+				target = filepath.Join(t.TempDir(), "opencode")
+				writeExecutable(t, target, "external")
+			case "sibling":
+				target = filepath.Join(BinDir(fixture.home)+"-other", "opencode")
+				writeExecutable(t, target, "external")
+			}
+			linkDir := t.TempDir()
+			if err := os.Symlink(target, filepath.Join(linkDir, "opencode")); err != nil {
+				t.Fatal(err)
+			}
+			fixture.options.Path = linkDir + ":" + BinDir(alias)
+			got := ResolveLoginShellActivation(alias, fixture.options)
+			if got.Status != tt.want {
+				t.Fatalf("ResolveLoginShellActivation() = %#v, want %s", got, tt.want)
+			}
+			wantResolved := filepath.Join(linkDir, "opencode")
+			if tt.want == ActivationStatusReady {
+				wantResolved = POSIXLauncherPath(alias)
+			}
+			if got.Resolved != wantResolved || got.Source != inheritedPathSource {
+				t.Fatalf("resolution = %#v, want %s from inherited PATH", got, wantResolved)
+			}
+		})
+	}
+}
+
+func TestResolveLoginShellActivationContainmentFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "opencode")
+	writeExecutable(t, path, "real")
+	missing := filepath.Join(root, "missing")
+	for _, tt := range []struct {
+		name string
+		path string
+		root string
+	}{
+		{name: "unresolved candidate", path: missing, root: root},
+		{name: "unresolved root", path: path, root: missing},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if resolvesUnder(tt.path, tt.root, "linux") {
+				t.Fatal("containment accepted an unresolved path or root")
+			}
+		})
+	}
+}
+
 func TestResolveLoginShellActivationFollowsLinksToTheLauncher(t *testing.T) {
 	fixture := newReadinessFixture(t, "/bin/sh")
 	writeExecutable(t, POSIXLauncherPath(fixture.home), posixLauncher(fixture.target))

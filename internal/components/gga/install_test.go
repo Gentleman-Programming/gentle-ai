@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/versions"
 )
 
@@ -49,17 +50,29 @@ func fileExistsForTest(path string) bool {
 	return err == nil
 }
 
+func TestMain(m *testing.M) {
+	testenv.RunBrewProbeFixture()
+	os.Exit(m.Run())
+}
+
 func TestInstallCommandByProfile(t *testing.T) {
 	cloneDst := filepath.Join(os.TempDir(), "gentleman-guardian-angel")
 	bash := resolveGitBashForTest()
 	scriptPath := strings.ReplaceAll(filepath.Join(cloneDst, "install.sh"), `\`, "/")
 
 	tests := []struct {
-		name    string
-		profile system.PlatformProfile
-		want    [][]string
-		wantErr bool
+		name      string
+		profile   system.PlatformProfile
+		want      [][]string
+		wantErr   bool
+		brewTrust bool
 	}{
+		{
+			name:      "darwin trusts formula before reinstall",
+			profile:   system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
+			want:      [][]string{{"brew", "tap", "Gentleman-Programming/homebrew-tap"}, {"brew", "trust", "--formula", "gentleman-programming/tap/gga"}, {"brew", "reinstall", "gga"}},
+			brewTrust: true,
+		},
 		{
 			name:    "darwin uses brew tap and reinstall",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
@@ -123,6 +136,9 @@ func TestInstallCommandByProfile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.profile.PackageManager == "brew" {
+				testenv.BrewProbe(t, tt.brewTrust)
+			}
 			command, err := InstallCommand(tt.profile)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("InstallCommand() error = %v, wantErr %v", err, tt.wantErr)

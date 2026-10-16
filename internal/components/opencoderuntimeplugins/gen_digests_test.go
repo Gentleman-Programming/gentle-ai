@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -158,6 +159,9 @@ func TestGenerateDigestsHashesWorkingTreeBytes(t *testing.T) {
 
 	if os.Geteuid() == 0 {
 		t.Skip("root reads unreadable files")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 0 only sets the read-only attribute on Windows")
 	}
 	path := filepath.Join(repo.dir, filepath.FromSlash(genAsset))
 	if err := os.Chmod(path, 0); err != nil {

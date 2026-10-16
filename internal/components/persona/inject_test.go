@@ -650,7 +650,7 @@ func TestInjectPiPersonaWritesSelectedModeAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	path := PiPersonaConfigPath(root)
 
-	result, err := InjectPiPersona(root, model.PersonaNeutral)
+	result, err := InjectPiPersonaAt(PiPersonaConfigPath(root), model.PersonaNeutral)
 	if err != nil {
 		t.Fatalf("InjectPiPersona() error = %v", err)
 	}
@@ -669,7 +669,7 @@ func TestInjectPiPersonaWritesSelectedModeAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Pi persona config = %q, want %q", got, want)
 	}
 
-	second, err := InjectPiPersona(root, model.PersonaNeutral)
+	second, err := InjectPiPersonaAt(PiPersonaConfigPath(root), model.PersonaNeutral)
 	if err != nil {
 		t.Fatalf("second InjectPiPersona() error = %v", err)
 	}
@@ -689,7 +689,7 @@ func TestInjectPiPersonaCustomPreservesExistingConfig(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	result, err := InjectPiPersona(root, model.PersonaCustom)
+	result, err := InjectPiPersonaAt(PiPersonaConfigPath(root), model.PersonaCustom)
 	if err != nil {
 		t.Fatalf("InjectPiPersona(custom) error = %v", err)
 	}

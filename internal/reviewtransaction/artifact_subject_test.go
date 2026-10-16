@@ -101,3 +101,33 @@ func TestLegacyArtifactSubjectRetainsCandidateDiffBinding(t *testing.T) {
 		t.Fatal("v1 candidate-diff and v2 native-Git subjects share an identity")
 	}
 }
+
+// TestArtifactSubjectBindsFrozenRequestContext proves the lens slot identity
+// commits to the request a review judges against: a changed request yields a
+// different authority revision and subject, so an admitted lens result can
+// never be replayed under a different request.
+func TestArtifactSubjectBindsFrozenRequestContext(t *testing.T) {
+	state, _, context := artifactSubjectFixture(t)
+	subjectFor := func(request string) string {
+		t.Helper()
+		candidate := state
+		if request == "" {
+			phase, err := deriveCompactCapturePhaseRevision(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate.CapturePhaseRevision = phase
+		} else if err := candidate.FreezeRequestContext(request); err != nil {
+			t.Fatal(err)
+		}
+		subject, err := NewArtifactSubject(candidate, candidate.CapturePhaseRevision, context, LensReliability, 0, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return subject.SubjectHash
+	}
+	absent, first, second := subjectFor(""), subjectFor("S1 add --category.\n"), subjectFor("S1 add --amount.\n")
+	if absent == first || first == second || absent == second {
+		t.Fatalf("subject does not bind the request context: absent=%s first=%s second=%s", absent, first, second)
+	}
+}

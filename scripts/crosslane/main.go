@@ -28,7 +28,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 func main() {
@@ -37,6 +40,8 @@ func main() {
 
 // run holds the battery body so deferred cleanup (work-root removal or the
 // --keep-work banner) always executes before the process exits nonzero.
+var semverVersionLine = regexp.MustCompile(`(?m)^gentle-ai\s+\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\s*$`)
+
 func run() int {
 	binary := flag.String("binary", "", "path to the gentle-ai binary under test (required)")
 	withModel := flag.Bool("with-model", false, "reserved; live Claude model proof remains intentionally disabled")
@@ -54,6 +59,13 @@ func run() int {
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "crosslane: binary %q is not usable: %v\n", *binary, err)
+		return 2
+	}
+	// The OpenCode transport plugin refuses a gentle-ai whose --version is not
+	// a semver (a plain `go build` reports "gentle-ai dev"), which would surface
+	// as a misleading "binary unavailable" lane failure.
+	if output, versionErr := exec.Command(resolved, "--version").Output(); versionErr != nil || !semverVersionLine.Match(output) {
+		fmt.Fprintf(os.Stderr, "crosslane: binary %q must report a semver version (got %q); build it with -ldflags \"-X main.version=$(git describe --tags --abbrev=0 | sed s/^v//)-dev\" (see CONTRIBUTING.md)\n", *binary, strings.TrimSpace(string(output)))
 		return 2
 	}
 	operatorHome := os.Getenv("HOME")

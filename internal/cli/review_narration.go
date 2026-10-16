@@ -117,7 +117,8 @@ var reviewStopReasonNarration = map[string]string{
 	"captured_result_selection_unavailable": "This run reached a state that should never happen: every review result it expected was already present. " +
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
-	"corrected_candidate_unavailable": "Change the candidate content so it differs from the frozen original, then re-run " +
+	"corrected_candidate_unavailable": "For a committed-only review, commit the bounded correction (or amend its commit); unrelated tracked worktree edits are ignored. " +
+		"The accepted correction forecast cannot be captured again. Change the candidate content so it differs from the frozen original, then re-run " +
 		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition`. " +
 		"That is the right path when the review found real defects. If instead the reviewers were given the wrong input " +
 		"and their findings describe content that was never the candidate, a maintainer can quarantine those results and " +
@@ -159,6 +160,9 @@ var reviewStopReasonNarration = map[string]string{
 	"target_already_acknowledged": "This exact target was already acknowledged and its review authority was burned. " +
 		"No further review action is required; delivery follows ordinary repository policy. Changed targets remain eligible for review. " +
 		"Only when deliberately requesting a new independent review, use `gentle-ai review start`; do not automatically restart this consumed target.",
+	"acknowledged_predecessor_passive_delta": "This committed range only adds passive content (documentation or notes) to a candidate that was already approved and acknowledged, so there is nothing new to review. " +
+		"No review action is required and no review authority was created; delivery follows ordinary repository policy. Any non-passive change is offered for review again. " +
+		"Only when deliberately requesting a new independent review, use `gentle-ai review start`.",
 	"rdd_disabled": "Review mode is disabled. Run `gentle-ai review mode status --cwd <repo> --json` to inspect the deciding scope; STATUS renders the exact scoped enable command for this request.",
 	"staged_workspace_overlay_recovery_unavailable": "Pass `--lineage <id>` to continue the review you already started, " +
 		"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh.",

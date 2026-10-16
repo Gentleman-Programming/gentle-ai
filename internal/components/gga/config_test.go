@@ -2,10 +2,13 @@ package gga
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
@@ -82,8 +85,8 @@ func TestBuildConfig(t *testing.T) {
 
 	requiredFields := []string{
 		`PROVIDER="claude"`,
-		`FILE_PATTERNS=`,
-		`EXCLUDE_PATTERNS=`,
+		`FILE_PATTERNS="*.ts,*.tsx,*.js,*.jsx,*.py,*.go"`,
+		`EXCLUDE_PATTERNS="*.test.ts,*.test.tsx,*.spec.ts,*.spec.tsx,*.test.js,*.test.jsx,*.spec.js,*.spec.jsx,*.d.ts,dist/*,build/*,node_modules/*"`,
 		`RULES_FILE="AGENTS.md"`,
 		`STRICT_MODE="true"`,
 		`TIMEOUT="300"`,
@@ -103,6 +106,133 @@ func TestBuildConfig(t *testing.T) {
 	// Verify header comment.
 	if !strings.HasPrefix(config, "# Gentleman Guardian Angel") {
 		t.Error("BuildConfig() should start with a header comment")
+	}
+}
+
+func TestBuildConfigGGAMatcher(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires Bash and Git")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is required to exercise the GGA file filter")
+	}
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is required to exercise the GGA file filter")
+	}
+
+	repo := t.TempDir()
+	env := append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GGA_SKIP_FILE_CHECK=")
+	runGit := func(t *testing.T, args ...string) string {
+		t.Helper()
+		cmd := exec.Command(git, append([]string{
+			"-c", "core.hooksPath=/dev/null",
+			"-c", "core.autocrlf=false",
+			"-c", "commit.gpgsign=false",
+			"-c", "user.name=GGA Test",
+			"-c", "user.email=gga-test@example.invalid",
+			"-c", "init.defaultBranch=main",
+		}, args...)...)
+		cmd.Dir = repo
+		cmd.Env = env
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, output)
+		}
+		return string(output)
+	}
+	runGit(t, "init", "-q")
+	runGit(t, "commit", "-q", "--allow-empty", "-m", "baseline")
+
+	files := []string{}
+	for _, suffix := range []string{
+		".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx",
+		".test.js", ".test.jsx", ".spec.js", ".spec.jsx",
+	} {
+		files = append(files, "auth"+suffix, "src/auth"+suffix)
+	}
+	files = append(files, "types.d.ts", "src/types.d.ts", "dist/app.js", "build/app.js", "node_modules/pkg/index.js")
+	production := []string{"src/auth.ts", "src/view.tsx", "src/app.js", "src/view.jsx", "src/main.py", "src/main.go"}
+	files = append(files, production...)
+	files = append(files, "notes.txt", "deleted.ts")
+	for _, file := range files {
+		path := filepath.Join(repo, filepath.FromSlash(file))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("fixture\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, "add", "-f", ".")
+	runGit(t, "commit", "-q", "-m", "fixtures")
+	// Use a small second change for normalization cases: repeated process
+	// launches in the shell filter are comparatively expensive on Windows.
+	for _, file := range []string{"src/auth.ts", "src/auth.test.ts", "notes.txt", "deleted.ts"} {
+		if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(file)), []byte("updated fixture\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit(t, "add", ".")
+	runGit(t, "commit", "-q", "-m", "normalization fixtures")
+	if err := os.Remove(filepath.Join(repo, "deleted.ts")); err != nil {
+		t.Fatal(err)
+	}
+	before := runGit(t, "status", "--porcelain")
+
+	filter, err := assets.Read("gga/pr_mode.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the shipped filter, including Git discovery and the existence
+	// check, rather than maintaining a second implementation of its matcher.
+	const script = `
+case "$1" in
+  whitespace)
+    FILE_PATTERNS=" ${FILE_PATTERNS//,/, } "
+    EXCLUDE_PATTERNS=" ${EXCLUDE_PATTERNS//,/, } "
+    ;;
+  wildcard)
+    FILE_PATTERNS="*"
+    ;;
+esac
+get_pr_files "$2" "$FILE_PATTERNS" "$EXCLUDE_PATTERNS"
+`
+	tests := []struct {
+		name     string
+		scenario string
+		gitRange string
+		want     []string
+	}{
+		{name: "generated exclusions", scenario: "defaults", gitRange: "HEAD~2...HEAD~1", want: production},
+		{name: "whitespace is trimmed", scenario: "whitespace", gitRange: "HEAD~1...HEAD", want: []string{"src/auth.ts"}},
+		{name: "wildcard includes other extensions", scenario: "wildcard", gitRange: "HEAD~1...HEAD", want: []string{"notes.txt", "src/auth.ts"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command(bash, "-s", "--", tt.scenario, tt.gitRange)
+			cmd.Dir = repo
+			cmd.Env = env
+			cmd.Stdin = strings.NewReader(string(BuildConfig("claude")) + "\n" + filter + "\n" + script)
+			var stdout, stderr strings.Builder
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("GGA filter failed: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Errorf("GGA filter stderr = %q, want empty", stderr.String())
+			}
+			wantFiles := append([]string{}, tt.want...)
+			sort.Strings(wantFiles)
+			if want := strings.Join(wantFiles, "\n") + "\n"; stdout.String() != want {
+				t.Errorf("files sent to reviewer = %q, want %q", stdout.String(), want)
+			}
+			if after := runGit(t, "status", "--porcelain"); after != before {
+				t.Errorf("filter changed repository state: before %q, after %q", before, after)
+			}
+		})
 	}
 }
 
@@ -139,6 +269,10 @@ func TestInjectWritesConfigAndAgents(t *testing.T) {
 	}
 	if !strings.Contains(string(configContent), `PROVIDER="claude"`) {
 		t.Error("config file missing PROVIDER=claude")
+	}
+
+	if want := string(BuildConfig("claude")); string(configContent) != want {
+		t.Errorf("injected config = %q, want generated config %q", configContent, want)
 	}
 
 	// AGENTS.md template created.

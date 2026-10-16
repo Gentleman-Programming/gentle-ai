@@ -389,6 +389,16 @@ gentle-ai review start --cwd .
    is the worst outcome and the one worth reporting loudest.
 5. [ ] **Report the mount type and options either way, including a PASS.** This
    path has never run on a network filesystem.
+6. [ ] **Windows only**: put a repository on an SMB share reached by a UNC path
+   (`\\server\share\repo`) or a mapped network drive. With reviews on,
+   `gentle-ai review mode status --cwd <repo>` → **Expected**: it resolves,
+   because the clone holds no override to read. `gentle-ai review mode disable
+   --scope clone --cwd <repo>` → **Expected**: a typed refusal naming the
+   remote filesystem, `gentle-ai review mode disable --scope global`, and a
+   local NTFS or ReFS volume, never "check the path and rerun". Then run
+   `gentle-ai review mode disable --scope global` and `status` again →
+   **Expected**: `off (decided by global)`, exit 0, and the Claude Code stop
+   hook stays silent (#4670).
 
 ### Flow 28: A read-only filesystem — **needs a read-only mount**
 

@@ -68,7 +68,7 @@ func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 						}
 						// #4377 keeps the deferred RDD decision after community tools;
 						// there is no separate Strict TDD installer choice to confirm.
-						return waitForIssue4377TTY(reader, []string{"Community Tools/Plugins", "Continue"}, func() error {
+						return waitForIssue4377TTY(reader, []string{"Community Tools", "Continue"}, func() error {
 							if communityToolCursorRows == 0 {
 								return fmt.Errorf("community tools rendered no tool rows")
 							}

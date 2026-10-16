@@ -145,8 +145,12 @@ func TestInjectLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
 			if err != nil || string(got) != tt.content {
 				t.Fatalf("native settings = %q, %v; want bytes preserved", got, err)
 			}
-			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != 0o600 {
-				t.Fatalf("native settings mode = %v, %v; want 0600", info, err)
+			wantMode := os.FileMode(0o600)
+			if runtime.GOOS == "windows" {
+				wantMode = 0o666 // Windows reports only the read-only attribute.
+			}
+			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != wantMode {
+				t.Fatalf("native settings mode = %v, %v; want %v", info, err, wantMode)
 			}
 		})
 	}

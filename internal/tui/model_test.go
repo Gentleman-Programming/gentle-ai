@@ -2130,7 +2130,7 @@ func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	}
 }
 
-func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
+func TestWelcomeMenu_UninstallNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
 	m.Cursor = 9
@@ -2143,7 +2143,7 @@ func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
 	}
 }
 
-func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
+func TestWelcomeMenu_UninstallNavigation_WithOpenCodeDetected(t *testing.T) {
 	m := NewModel(system.DetectionResult{
 		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
 	}, "dev")
@@ -2158,17 +2158,13 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 	}
 }
 
-// TestWelcomeMenu_OptionCount verifies legacy discovery does not change the menu.
+// TestWelcomeMenu_OptionCount verifies the 12 retained welcome options.
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	// Legacy discovery does not change the 12 retained options.
-	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true, true)
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, true)
 	if len(opts) != 12 {
-		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 12; got %v", len(opts), opts)
-	}
-	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 2, true, true)
-	if len(optsWithProfiles) != 12 || !reflect.DeepEqual(opts, optsWithProfiles) {
-		t.Fatalf("legacy profile discovery changed welcome menu: %v", optsWithProfiles)
+		t.Fatalf("WelcomeOptions() len = %d, want 12; got %v", len(opts), opts)
 	}
 }
 
@@ -2461,7 +2457,7 @@ func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
 	}
 }
 
-func TestUninstallModeScreen_FullWithProfilesSkipsProfileSelection(t *testing.T) {
+func TestUninstallModeScreen_FullSkipsEngramScopeSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
 	m.Screen = ScreenUninstallMode
 	m.Cursor = 1 // Full Uninstall option
@@ -2472,8 +2468,8 @@ func TestUninstallModeScreen_FullWithProfilesSkipsProfileSelection(t *testing.T)
 	if state.Screen != ScreenUninstallConfirm {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
 	}
-	if len(state.UninstallProfilesToRemove) != 0 {
-		t.Fatalf("legacy profiles selected for deletion: %v", state.UninstallProfilesToRemove)
+	if state.UninstallEngramScopeSelected {
+		t.Fatal("full uninstall must not mark the Engram scope as selected")
 	}
 }
 
@@ -2507,7 +2503,7 @@ func TestUninstallComponents_ContinueNavigatesToConfirm(t *testing.T) {
 	}
 }
 
-func TestUninstallComponents_ContinueWithProfilesSkipsProfileSelection(t *testing.T) {
+func TestUninstallComponents_ContinueWithoutEngramSkipsScopeSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
 	m.Screen = ScreenUninstallComponents
 	m.UninstallMode = model.UninstallModePartial
@@ -2518,23 +2514,24 @@ func TestUninstallComponents_ContinueWithProfilesSkipsProfileSelection(t *testin
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallConfirm || len(state.UninstallProfilesToRemove) != 0 {
-		t.Fatalf("partial component uninstall selected legacy profiles: screen=%v profiles=%v", state.Screen, state.UninstallProfilesToRemove)
+	if state.Screen != ScreenUninstallConfirm || state.UninstallEngramScopeSelected {
+		t.Fatalf("partial component uninstall without Engram: screen=%v scopeSelected=%v", state.Screen, state.UninstallEngramScopeSelected)
 	}
 }
 
-func TestUninstallProfiles_ContinueNavigatesToConfirm(t *testing.T) {
+func TestUninstallEngramScope_ContinueNavigatesToConfirm(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenUninstallProfiles
-	m.UninstallProfilesAvailable = []string{"cheap"}
-	m.UninstallProfilesToRemove = []string{"cheap"}
-	m.Cursor = len(m.UninstallProfilesAvailable)
+	m.Screen = ScreenUninstallEngramScope
+	m.Cursor = 0
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallConfirm {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+	if !state.UninstallEngramScopeSelected {
+		t.Fatal("continuing from the Engram scope screen must mark the scope as selected")
 	}
 }
 
@@ -2729,27 +2726,24 @@ func TestStartUninstall_FullRemoveNonBrewRemovesBinary(t *testing.T) {
 	}
 }
 
-func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
+func TestStartUninstall_UsesEngramScopeUninstallWhenSelected(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.UninstallMode = model.UninstallModePartial
 	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
-	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
-	m.UninstallProfilesToRemove = []string{"cheap"}
-	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallEngramScopeSelected = true
+	m.UninstallEngramScope = model.EngramUninstallScopeProject
 
 	called := false
-	m.UninstallWithProfilesFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+	m.UninstallWithEngramScopeFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
 		called = true
-		if !reflect.DeepEqual(profileNames, []string{"cheap"}) {
-			t.Fatalf("profileNames = %v, want [cheap]", profileNames)
-		}
-		if engramScope != model.EngramUninstallScopeGlobal {
-			t.Fatalf("engramScope = %q, want %q", engramScope, model.EngramUninstallScopeGlobal)
+		if engramScope != model.EngramUninstallScopeProject {
+			t.Fatalf("engramScope = %q, want %q", engramScope, model.EngramUninstallScopeProject)
 		}
 		return componentuninstall.Result{}, nil
 	}
 	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
-		t.Fatalf("UninstallFn should not be called when UninstallWithProfilesFn is configured")
+		t.Fatalf("UninstallFn should not be called when UninstallWithEngramScopeFn is configured")
 		return componentuninstall.Result{}, nil
 	}
 
@@ -2758,7 +2752,7 @@ func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
 		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
 	}
 	if !called {
-		t.Fatal("UninstallWithProfilesFn was not called")
+		t.Fatal("UninstallWithEngramScopeFn was not called")
 	}
 }
 
@@ -2780,8 +2774,8 @@ func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelecti
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallProfiles {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
+	if state.Screen != ScreenUninstallEngramScope {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallEngramScope)
 	}
 	if !state.UninstallEngramProjectScopeAvailable {
 		t.Fatal("UninstallEngramProjectScopeAvailable = false, want true")

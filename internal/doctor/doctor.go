@@ -30,16 +30,17 @@ const (
 type RemedyID string
 
 const (
-	RemedyInstallTool      RemedyID = "install-tool"
-	RemedyRemoveDuplicates RemedyID = "remove-duplicate-tools"
-	RemedyInstall          RemedyID = "install"
-	RemedyRepairState      RemedyID = "repair-state"
-	RemedySync             RemedyID = "sync"
-	RemedyEditShellPath    RemedyID = "edit-shell-path"
-	RemedyReorderPath      RemedyID = "reorder-path"
-	RemedyStartEngram      RemedyID = "start-engram"
-	RemedyInspectEngram    RemedyID = "inspect-engram"
-	RemedyFreeDiskSpace    RemedyID = "free-disk-space"
+	RemedyInstallTool        RemedyID = "install-tool"
+	RemedyRemoveDuplicates   RemedyID = "remove-duplicate-tools"
+	RemedyInstall            RemedyID = "install"
+	RemedyRepairState        RemedyID = "repair-state"
+	RemedyInspectStateAccess RemedyID = "inspect-state-access"
+	RemedySync               RemedyID = "sync"
+	RemedyEditShellPath      RemedyID = "edit-shell-path"
+	RemedyReorderPath        RemedyID = "reorder-path"
+	RemedyStartEngram        RemedyID = "start-engram"
+	RemedyInspectEngram      RemedyID = "inspect-engram"
+	RemedyFreeDiskSpace      RemedyID = "free-disk-space"
 )
 
 // RemedyCategory groups remedies by the resource they concern.
@@ -97,6 +98,8 @@ func NewRemedy(id RemedyID, description string) *Remedy {
 		r.Category, r.EligibilityReason = RemedyCategoryEnvironment, "PATH order is user-owned"
 	case RemedyRepairState:
 		r.Category, r.EligibilityReason = RemedyCategoryConfiguration, "no safe recovery source was identified"
+	case RemedyInspectStateAccess:
+		r.Category, r.EligibilityReason = RemedyCategoryConfiguration, "file access and ownership require manual inspection"
 	case RemedySync:
 		r.Category, r.ActionMode, r.Eligible = RemedyCategoryConfiguration, ActionConfirmation, true
 		r.EligibilityReason = "requires managed state and existing sync safeguards"

@@ -21,8 +21,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	codexagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
@@ -69,6 +71,9 @@ type InstallResult struct {
 	BackgroundPolicyEnabled bool
 
 	PiBackground PiBackgroundResolution
+
+	// PiExcludedPackages are managed Pi sources skipped by `pi install`.
+	PiExcludedPackages []string
 }
 
 var (
@@ -157,26 +162,52 @@ func SetCommandOutputStreaming(enabled bool) func() {
 var deriveManagedAssetWriter = managedAssetDigest
 var installStagePlan = func(runtime *installRuntime) pipeline.StagePlan { return runtime.stagePlan() }
 
-func RunInstall(args []string, detection system.DetectionResult) (InstallResult, error) {
+// PreparedInstall is a validated install plan, ready for execution after app preflight.
+// Its fields stay private so dispatch reuses the exact parsed and resolved input.
+type PreparedInstall struct {
+	flags              InstallFlags
+	input              InstallInput
+	resolved           planner.ResolvedPlan
+	piExcludedPackages []string
+}
+
+// PrepareInstall resolves and validates without reading or writing install state.
+func PrepareInstall(args []string, detection system.DetectionResult) (PreparedInstall, error) {
 	flags, err := ParseInstallFlags(args)
 	if err != nil {
-		return InstallResult{}, err
+		return PreparedInstall{}, err
 	}
 
 	input, err := NormalizeInstallFlags(flags, detection)
 	if err != nil {
-		return InstallResult{}, err
+		return PreparedInstall{}, err
 	}
 
 	resolved, err := planner.NewResolver(planner.MVPGraph()).Resolve(input.Selection)
 	if err != nil {
-		return InstallResult{}, err
+		return PreparedInstall{}, err
 	}
+	if err := validateInstallModifierConsumers(flags, input.Selection, resolved.OrderedComponents); err != nil {
+		return PreparedInstall{}, err
+	}
+	piExcluded, err := validatePiExcludePackages(flags.PiExcludePackages, resolved.Agents)
+	if err != nil {
+		return PreparedInstall{}, err
+	}
+	return PreparedInstall{flags: flags, input: input, resolved: resolved, piExcludedPackages: piExcluded}, nil
+}
+
+// RunPreparedInstall executes a plan returned by PrepareInstall.
+func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResult) (InstallResult, error) {
+	flags, input, resolved := prepared.flags, prepared.input, prepared.resolved
 	profile := ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 	homeDir, err := osUserHomeDir()
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("resolve user home directory: %w", err)
+	}
+	if err := validatePiPackageInstall(homeDir, resolved.Agents); err != nil {
+		return InstallResult{}, err
 	}
 	persistedState, stateErr := state.Read(homeDir)
 	if errors.Is(stateErr, os.ErrNotExist) {
@@ -217,6 +248,8 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		DryRun:       input.DryRun,
 		Background:   background,
 		PiBackground: piBackground,
+
+		PiExcludedPackages: prepared.piExcludedPackages,
 	}
 	result.Background.activationPlan = backgroundActivation
 	if backgroundActivation != nil {
@@ -226,6 +259,9 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 
 	if input.DryRun {
 		return result, nil
+	}
+	if err := validateCallerEngramRuns(resolved.OrderedComponents); err != nil {
+		return result, err
 	}
 
 	if input.Scope == ScopeGlobal {
@@ -252,6 +288,8 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	runtime.backgroundActivation = backgroundActivation
 	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
 	runtime.piBackgroundProjection = piBackgroundProjection
+	runtime.piExcludedPackages = prepared.piExcludedPackages
+	runtime.claudeOrchestratorModules = input.ClaudeOrchestratorModules
 
 	stagePlan = installStagePlan(runtime)
 	result.Plan = stagePlan
@@ -445,7 +483,12 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	if newState.CodexPhaseModelAssignments != nil {
 		merged.CodexPhaseModelAssignments = newState.CodexPhaseModelAssignments
 	}
-	if merged.SelectionConfigured {
+	if !merged.SelectionConfigured && newState.SelectionConfigured {
+		// A metadata-only or legacy state has no selection to preserve.
+		merged.SelectionConfigured = true
+		merged.Components, merged.Skills = newState.Components, newState.Skills
+		merged.Preset, merged.SDDMode = newState.Preset, newState.SDDMode
+	} else if merged.SelectionConfigured {
 		if len(flags.Components) > 0 {
 			merged.Components = newState.Components
 		}
@@ -621,7 +664,26 @@ func goInstallBinDirFromGoEnv() (string, error) {
 
 const engramBetaGoInstallPackage = "github.com/Gentleman-Programming/engram/cmd/engram@main"
 
+// validateCallerEngramRuns proves a caller-supplied Engram binary runs before
+// anything is installed, when the plan applies Engram.
+func validateCallerEngramRuns(components []model.ComponentID) error {
+	bin, ok := engram.CallerBinary()
+	if !ok || !slices.Contains(components, model.ComponentEngram) {
+		return nil
+	}
+	if err := engram.ValidateCallerBinary(); err != nil {
+		return err
+	}
+	if _, err := verifyEngramVersionCommand(bin); err != nil {
+		return fmt.Errorf("%s=%s does not run: %w", system.EngramBinEnv, bin, err)
+	}
+	return nil
+}
+
 func betaEngramRequiresGo(channel InstallChannel, component model.ComponentID) bool {
+	if _, ok := engram.CallerBinary(); ok {
+		return false
+	}
 	return channel.IsBeta() && component == model.ComponentEngram
 }
 
@@ -708,7 +770,13 @@ type installRuntime struct {
 	backgroundActivation *opencodeactivation.ActivationPlan
 
 	piBackgroundProjection *piBackgroundProjectionPlan
+	piExcludedPackages     []string
 	progress               pipeline.ProgressFunc
+
+	// claudeOrchestratorModules is the explicit install opt-in for the
+	// user-global Claude module pilot. stagePlan hands it to both the backup
+	// planner and the routing step, so it must be set before the plan is built.
+	claudeOrchestratorModules bool
 }
 
 type runtimeState struct {
@@ -764,7 +832,7 @@ func (s *runtimeState) compatibilityChangedFiles() []string {
 }
 
 func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	backupRoot := state.BackupsDir(homeDir)
 	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, resolved.OrderedComponents, selection)
 	if err != nil {
 		return nil, err
@@ -791,7 +859,7 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 }
 
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
-	targets, targetErr := backupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved)
+	targets, targetErr := installBackupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved, r.claudeOrchestratorModules)
 	prepare := []pipeline.Step{
 		prepareBackupStep{
 			id:          "prepare:backup-snapshot",
@@ -829,7 +897,11 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			touchedKeys: openCodeSettingsWriterKeys(r.resolved.OrderedComponents, true, false),
 		}}, prepare...)
 	}
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir})
+	piAgentDir := ""
+	if containsAgent(r.resolved.Agents, model.AgentPi) {
+		piAgentDir = piagent.AgentConfigPath(r.homeDir)
+	}
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, piAgentDir: piAgentDir})
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
 	}
@@ -855,6 +927,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			homeDir:  r.homeDir,
 			profile:  r.profile,
 			progress: r.progress,
+			excluded: r.piExcludedPackages,
 		})
 	}
 
@@ -910,6 +983,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			homeDir:          r.homeDir,
 			workspaceDir:     r.workspaceDir,
 			scope:            r.scope,
+			claudeModules:    r.claudeOrchestratorModules,
 		})
 	}
 
@@ -1863,6 +1937,10 @@ type agentRoutingGuidanceStep struct {
 	workspaceDir     string
 	scope            InstallScope
 
+	// claudeModules is install's explicit opt-in for the user-global Claude
+	// module pilot. Sync leaves it false and only continues an installed pilot.
+	claudeModules bool
+
 	// changedFiles is the shared sync accumulator. Install leaves it nil and
 	// reports progress through the pipeline instead.
 	changedFiles *[]string
@@ -1875,8 +1953,20 @@ func (s agentRoutingGuidanceStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
 	}
+	// Resolve delivery before any write, so a Claude module pilot that cannot
+	// be inspected fails this step with nothing changed.
+	options, err := scopedRoutingGuidanceOptions(s.homeDir, s.workspaceDir, s.scope, adapter, s.claudeModules)
+	if err != nil {
+		return err
+	}
 
-	retainedHooks, err := agenthooks.InstallRetainedClaudeHooks(s.homeDir, adapter)
+	// Claude loads both global and project settings. Keep its hooks within
+	// the selected scope without changing Codex's home-level hook delivery.
+	hookRoot := s.homeDir
+	if adapter.Agent() == model.AgentClaudeCode {
+		hookRoot = ResolveAgentConfigDir(s.scope, s.homeDir, s.workspaceDir)
+	}
+	retainedHooks, err := agenthooks.InstallRetainedClaudeHooks(hookRoot, adapter)
 	if err != nil {
 		return fmt.Errorf("install retained Claude hooks for %q: %w", s.agent, err)
 	}
@@ -1890,7 +1980,7 @@ func (s agentRoutingGuidanceStep) Run() error {
 	if s.changedFiles != nil && telemetryHooks.Changed {
 		*s.changedFiles = append(*s.changedFiles, telemetryHooks.Files...)
 	}
-	hooks, err := agenthooks.InstallSkillRegistry(s.homeDir, adapter)
+	hooks, err := agenthooks.InstallSkillRegistry(hookRoot, adapter)
 	if err != nil {
 		return fmt.Errorf("install skill-registry hook for %q: %w", s.agent, err)
 	}
@@ -1950,8 +2040,6 @@ func (s agentRoutingGuidanceStep) Run() error {
 			return fmt.Errorf("migrate legacy Kilo agents: %w", err)
 		}
 	}
-
-	options := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter)
 
 	// Strip first: an installation upgraded from an older release still carries
 	// the retired block, and leaving it beside fresh guidance would hand the
@@ -2223,13 +2311,21 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 		return false, err
 	}
 	task := map[string]any{}
+	agents, _ := root["agent"].(map[string]any)
+	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
+	current, _ := orchestrator["permission"].(map[string]any)
+	// Delegate only to Gentle AI agents: without a wildcard deny the
+	// orchestrator can pick OpenCode's built-in explore/general subagents,
+	// which lack the skill tool. OpenCode applies the last matching rule, and
+	// "*" sorts before every agent name, so the wildcard precedes the grants.
+	// A wildcard rule the user already set is kept.
+	if currentTask, _ := current["task"].(map[string]any); currentTask["*"] == nil {
+		task["*"] = "deny"
+	}
 	for _, name := range opencodeagents.Roles(agent) {
 		task[name] = "allow"
 	}
 	permission := map[string]any{"task": task}
-	agents, _ := root["agent"].(map[string]any)
-	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
-	current, _ := orchestrator["permission"].(map[string]any)
 	if _, set := current["question"]; !set && !userDeniesQuestion(root, orchestrator) {
 		permission["question"] = "allow"
 	}
@@ -2617,6 +2713,7 @@ type rollbackRestoreStep struct {
 	homeDir            string
 	workspaceDir       string
 	telemetryConfigDir string // Selected adapter authority, potentially outside HOME via XDG.
+	piAgentDir         string // Selected Pi adapter authority, never derived from the manifest.
 }
 
 type openCodeBackgroundActivationStep struct {
@@ -2653,6 +2750,10 @@ func (s rollbackRestoreStep) Rollback() error {
 	manifest := s.state.manifest
 	var telemetryErr error
 	roots := rollbackRoots(s.homeDir, s.workspaceDir)
+	// guard:population pi-rollback-agent-root too-loose: Only the selected adapter directory extends restore roots; sibling and symlink escapes remain refused.
+	if s.piAgentDir != "" {
+		roots = append(roots, s.piAgentDir)
+	}
 	if s.telemetryConfigDir != "" {
 		roots = append(roots, s.telemetryConfigDir)
 		// The retained journals, never the generic backup, own this pair's rollback.
@@ -2701,6 +2802,8 @@ type agentInstallStep struct {
 	homeDir  string
 	profile  system.PlatformProfile
 	progress pipeline.ProgressFunc
+	// excluded lists validated managed Pi sources to skip.
+	excluded []string
 }
 
 func openCodeTelemetryConfigDir(home, workspace string, scope InstallScope, agentIDs []model.AgentID) string {
@@ -2783,6 +2886,17 @@ func (s agentInstallStep) ID() string {
 	return s.id
 }
 
+func validatePiPackageInstall(homeDir string, agentIDs []model.AgentID) error {
+	if !containsAgent(agentIDs, model.AgentPi) {
+		return nil
+	}
+	// guard:population pi-install-settings-preflight fail-closed: Selected Pi conflicts or malformed settings are refused before CLI/TUI runtime construction or pipeline execution.
+	if err := piagent.NewAdapter().ValidateInstall(homeDir); err != nil {
+		return fmt.Errorf("preflight for agent %q: %w", model.AgentPi, err)
+	}
+	return nil
+}
+
 // Run executes Pi's package installation commands only. Other selected
 // agents remain config targets regardless of whether their runtime is present.
 //
@@ -2795,10 +2909,7 @@ func (s agentInstallStep) Run() error {
 		return nil
 	}
 
-	adapter, err := agents.NewAdapter(s.agent)
-	if err != nil {
-		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
-	}
+	adapter := piagent.NewAdapter()
 
 	if _, _, _, _, err := adapter.Detect(context.Background(), s.homeDir); err != nil {
 		return fmt.Errorf("detect agent %q: %w", s.agent, err)
@@ -2808,7 +2919,7 @@ func (s agentInstallStep) Run() error {
 		return fmt.Errorf("preflight for agent %q: %w", s.agent, err)
 	}
 
-	commands, err := adapter.InstallCommand(s.profile)
+	commands, err := adapter.PrepareInstall(s.profile, s.homeDir, s.excluded...)
 	if err != nil {
 		return fmt.Errorf("resolve install command for %q: %w", s.agent, err)
 	}
@@ -3000,7 +3111,11 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentEngram:
 		engramCommand := "engram"
 		var installErr error
-		if betaEngramRequiresGo(s.channel, s.component) {
+		if callerBinary, ok := engram.CallerBinary(); ok {
+			// A caller-supplied Engram is used as is: no brew, download, go
+			// install or PATH change. RunPreparedInstall already checked it runs.
+			engramCommand = callerBinary
+		} else if betaEngramRequiresGo(s.channel, s.component) {
 			binaryPath, err := installBetaEngramFromMain()
 			if err != nil {
 				return fmt.Errorf("install beta engram from main: %w", err)
@@ -3195,8 +3310,8 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentPersona:
 		for _, adapter := range adapters {
 			if adapter.Agent() == model.AgentPi {
-				for _, rootDir := range piPersonaConfigRoots(s.homeDir, s.workspaceDir, s.scope) {
-					if _, err := persona.InjectPiPersona(rootDir, s.selection.Persona); err != nil {
+				for _, path := range piPersonaConfigPaths(s.homeDir, s.workspaceDir, s.scope) {
+					if _, err := persona.InjectPiPersonaAt(path, s.selection.Persona); err != nil {
 						return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
 					}
 				}
@@ -3374,6 +3489,9 @@ func ExecuteTUIInstallRecordingCodexServiceTier(homeDir string, selection model.
 }
 
 func executeTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc, consent ...*OpenCodeSDKConsent) (pipeline.ExecutionResult, *pipeline.Orchestrator, *string) {
+	if err := validatePiPackageInstall(homeDir, resolved.Agents); err != nil {
+		return pipeline.ExecutionResult{Err: err}, nil, nil
+	}
 	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
 	if err != nil {
 		return pipeline.ExecutionResult{Err: err}, nil, nil
@@ -3671,9 +3789,19 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 	return skills.SkillsForPreset(selection.Preset)
 }
 
-func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
+// installBackupTargets lists every path an install is about to rewrite. An
+// install that carries the explicit Claude module opt-in also plans every
+// pilot path, so the snapshot can restore it.
+func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan, claudeModules bool) ([]string, error) {
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
+	// Pi package commands always target global settings, even for a workspace
+	// selection or a plan without the Engram component.
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			paths[adapter.SettingsPath(homeDir)] = struct{}{}
+		}
+	}
 	if configDir := openCodeTelemetryConfigDir(homeDir, workspaceDir, scope, resolved.Agents); configDir != "" {
 		for _, path := range telemetryruntime.ManagedPaths(configDir) {
 			paths[path] = struct{}{}
@@ -3729,7 +3857,7 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	// Routing guidance is delivered per agent outside the component loop, so a
 	// selection whose components do not happen to cover the same file would be
 	// rewritten without ever having been snapshotted (issue #1794).
-	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, adapters) {
+	for _, path := range routingGuidancePathsWithClaudeModules(homeDir, workspaceDir, scope, adapters, claudeModules) {
 		paths[path] = struct{}{}
 	}
 	for _, path := range retiredSDDAssetBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
@@ -3749,6 +3877,13 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		}
 		for _, path := range retiredOpenCodeSDDBackupPaths(homeDir, workspaceDir, scope, []model.AgentID{adapter.Agent()}) {
 			paths[path] = struct{}{}
+		}
+		// Retained Claude hooks are installed independently of optional
+		// components. Snapshot the same scoped settings their writer uses.
+		if adapter.Agent() == model.AgentClaudeCode {
+			if path := adapter.SettingsPath(ResolveAgentConfigDir(scope, homeDir, workspaceDir)); path != "" {
+				paths[path] = struct{}{}
+			}
 		}
 		// Native review and Judgment Day agents are installed independently of SDD.
 		// Retired review agents are listed too: the installer may remove them.
@@ -3882,6 +4017,12 @@ func claudeMCPSettingsCleanupPaths(homeDir, workspaceDir string, scope InstallSc
 // the paths themselves come from the injector's own delivery dispatch, so the
 // backup contract cannot drift from what is actually written.
 func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	return routingGuidancePathsWithClaudeModules(homeDir, workspaceDir, scope, adapters, false)
+}
+
+// routingGuidancePathsWithClaudeModules also takes install's explicit Claude
+// module opt-in, which the routing step receives too.
+func routingGuidancePathsWithClaudeModules(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter, claudeModules bool) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
 		// Mirrors the same skip agentRoutingGuidanceStep.Run() applies: an
@@ -3891,14 +4032,15 @@ func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adap
 			continue
 		}
 		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
-		options := routingGuidanceOptions(homeDir, workspaceDir, adapter)
-		var routing []string
-		var err error
-		if options.SettingsPath == "" {
-			routing, err = agentguidance.RoutingPaths(targetDir, adapter.Agent())
-		} else {
-			routing, err = agentguidance.RoutingPathsWithOptions(targetDir, adapter.Agent(), options)
+		options, err := scopedRoutingGuidanceOptions(homeDir, workspaceDir, scope, adapter, claudeModules)
+		if err != nil {
+			// The guidance step runs the same detection before any write and
+			// fails loudly, so there is nothing of this agent to snapshot.
+			continue
 		}
+		// Always with options: an empty SettingsPath must not drop the Claude
+		// module delivery the step will use.
+		routing, err := agentguidance.RoutingPathsWithOptions(targetDir, adapter.Agent(), options)
 		if err != nil {
 			// The guidance step resolves the same delivery and fails loudly when
 			// it runs. Declaring a target we could not resolve would only add a
@@ -4162,6 +4304,33 @@ func routingGuidanceOptions(homeDir, workspaceDir string, adapter agents.Adapter
 	return options
 }
 
+// scopedRoutingGuidanceOptions extends routingGuidanceOptions with the one
+// scope-dependent choice: a global Claude install continues the module pilot
+// whose ledger is already installed under homeDir (#5256), and creates it only
+// when claudeModules carries install's explicit opt-in. Otherwise, in the
+// workspace scope and for every other agent the options are unchanged. The
+// ledger is always looked up, so a ledger that cannot be inspected is an error
+// with or without the opt-in.
+//
+// The routing step and the install/sync snapshot planner both resolve through
+// here, so the snapshot covers the core, every module and the ledger. After a
+// failure, install and sync restore those files from that snapshot like any
+// other: an edit made while the run was in progress can be overwritten and a
+// file created meanwhile removed. Nothing here makes that restore concurrency
+// safe or atomic.
+func scopedRoutingGuidanceOptions(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter, claudeModules bool) (agentguidance.RoutingOptions, error) {
+	options := routingGuidanceOptions(homeDir, workspaceDir, adapter)
+	if scope != ScopeGlobal || adapter.Agent() != model.AgentClaudeCode {
+		return options, nil
+	}
+	pilot, err := agentguidance.ClaudeGlobalModulePaths(homeDir)
+	if err != nil {
+		return agentguidance.RoutingOptions{}, fmt.Errorf("detect installed Claude module pilot: %w", err)
+	}
+	options.ClaudeGlobalModules = claudeModules || len(pilot) > 0
+	return options, nil
+}
+
 // routingGuidanceDir resolves the installation root routing guidance is
 // delivered under. Orchestrator-prompt adapters retain their home-level adapter
 // root for legacy cleanup and ordinary delivery; OpenCode's effective settings
@@ -4183,19 +4352,17 @@ func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScop
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
 }
 
-// piPersonaConfigRoots returns the roots whose Pi persona state is managed by
-// install. Like every scoped component, global install writes only to home.
-func piPersonaConfigRoots(homeDir, workspaceDir string, scope InstallScope) []string {
-	return []string{ResolveAgentConfigDir(scope, homeDir, workspaceDir)}
-}
-
+// piPersonaConfigPaths returns the Pi persona state files managed by install.
+// Like every scoped component, global install writes only the global file,
+// which GENTLE_AI_PI_CONFIG_DIR may relocate; workspace install writes only
+// the workspace file.
 func piPersonaConfigPaths(homeDir, workspaceDir string, scope InstallScope) []string {
-	roots := piPersonaConfigRoots(homeDir, workspaceDir, scope)
-	paths := make([]string, 0, len(roots))
-	for _, root := range roots {
-		paths = append(paths, persona.PiPersonaConfigPath(root))
+	// The scope decides, not the folder: a workspace install whose workspace is
+	// the home folder still writes the workspace persona file.
+	if scope == ScopeGlobal {
+		return []string{persona.PiGlobalPersonaConfigPath(homeDir)}
 	}
-	return paths
+	return []string{persona.PiPersonaConfigPath(ResolveAgentConfigDir(scope, homeDir, workspaceDir))}
 }
 
 func nativeReviewCodeGraphGuidanceMarkdown(homeDir string, selected []model.CommunityToolID) string {
@@ -4371,6 +4538,26 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 				return nil
 			},
 		})
+	}
+
+	if hasComponent(input.Resolved.OrderedComponents, model.ComponentPersona) && input.Selection.Persona != model.PersonaCustom {
+		for _, adapter := range adapters {
+			if adapter.Agent() != model.AgentCursor {
+				continue
+			}
+			targetDir := componentPathDirScoped(input.HomeDir, input.WorkspaceDir, input.Scope, adapter, model.ComponentPersona)
+			path := adapter.SystemPromptFile(targetDir)
+			checks = append(checks, verify.Check{
+				ID: "verify:cursor:rule-activation:" + path, Description: "Cursor rule activates in every conversation",
+				Run: func(context.Context) error {
+					content, err := os.ReadFile(path)
+					if err != nil {
+						return err
+					}
+					return cursor.ValidateRule(content)
+				},
+			})
+		}
 	}
 
 	if hasComponent(input.Resolved.OrderedComponents, model.ComponentEngram) {

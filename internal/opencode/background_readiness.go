@@ -984,11 +984,16 @@ func pathEntryExecutable(path, goos string) bool {
 	return goos == "windows" || info.Mode().Perm()&0o111 != 0
 }
 
-// resolvesUnder reports whether path is a symlink into root, such as a user
-// link to the managed launcher.
+// resolvesUnder reports whether path resolves into the existing root, such as
+// a user link to the managed launcher. Resolve both sides so a root alias does
+// not turn a legitimate link into a shadowing executable; fail closed on error.
 func resolvesUnder(path, root, goos string) bool {
 	resolved, err := filepath.EvalSymlinks(path)
-	return err == nil && pathUnder(resolved, root, goos)
+	if err != nil {
+		return false
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	return err == nil && pathUnder(resolved, resolvedRoot, goos)
 }
 
 // ManagedLauncherTarget returns the OpenCode executable a Gentle-owned

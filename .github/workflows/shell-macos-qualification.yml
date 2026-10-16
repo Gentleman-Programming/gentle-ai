@@ -1,0 +1,140 @@
+name: Gentle Shell macOS qualification
+
+# macOS runners bill ~10x Linux minutes (see the Darwin Runtime job in ci.yml),
+# so this native lane runs only when the macOS installer surface changes,
+# including the dependency set and the CLI entry that dispatches `shell`.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/shellinstaller/**'
+      - 'internal/cli/shell_install*'
+      - 'scripts/bootstrap-gentle-shell-private-node.sh'
+      - 'scripts/provision-gentle-shell-private-global.mjs'
+      - 'scripts/runtime_helpers.go'
+      - 'scripts/user_helpers.go'
+      - 'scripts/user-global-graph.mjs'
+      - 'scripts/user-locks/**'
+      - 'scripts/complete-generated-lock-sri.mjs'
+      - 'scripts/normalize-private-optional-platform-closure.mjs'
+      - 'e2e/shell-macos-*'
+      - 'docs/gentle-shell-macos-install.md'
+      - 'internal/app/app.go'
+      - 'cmd/gentle-ai/main.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/shell-macos-qualification.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/shellinstaller/**'
+      - 'internal/cli/shell_install*'
+      - 'scripts/bootstrap-gentle-shell-private-node.sh'
+      - 'scripts/provision-gentle-shell-private-global.mjs'
+      - 'scripts/runtime_helpers.go'
+      - 'scripts/user_helpers.go'
+      - 'scripts/user-global-graph.mjs'
+      - 'scripts/user-locks/**'
+      - 'scripts/complete-generated-lock-sri.mjs'
+      - 'scripts/normalize-private-optional-platform-closure.mjs'
+      - 'e2e/shell-macos-*'
+      - 'docs/gentle-shell-macos-install.md'
+      - 'internal/app/app.go'
+      - 'cmd/gentle-ai/main.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/shell-macos-qualification.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+# Only superseded pull request runs are cancelled: every push to main keeps
+# its own receipt, because support is declared per exact candidate.
+concurrency:
+  group: shell-macos-qualification-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  macos-native:
+    name: macOS installation and recovery qualification
+    if: github.repository == 'Gentleman-Programming/gentle-ai' || github.repository == 'decode2/gentle-ai'
+    runs-on: macos-latest
+    # Every step below has its own deadline; their sum stays inside this job
+    # budget, and the qualification script's whole-run deadline stays inside
+    # its step with margin so a stuck command is named in the receipt.
+    timeout-minutes: 55
+    steps:
+      - name: Bind public source without repository credentials
+        timeout-minutes: 3
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_ASKPASS: /usr/bin/false
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          test "$(uname -s)/$(uname -m)" = Darwin/arm64
+          test ! -e .git
+          git init -q
+          git -c credential.helper= -c http.followRedirects=false fetch --no-tags --depth=1 "https://github.com/$SOURCE_REPOSITORY.git" "$SOURCE_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          printf 'macOS candidate source: %s on macOS %s\n' "$SOURCE_SHA" "$(sw_vers -productVersion)"
+
+      - name: Set up Go
+        timeout-minutes: 3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run native installer package tests
+        timeout-minutes: 8
+        run: go test ./internal/shellinstaller ./scripts -count=1
+
+      - name: Run native CLI shell tests
+        timeout-minutes: 4
+        run: go test ./internal/cli -run Shell -count=1
+
+      - name: Check qualification workflow contract
+        timeout-minutes: 1
+        run: /usr/bin/python3 -I e2e/shell-macos-ci-contract.test.py
+
+      - name: Build candidate gentle-ai
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/macos-qualification"
+          go build -mod=readonly -o "$RUNNER_TEMP/candidate/gentle-ai" ./cmd/gentle-ai
+
+      - name: Qualify native Separate, Shared and recovery
+        id: qualify
+        timeout-minutes: 25
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          base="$(mktemp -d /private/tmp/gentle-macos-qualification.XXXXXX)"
+          test "$(stat -f '%Su:%Lp' "$base")" = "$(id -un):700"
+          /usr/bin/env -i PATH=/usr/bin:/bin TMPDIR="$base" /usr/bin/python3 -I e2e/shell-macos-qualification.py \
+            --gentle-ai "$RUNNER_TEMP/candidate/gentle-ai" \
+            --receipt "$RUNNER_TEMP/macos-qualification/receipt.json" \
+            --source-sha "$SOURCE_SHA"
+
+      - name: Upload qualification receipt
+        if: always() && steps.qualify.outcome != 'skipped'
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # same pin as shell-windows-crosscheck.yml
+        with:
+          name: shell-macos-qualification-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/macos-qualification/receipt.json
+          retention-days: 14
+          if-no-files-found: error

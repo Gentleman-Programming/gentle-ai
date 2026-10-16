@@ -132,7 +132,41 @@ The cost of a fresh session is not the tokens — it is you, re-explaining the s
 
 Small changes should not need a planning pipeline, and larger work should not lose its context between sessions. **Organic Driven Development (ODD)** keeps understood changes lightweight and gives substantial, authorized work one recoverable feature document. The agent explores before changing code, checks the results, and keeps progress current so work can resume without rebuilding the plan.
 
+Tasks are sized by understanding, risk, and resumability, never by file count. A small task — understood, with contained risk, and resumable from the diff alone — runs inline: no subagents, no task document. The feature document of a large task holds your spec verbatim, and every handoff points at it instead of paraphrasing it.
+
 **[Docs →](docs/usage.md#organic-driven-development-odd)**
+
+---
+
+### Delegate for a reason — Not for size
+
+A subagent costs a fresh session, uncached reads, and a handoff. So the orchestrator delegates only when it can name the reason:
+
+| Reason | When it applies |
+| :--- | :--- |
+| **Exploration** | Understanding needs more than one inline batch (about 3 calls and 10k tokens) or more than about five sequential lookups; one read-only explorer returns a short map with `path:line` evidence |
+| **Parallel writers** | Two or more independent units of behavior (code, tests, and docs together) with disjoint edit surfaces, each needing several minutes of work: several files or roughly 100+ changed lines, because a subagent spends one to two minutes reading before it writes. A delivery that depends on another is not independent |
+| **Context backstop** | A long session hands its next bounded unit to a fresh worker |
+| **Independent verifier** | A change that names a high-risk item (data, security, shared contracts, concurrency, delivery, or no test that would catch a regression); never a native risk tier alone, an unclear or failed assessment, or the model that wrote the change |
+
+A trigger holds only when its condition truly holds; none holds by default, and when in doubt the parent works inline. Without a reason the parent writes inline, following its feature document. File count, task size, or a model price ratio never decide the route on their own.
+
+**[Docs →](docs/trigger-rules.md)**
+
+---
+
+### Measured — What proportional routing changed
+
+The routing rules above came from benchmarks, not intuition. These are Gentle Shell runs on a local benchmark with hidden acceptance suites; each cell is a single run (n=1), and cost is API-equivalent.
+
+| Scenario | Before | After |
+| :--- | :--- | :--- |
+| 3-line bug in one function | 335 s · 56 turns · $0.339 | **77 s · 10 turns · $0.105** — inline, no subagents |
+| Bug rooted in shared logic | 479 s · $0.361 | **276 s · $0.207** — one explorer |
+| Data migration (high risk) | 559 s · $0.403 · needed a feedback round | 539 s · $0.555 · **accepted on the first round** — one independent verifier |
+| 73-line spec, 26 hidden checks | Paraphrased handoffs: 13 failing, still 23/26 after two feedback rounds | Spec passed by reference ([gentle-shell#1718](https://github.com/Gentleman-Programming/gentle-shell/pull/1718)) |
+
+Against the same model in Codex CLI, with blind review of every solution, Gentle Shell was accepted on the first round in every cell and ranked higher on the medium (3 of 3 runs) and large tasks; it was close on the small one. The large task still took about three times longer (17.5–17.9 min vs 6.1 min) — that gap is open work. Sources: [gentle-shell#1723](https://github.com/Gentleman-Programming/gentle-shell/pull/1723), [#1794](https://github.com/Gentleman-Programming/gentle-shell/pull/1794), [#1713](https://github.com/Gentleman-Programming/gentle-shell/issues/1713).
 
 ---
 
@@ -149,6 +183,8 @@ ODD applies test-first development by default when a relevant runnable test and 
 <img width="100%" src="docs/assets/diagrams/rdd-review.svg" alt="How RDD checks a finished change. The exact change is frozen to a lineage, revision and target, then a read-only risk assessment picks the depth: passive gets a structural readback with zero reviewer lenses, medium gets one focused lens, high gets the canonical 4R — Risk, Resilience, Readability and Reliability. At most one bounded correction is allowed, and one exact acknowledgement closes the transaction. Delivery stays human-owned." />
 
 Receipt-Driven Development (RDD) is on by default and opt-out: run `gentle-ai review mode disable` to turn it off. Explicit global or clone-local OFF choices remain OFF. Its point is that a review cannot drift: the candidate is frozen before anything reads it, so the evidence belongs to the exact version you are about to rely on — not to whatever the worktree looked like a moment later. The depth comes from that frozen candidate rather than from the model's judgment, and the result is informational. Commit, push and release stay your call.
+
+Review is proportionate: an automatic review is due only for a high-risk candidate, and the agent can name the 4R lenses that fit what it touched — with a reason frozen alongside the authority — instead of paying for all four. Verification by risk tier covers the rest.
 
 **[Docs →](docs/review-integration.md)**
 
@@ -169,6 +205,8 @@ A model that guesses the next step guesses differently tomorrow, and differently
 <img width="100%" src="docs/assets/features/gentle-shell.png" alt="Gentle Shell development workspace with the todo list and live context and spend information" />
 
 Gentle Shell is a separate Pi integration package. Gentle AI configures supported agents; Gentle Shell owns its own Pi runtime, agents, and interface. Installing or updating this binary does not itself establish Pi behavior parity.
+
+On a clean machine, the [Gentle Shell installers](https://github.com/Gentleman-Programming/gentle-shell#get-started) set up a self-contained, bundled Gentle Shell with its exact Pi, its pinned Gentle AI, and Engram.
 
 **[Docs →](docs/pi.md)**
 
@@ -214,13 +252,15 @@ brew install gentleman-programming/tap/gentle-ai
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 
 # Windows (PowerShell) — source install of the latest release, needs Go 1.25.10+
-go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.1.1
 ```
 
 ```bash
 gentle-ai          # pick your agents, components and persona
 gentle-ai doctor   # verify — read-only, changes nothing
 ```
+
+If `doctor` cannot read `state.json`, inspect the reported file and parent directory's access; for permission errors, check permissions and ownership. Keep the existing state file. For invalid JSON, restore a valid backup or repair the content while preserving your installation settings. Then re-run `gentle-ai doctor`; it never changes the file or its permissions.
 
 Then use your agent normally. Your configs are snapshotted before every write, and **Gentle-AI never installs an AI agent for you** — it configures what you already have.
 

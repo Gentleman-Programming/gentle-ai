@@ -136,6 +136,7 @@ internal/reviewtransaction/rar_plan_authority.go	rarPlanAuthorityDigest
 internal/reviewtransaction/rar_plan_authority.go	validatePlanEffectBinding
 internal/reviewtransaction/rar_plan_authority.go	verificationEffectAuthorizationDigest
 internal/reviewtransaction/rar_plan_authority.go	verificationFrozenPlanConsentDigest
+internal/reviewtransaction/rar_unsupported_filesystem.go	windowsNetworkPath
 internal/reviewtransaction/rar_windows_authority_filesystem.go	classifyWindowsAuthorityFilesystem
 internal/reviewtransaction/rar_windows_owner_trust.go	rarWindowsOwnerOnlyMismatch
 internal/reviewtransaction/rar_windows_owner_trust.go	rarWindowsRepairOwnerControlled
@@ -246,4 +247,3 @@ internal/update/upgrade/download.go	downloadBinary
 internal/update/upgrade/executor.go	enumerateFilesInDir
 internal/update/upgrade/homebrew.go	homebrewPackageInstalledWith
 internal/update/upgrade/homebrew.go	pathWithinPrefix
-internal/update/upgrade/strategy.go	openCodePluginRegisteredPendingHint

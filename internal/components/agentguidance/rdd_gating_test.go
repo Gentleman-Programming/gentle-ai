@@ -66,7 +66,7 @@ var oddContractClauses = []string{
 	"Native Checking Contract",
 	"Lossless Blocking Prompts",
 	"Delegation Rules",
-	"Mandatory Delegation Triggers",
+	"#### Delegation Triggers", // pain-point-iteration S9 C4 dropped "Mandatory" from the heading
 	"Language Domain Contract",
 	"Cost and Context Balance",
 	"Delivery follows work units",

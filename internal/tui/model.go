@@ -42,6 +42,9 @@ import (
 // Package-level var so tests can inject a deterministic clock.
 var tuiNowFn = time.Now
 
+// updateCheckFn is the remote-check boundary, replaceable by deterministic tests.
+var updateCheckFn = update.CheckAll
+
 // tuiOpenBrowserFn opens a URL in the default system browser.
 // Package-level var so tests can inject a stub without spawning a process.
 // Returns a non-nil error when the browser cannot be opened; callers fall back
@@ -434,6 +437,9 @@ type BackupRestoreMsg struct {
 // UpdateCheckResultMsg is sent when the background update check completes.
 type UpdateCheckResultMsg struct {
 	Results []update.UpdateResult
+	State   update.CheckState
+	// Forced marks a zero-TTL refresh result so its failure cannot auto-retry.
+	Forced bool
 }
 
 // AdvisoryMsg is sent when the background advisory manifest fetch completes.
@@ -568,9 +574,9 @@ type SyncDetailedFunc func(overrides *model.SyncOverrides) ([]string, []string, 
 // UninstallFunc is the signature of the function injected to perform managed uninstall.
 type UninstallFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error)
 
-// UninstallWithProfilesFunc is an uninstall function variant that accepts an
-// explicit profile selection for OpenCode SDD profile cleanup.
-type UninstallWithProfilesFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error)
+// UninstallWithEngramScopeFunc is an uninstall function variant that accepts an
+// explicit Engram cleanup scope.
+type UninstallWithEngramScopeFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (componentuninstall.Result, error)
 
 // ExecuteFunc builds and runs the installation pipeline. It receives the
 // effective and publishable OpenCode and Pi background choices plus a
@@ -645,7 +651,7 @@ const (
 	ScreenUninstallMode
 	ScreenUninstall
 	ScreenUninstallComponents
-	ScreenUninstallProfiles
+	ScreenUninstallEngramScope
 	ScreenUninstallConfirm
 	ScreenUninstallResult
 	ScreenAgentBuilderEngine
@@ -759,7 +765,8 @@ type Model struct {
 	UpdateResults []update.UpdateResult
 
 	// UpdateCheckDone is true once the background update check has completed.
-	UpdateCheckDone bool
+	UpdateCheckDone  bool
+	UpdateCheckState update.CheckState
 
 	// AdvisoryMessage holds the informational text from the advisory manifest
 	// fetch, when a non-empty message was returned. Empty string means no
@@ -828,11 +835,9 @@ type Model struct {
 	UninstallMode model.UninstallMode
 
 	// UninstallAgents holds the current TUI selection for the uninstall flow.
-	UninstallAgents            []model.AgentID
-	UninstallComponents        []model.ComponentID
-	UninstallProfilesAvailable []string
-	UninstallProfilesToRemove  []string
-	UninstallProfileSelection  bool
+	UninstallAgents              []model.AgentID
+	UninstallComponents          []model.ComponentID
+	UninstallEngramScopeSelected bool
 	// UninstallEngramProjectScopeAvailable indicates whether .engram project data
 	// was detected for the current workspace, enabling project-only cleanup.
 	UninstallEngramProjectScopeAvailable bool
@@ -854,9 +859,9 @@ type Model struct {
 	// UninstallFn performs the managed uninstall operation.
 	UninstallFn UninstallFunc
 
-	// UninstallWithProfilesFn performs managed uninstall with explicit profile
-	// cleanup selection when the current flow requires it.
-	UninstallWithProfilesFn UninstallWithProfilesFunc
+	// UninstallWithEngramScopeFn performs managed uninstall with an explicit
+	// Engram cleanup scope when the current flow requires it.
+	UninstallWithEngramScopeFn UninstallWithEngramScopeFunc
 
 	// AgentBuilder holds the transient state for the agent-builder TUI flow.
 	AgentBuilder AgentBuilderState
@@ -1036,20 +1041,24 @@ func installStateModelAssignments(assignments map[string]state.ModelAssignmentSt
 	return out
 }
 
-func (m Model) Init() tea.Cmd {
+func (m Model) updateCheckCommand(ttl time.Duration) tea.Cmd {
 	version := m.Version
 	profile := m.Detection.System.Profile
 	home := homeDir()
 
-	updateCmd := func() tea.Msg {
+	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		results := update.CheckAllWithCooldown(ctx, version, profile, home, update.UpdateCheckTTL,
+		report := update.CheckAllWithCooldownReport(ctx, version, profile, home, ttl,
 			tuiNowFn,
-			update.CheckAll,
+			updateCheckFn,
 		)
-		return UpdateCheckResultMsg{Results: results}
+		return UpdateCheckResultMsg{Results: report.Results, State: report.State, Forced: ttl == 0}
 	}
+}
+
+func (m Model) Init() tea.Cmd {
+	updateCmd := m.updateCheckCommand(update.UpdateCheckTTL)
 
 	// Fetch the advisory manifest concurrently with the update check.
 	// advisoryFetchFn is a package-level var so tests can override it.
@@ -1239,6 +1248,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UpdateCheckResultMsg:
 		m.UpdateResults = msg.Results
 		m.UpdateCheckDone = true
+		m.UpdateCheckState = msg.State
+		for _, result := range msg.Results {
+			if result.Status == update.CheckFailed {
+				m.UpdateCheckState = update.CheckUnsuccessful
+			}
+		}
+		// An upgrade screen opened during startup gets one fresh check after
+		// omission or failure. Never automatically retry that forced check.
+		if !msg.Forced && (m.UpdateCheckState == update.CheckSkipped || m.UpdateCheckState == update.CheckUnsuccessful) &&
+			(m.Screen == ScreenUpgrade || m.Screen == ScreenUpgradeSync) {
+			m.UpdateCheckDone = false
+			return m, tea.Batch(tickCmd(), m.updateCheckCommand(0))
+		}
 		// Show the pre-Welcome update prompt only when the user is still on the
 		// initial Welcome screen. The update check is async (~10 s) so if the user
 		// has already navigated into a flow we must not interrupt them mid-action.
@@ -1491,9 +1513,7 @@ func (m Model) View() string {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
 		return screens.RenderWelcomeWithAdvisory(
-			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone,
-			m.hasDetectedOpenCode(), 0, m.hasAgentBuilderEngines(),
-			m.inGitRepository(),
+			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone && m.UpdateCheckState == update.CheckCompleted, m.hasAgentBuilderEngines(), m.inGitRepository(),
 			m.Width, m.Height,
 			screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll},
 		)
@@ -1515,12 +1535,12 @@ func (m Model) View() string {
 		return screens.RenderUninstall(m.UninstallAgents, m.Cursor)
 	case ScreenUninstallComponents:
 		return screens.RenderUninstallComponents(m.UninstallComponents, m.Cursor)
-	case ScreenUninstallProfiles:
-		return screens.RenderUninstallProfiles(m.UninstallProfilesAvailable, m.UninstallProfilesToRemove, m.UninstallEngramProjectScopeAvailable, m.UninstallEngramScope, m.Cursor)
+	case ScreenUninstallEngramScope:
+		return screens.RenderUninstallEngramScope(m.UninstallEngramProjectScopeAvailable, m.UninstallEngramScope, m.Cursor)
 	case ScreenUninstallConfirm:
-		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.Cursor, m.OperationRunning, m.SpinnerFrame)
+		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.Cursor, m.OperationRunning, m.SpinnerFrame)
 	case ScreenUninstallResult:
-		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.SyncCleanInstallFiles, m.SyncCleanInstallErr)
+		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.SyncCleanInstallFiles, m.SyncCleanInstallErr)
 	case ScreenDetection:
 		return screens.RenderDetection(m.Detection, m.Cursor)
 	case ScreenAgents:
@@ -1933,12 +1953,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggleCurrentUninstallAgent()
 		case ScreenUninstallComponents:
 			m.toggleCurrentUninstallComponent()
-		case ScreenUninstallProfiles:
-			if m.Cursor < len(m.UninstallProfilesAvailable) {
-				m.toggleCurrentUninstallProfile()
-			} else {
-				m.toggleCurrentUninstallEngramScope()
-			}
+		case ScreenUninstallEngramScope:
+			m.toggleCurrentUninstallEngramScope()
 		case ScreenDependencyTree:
 			if m.Selection.Preset == model.PresetCustom {
 				m.toggleCurrentComponent()
@@ -2027,6 +2043,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 1:
 			m = m.withResetOperationState()
 			m.setScreen(ScreenUpgrade)
+			if m.UpdateCheckDone && m.UpdateCheckState != update.CheckCompleted {
+				m.UpdateCheckDone = false
+				return m, tea.Batch(tickCmd(), m.updateCheckCommand(0))
+			}
 			// Start spinner for update check waiting state.
 			if !m.UpdateCheckDone {
 				return m, tickCmd()
@@ -2037,6 +2057,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 3:
 			m = m.withResetOperationState()
 			m.setScreen(ScreenUpgradeSync)
+			if m.UpdateCheckDone && m.UpdateCheckState != update.CheckCompleted {
+				m.UpdateCheckDone = false
+				return m, tea.Batch(tickCmd(), m.updateCheckCommand(0))
+			}
 			// Start spinner for update check waiting state.
 			if !m.UpdateCheckDone {
 				return m, tickCmd()
@@ -2106,7 +2130,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 		}
 	case ScreenUninstallMode:
-		m.refreshUninstallProfiles()
+		m.refreshUninstallEngramScope()
 		options := screens.UninstallModeOptions()
 		switch {
 		case m.Cursor < len(options):
@@ -2126,8 +2150,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				for _, component := range allComponents {
 					m.UninstallComponents = append(m.UninstallComponents, component.ID)
 				}
-				m.UninstallProfileSelection = false
-				m.UninstallProfilesToRemove = nil
+				m.UninstallEngramScopeSelected = false
 				m.setScreen(ScreenUninstallConfirm)
 			}
 		case m.Cursor == len(options):
@@ -2151,11 +2174,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case m.Cursor < componentCount:
 			m.toggleCurrentUninstallComponent()
 		case m.Cursor == componentCount && len(m.UninstallComponents) > 0:
-			m.refreshUninstallProfiles()
-			m.UninstallProfileSelection = false
-			m.UninstallProfilesToRemove = nil
+			m.refreshUninstallEngramScope()
 			if m.shouldShowUninstallEngramScopeSelection() {
-				m.setScreen(ScreenUninstallProfiles)
+				m.setScreen(ScreenUninstallEngramScope)
 			} else {
 				m.setScreen(ScreenUninstallConfirm)
 			}
@@ -2163,20 +2184,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenUninstall)
 		}
 		return m, nil
-	case ScreenUninstallProfiles:
-		profileCount := len(m.UninstallProfilesAvailable)
-		engramScopeOptionCount := 0
+	case ScreenUninstallEngramScope:
+		continueIdx := 0
 		if m.shouldShowUninstallEngramScopeSelection() {
-			engramScopeOptionCount = 2
+			continueIdx = 2
 		}
-		continueIdx := profileCount + engramScopeOptionCount
 		switch {
-		case m.Cursor < profileCount:
-			m.toggleCurrentUninstallProfile()
 		case m.Cursor < continueIdx:
 			m.toggleCurrentUninstallEngramScope()
 		case m.Cursor == continueIdx:
-			m.UninstallProfileSelection = true
+			m.UninstallEngramScopeSelected = true
 			m.setScreen(ScreenUninstallConfirm)
 		case m.Cursor == continueIdx+1:
 			if m.UninstallMode == model.UninstallModePartial {
@@ -2198,8 +2215,8 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Route cancel/back based on uninstall mode:
 		// - partial: go back to components selection
 		// - full/full-remove: go back to uninstall mode selection
-		if m.UninstallProfileSelection {
-			m.setScreen(ScreenUninstallProfiles)
+		if m.UninstallEngramScopeSelected {
+			m.setScreen(ScreenUninstallEngramScope)
 		} else {
 			switch m.UninstallMode {
 			case model.UninstallModePartial:
@@ -2936,9 +2953,7 @@ func (m Model) withResetUninstallState() Model {
 	m.UninstallMode = model.UninstallModePartial
 	m.UninstallAgents = detectedAgentIDs(m.Detection)
 	m.UninstallComponents = defaultUninstallComponents()
-	m.UninstallProfilesAvailable = nil
-	m.UninstallProfilesToRemove = nil
-	m.UninstallProfileSelection = false
+	m.UninstallEngramScopeSelected = false
 	m.UninstallEngramProjectScopeAvailable = false
 	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
 	m.UninstallResult = componentuninstall.Result{}
@@ -3309,16 +3324,15 @@ func executeExternalCommand(commandFn func(string, ...string) *exec.Cmd, name st
 
 func (m Model) startUninstall() tea.Cmd {
 	uninstallFn := m.UninstallFn
-	uninstallWithProfilesFn := m.UninstallWithProfilesFn
+	uninstallWithEngramScopeFn := m.UninstallWithEngramScopeFn
 	syncFn := m.SyncFn
 	agentIDs := append([]model.AgentID(nil), m.UninstallAgents...)
 	componentIDs := append([]model.ComponentID(nil), m.UninstallComponents...)
-	profileNamesToRemove := append([]string(nil), m.UninstallProfilesToRemove...)
 	engramScope := m.UninstallEngramScope
-	profileSelectionUsed := m.UninstallProfileSelection || len(profileNamesToRemove) > 0
+	engramScopeSelected := m.UninstallEngramScopeSelected
 	mode := m.UninstallMode
 	return func() tea.Msg {
-		if uninstallFn == nil && uninstallWithProfilesFn == nil {
+		if uninstallFn == nil && uninstallWithEngramScopeFn == nil {
 			return UninstallDoneMsg{Err: fmt.Errorf("uninstall function not configured")}
 		}
 
@@ -3326,8 +3340,8 @@ func (m Model) startUninstall() tea.Cmd {
 			result componentuninstall.Result
 			err    error
 		)
-		if uninstallWithProfilesFn != nil && profileSelectionUsed {
-			result, err = uninstallWithProfilesFn(agentIDs, componentIDs, profileNamesToRemove, engramScope)
+		if uninstallWithEngramScopeFn != nil && engramScopeSelected {
+			result, err = uninstallWithEngramScopeFn(agentIDs, componentIDs, engramScope)
 		} else {
 			result, err = uninstallFn(agentIDs, componentIDs)
 		}
@@ -3364,21 +3378,10 @@ func (m Model) startUninstall() tea.Cmd {
 	}
 }
 
-func (m *Model) refreshUninstallProfiles() {
+func (m *Model) refreshUninstallEngramScope() {
 	m.UninstallEngramProjectScopeAvailable = m.detectProjectEngramData()
 	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
-
-	if !m.hasDetectedOpenCode() {
-		m.UninstallProfilesAvailable = nil
-		m.UninstallProfilesToRemove = nil
-		m.UninstallProfileSelection = false
-		return
-	}
-
-	// Named profile cleanup is retired. Existing user profiles remain untouched.
-	m.UninstallProfilesAvailable = nil
-	m.UninstallProfilesToRemove = nil
-	m.UninstallProfileSelection = false
+	m.UninstallEngramScopeSelected = false
 }
 
 func (m Model) detectProjectEngramData() bool {
@@ -3627,12 +3630,12 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	}
 
 	// ScreenUninstallConfirm: dynamic back navigation based on uninstall mode.
-	// - with profile selection: go back to profile selection screen
+	// - with Engram scope selection: go back to the Engram scope screen
 	// - partial: go back to component selection (ScreenUninstallComponents)
 	// - full/full-remove: go back to mode selection (ScreenUninstallMode)
 	if m.Screen == ScreenUninstallConfirm {
-		if m.UninstallProfileSelection {
-			m.setScreen(ScreenUninstallProfiles)
+		if m.UninstallEngramScopeSelected {
+			m.setScreen(ScreenUninstallEngramScope)
 		} else {
 			switch m.UninstallMode {
 			case model.UninstallModePartial:
@@ -3644,7 +3647,7 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		return m
 	}
 
-	if m.Screen == ScreenUninstallProfiles {
+	if m.Screen == ScreenUninstallEngramScope {
 		if m.UninstallMode == model.UninstallModePartial {
 			m.setScreen(ScreenUninstallComponents)
 		} else {
@@ -3780,10 +3783,7 @@ func (m *Model) setScreen(next Screen) {
 		m.PinErr = nil
 	}
 	if next == ScreenUninstallMode {
-		m.refreshUninstallProfiles()
-		m.UninstallProfilesToRemove = nil
-		m.UninstallProfileSelection = false
-		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+		m.refreshUninstallEngramScope()
 	}
 }
 
@@ -3840,13 +3840,10 @@ func (m Model) optionCount() int {
 	}
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), 0, m.hasAgentBuilderEngines(), m.inGitRepository()))
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.inGitRepository()))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 0
-		}
-		if !m.UpdateCheckDone {
-			return 0 // no options while checking
 		}
 		return 1 // "upgrade all" or "return" when up to date
 	case ScreenSync:
@@ -3867,8 +3864,8 @@ func (m Model) optionCount() int {
 		return len(screens.UninstallAgentOptions()) + 2
 	case ScreenUninstallComponents:
 		return len(screens.UninstallComponentOptions()) + 2
-	case ScreenUninstallProfiles:
-		count := len(m.UninstallProfilesAvailable) + 2
+	case ScreenUninstallEngramScope:
+		count := 2
 		if m.shouldShowUninstallEngramScopeSelection() {
 			count += 2
 		}
@@ -4063,28 +4060,11 @@ func (m *Model) toggleCurrentUninstallComponent() {
 	m.UninstallComponents = append(m.UninstallComponents, componentID)
 }
 
-func (m *Model) toggleCurrentUninstallProfile() {
-	if m.Cursor >= len(m.UninstallProfilesAvailable) {
-		return
-	}
-
-	profileName := m.UninstallProfilesAvailable[m.Cursor]
-	for idx, selected := range m.UninstallProfilesToRemove {
-		if selected == profileName {
-			m.UninstallProfilesToRemove = append(m.UninstallProfilesToRemove[:idx], m.UninstallProfilesToRemove[idx+1:]...)
-			return
-		}
-	}
-
-	m.UninstallProfilesToRemove = append(m.UninstallProfilesToRemove, profileName)
-}
-
 func (m *Model) toggleCurrentUninstallEngramScope() {
-	profileCount := len(m.UninstallProfilesAvailable)
-	if m.Cursor < profileCount || !m.shouldShowUninstallEngramScopeSelection() {
+	if !m.shouldShowUninstallEngramScopeSelection() {
 		return
 	}
-	idx := m.Cursor - profileCount
+	idx := m.Cursor
 	if idx == 0 {
 		m.UninstallEngramScope = model.EngramUninstallScopeProject
 		return
@@ -4375,16 +4355,6 @@ func extractAvailableUpdates(results []update.UpdateResult) []screens.UpdateInfo
 		}
 	}
 	return updates
-}
-
-// hasDetectedOpenCode returns true if OpenCode config directory was detected.
-func (m Model) hasDetectedOpenCode() bool {
-	for _, cfg := range m.Detection.Configs {
-		if cfg.Agent == string(model.AgentOpenCode) && cfg.Exists {
-			return true
-		}
-	}
-	return false
 }
 
 func (m Model) shouldShowOpenCodeBackgroundScreen() bool {

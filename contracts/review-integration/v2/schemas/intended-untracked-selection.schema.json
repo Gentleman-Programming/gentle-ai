@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gentle-ai.review-intended-untracked-selection/v1",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/intended-untracked-selection.schema.json",
   "title": "Gentle AI intended untracked selection",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "untracked_scope", "expected_untracked_inventory", "intended_untracked"],

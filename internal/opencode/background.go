@@ -392,9 +392,9 @@ func ManagedLauncherPaths(homeDir, goos string) []string {
 // they are asking for Gentle-owned paths.
 func LauncherPaths(homeDir, goos string) []string { return ManagedLauncherPaths(homeDir, goos) }
 
-// ResolveTarget finds the real OpenCode executable while excluding the
-// Gentle-owned bin directory. It must be called before that directory is added
-// to PATH, and remains safe on repeated activation after it is already there.
+// ResolveTarget finds a stable OpenCode executable path outside the Gentle-owned
+// bin directory. Physical targets are checked for recursion, but executable
+// symlinks are preserved so package-manager upgrades do not invalidate launchers.
 func ResolveTarget(homeDir, goos, pathValue string) (string, error) {
 	if goos == "" {
 		goos = runtime.GOOS
@@ -403,9 +403,18 @@ func ResolveTarget(homeDir, goos, pathValue string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve managed OpenCode bin directory: %w", err)
 	}
+	if physicalDir, evalErr := filepath.EvalSymlinks(managedDir); evalErr == nil {
+		managedDir = physicalDir
+	}
 	for _, entry := range splitPath(pathValue, goos) {
 		entry = strings.Trim(strings.TrimSpace(entry), `"`)
 		if entry == "" || !filepath.IsAbs(entry) {
+			continue
+		}
+		// Normalize directory aliases (including Windows short names), but do
+		// not resolve the executable symlink that a package manager maintains.
+		entry, err = filepath.EvalSymlinks(entry)
+		if err != nil {
 			continue
 		}
 		entry, err = filepath.Abs(entry)
@@ -432,7 +441,7 @@ func ResolveTarget(homeDir, goos, pathValue string) (string, error) {
 			if pathUnder(realPath, managedDir, goos) {
 				continue
 			}
-			return realPath, nil
+			return candidate, nil
 		}
 	}
 	return "", fmt.Errorf("OpenCode target not found outside managed launcher directory %q", managedDir)

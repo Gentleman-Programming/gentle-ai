@@ -265,17 +265,14 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 			probe = probePiCodeGraphMCP
 		}
 	}
-	if err = verifyPiCodeGraphWithProbe(effectiveMCPPath, result.Children, probe); err != nil {
+	var verification PiCodeGraphMCPVerification
+	if verification, err = verifyPiCodeGraphCapabilityWithProbe(effectiveMCPPath, result.Children, probe); err != nil {
 		result, err = PreservePiCodeGraphPending(result, err)
 		if err != nil {
 			return result, err
 		}
-	} else {
-		result.MCP, err = verifyPiMCPWithProbe(effectiveMCPPath, probe)
-		if err != nil {
-			return result, err
-		}
 	}
+	result.MCP = verification
 	encoded, marshalErr := json.MarshalIndent(manifest, "", "  ")
 	if marshalErr != nil {
 		return result, marshalErr
@@ -445,30 +442,23 @@ func stripPiCodeGraphBlocks(body string) (string, error) {
 	return body, nil
 }
 
-func verifyPiCodeGraph(mcpPath string, children []PiCodeGraphChild) error {
-	return verifyPiCodeGraphWithProbe(mcpPath, children, piCodeGraphEffectiveMCPProbe)
-}
-
-func verifyPiCodeGraphWithProbe(mcpPath string, children []PiCodeGraphChild, probe PiCodeGraphEffectiveMCPProbe) error {
+func verifyPiCodeGraphCapabilityWithProbe(mcpPath string, children []PiCodeGraphChild, probe PiCodeGraphEffectiveMCPProbe) (PiCodeGraphMCPVerification, error) {
 	for _, child := range children {
 		if child.Classification == PiChildMisconfigured {
-			return fmt.Errorf("Pi child %q is misconfigured: %s", child.Name, child.Reason)
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi child %q is misconfigured: %s", child.Name, child.Reason)
 		}
 		if child.Classification == PiChildUnavailable {
 			continue
 		}
 		body, err := os.ReadFile(child.Target)
 		if err != nil || !strings.Contains(string(body), piCodeGraphGuidanceMarker) {
-			return fmt.Errorf("Pi child %q lacks CodeGraph lazy-init guidance", child.Name)
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi child %q lacks CodeGraph lazy-init guidance", child.Name)
 		}
 		if child.Classification == PiChildCompatible && (!strings.Contains(string(body), piCodeGraphToolMarker) || !slices.Contains(child.Tools, "bash") || !slices.Contains(child.Tools, "mcp")) {
-			return fmt.Errorf("Pi child %q lacks verified CodeGraph tools", child.Name)
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi child %q lacks verified CodeGraph tools", child.Name)
 		}
 	}
-	if _, err := verifyPiMCPWithProbe(mcpPath, probe); err != nil {
-		return err
-	}
-	return nil
+	return verifyPiMCPWithProbe(mcpPath, probe)
 }
 
 func verifyPiMCP(mcpPath string) (PiCodeGraphMCPVerification, error) {
@@ -657,24 +647,22 @@ func hasSchemaType(properties map[string]any, name, want string) bool {
 // markers are intentionally not consulted because they cannot prove child MCP
 // tools or per-child lazy-init guidance.
 func PiCodeGraphConfigured(homeDir, workspaceDir string) (bool, string) {
-	configured, reason, _ := inspectPiCodeGraph(homeDir, workspaceDir)
-	return configured, reason
+	status, reason, _ := inspectPiCodeGraph(homeDir, workspaceDir)
+	return status == AgentStatusConfigured, reason
 }
 
-func inspectPiCodeGraph(homeDir, workspaceDir string) (bool, string, []PiCodeGraphChild) {
+func inspectPiCodeGraph(homeDir, workspaceDir string) (AgentStatusKind, string, []PiCodeGraphChild) {
 	paths := piagent.CodeGraphPaths(homeDir)
 	children, err := piagent.DiscoverCodeGraphChildren(homeDir, workspaceDir)
 	if err != nil {
-		return false, err.Error(), nil
+		return AgentStatusMissing, err.Error(), nil
 	}
 	if len(children) == 0 {
 		if _, err := os.Stat(paths.Manifest); err != nil {
-			return false, "no effective Pi children were discovered and no Gentle-AI ownership record exists", nil
+			return AgentStatusMissing, "no effective Pi children were discovered and no Gentle-AI ownership record exists", nil
 		}
-		if err := verifyPiCodeGraph(paths.MCPConfig, nil); err != nil {
-			return false, err.Error(), nil
-		}
-		return true, "verified Pi MCP transport; no effective children were discovered", nil
+		status, reason := inspectPiCodeGraphCapability(paths.MCPConfig, nil)
+		return status, reason, nil
 	}
 	reports := make([]PiCodeGraphChild, 0, len(children))
 	for _, child := range children {
@@ -683,7 +671,7 @@ func inspectPiCodeGraph(homeDir, workspaceDir string) (bool, string, []PiCodeGra
 		}
 		body, err := os.ReadFile(child.Target)
 		if err != nil {
-			return false, fmt.Sprintf("cannot read Pi child %q: %v", child.Name, err), reports
+			return AgentStatusMissing, fmt.Sprintf("cannot read Pi child %q: %v", child.Name, err), reports
 		}
 		tools, parseable, malformed := piChildTools(string(body))
 		if malformed {
@@ -695,14 +683,23 @@ func inspectPiCodeGraph(homeDir, workspaceDir string) (bool, string, []PiCodeGra
 			classification = PiChildCompatible
 		}
 		if classification != PiChildCompatible && strings.Contains(string(body), piCodeGraphToolMarker) {
-			return false, fmt.Sprintf("Pi child %q has stale CodeGraph tools without bash support", child.Name), reports
+			return AgentStatusMissing, fmt.Sprintf("Pi child %q has stale CodeGraph tools without bash support", child.Name), reports
 		}
 		reports = append(reports, PiCodeGraphChild{Name: child.Name, Source: child.Source, Target: child.Target, Tools: tools, Classification: classification})
 	}
-	if err := verifyPiCodeGraph(paths.MCPConfig, reports); err != nil {
-		return false, err.Error(), reports
+	status, reason := inspectPiCodeGraphCapability(paths.MCPConfig, reports)
+	return status, reason, reports
+}
+
+func inspectPiCodeGraphCapability(mcpPath string, children []PiCodeGraphChild) (AgentStatusKind, string) {
+	verification, err := verifyPiCodeGraphCapabilityWithProbe(mcpPath, children, piCodeGraphEffectiveMCPProbe)
+	if err == nil {
+		return AgentStatusConfigured, "verified Pi MCP transport and every effective child"
 	}
-	return true, "verified Pi MCP transport and every effective child", reports
+	if isExclusivePiCodeGraphPending(err) && verification.Adapter && verification.ReadOnlyExplore {
+		return AgentStatusPending, "direct MCP capability verified; " + err.Error()
+	}
+	return AgentStatusMissing, err.Error()
 }
 
 // PiCodeGraphPaths returns only files Gentle AI may reconcile or remove.

@@ -75,6 +75,16 @@ From that validated request the execution derives the inner exact LF-only eight-
 
 On success it moves the complete immutable lineage into `review-transactions/quarantine/`, writes a prepared then committed audit record with the re-derived chain identity and alias-event revisions, and reads the inventory back. It does not delete or rewrite authority. The status becomes complete/authoritative only if the remaining inventory is independently clean; unrelated invalid, incomplete, compact-v2, or graph authority continues to fail closed.
 
+## Rejected Validator Terminal Disposition
+
+A canonical rejected targeted-validator verdict is valid authority, not corruption. An unchanged candidate still stops, and ordinary abandonment and recovery restrictions remain in force. For an isolated terminal with a consumed correction and no recovery dependencies, `gentle-ai review repair --preflight` offers an exact successor-only selector, not permission to mutate.
+
+1. Select the exact entry by repeating preflight with its returned `--successor-lineage` and `--successor-revision`.
+2. Review the disposition plan and supply actor, reason, and its exact digest/inventory-bound `gentle-ai.review-disposition-authorization/v1` binding through the existing repair execution inputs.
+3. Execution rederives eligibility under the maintenance lock, validates authorization and revisions, and retains byte-identical rejected authority with an audit proof. Exact replay converges on that proof.
+
+The class is `rejected_targeted_validator_terminal`. Disposition releases only the active governing claim: it does not approve the candidate, replace the historical verdict, restore a correction attempt, disable RDD, or automatically launch another review. It is not delivery permission. Missing canonical evidence, stale or forged bindings, non-rejected terminals, incomplete inspection, and retained recovery dependencies fail closed. Unrelated historical and content-mismatch repair behavior is unchanged.
+
 ## Historical Complete-Fix Scope Quarantine
 
 The former `review quarantine-legacy-fix-scope` verb and its provider are retired; the CLI refuses the verb as an unknown review command, and no live command performs this quarantine. The operation existed for immutable legacy-v1 `ordinary_4r` history whose sole semantic anomaly was a historical `review/complete-fix` expanding correction paths beyond frozen genesis scope, and it was a quarantine, never validation, rewrite, migration, or repair.

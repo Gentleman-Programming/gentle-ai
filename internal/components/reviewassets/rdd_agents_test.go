@@ -46,7 +46,7 @@ func TestNativeAgentManifestShipsReviewAgentsOnlyToRDDRuntimes(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"} {
-		for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE} {
+		for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCursor} {
 			if !containsName(NativeAgentManifest[agent], want) {
 				t.Errorf("%s lost Judgment Day agent %s", agent, want)
 			}
@@ -261,7 +261,7 @@ func TestRetiredReviewAgentCleanupSkipsNonRegularFiles(t *testing.T) {
 	}
 }
 
-func TestCursorInstallWithoutAgentsDirectoryWritesNothing(t *testing.T) {
+func TestCursorInstallWithoutAgentsDirectoryInstallsJudgmentDay(t *testing.T) {
 	t.Parallel()
 
 	adapter, err := agents.NewAdapter(model.AgentCursor)
@@ -270,12 +270,13 @@ func TestCursorInstallWithoutAgentsDirectoryWritesNothing(t *testing.T) {
 	}
 	home := t.TempDir()
 	result, err := InstallNativeAgents(home, adapter, InstallOptions{})
-	if err != nil || result.Changed {
-		t.Fatalf("InstallNativeAgents(cursor) = %+v, %v; want no change", result, err)
+	if err != nil || !result.Changed {
+		t.Fatalf("InstallNativeAgents(cursor) = %+v, %v; want installed agents", result, err)
 	}
-	entries, err := os.ReadDir(home)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("cursor install wrote into an empty home: %v %v", entries, err)
+	for _, name := range []string{"jd-judge-a.md", "jd-judge-b.md", "jd-fix-agent.md"} {
+		if _, err := os.Stat(filepath.Join(adapter.SubAgentsDir(home), name)); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
 	}
 }
 

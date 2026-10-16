@@ -215,12 +215,19 @@ func buildCandidateBinary(t *testing.T) string {
 		binaryName += ".exe"
 	}
 	binary := filepath.Join(t.TempDir(), binaryName)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Building the CLI can approach 30 seconds even with a warm cache on
+	// Windows. Keep a bounded build budget separate from actor deadlines.
+	const buildTimeout = 2 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, "go", "build", "-o", binary, "./cmd/gentle-ai")
 	command.Dir = repositoryRoot(t)
+	started := time.Now()
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build candidate gentle-ai binary: %v\n%s", err, output)
+		if ctx.Err() != nil {
+			t.Fatalf("build candidate gentle-ai binary timed out (budget %s, elapsed %s): %v; command error: %v\n%s", buildTimeout, time.Since(started), ctx.Err(), err, output)
+		}
+		t.Fatalf("build candidate gentle-ai binary failed after %s: %v\n%s", time.Since(started), err, output)
 	}
 	return binary
 }

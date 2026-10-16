@@ -28,6 +28,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
 )
@@ -733,7 +734,9 @@ func buildAppCandidateBinary(t *testing.T) string {
 	// 30s; the cap only guards against a hung toolchain, not build speed.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "build", "-o", binary, "../../cmd/gentle-ai")
+	// This fixture tests runtime state, not VCS metadata. Avoid consulting
+	// ambient repository ancestry when building from a linked worktree.
+	command := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-o", binary, "../../cmd/gentle-ai")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build candidate binary: %v\n%s", err, output)
 	}
@@ -838,6 +841,60 @@ func TestDeferredSyncIncludesCodexPermissionsArgs(t *testing.T) {
 	}
 	if args := syncArgsForDiscoveredAgents(configured); len(args) != 0 {
 		t.Fatalf("configured Custom sync args = %v, want none", args)
+	}
+}
+
+func TestTuiSyncPreservesClaudeBalancedPreset(t *testing.T) {
+	for _, phase := range []bool{false, true} {
+		t.Run(fmt.Sprintf("phase=%t", phase), func(t *testing.T) {
+			home := t.TempDir()
+			balanced := model.ClaudeModelPresetBalanced()
+			initial := state.InstallState{InstalledAgents: []string{string(model.AgentClaudeCode)}}
+			if phase {
+				initial.ClaudePhaseAssignments = make(map[string]state.ClaudePhaseAssignmentState)
+				for role, alias := range balanced {
+					initial.ClaudePhaseAssignments[role] = state.ClaudePhaseAssignmentState{Model: string(alias)}
+				}
+			} else {
+				initial.ClaudeModelAssignments = make(map[string]string)
+				for role, alias := range balanced {
+					initial.ClaudeModelAssignments[role] = string(alias)
+				}
+			}
+			if err := state.Write(home, initial); err != nil {
+				t.Fatal(err)
+			}
+			for syncRun := 0; syncRun < 2; syncRun++ {
+				if _, err := tuiSync(home)(nil); err != nil {
+					t.Fatalf("sync %d: %v", syncRun, err)
+				}
+				persisted, err := state.Read(home)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(persisted.ClaudePhaseAssignments, initial.ClaudePhaseAssignments) ||
+					!reflect.DeepEqual(persisted.ClaudeModelAssignments, initial.ClaudeModelAssignments) {
+					t.Fatalf("sync %d changed Claude preset assignments: phase=%v legacy=%v", syncRun, persisted.ClaudePhaseAssignments, persisted.ClaudeModelAssignments)
+				}
+				reopened := model.Selection{}
+				loadPersistedAssignments(home, &reopened)
+				assignments := reopened.ClaudePhaseAssignments
+				if !phase {
+					assignments = model.ClaudePhaseAssignmentsFromLegacy(reopened.ClaudeModelAssignments)
+				}
+				picker := screens.NewClaudeModelPickerStateFromPhaseAssignments(assignments)
+				if picker.Preset != screens.ClaudePresetBalanced {
+					t.Fatalf("sync %d reopened preset = %v, want Balanced", syncRun, picker.Preset)
+				}
+				body, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(body), "| orchestrator |") {
+					t.Fatal("persisted metadata must not expose an orchestrator model row in the parent prompt")
+				}
+			}
+		})
 	}
 }
 
@@ -1120,8 +1177,8 @@ func TestLoadPersistedAssignmentsPopulatesEmptySelection(t *testing.T) {
 	selection := model.Selection{}
 	loadPersistedAssignments(home, &selection)
 
-	if _, exists := selection.ClaudeModelAssignments["orchestrator"]; exists {
-		t.Errorf("ClaudeModelAssignments should not load persisted orchestrator model: %v", selection.ClaudeModelAssignments)
+	if got := selection.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
+		t.Errorf("persisted orchestrator metadata = %q, want opus", got)
 	}
 	if got := selection.ClaudeModelAssignments["sdd-apply"]; got != "sonnet" {
 		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got, "sonnet")
@@ -1205,8 +1262,8 @@ func TestPersistAssignmentsPreservesInstalledAgents(t *testing.T) {
 	if len(got.InstalledAgents) != 2 {
 		t.Fatalf("InstalledAgents = %v, want [claude-code opencode]", got.InstalledAgents)
 	}
-	if _, exists := got.ClaudeModelAssignments["orchestrator"]; exists {
-		t.Errorf("ClaudeModelAssignments should not persist orchestrator model: %v", got.ClaudeModelAssignments)
+	if alias := got.ClaudeModelAssignments["orchestrator"]; alias != "opus" {
+		t.Errorf("persisted orchestrator metadata = %q, want opus", alias)
 	}
 	if got.ClaudeModelAssignments["sdd-apply"] != "sonnet" {
 		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got.ClaudeModelAssignments["sdd-apply"], "sonnet")

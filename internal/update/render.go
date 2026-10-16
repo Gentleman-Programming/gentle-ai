@@ -15,7 +15,6 @@ func RenderCLI(results []UpdateResult) string {
 
 	updatesAvailable := 0
 	checksFailed := 0
-	registeredPending := 0
 
 	for _, r := range results {
 		status := statusIcon(r.Status)
@@ -41,12 +40,6 @@ func RenderCLI(results []UpdateResult) string {
 				fmt.Fprintf(&b, ": %v", r.Err)
 			}
 			checksFailed++
-		} else if r.Status == RegisteredNotMaterialized {
-			registeredPending++
-			b.WriteString("  registered, pending OpenCode materialization")
-			if r.UpdateHint != "" {
-				fmt.Fprintf(&b, "  %s", r.UpdateHint)
-			}
 		}
 
 		b.WriteString("\n")
@@ -60,8 +53,6 @@ func RenderCLI(results []UpdateResult) string {
 		fmt.Fprintf(&b, "%d update(s) available.\n", updatesAvailable)
 	} else if checksFailed > 0 {
 		fmt.Fprintf(&b, "Update check incomplete: %d tool(s) failed to check.\n", checksFailed)
-	} else if registeredPending > 0 {
-		fmt.Fprintf(&b, "%d OpenCode plugin(s) registered, pending materialization.\n", registeredPending)
 	} else {
 		b.WriteString("All tools are up to date!\n")
 	}
@@ -78,8 +69,6 @@ func statusIcon(status UpdateStatus) string {
 		return "[UP]"
 	case NotInstalled:
 		return "[--]"
-	case RegisteredNotMaterialized:
-		return "[reg]"
 	case VersionUnknown:
 		return "[??]"
 	case CheckFailed:

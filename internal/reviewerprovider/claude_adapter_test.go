@@ -71,18 +71,28 @@ func TestClaudeAdapterUsesStdinAndReturnsUntouchedRawOutput(t *testing.T) {
 	}
 }
 
-func TestClaudeAdapterExecutesWithSavedModelOnlyWhenValid(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the helper process uses POSIX argument handling")
-	}
+func TestClaudeAdapterExecutesWithSavedModelAndEffortOnlyWhenValid(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		model model.ClaudeModelAlias
-		want  string
+		name       string
+		model      model.ClaudeModelAlias
+		effort     model.ClaudeEffort
+		wantModel  string
+		wantEffort string
 	}{
-		{"configured", model.ClaudeModelHaiku, "haiku"},
-		{"missing", "", ""},
-		{"invalid", "unknown", ""},
+		{"configured", model.ClaudeModelHaiku, model.ClaudeEffortDefault, "haiku", ""},
+		{"missing", "", model.ClaudeEffortDefault, "", ""},
+		{"invalid model", "unknown", model.ClaudeEffortLow, "", ""},
+		{"opus low", model.ClaudeModelOpus, model.ClaudeEffortLow, "opus", "low"},
+		{"opus medium", model.ClaudeModelOpus, model.ClaudeEffortMedium, "opus", "medium"},
+		{"opus high", model.ClaudeModelOpus, model.ClaudeEffortHigh, "opus", "high"},
+		{"opus xhigh", model.ClaudeModelOpus, model.ClaudeEffortXHigh, "opus", "xhigh"},
+		{"opus max", model.ClaudeModelOpus, model.ClaudeEffortMax, "opus", "max"},
+		{"sonnet max", model.ClaudeModelSonnet, model.ClaudeEffortMax, "sonnet", "max"},
+		{"fable xhigh", model.ClaudeModelFable, model.ClaudeEffortXHigh, "fable", "xhigh"},
+		{"default effort", model.ClaudeModelOpus, model.ClaudeEffortDefault, "opus", ""},
+		{"invalid effort", model.ClaudeModelOpus, "invalid", "opus", ""},
+		{"unsupported effort", model.ClaudeModelHaiku, model.ClaudeEffortLow, "haiku", ""},
+		{"unsupported xhigh", model.ClaudeModelSonnet, model.ClaudeEffortXHigh, "sonnet", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			argumentsPath := filepath.Join(t.TempDir(), "arguments")
@@ -91,33 +101,45 @@ func TestClaudeAdapterExecutesWithSavedModelOnlyWhenValid(t *testing.T) {
 			t.Setenv(claudeAdapterArgumentsPathEnvironment, argumentsPath)
 			adapter := &ClaudeAdapter{
 				Model:    tc.model,
+				Effort:   tc.effort,
 				LookPath: func(string) (string, error) { return "claude", nil },
 				commandContext: func(ctx context.Context, _ string, arguments ...string) *exec.Cmd {
 					return exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestClaudeAdapterHelperProcess$", "--"}, arguments...)...)
 				},
 			}
-			if _, err := adapter.Review(context.Background(), NewInvocation([]byte("opaque prompt"))); err != nil {
+			raw, err := adapter.Review(context.Background(), NewInvocation([]byte("opaque prompt")))
+			if err != nil {
 				t.Fatal(err)
+			}
+			if !bytes.Equal(raw, []byte("raw\x00reviewer\xffoutput")) {
+				t.Fatalf("Review() = %q, want untouched raw output", raw)
 			}
 			data, err := os.ReadFile(argumentsPath)
 			if err != nil {
 				t.Fatal(err)
 			}
 			args := strings.Split(string(data), "\n")
-			for i, arg := range args {
-				if arg == "--effort" {
-					t.Fatal("reviewer must not pass unverified effort flags")
-				}
-				if arg == "--model" {
-					if tc.want == "" || i+1 >= len(args) || args[i+1] != tc.want {
-						t.Fatalf("unexpected model arguments: %q", args)
+			for flag, want := range map[string]string{"--model": tc.wantModel, "--effort": tc.wantEffort} {
+				count := 0
+				for i, arg := range args {
+					if arg != flag {
+						continue
 					}
+					count++
+					if want == "" || i+1 >= len(args) || args[i+1] != want {
+						t.Fatalf("unexpected %s arguments: %q", flag, args)
+					}
+				}
+				if want != "" && count != 1 {
+					t.Fatalf("want exactly one %s %s in %q", flag, want, args)
+				}
+			}
+			for i, arg := range args {
+				if arg == "--setting-sources" && i+1 < len(args) && args[i+1] == "" {
 					return
 				}
 			}
-			if tc.want != "" {
-				t.Fatalf("missing --model %s in %q", tc.want, args)
-			}
+			t.Fatal("reviewer must retain empty setting sources")
 		})
 	}
 }

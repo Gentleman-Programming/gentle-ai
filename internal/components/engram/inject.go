@@ -73,6 +73,9 @@ func SetLookPathForTest(t interface {
 // an absolute path survives across environments where PATH is not fully
 // inherited (e.g. Windsurf, IDEs that launch without a login shell).
 func resolveEngramCommand() (string, bool) {
+	if bin, ok := CallerBinary(); ok {
+		return bin, true
+	}
 	p, err := EngramLookPath("engram")
 	if err != nil || p == "" {
 		return "engram", false
@@ -1191,6 +1194,9 @@ func stableAntigravityEngramCommand(homeDir, globalPath string) string {
 }
 
 func preferredStableEngramCommand() string {
+	if bin, ok := CallerBinary(); ok {
+		return bin
+	}
 	p, err := EngramLookPath("engram")
 	if err == nil && isStableHomebrewEngramPath(p) {
 		return p

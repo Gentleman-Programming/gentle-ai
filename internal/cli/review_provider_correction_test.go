@@ -537,3 +537,60 @@ func TestProviderCaptureRefusesPreflightBeforeInvocationOrPreservation(t *testin
 		t.Fatalf("preflight preserved a rejected result: %v", statErr)
 	}
 }
+
+// TestProviderCaptureCorrectiveRetryKeepsTheProbeWorkspace pins S11 on the
+// corrective attempt: the re-invocation carries the same candidate
+// materializer and source root as the first, so a corrective Codex refuter
+// still runs in the confined candidate copy its prompt describes. An
+// invocation without a probe stays without one.
+func TestProviderCaptureCorrectiveRetryKeepsTheProbeWorkspace(t *testing.T) {
+	for _, withProbe := range []bool{true, false} {
+		materialized := 0
+		invocation := reviewerprovider.NewInvocation([]byte("original prompt"))
+		if withProbe {
+			invocation = invocation.WithProbeWorkspace("/reviewed/repository", func(context.Context, string) error {
+				materialized++
+				return nil
+			})
+		}
+		var probes []reviewerprovider.ProbeWorkspace
+		var sources, prompts []string
+		adapter := providerTestAdapterFunc(func(_ context.Context, invocation reviewerprovider.Invocation) ([]byte, error) {
+			probes = append(probes, invocation.ProbeWorkspace())
+			sources = append(sources, invocation.ProbeSourceRoot())
+			prompts = append(prompts, string(invocation.Prompt()))
+			return []byte("raw"), nil
+		})
+		attempts := 0
+		admit := func(context.Context, []byte) (string, error) {
+			attempts++
+			if attempts == 1 {
+				return "", errors.New("malformed refuter result")
+			}
+			return "admitted", nil
+		}
+		preserve := func(context.Context, int, error, []byte) string { return "" }
+		continuation := func() string { return "gentle-ai review status --next-transition" }
+		if _, _, err := reviewProviderCaptureRetry(context.Background(), adapter, invocation, string(model.AgentCodex), admit, preserve, continuation, nil); err != nil {
+			t.Fatal(err)
+		}
+		if len(probes) != 2 {
+			t.Fatalf("adapter invocations = %d, want the first attempt plus the corrective retry", len(probes))
+		}
+		if prompts[1] == prompts[0] {
+			t.Fatal("corrective re-invocation did not deliver the corrective prompt")
+		}
+		if !withProbe {
+			if probes[0] != nil || probes[1] != nil || sources[1] != "" {
+				t.Fatal("an invocation without a probe gained one on the corrective retry")
+			}
+			continue
+		}
+		if probes[1] == nil || sources[1] != "/reviewed/repository" {
+			t.Fatalf("corrective re-invocation probe = %v, source root %q; want the original probe and root", probes[1] != nil, sources[1])
+		}
+		if err := probes[1](context.Background(), t.TempDir()); err != nil || materialized != 1 {
+			t.Fatalf("corrective probe workspace = %v, materialized %d; want the original materializer", err, materialized)
+		}
+	}
+}
