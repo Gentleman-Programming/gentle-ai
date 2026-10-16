@@ -306,6 +306,7 @@ func TestEveryManifestDigestStaysByteStable(t *testing.T) {
 		model.AgentAntigravity:   "sha256:4666df6712fc63b0aacf1227cb28d0afdace1f98cbdd611aa2d5e8d4048b87ce",
 		model.AgentClaudeCode:    "sha256:0644de1b6539cffee24ed3d673b450bf1f460fe5db7e8f05c5a0911aace8b280",
 		model.AgentCodex:         "sha256:b47855dc0acdae65aa2215eba09135087d32a890814dc73baab13595ecb6602b",
+		model.AgentCommandCode:   "sha256:530d634cfc12ace0bcfa895fba6c5380ed2b6b93fa3dbd36fc1ef462594b728c",
 		model.AgentConductor:     "sha256:f06b2f6250b4fe2795a4f3c5dba242f4d19933ba2601311f1e8ed1b9fc95e48f",
 		model.AgentCursor:        "sha256:acb6f0092917d40ee12ca88b2661f623f317f0c7436b8b4205fccabf6dd9a9ca",
 		model.AgentGeminiCLI:     "sha256:98095b61c7598a2b36088a0d28309ca95d27944298e20d09159375874b09d9fa",
@@ -326,8 +327,8 @@ func TestEveryManifestDigestStaysByteStable(t *testing.T) {
 		nonPiAgents = append(nonPiAgents, agent)
 	}
 
-	if got := len(nonPiAgents); got != 16 {
-		t.Fatalf("want 16 non-Pi agents, got %d", got)
+	if got := len(nonPiAgents); got != 17 {
+		t.Fatalf("want 17 non-Pi agents, got %d", got)
 	}
 
 	for _, agent := range nonPiAgents {
