@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/triageevidence"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/triageevidence"
 )
 
 func main() {

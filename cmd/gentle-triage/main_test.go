@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/triageevidence"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/triageevidence"
 )
 
 // fixtures mirror the API shapes the pipeline reads.

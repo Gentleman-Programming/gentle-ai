@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/triageevidence"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/triageevidence"
 )
 
 // lifecycleLabels are the status:* lifecycle labels; issues carrying none of
