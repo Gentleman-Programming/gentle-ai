@@ -16,13 +16,14 @@ import (
 )
 
 type Definition struct {
-	ID          model.OpenCodeCommunityPluginID
-	Name        string
-	PackageName string
-	RepoURL     string
-	Owner       string
-	Repo        string
-	Description string
+	ID           model.OpenCodeCommunityPluginID
+	Name         string
+	PackageName  string
+	RepoURL      string
+	Owner        string
+	Repo         string
+	Description  string
+	V2Compatible bool
 }
 
 // UnsupportedLogoError reports the accepted V2 omission without installing or
@@ -34,6 +35,16 @@ func (UnsupportedLogoError) Error() string {
 }
 func (e UnsupportedLogoError) SkipReason() string { return e.Error() }
 
+// V2IncompatibleError reports that a community plugin is not compatible with OpenCode V2.
+type V2IncompatibleError struct {
+	PluginID model.OpenCodeCommunityPluginID
+}
+
+func (e V2IncompatibleError) Error() string {
+	return fmt.Sprintf("OpenCode community plugin %q V2 compatibility is unverified; existing configuration preserved", e.PluginID)
+}
+func (e V2IncompatibleError) SkipReason() string { return e.Error() }
+
 type Result struct {
 	Changed bool
 	Files   []string
@@ -42,25 +53,27 @@ type Result struct {
 // Retained only to identify registrations owned by older installations during
 // explicit CLI uninstall. External plugins are never installable or updatable.
 var legacyStatuslineDefinition = Definition{
-	ID:          model.OpenCodePluginSubAgentStatusline,
-	Name:        "Sub-agent Statusline",
-	PackageName: "opencode-subagent-statusline",
-	RepoURL:     "https://github.com/Joaquinvesapa/sub-agent-statusline",
-	Owner:       "Joaquinvesapa",
-	Repo:        "sub-agent-statusline",
-	Description: "OpenCode sidebar/statusline for sub-agent activity",
+	ID:           model.OpenCodePluginSubAgentStatusline,
+	Name:         "Sub-agent Statusline",
+	PackageName:  "opencode-subagent-statusline",
+	RepoURL:      "https://github.com/Joaquinvesapa/sub-agent-statusline",
+	Owner:        "Joaquinvesapa",
+	Repo:         "sub-agent-statusline",
+	Description:  "OpenCode sidebar/statusline for sub-agent activity",
+	V2Compatible: false,
 }
 
 // Retain only for identifying registrations owned by older installations during
 // uninstall. It is not offered in the installation or update catalogs.
 var legacySDDEngramDefinition = Definition{
-	ID:          model.OpenCodePluginSDDEngramManage,
-	Name:        "SDD Engram Manager",
-	PackageName: "opencode-sdd-engram-manage",
-	RepoURL:     "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin",
-	Owner:       "j0k3r-dev-rgl",
-	Repo:        "sdd-engram-plugin",
-	Description: "OpenCode TUI for SDD profiles and Engram memories",
+	ID:           model.OpenCodePluginSDDEngramManage,
+	Name:         "SDD Engram Manager",
+	PackageName:  "opencode-sdd-engram-manage",
+	RepoURL:      "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin",
+	Owner:        "j0k3r-dev-rgl",
+	Repo:         "sdd-engram-plugin",
+	Description:  "OpenCode TUI for SDD profiles and Engram memories",
+	V2Compatible: false,
 }
 
 const gentleLogoPluginFile = "gentle-logo.tsx"
@@ -139,6 +152,17 @@ func DefinitionFor(id model.OpenCodeCommunityPluginID) (Definition, bool) {
 }
 
 func Install(homeDir string, id model.OpenCodeCommunityPluginID) (Result, error) {
+	// Check V2 compatibility for legacy plugins
+	if id == model.OpenCodePluginSubAgentStatusline || id == model.OpenCodePluginSDDEngramManage {
+		major, err := opencode.DetectRuntimeMajor(context.Background())
+		if err != nil {
+			return Result{}, err
+		}
+		if major == opencode.RuntimeV2 {
+			return Result{}, V2IncompatibleError{PluginID: id}
+		}
+	}
+
 	// Legacy lookup is uninstall-only: refuse before probing or mutating anything.
 	if id != model.OpenCodePluginGentleLogo {
 		return Result{}, fmt.Errorf("OpenCode community plugin %q is not installable; existing configuration preserved", id)

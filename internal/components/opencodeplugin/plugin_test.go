@@ -455,6 +455,64 @@ func TestInstallGentleLogoReportsRollbackFailureInErrorChain(t *testing.T) {
 	}
 }
 
+func TestV2IncompatibleError_SubAgentStatusline(t *testing.T) {
+	err := V2IncompatibleError{PluginID: model.OpenCodePluginSubAgentStatusline}
+	if err.PluginID == "" {
+		t.Fatal("V2IncompatibleError should have PluginID set")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "sub-agent-statusline") {
+		t.Fatalf("Error message should contain plugin ID: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "V2 compatibility is unverified") {
+		t.Fatalf("Error message should mention V2 compatibility: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "existing configuration preserved") {
+		t.Fatalf("Error message should mention configuration preserved: %s", errMsg)
+	}
+	if err.SkipReason() != errMsg {
+		t.Fatalf("SkipReason should match Error(): %s vs %s", err.SkipReason(), errMsg)
+	}
+}
+
+func TestV2IncompatibleError_SDDEngramManage(t *testing.T) {
+	err := V2IncompatibleError{PluginID: model.OpenCodePluginSDDEngramManage}
+	if err.PluginID == "" {
+		t.Fatal("V2IncompatibleError should have PluginID set")
+	}
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "sdd-engram-plugin") {
+		t.Fatalf("Error message should contain plugin ID: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "V2 compatibility is unverified") {
+		t.Fatalf("Error message should mention V2 compatibility: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "existing configuration preserved") {
+		t.Fatalf("Error message should mention configuration preserved: %s", errMsg)
+	}
+	if err.SkipReason() != errMsg {
+		t.Fatalf("SkipReason should match Error(): %s vs %s", err.SkipReason(), errMsg)
+	}
+}
+
+func TestLegacyDefinitionsHaveV2CompatibleFalse(t *testing.T) {
+	def1, ok1 := DefinitionFor(model.OpenCodePluginSubAgentStatusline)
+	if !ok1 {
+		t.Fatal("DefinitionFor should return true for sub-agent-statusline")
+	}
+	if def1.V2Compatible {
+		t.Fatal("legacyStatuslineDefinition.V2Compatible should be false")
+	}
+
+	def2, ok2 := DefinitionFor(model.OpenCodePluginSDDEngramManage)
+	if !ok2 {
+		t.Fatal("DefinitionFor should return true for sdd-engram-plugin")
+	}
+	if def2.V2Compatible {
+		t.Fatal("legacySDDEngramDefinition.V2Compatible should be false")
+	}
+}
+
 func TestInstallGentleLogoWritesLocalTUIPluginAndRegistersAbsolutePath(t *testing.T) {
 	home := t.TempDir()
 
