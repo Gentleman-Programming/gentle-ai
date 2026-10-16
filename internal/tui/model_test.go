@@ -2161,7 +2161,8 @@ func TestWelcomeMenu_UninstallNavigation_WithOpenCodeDetected(t *testing.T) {
 // TestWelcomeMenu_OptionCount verifies the 12 retained welcome options.
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true)
+	// Legacy discovery does not change the 12 retained options.
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, true)
 	if len(opts) != 12 {
 		t.Fatalf("WelcomeOptions() len = %d, want 12; got %v", len(opts), opts)
 	}
