@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	ShellInstallWelcomeOption      = "Install Gentle Shell"
 	welcomeAdvisoryMaxRegionHeight = 7
 	welcomePrimaryContentHeight    = 44
 	welcomeHelpText                = "j/k: navigate • enter: select • q: quit"
@@ -26,6 +27,10 @@ type WelcomeAdvisory struct {
 // When hasEngines is false, "Create your own Agent" is shown as disabled
 // (labelled "(no agents)") to signal that no supported AI engine is installed.
 func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool) []string {
+	return WelcomeOptionsWithShellInstaller(updateResults, updateCheckDone, hasEngines, false)
+}
+
+func WelcomeOptionsWithShellInstaller(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, shellInstaller bool) []string {
 	upgradeLabel := "Upgrade tools"
 	if updateCheckDone && update.HasUpdates(updateResults) {
 		upgradeLabel = "Upgrade tools ★"
@@ -52,6 +57,9 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, h
 	opts = append(opts, "Receipt-Driven Development")
 	opts = append(opts, "Managed uninstall")
 	opts = append(opts, "Community Tools")
+	if shellInstaller {
+		opts = append(opts, ShellInstallWelcomeOption)
+	}
 	opts = append(opts, "Quit")
 
 	return opts
@@ -66,6 +74,26 @@ func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, upd
 }
 
 func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
+	return renderWelcomeWithInstaller(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, height, advisory, false)
+}
+
+func RenderShellWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
+	return renderWelcomeWithInstaller(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, height, advisory, true)
+}
+
+func renderWelcomeWithInstaller(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory, shellInstaller bool) string {
+	var options []string
+	if shellInstaller {
+		options = WelcomeOptionsWithShellInstaller(updateResults, updateCheckDone, hasEngines, true)
+	} else {
+		options = WelcomeOptions(updateResults, updateCheckDone, hasEngines)
+	}
+	minimum := func() string {
+		if shellInstaller && cursor >= 0 && cursor < len(options) {
+			return renderWelcomeMinimumLabel(width, height, options[cursor], true)
+		}
+		return renderWelcomeMinimum(width, height, cursor)
+	}
 	render := func(includeLogo, includeOptional, compact bool) string {
 		var b strings.Builder
 
@@ -102,7 +130,6 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 		} else {
 			b.WriteString("\n\n")
 		}
-		options := WelcomeOptions(updateResults, updateCheckDone, hasEngines)
 		if compact {
 			b.WriteString(renderWelcomeOptions(options, cursor, width))
 		} else {
@@ -123,7 +150,7 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 		return welcomeFrameStyle(width).Render(b.String())
 	}
 	if width > 0 && width <= styles.FrameStyle.GetHorizontalBorderSize() {
-		return renderWelcomeMinimum(width, height, cursor)
+		return minimum()
 	}
 	fitsViewport := func(view string) bool {
 		return (width <= 0 || lipgloss.Width(view) <= width) &&
@@ -144,7 +171,7 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 	if !fitsViewport(view) {
 		// A viewport shorter than the compact menu still needs a safe, actionable
 		// state instead of allowing the terminal to clip the rendered content.
-		view = renderWelcomeMinimum(width, height, cursor)
+		view = minimum()
 	}
 	return view
 }
@@ -178,7 +205,10 @@ func renderWelcomeOptions(options []string, cursor int, width int) string {
 }
 
 func renderWelcomeMinimum(width int, height int, cursor int) string {
-	const primaryAction = "Start installation"
+	return renderWelcomeMinimumLabel(width, height, "Start installation", cursor == 0)
+}
+
+func renderWelcomeMinimumLabel(width int, height int, primaryAction string, selected bool) string {
 	const compactPrimaryAction = "Go"
 	const narrowPrimaryAction = ">"
 	const compactHelp = "j/k, enter, q"
@@ -214,7 +244,7 @@ func renderWelcomeMinimum(width int, height int, cursor int) string {
 		primaryLineCount = len(lines)
 	}
 	primaryStyle := styles.UnselectedStyle
-	if cursor == 0 {
+	if selected {
 		primaryStyle = styles.SelectedStyle
 	}
 	rendered := primaryStyle.Render(strings.Join(lines[:primaryLineCount], "\n"))
