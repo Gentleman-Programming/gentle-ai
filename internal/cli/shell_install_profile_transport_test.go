@@ -11,7 +11,7 @@ import (
 
 func TestShellInstallProfileTransport(t *testing.T) {
 	selection, _ := ShellInstallOutcome(NewShellInstallModel(nil))
-	profile := shellinstaller.UserExperience{Persona: "unmanaged", BackgroundSubagents: "off", GlobalRDD: "off", Context7: "off"}
+	profile := shellinstaller.UserExperience{Persona: "unmanaged", BackgroundSubagents: "off", GlobalRDD: "off", Context7: "off", StrictTDD: "off", GGA: "on", GGAProvider: "codex"}
 	selection.Request.Destination = t.TempDir() + "/target"
 	selection.Request.Confirmation = "model-only-transport-token"
 	selection.Request.Experience, selection.Confirmed = &profile, true
@@ -49,6 +49,12 @@ func TestShellInstallProfileTransportRefusesInvalid(t *testing.T) {
 	for _, mutate := range []func(*shellinstaller.UserExperience){
 		func(p *shellinstaller.UserExperience) { p.GlobalRDD = "invalid" },
 		func(p *shellinstaller.UserExperience) { p.Context7 = "invalid" },
+		func(p *shellinstaller.UserExperience) { p.StrictTDD = "invalid" },
+		func(p *shellinstaller.UserExperience) { p.GGA = "invalid" },
+		func(p *shellinstaller.UserExperience) {
+			p.GGA = "on"
+			p.GGAProvider = "pi"
+		},
 	} {
 		selection, _ := ShellInstallOutcome(NewShellInstallModel(nil))
 		profile := shellinstaller.UserExperience{Persona: "gentleman", BackgroundSubagents: "on"}
