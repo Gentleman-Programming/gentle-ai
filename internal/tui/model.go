@@ -905,7 +905,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		PiBackgroundIntent:    s.PiBackgroundIntent,
 		UninstallAgents:       agents,
 		UninstallComponents:   defaultUninstallComponents(),
-		UninstallEngramScope:  model.EngramUninstallScopeGlobal,
+		UninstallEngramScope:  model.EngramUninstallScopeNone,
 		ReviewModeCwdFn:       os.Getwd,
 		ReviewModeStatusFn:    cli.ReviewModeStatus,
 		ReviewModeSetGlobalFn: cli.SetGlobalReviewMode,
@@ -2078,6 +2078,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.UninstallMode = options[m.Cursor].Mode
 			switch m.UninstallMode {
 			case model.UninstallModePartial:
+				m.UninstallEngramScope = model.EngramUninstallScopeNone
 				m.setScreen(ScreenUninstall)
 			case model.UninstallModeFull, model.UninstallModeFullRemove, model.UninstallModeCleanInstall:
 				// Populate all agents and all components for full uninstall
@@ -2091,6 +2092,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				for _, component := range allComponents {
 					m.UninstallComponents = append(m.UninstallComponents, component.ID)
 				}
+				m.UninstallEngramScope = model.EngramUninstallScopeGlobal
 				m.UninstallEngramScopeSelected = false
 				m.setScreen(ScreenUninstallConfirm)
 			}
@@ -2128,7 +2130,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	case ScreenUninstallEngramScope:
 		continueIdx := 0
 		if m.shouldShowUninstallEngramScopeSelection() {
-			continueIdx = 2
+			continueIdx = len(m.uninstallEngramScopeOptions())
 		}
 		switch {
 		case m.Cursor < continueIdx:
@@ -2896,7 +2898,7 @@ func (m Model) withResetUninstallState() Model {
 	m.UninstallComponents = defaultUninstallComponents()
 	m.UninstallEngramScopeSelected = false
 	m.UninstallEngramProjectScopeAvailable = false
-	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	m.UninstallEngramScope = model.EngramUninstallScopeNone
 	m.UninstallResult = componentuninstall.Result{}
 	m.UninstallErr = nil
 	m.SyncCleanInstallFiles = nil
@@ -3274,7 +3276,7 @@ func (m Model) startUninstall() tea.Cmd {
 			result componentuninstall.Result
 			err    error
 		)
-		if uninstallWithEngramScopeFn != nil && engramScopeSelected {
+		if uninstallWithEngramScopeFn != nil && (engramScopeSelected || m.UninstallMode == model.UninstallModePartial) {
 			result, err = uninstallWithEngramScopeFn(agentIDs, componentIDs, engramScope)
 		} else {
 			result, err = uninstallFn(agentIDs, componentIDs)
@@ -3314,7 +3316,11 @@ func (m Model) startUninstall() tea.Cmd {
 
 func (m *Model) refreshUninstallEngramScope() {
 	m.UninstallEngramProjectScopeAvailable = m.detectProjectEngramData()
-	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	if m.UninstallMode == model.UninstallModePartial {
+		m.UninstallEngramScope = model.EngramUninstallScopeNone
+	} else {
+		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	}
 	m.UninstallEngramScopeSelected = false
 }
 
@@ -3804,7 +3810,7 @@ func (m Model) optionCount() int {
 	case ScreenUninstallEngramScope:
 		count := 2
 		if m.shouldShowUninstallEngramScopeSelection() {
-			count += 2
+			count += len(m.uninstallEngramScopeOptions())
 		}
 		return count
 	case ScreenUninstallConfirm:
@@ -4001,13 +4007,9 @@ func (m *Model) toggleCurrentUninstallEngramScope() {
 	if !m.shouldShowUninstallEngramScopeSelection() {
 		return
 	}
-	idx := m.Cursor
-	if idx == 0 {
-		m.UninstallEngramScope = model.EngramUninstallScopeProject
-		return
-	}
-	if idx == 1 {
-		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	options := m.uninstallEngramScopeOptions()
+	if m.Cursor >= 0 && m.Cursor < len(options) {
+		m.UninstallEngramScope = options[m.Cursor].Scope
 	}
 }
 
@@ -4452,10 +4454,11 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 }
 
 func (m Model) shouldShowUninstallEngramScopeSelection() bool {
-	if !hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
-		return false
-	}
-	return m.UninstallEngramProjectScopeAvailable
+	return hasSelectedComponent(m.UninstallComponents, model.ComponentEngram)
+}
+
+func (m Model) uninstallEngramScopeOptions() []screens.UninstallEngramScopeOption {
+	return screens.UninstallEngramScopeOptions(m.UninstallEngramProjectScopeAvailable)
 }
 
 // isScrollableScreen returns true for screens that use scroll-based navigation
