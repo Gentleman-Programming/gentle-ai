@@ -17,9 +17,11 @@ args := cli.ShellInstallArguments(selection)
 
 The existing Linux/macOS `gentle-ai shell install` route already consumes these helpers: it creates the selector, reads its outcome and forwards its argument vector only after its owning program returns. Cancellation still produces no worker invocation.
 
-This is an internal application API, not a new user command. It does not add a Welcome entry, experience controls, terminal handoff integration, acquisition or installed Ready. Those are separately qualified units. Default CLI behavior is unchanged.
+The ordinary application opts into `WithShellInstaller()` and exposes **Install Gentle Shell** in Welcome. Selection stays inside its existing Bubble Tea program; only a confirmed result after terminal restoration reaches the guarded host handoff. See [Linux installation and limits](gentle-shell-linux-install.md).
 
 ## Verification and rollback
+
+On Linux, `TestShellInstallParentPhysicalPTY` drives the real common TUI through an owned PTY: confirm, Escape/Ctrl+C while editing and Escape/Ctrl+C on review. It observes exactly one parent program, a fresh physical-selection token and full termios restoration before the inert worker boundary. Successful cleanup joins the parent and PTY reader before restoring process-global state. Each scenario runs in an isolated invocation of the same test binary, with a bounded parent wait/kill/reap; a failed join fails the test without leaking hooks or streams into its parent test process. Worker count is exactly zero for cancellation and one for confirmation. A controlled stalled-child case checks the deadline, completed wait and absent PID; its expected timeout is a negative fixture, not a suppressed product failure. The spy never acquires or installs a runtime; startup network commands are isolated, so this is not full ordinary-startup, installed or human visual acceptance.
 
 `TestShellInstallEmbeddedDefaultsAndCancel`, `TestShellInstallEmbeddedConfirmationOnlySelects` and `TestShellInstallEmbeddedOutcomeRejectsOtherModels` cover the model boundary and platform argument roundtrip. Confirmation in these tests is a model fixture, not physical consent or native Windows/Darwin acceptance.
 
