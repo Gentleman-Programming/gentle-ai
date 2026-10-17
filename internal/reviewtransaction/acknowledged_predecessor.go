@@ -34,7 +34,7 @@ func AcknowledgedPassivePredecessor(ctx context.Context, repo string, live Snaps
 	if err != nil || headTree != live.CandidateTree {
 		return false, err
 	}
-	ancestors, err := selectorlessCommittedBaseDiffAncestors(ctx, root)
+	ancestors, err := selectorlessCommittedBaseDiffAncestors(ctx, root, nil)
 	if err != nil {
 		return false, err
 	}

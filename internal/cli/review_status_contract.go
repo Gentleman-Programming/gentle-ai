@@ -123,6 +123,7 @@ type ReviewTargetStatusResult struct {
 	// committed range that only adds passive content to an acknowledged
 	// candidate (#4739). It selects the STOP reason, never authority.
 	passiveDeltaAfterAcknowledgement bool
+	TimingDiagnostics               *reviewtransaction.TargetStatusTiming                         `json:"timing_diagnostics,omitempty"`
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -243,6 +244,9 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 			IntendedUntrackedProof:  native.Projection.IntendedUntrackedProof,
 			InitialSnapshotIdentity: native.Projection.InitialSnapshotIdentity, CurrentSnapshotIdentity: native.Projection.CurrentSnapshotIdentity,
 		},
+	}
+	if native.TimingDiagnostics != nil {
+		result.TimingDiagnostics = native.TimingDiagnostics
 	}
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
@@ -609,7 +613,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 	}
 	switch transition.ReasonCode {
-	case "correction_plan_required":
+	case "correction_plan_required", "corrected_candidate_unavailable":
 		if len(transition.Collect.Inputs) != 1 {
 			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
 		}

@@ -160,7 +160,7 @@ func TestNegotiatedStartCommandEchoesTheCallersOwnRuntime(t *testing.T) {
 func TestTierCRecoveryStatementsCarryOnlyTheIdentitySlot(t *testing.T) {
 	t.Parallel()
 
-	for _, reason := range []string{"corrected_candidate_unavailable"} {
+	for _, reason := range []string{"empty_base_diff_bootstrap_required", "managed_assets_outdated"} {
 		emission, ok := reviewNarrationRegistry["stop:"+reason]
 		if !ok {
 			t.Fatalf("Tier C reason %q has no narration", reason)

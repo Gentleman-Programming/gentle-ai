@@ -394,7 +394,14 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 			if input.CorrectionRequest == nil {
 				return reviewStopTransition("corrupted_or_unverifiable_authority")
 			}
-			transition := reviewStopTransition("corrected_candidate_unavailable")
+			// Provide a collect transition with repository_context so the user can submit
+			// another correction plan with a fresh handle (CapturePhaseRevision advances on
+			// each BeginCorrection, invalidating the previous repository_context).
+			transition := reviewCollectTransition("corrected_candidate_unavailable", ReviewTransitionInput{
+				Name: "correction_lines", Schema: "gentle-ai.review-correction-plan/v1", CaptureOperation: reviewCaptureCorrectionPlanOperation,
+				Arguments:  append(append(reviewBindingArguments(captureBinding), reviewRepositoryContextArguments(captureBinding)...), ReviewTransitionArgument{Name: "request-hash", Value: input.CorrectionRequest.RequestHash}),
+				Submission: reviewCorrectionPlanSubmission(input.Contract, captureBinding, *input.CorrectionRequest),
+			})
 			transition.CorrectionRequest = input.CorrectionRequest
 			return transition
 		}

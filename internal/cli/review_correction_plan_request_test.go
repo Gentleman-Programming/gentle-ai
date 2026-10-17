@@ -39,7 +39,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 		{
 			name: "high risk after accepted correction forecast", path: "service-token.ts",
 			content: strings.Repeat("export const candidate = 1;\n", 400), forecast: 120,
-			wantRisk: reviewtransaction.RiskHigh, wantKind: reviewNextTransitionStop,
+			wantRisk: reviewtransaction.RiskHigh, wantKind: reviewNextTransitionCollect,
 			wantReason: "corrected_candidate_unavailable", wantBudget: 200, wantSelectedLens: 4,
 		},
 	} {
