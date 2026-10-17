@@ -36,6 +36,7 @@ After explicit change intent is established, route work for the requested outcom
 
 - **Direct inline:** small tasks, by the Task Size section, and large tasks without a Writer trigger reason, which follow their logbook. Decide or verify with one parallel batch (1 maximum), at most 3 calls and approximately 10k tokens of evidence. Use bounded search/line ranges, not whole large files. One understood change stays inline even when it spans files, and its focused test and suite run inline.
 - **Delegated direct:** understanding that needs more evidence or more than approximately 5 sequential lookups takes one read-only explorer, then task size is re-evaluated; a writer is delegated only by the Writer trigger.
+  - **Design-minimality pass:** between exploration and implementation, run a design-minimality pass before composing the writer brief. Apply the minimality ladder (YAGNI -> reuse -> stdlib -> platform -> dependency -> minimum new code), estimate authored-line footprint, record deliberate deferrals, required tests, and boundary invariants, and pass the complete minimal plan and constraints as the writer brief.
 - File count, changed lines, size, or perceived risk alone never forces a heavier route.
 - These are implementation routes, not a ban on per-action delegation. Tests, builds, installs, and review actors may still use fresh workers without changing the selected route.
 

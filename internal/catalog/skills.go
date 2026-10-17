@@ -39,6 +39,7 @@ var mvpSkills = []Skill{
 	{ID: model.SkillWorkUnitCommits, Name: "work-unit-commits", Category: "workflow", Priority: "p0"},
 	{ID: model.SkillRDDDefectWorkflow, Name: "rdd-defect-workflow", Category: "workflow", Priority: "p0"},
 	{ID: model.SkillSystemicIssueTriage, Name: "systemic-issue-triage", Category: "workflow", Priority: "p0"},
+	{ID: model.SkillDesignMinimality, Name: "design-minimality", Category: "workflow", Priority: "p0"},
 }
 
 func MVPSkills() []Skill {

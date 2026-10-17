@@ -322,6 +322,7 @@ Foundation Skills
   [x] Work Unit Commits
   [x] RDD Defect Workflow
   [x] Systemic Issue Triage
+  [x] Design Minimality
 
   Continue
   Back
