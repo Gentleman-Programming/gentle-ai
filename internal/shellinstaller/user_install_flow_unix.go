@@ -201,6 +201,9 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 	}
+	if err = userStageExperience(ctx, root, req.Experience); err != nil {
+		return result, err
+	}
 	if err = userBootstrap(ctx, root, workspace); err != nil {
 		return result, fmt.Errorf("runtime acquisition: %w", err)
 	}

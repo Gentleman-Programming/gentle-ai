@@ -27,6 +27,8 @@ This entry-point slice connects the existing installation protocol. It does not 
 
 The internal request binds preference values to physical confirmation while preserving legacy bytes when no profile is supplied. Non-nil profiles are currently refused before installation effects; this slice does not expose new preference controls or silently drop unsupported choices.
 
+The private-stage preference writer is connected before runtime bootstrap. It preserves nil legacy stages, writes only canonical private files for supported internal selections, and leaves unmanaged persona bytes untouched. Public profile admission and installed-platform qualification remain disabled/pending; explicit RDD choices are still refused.
+
 The confirmation review wraps to terminal width. Use PgUp/PgDn to scroll and Home/End to reach the first/last page, including the full Shared settings preview and recovery warnings; scrolling or resizing does not confirm or change your selection.
 
 For command-line installation, inspect, then use the **exact fresh printed confirmation** for that unchanged selection:
