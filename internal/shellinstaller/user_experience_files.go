@@ -12,6 +12,9 @@ func userValidateStageExperience(profile *UserExperience) error {
 	if profile.GlobalRDD != "" {
 		return experienceError("explicit global RDD requires a supported native distribution")
 	}
+	if profile.Context7 != "" {
+		return experienceError("explicit Context7 requires a supported private MCP stage")
+	}
 	return nil
 }
 
