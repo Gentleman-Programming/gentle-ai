@@ -3,6 +3,18 @@ package shellinstaller
 import "encoding/json"
 
 func userValidateStageExperience(profile *UserExperience) error {
+	if err := userValidateStagePreferences(profile); err != nil {
+		return err
+	}
+	if profile != nil && profile.Context7 != "" {
+		return experienceError("explicit Context7 requires a supported private MCP stage")
+	}
+	return nil
+}
+
+// Typed preferences and native RDD refusal are shared. POSIX preparation also
+// validates its actual mode; generic/Windows writers retain the MCP refusal.
+func userValidateStagePreferences(profile *UserExperience) error {
 	if profile == nil {
 		return nil
 	}
@@ -11,9 +23,6 @@ func userValidateStageExperience(profile *UserExperience) error {
 	}
 	if profile.GlobalRDD != "" {
 		return experienceError("explicit global RDD requires a supported native distribution")
-	}
-	if profile.Context7 != "" {
-		return experienceError("explicit Context7 requires a supported private MCP stage")
 	}
 	return nil
 }
@@ -30,6 +39,12 @@ func userStageExperienceFiles(profile *UserExperience) ([]userExperienceStageFil
 	if err := userValidateStageExperience(profile); err != nil {
 		return nil, err
 	}
+	return userExperienceConfigFiles(profile)
+}
+
+// Serialize only the config-home preferences of an already validated profile.
+// Context7 belongs to agent/mcp.json, not a dropped selection or config key.
+func userExperienceConfigFiles(profile *UserExperience) ([]userExperienceStageFile, error) {
 	if profile == nil {
 		return nil, nil
 	}

@@ -20,7 +20,7 @@ func installStagePath(t *testing.T) string {
 
 func TestUserPrepareInstallStagePreservesLegacyLayout(t *testing.T) {
 	root := installStagePath(t)
-	if err := userPrepareInstallStage(context.Background(), root, nil); err != nil {
+	if err := userPrepareInstallStage(context.Background(), root, "separate", nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"", "home", "tmp", "config", "state", "agent", "project", "bin"} {
@@ -45,7 +45,7 @@ func TestUserPrepareInstallStageAppliesCanonicalProfile(t *testing.T) {
 			t.Run(persona+"-"+background, func(t *testing.T) {
 				root := installStagePath(t)
 				profile := UserExperience{Persona: persona, BackgroundSubagents: background}
-				if err := userPrepareInstallStage(context.Background(), root, &profile); err != nil {
+				if err := userPrepareInstallStage(context.Background(), root, "separate", &profile); err != nil {
 					t.Fatal(err)
 				}
 				assertExperienceFile(t, filepath.Join(root, "config/background-subagents.json"), "{\n  \"schema\": \"gentle-pi.background-subagents/v1\",\n  \"policy\": \""+background+"\"\n}\n")
@@ -100,7 +100,7 @@ func TestUserPrepareInstallStageRefusesBeforeCreation(t *testing.T) {
 				}
 			}
 			before, beforeErr := os.Lstat(root)
-			if err := userPrepareInstallStage(ctx, root, &profile); err == nil {
+			if err := userPrepareInstallStage(ctx, root, "separate", &profile); err == nil {
 				t.Fatal("unsafe or unsupported stage was created")
 			}
 			after, afterErr := os.Lstat(root)

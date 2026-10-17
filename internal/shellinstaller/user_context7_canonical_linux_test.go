@@ -113,11 +113,14 @@ func TestUserContext7FrozenBuiltinMCPCLI(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			root := t.TempDir()
-			for _, name := range []string{"home", "agent", "config", "workspace"} {
-				if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {
-					t.Fatal(err)
-				}
+			root := installStagePath(t)
+			var profile *UserExperience
+			if tc.name == "disabled" {
+				selected := UserExperience{Persona: "gentleman", BackgroundSubagents: "on", Context7: "off"}
+				profile = &selected
+			}
+			if err := userPrepareInstallStage(ctx, root, "separate", profile); err != nil {
+				t.Fatal(err)
 			}
 			agent := filepath.Join(root, "agent")
 			entry := map[string]any{"url": server.URL, "enabled": tc.enabled, "exposure": "codemode", "timeout": 1}
@@ -129,7 +132,16 @@ func TestUserContext7FrozenBuiltinMCPCLI(t *testing.T) {
 				t.Fatal(err)
 			}
 			configPath := filepath.Join(agent, "mcp.json")
-			if err := os.WriteFile(configPath, config, 0600); err != nil {
+			transport := server.URL
+			if tc.name == "disabled" {
+				// Consume the preparer's unchanged official OFF file, not a fixture URL.
+				transport = "https://mcp.context7.com/mcp"
+				config, err = os.ReadFile(configPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err := userToolWrite(configPath, config, 0600); err != nil {
+				// Local transport bytes are fixtures, not fixed-endpoint producer output.
 				t.Fatal(err)
 			}
 			before, err := os.Stat(configPath)
@@ -144,7 +156,7 @@ func TestUserContext7FrozenBuiltinMCPCLI(t *testing.T) {
 			runCtx, stop := context.WithTimeout(ctx, 15*time.Second)
 			defer stop()
 			cmd := context7ProofCommand(runCtx, "/opt/node/bin/node", filepath.Join(pkg, "dist/bundle/cli.js"), "mcp", "list", "--json")
-			cmd.Dir = filepath.Join(root, "workspace")
+			cmd.Dir = filepath.Join(root, "project")
 			cmd.Env = []string{"HOME=" + filepath.Join(root, "home"), "PI_CODING_AGENT_DIR=" + agent, "GENTLE_PI_CONFIG_HOME=" + filepath.Join(root, "config"), "PATH=/opt/node/bin:/usr/bin:/bin", "GENTLE_AI_TELEMETRY_DISABLE=1"}
 			output, runErr := context7ProofOutput(cmd)
 			if runCtx.Err() != nil {
@@ -181,7 +193,7 @@ func TestUserContext7FrozenBuiltinMCPCLI(t *testing.T) {
 					t.Fatalf("unexpected CLI reports: %s", output)
 				}
 				s := report.Servers[0]
-				if s.Name != "context7" || s.Scope != "global" || s.Source != configPath || s.Enabled != tc.enabled || s.Exposure != "codemode" || s.Transport != server.URL {
+				if s.Name != "context7" || s.Scope != "global" || s.Source != configPath || s.Enabled != tc.enabled || s.Exposure != "codemode" || s.Transport != transport {
 					t.Fatalf("canonical policy/source mismatch: %s", output)
 				}
 				if tc.broken {
