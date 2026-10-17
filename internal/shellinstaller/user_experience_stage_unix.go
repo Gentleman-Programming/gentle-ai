@@ -29,6 +29,11 @@ func userStageExperience(ctx context.Context, root string, profile *UserExperien
 // Reuse the native config writer after the preparer validates the full profile
 // and mode. Generic callers still enter through userStageExperience's guards.
 func userStageExperienceConfig(ctx context.Context, root string, files []userExperienceStageFile) error {
+	return userStageConfigFiles(ctx, root, "config", files)
+}
+
+// Only internal callers select the fixed private configuration directories.
+func userStageConfigFiles(ctx context.Context, root, relative string, files []userExperienceStageFile) error {
 	if len(files) == 0 {
 		return nil
 	}
@@ -41,7 +46,7 @@ func userStageExperienceConfig(ctx context.Context, root string, files []userExp
 	if _, err := privateDirectory(root); err != nil {
 		return err
 	}
-	config := filepath.Join(root, "config")
+	config := filepath.Join(root, relative)
 	identity, err := privateDirectory(config)
 	if err != nil {
 		return err

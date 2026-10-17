@@ -6,6 +6,12 @@ func userValidateStageExperience(profile *UserExperience) error {
 	if err := userValidateStagePreferences(profile); err != nil {
 		return err
 	}
+	if profile != nil && profile.GGA != "" {
+		return experienceError("explicit GGA requires a qualified optional private CLI/config stage")
+	}
+	if profile != nil && profile.StrictTDD != "" {
+		return experienceError("explicit Strict TDD requires a supported private SDK stage")
+	}
 	if profile != nil && profile.Context7 != "" {
 		return experienceError("explicit Context7 requires a supported private MCP stage")
 	}
@@ -13,7 +19,7 @@ func userValidateStageExperience(profile *UserExperience) error {
 }
 
 // Typed preferences and native RDD refusal are shared. POSIX preparation also
-// validates its actual mode; generic/Windows writers retain the MCP refusal.
+// validates its actual mode; generic/Windows writers retain MCP/Strict TDD/GGA refusals.
 func userValidateStagePreferences(profile *UserExperience) error {
 	if profile == nil {
 		return nil
@@ -64,6 +70,15 @@ func userExperienceConfigFiles(profile *UserExperience) ([]userExperienceStageFi
 		}{"persona.json", struct {
 			Mode string `json:"mode"`
 		}{profile.Persona}})
+	}
+	if profile.StrictTDD != "" {
+		values = append(values, struct {
+			name  string
+			value any
+		}{"strict-tdd.json", struct {
+			Schema string `json:"schema"`
+			Policy string `json:"policy"`
+		}{"gentle-pi.strict-tdd/v1", profile.StrictTDD}})
 	}
 	files := make([]userExperienceStageFile, 0, len(values))
 	for _, value := range values {

@@ -56,6 +56,30 @@ func TestUserContext7FrozenRegistration(t *testing.T) {
 	if os.Getenv("GENTLE_EXPERIENCE_PRIVATE_CONTEXT7_CLI_PROBE") == "1" {
 		script, marker, cases = "/source/e2e/shell-context7-private-cli.mjs", "FROZEN_PI_PRIVATE_CLI_PASS", 3
 	}
+	if os.Getenv("GENTLE_EXPERIENCE_CANONICAL_CONTEXT7_PROBE") == "1" {
+		script, marker, cases = "/source/e2e/shell-context7-stage-session.mjs", "FROZEN_PI_STAGE_SESSION_PASS", 5
+		for _, mode := range []string{"off", "absent", "builtin-disabled", "project-trusted", "project-untrusted"} {
+			var profile *UserExperience
+			if mode != "absent" {
+				profile = &UserExperience{Persona: "unmanaged", BackgroundSubagents: "off", Context7: "off"}
+			}
+			if err := userPrepareInstallStage(ctx, filepath.Join(root, mode), "separate", profile); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if os.Getenv("GENTLE_EXPERIENCE_STRICT_TDD_PROBE") == "1" {
+		script, marker, cases = "/source/e2e/shell-strict-tdd-stage-session.mjs", "FROZEN_PI_STRICT_TDD_STAGE_PASS", 3
+		for _, choice := range []string{"on", "off", "absent"} {
+			profile := UserExperience{Persona: "unmanaged", BackgroundSubagents: "off"}
+			if choice != "absent" {
+				profile.StrictTDD = choice
+			}
+			if err := userPrepareInstallStage(ctx, filepath.Join(root, choice), "separate", &profile); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	cmd = context7ProofCommand(ctx, "/opt/node/bin/node", script, pkg, root)
 	cmd.Dir = root
 	cmd.Env = []string{"HOME=" + root, "PATH=/opt/node/bin:/usr/bin:/bin", "GENTLE_AI_TELEMETRY_DISABLE=1"}
