@@ -1,12 +1,17 @@
 package permissions
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"sort"
+)
 
 // openCodeOverlayJSON mirrors the Gentle Pi safety model for OpenCode (and
 // Kilocode): everything is allowed by design; recognized destructive commands
-// are confirmed (Pi confirm) or denied outright (Pi hard deny); remote commands
-// keep their approval (#4324); and secret-bearing paths cannot be read or
-// modified ("edit" covers the edit, write, and patch tools).
+// are confirmed (Pi confirm) or denied outright (Pi hard deny); remote shell
+// utilities are denied outright across their escape forms (#4324); and
+// secret-bearing paths cannot be read or modified ("edit" covers the edit,
+// write, and patch tools).
 //
 // OpenCode resolves these wildcard rules in order and the LAST matching rule
 // wins. `*` spans any characters, including `/`, and `?` matches exactly one.
@@ -21,7 +26,45 @@ import "encoding/json"
 // other than sudo (env, nohup, timeout, xargs, VAR=value), nested shells,
 // absolute executable paths, unusual flag permutations, and `rm -rf /*` (which
 // cannot be denied without denying every absolute path) are config limits.
+// The remote shell utilities are the carve-out (#4324): their canonical
+// install prefixes, root-level path (which also reaches backslash escapes,
+// because the matcher normalizes backslashes to forward slashes), command
+// and exec resolution wrappers, direct env execution (env tool ...), and the
+// single- and double-quoted command names ('tool' ..., "tool" ...) are
+// enumerated explicitly, mirroring the Claude Code deny list. A human who
+// wants a utility back re-enables it in their own config.
 var openCodeOverlayJSON = buildOpenCodeOverlayJSON()
+
+// catchAllFirst encodes one rule map with "*" first and the remaining keys
+// sorted. OpenCode applies the last matching rule, and a quoted rule such as
+// "'ssh' *" sorts before "*" in plain map order, where the catch-all would
+// override it.
+func catchAllFirst(rules map[string]string) json.RawMessage {
+	keys := make([]string, 0, len(rules))
+	for key := range rules {
+		if key != "*" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if _, ok := rules["*"]; ok {
+		keys = append([]string{"*"}, keys...)
+	}
+	var encoded bytes.Buffer
+	encoded.WriteByte('{')
+	for i, key := range keys {
+		if i > 0 {
+			encoded.WriteByte(',')
+		}
+		name, _ := json.Marshal(key)
+		value, _ := json.Marshal(rules[key])
+		encoded.Write(name)
+		encoded.WriteByte(':')
+		encoded.Write(value)
+	}
+	encoded.WriteByte('}')
+	return encoded.Bytes()
+}
 
 var (
 	// openCodeRecursiveRMFlags are the recursive rm flag spellings guarded,
@@ -46,6 +89,18 @@ var (
 	openCodeGitPrefixes = []string{"git ", "git -C * "}
 	// openCodeRemoteCommands keep their approval (#4324).
 	openCodeRemoteCommands = []string{"ssh", "scp", "sftp", "rsync"}
+
+	// openCodeRemotePathPrefixes lists the canonical install prefixes of the
+	// OpenSSH client and rsync across the supported platforms (FHS Linux /bin
+	// and /usr/bin, custom /usr/local/bin, Apple Silicon /opt/homebrew/bin,
+	// NixOS /run/current-system/sw/bin).
+	openCodeRemotePathPrefixes = []string{
+		"/bin/",
+		"/usr/bin/",
+		"/usr/local/bin/",
+		"/opt/homebrew/bin/",
+		"/run/current-system/sw/bin/",
+	}
 	// openCodeDatabaseClients and openCodeDestructiveSQL confirm destructive
 	// SQL passed to a database client, as Pi does.
 	openCodeDatabaseClients = []string{"psql", "mysql", "mariadb", "sqlite3"}
@@ -125,9 +180,21 @@ func buildOpenCodeOverlayJSON() []byte {
 	}
 	ask("npm publish")
 	ask("npm publish *")
+	// #4324 deny policy: the remote shell utilities are denied by default in
+	// their bare and wildcard forms plus the escape forms a bare prefix rule
+	// cannot reach, instead of being asked per command.
 	for _, command := range openCodeRemoteCommands {
-		ask(command)
-		ask(command + " *")
+		deny(command)
+		deny(command + " *")
+		for _, prefix := range openCodeRemotePathPrefixes {
+			deny(prefix + command + " *")
+		}
+		deny("/" + command + " *")
+		deny("command " + command + " *")
+		deny("exec " + command + " *")
+		deny("env " + command + " *")
+		deny("'" + command + "' *")
+		deny(`"` + command + `" *`)
 	}
 	for _, client := range openCodeDatabaseClients {
 		for _, statement := range openCodeDestructiveSQL {
@@ -141,7 +208,7 @@ func buildOpenCodeOverlayJSON() []byte {
 	}
 
 	overlay, err := json.MarshalIndent(map[string]any{
-		"permission": map[string]any{"bash": bash, "read": paths, "edit": paths},
+		"permission": map[string]any{"bash": catchAllFirst(bash), "read": catchAllFirst(paths), "edit": catchAllFirst(paths)},
 	}, "", "  ")
 	if err != nil {
 		panic(err)

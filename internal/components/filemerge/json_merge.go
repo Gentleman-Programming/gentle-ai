@@ -188,6 +188,17 @@ func marshalPermissionOrder(base []byte, value any, ordered bool) ([]byte, error
 		}
 	}
 	sort.Strings(added)
+	// Permission rules resolve last-match-wins, so an added catch-all "*" must
+	// precede every added rule: keys starting with a quote or another byte below
+	// '*' would otherwise sort ahead of it and be overridden by it.
+	if ordered {
+		for i, key := range added {
+			if key == "*" {
+				added = append([]string{"*"}, append(added[:i:i], added[i+1:]...)...)
+				break
+			}
+		}
+	}
 	keys := append(append([]string{}, existing...), added...)
 	// Newly introduced rules must not override existing custom rules.
 	if ordered {
