@@ -42,6 +42,9 @@ func userCanonicalRequest(req UserInstallRequest) (UserInstallRequest, error) {
 }
 
 func userValidateInstall(req UserInstallRequest) error {
+	if err := userExperienceSupported(req.Experience); err != nil {
+		return err
+	}
 	req, err := userCanonicalRequest(req)
 	if err != nil {
 		return err
@@ -93,6 +96,9 @@ func userValidateInstall(req UserInstallRequest) error {
 }
 
 func userInspectInstall(req UserInstallRequest) (string, error) {
+	if err := userExperienceSupported(req.Experience); err != nil {
+		return "", err
+	}
 	req, err := userCanonicalRequest(req)
 	if err != nil {
 		return "", err

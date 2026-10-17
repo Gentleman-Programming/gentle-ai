@@ -25,6 +25,8 @@ The ordinary `gentle-ai` Welcome menu also offers **Install Gentle Shell**. Its 
 
 This entry-point slice connects the existing installation protocol. It does not establish original-installer/PNPM publication or installed-platform qualification.
 
+The internal request binds preference values to physical confirmation while preserving legacy bytes when no profile is supplied. Non-nil profiles are currently refused before installation effects; this slice does not expose new preference controls or silently drop unsupported choices.
+
 The confirmation review wraps to terminal width. Use PgUp/PgDn to scroll and Home/End to reach the first/last page, including the full Shared settings preview and recovery warnings; scrolling or resizing does not confirm or change your selection.
 
 For command-line installation, inspect, then use the **exact fresh printed confirmation** for that unchanged selection:

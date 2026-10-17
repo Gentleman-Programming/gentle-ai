@@ -69,6 +69,9 @@ func userWindowsJobOwned() error {
 }
 
 func InspectUserInstall(req UserInstallRequest) (string, error) {
+	if err := userExperienceSupported(req.Experience); err != nil {
+		return "", err
+	}
 	channel, err := UserInstallChannel(req.Channel)
 	if err != nil {
 		return "", err
@@ -142,6 +145,9 @@ func userWindowsBinding(root, product string) []byte {
 func userWindowsSelection(data []byte, root string) (UserInstallRequest, error) {
 	var req UserInstallRequest
 	if err := json.Unmarshal(data, &req); err != nil {
+		return UserInstallRequest{}, err
+	}
+	if err := userExperienceSupported(req.Experience); err != nil {
 		return UserInstallRequest{}, err
 	}
 	canonical, _ := json.Marshal(req)

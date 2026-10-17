@@ -38,7 +38,7 @@ func ShellInstallOutcome(model tea.Model) (ShellInstallSelection, error) {
 // ShellInstallArguments preserves the backend's existing entry protocol.
 // Unconfirmed and cancelled selectors have no executable argument vector.
 func ShellInstallArguments(selection ShellInstallSelection) []string {
-	if !selection.Confirmed {
+	if !selection.Confirmed || selection.Request.Experience != nil {
 		return nil
 	}
 	return append([]string{"install"}, shellEntryValues(selection.Request)...)

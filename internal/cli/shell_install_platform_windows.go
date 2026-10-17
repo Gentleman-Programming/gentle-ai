@@ -35,6 +35,9 @@ func shellInstallPlatformFlags(flags *flag.FlagSet, req *shellinstaller.UserInst
 }
 
 func shellEntryValues(req shellinstaller.UserInstallRequest) []string {
+	if req.Experience != nil {
+		return nil // Unsupported preferences must never become legacy worker arguments.
+	}
 	channel, _ := shellinstaller.UserInstallChannel(req.Channel) // Worker rejects invalid values.
 	return []string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, req.Confirmation, "--channel", channel}
 }

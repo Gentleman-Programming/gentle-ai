@@ -4,7 +4,6 @@ package shellinstaller
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 )
 
@@ -13,6 +12,7 @@ import (
 type UserInstallRequest struct {
 	Destination, Mode, SharedPrefix, SharedAgent, Confirmation string
 	Channel                                                    string
+	Experience                                                 *UserExperience `json:",omitempty"`
 }
 
 func UserInstallChannel(channel string) (string, error) {
@@ -26,7 +26,10 @@ func UserInstallChannel(channel string) (string, error) {
 }
 
 func userConfirmation(req UserInstallRequest, identity string) string {
-	data, _ := json.Marshal([]string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, req.Channel, identity})
+	data, err := userExperienceConfirmationData([]string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, req.Channel, identity}, req.Experience)
+	if err != nil {
+		return ""
+	}
 	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
