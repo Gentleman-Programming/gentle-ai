@@ -20,11 +20,8 @@ func userStageExperience(ctx context.Context, root string, profile *UserExperien
 	if profile == nil {
 		return nil
 	}
-	if err := profile.Validate(); err != nil {
+	if err := userValidateStageExperience(profile); err != nil {
 		return err
-	}
-	if profile.GlobalRDD != "" {
-		return experienceError("explicit global RDD requires a supported native distribution")
 	}
 	if ctx == nil || ctx.Err() != nil {
 		return privateError("canceled", context.Canceled)

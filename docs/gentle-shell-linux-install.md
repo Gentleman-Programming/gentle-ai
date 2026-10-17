@@ -29,6 +29,8 @@ The internal request binds preference values to physical confirmation while pres
 
 The private-stage preference writer is connected before runtime bootstrap. It preserves nil legacy stages, writes only canonical private files for supported internal selections, and leaves unmanaged persona bytes untouched. Public profile admission and installed-platform qualification remain disabled/pending; explicit RDD choices are still refused.
 
+Fresh private-stage creation and preferences are now composed by the installation path: validation precedes creation, the legacy layout is retained for nil profiles, and the caller keeps ownership of cleanup/evidence. This does not enable public profile admission.
+
 The confirmation review wraps to terminal width. Use PgUp/PgDn to scroll and Home/End to reach the first/last page, including the full Shared settings preview and recovery warnings; scrolling or resizing does not confirm or change your selection.
 
 For command-line installation, inspect, then use the **exact fresh printed confirmation** for that unchanged selection:

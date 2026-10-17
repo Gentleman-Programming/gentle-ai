@@ -188,20 +188,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	root := filepath.Join(workspace, "installed")
-	if err = os.Mkdir(root, 0700); err != nil {
-		return result, err
-	}
-	for _, name := range []string{"home", "tmp", "config", "state", "agent", "project", "bin"} {
-		if err = os.Mkdir(filepath.Join(root, name), 0700); err != nil {
-			return result, err
-		}
-	}
-	for _, name := range []string{"user.npmrc", "global.npmrc"} {
-		if err = os.WriteFile(filepath.Join(root, "config", name), nil, 0600); err != nil {
-			return result, err
-		}
-	}
-	if err = userStageExperience(ctx, root, req.Experience); err != nil {
+	if err = userPrepareInstallStage(ctx, root, req.Experience); err != nil {
 		return result, err
 	}
 	if err = userBootstrap(ctx, root, workspace); err != nil {
