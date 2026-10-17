@@ -8,19 +8,6 @@ import (
 	"path/filepath"
 )
 
-func userValidateStageExperience(profile *UserExperience) error {
-	if profile == nil {
-		return nil
-	}
-	if err := profile.Validate(); err != nil {
-		return err
-	}
-	if profile.GlobalRDD != "" {
-		return experienceError("explicit global RDD requires a supported native distribution")
-	}
-	return nil
-}
-
 // userPrepareInstallStage is called after physical confirmation, before any
 // acquisition or Shared provisioning. Its caller owns unpublished-workspace
 // cleanup and uncertain failure evidence; this function never removes roots.

@@ -5,7 +5,6 @@ package shellinstaller
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -20,7 +19,8 @@ func userStageExperience(ctx context.Context, root string, profile *UserExperien
 	if profile == nil {
 		return nil
 	}
-	if err := userValidateStageExperience(profile); err != nil {
+	files, err := userStageExperienceFiles(profile)
+	if err != nil {
 		return err
 	}
 	if ctx == nil || ctx.Err() != nil {
@@ -46,23 +46,6 @@ func userStageExperience(ctx context.Context, root string, profile *UserExperien
 	if err != nil || !os.SameFile(identity, opened) {
 		return privateError("preimage", err)
 	}
-	files := []struct {
-		name  string
-		value any
-	}{
-		{"background-subagents.json", struct {
-			Schema string `json:"schema"`
-			Policy string `json:"policy"`
-		}{"gentle-pi.background-subagents/v1", profile.BackgroundSubagents}},
-	}
-	if profile.Persona != "unmanaged" {
-		files = append(files, struct {
-			name  string
-			value any
-		}{"persona.json", struct {
-			Mode string `json:"mode"`
-		}{profile.Persona}})
-	}
 	// Check every intended preimage before the first write. Unmanaged does not
 	// inspect or claim an existing persona file, including malformed bytes.
 	for _, file := range files {
@@ -71,11 +54,10 @@ func userStageExperience(ctx context.Context, root string, profile *UserExperien
 		}
 	}
 	for _, file := range files {
-		data, err := json.MarshalIndent(file.value, "", "  ")
-		if err != nil || ctx.Err() != nil {
-			return errors.Join(err, ctx.Err())
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		data = append(data, '\n')
+		data := file.data
 		if err := userWriteWithSync(file.name, data, 0600, func(path string, flags int, mode os.FileMode) (userSyncedFile, error) {
 			return directory.OpenFile(path, flags, mode)
 		}); err != nil {

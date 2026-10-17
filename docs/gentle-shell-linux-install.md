@@ -31,6 +31,8 @@ The private-stage preference writer is connected before runtime bootstrap. It pr
 
 Fresh private-stage creation and preferences are now composed by the installation path: validation precedes creation, the legacy layout is retained for nil profiles, and the caller keeps ownership of cleanup/evidence. This does not enable public profile admission.
 
+Persona/background serialization now has one side-effect-free canonical codec consumed by the POSIX writer. Native custody, exclusive writes and staged readback remain in that writer; Windows non-nil profiles stay refused and no Windows guest qualification is admitted.
+
 The confirmation review wraps to terminal width. Use PgUp/PgDn to scroll and Home/End to reach the first/last page, including the full Shared settings preview and recovery warnings; scrolling or resizing does not confirm or change your selection.
 
 For command-line installation, inspect, then use the **exact fresh printed confirmation** for that unchanged selection:
