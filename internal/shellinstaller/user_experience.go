@@ -3,6 +3,8 @@ package shellinstaller
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"strings"
 )
 
 // UserExperience is an inert selection of canonical preference values.
@@ -34,6 +36,52 @@ func (p UserExperience) Encode() (string, error) {
 	}
 	data, err := json.Marshal(p)
 	return string(data), err
+}
+
+func DecodeUserExperience(raw string) (UserExperience, error) {
+	var profile UserExperience
+	if len(raw) > 256 {
+		return profile, experienceError("experience exceeds its bounded input size")
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return profile, experienceError("experience must be a JSON object")
+	}
+	fields := map[string]*string{
+		"persona":              &profile.Persona,
+		"background_subagents": &profile.BackgroundSubagents,
+		"global_rdd":           &profile.GlobalRDD,
+	}
+	seen := make(map[string]bool)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return UserExperience{}, err
+		}
+		key, ok := token.(string)
+		field, supported := fields[key]
+		if !ok || !supported || seen[key] {
+			return UserExperience{}, experienceError("duplicate or unsupported experience choice")
+		}
+		seen[key] = true
+		if err := decoder.Decode(field); err != nil {
+			return UserExperience{}, err
+		}
+		if key == "global_rdd" && *field == "" {
+			return UserExperience{}, experienceError("an explicit global RDD choice must be on or off")
+		}
+	}
+	if token, err = decoder.Token(); err != nil || token != json.Delim('}') {
+		return UserExperience{}, experienceError("unterminated experience object")
+	}
+	if _, err = decoder.Token(); err != io.EOF {
+		return UserExperience{}, experienceError("trailing experience data")
+	}
+	if err := profile.Validate(); err != nil {
+		return UserExperience{}, err
+	}
+	return profile, nil
 }
 
 func experienceError(message string) error {

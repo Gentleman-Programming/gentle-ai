@@ -38,10 +38,21 @@ func ShellInstallOutcome(model tea.Model) (ShellInstallSelection, error) {
 // ShellInstallArguments preserves the backend's existing entry protocol.
 // Unconfirmed and cancelled selectors have no executable argument vector.
 func ShellInstallArguments(selection ShellInstallSelection) []string {
-	if !selection.Confirmed || selection.Request.Experience != nil {
+	if !selection.Confirmed {
 		return nil
 	}
-	return append([]string{"install"}, shellEntryValues(selection.Request)...)
+	req := selection.Request
+	profile := req.Experience
+	req.Experience = nil // Encoded separately, never discarded from the request.
+	args := append([]string{"install"}, shellEntryValues(req)...)
+	if profile != nil {
+		encoded, err := profile.Encode()
+		if err != nil || len(encoded) > 256 {
+			return nil
+		}
+		args = append(args, "--experience", encoded)
+	}
+	return args
 }
 
 // RunShellInstallSelection runs only after the owning TUI restores its terminal.

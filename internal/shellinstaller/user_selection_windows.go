@@ -34,6 +34,10 @@ func userConfirmation(req UserInstallRequest, identity string) string {
 }
 
 func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
+	args, profile, err := userEntryExperience(args)
+	if err != nil {
+		return UserInstallRequest{}, err
+	}
 	if len(args) != 5 && (len(args) != 7 || args[5] != "--channel") {
 		return UserInstallRequest{}, fmt.Errorf("invalid internal install arguments")
 	}
@@ -44,9 +48,9 @@ func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
 			return UserInstallRequest{}, fmt.Errorf("missing internal install channel")
 		}
 	}
-	channel, err := UserInstallChannel(channel)
+	channel, err = UserInstallChannel(channel)
 	if err != nil {
 		return UserInstallRequest{}, err
 	}
-	return UserInstallRequest{Destination: args[0], Mode: args[1], SharedPrefix: args[2], SharedAgent: args[3], Confirmation: args[4], Channel: channel}, nil
+	return UserInstallRequest{Destination: args[0], Mode: args[1], SharedPrefix: args[2], SharedAgent: args[3], Confirmation: args[4], Channel: channel, Experience: profile}, nil
 }

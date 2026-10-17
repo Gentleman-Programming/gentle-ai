@@ -63,8 +63,13 @@ func TestShellInstallArgumentsDoNotDropUnsupportedExperience(t *testing.T) {
 	selection, _ := ShellInstallOutcome(NewShellInstallModel(nil))
 	profile := shellinstaller.UserExperience{Persona: "gentleman", BackgroundSubagents: "on"}
 	selection.Confirmed, selection.Request.Experience = true, &profile
-	if args := ShellInstallArguments(selection); len(args) != 0 {
-		t.Fatalf("unsupported profile silently becomes legacy arguments: %q", args)
+	args := ShellInstallArguments(selection)
+	req, err := shellinstaller.UserInstallFromEntry(args[1:])
+	if err != nil || req.Experience == nil || *req.Experience != profile {
+		t.Fatalf("unsupported profile silently becomes legacy arguments: %q, %v", args, err)
+	}
+	if _, err := shellinstaller.InspectUserInstall(req); err == nil {
+		t.Fatal("inert transport admits unqualified effects")
 	}
 }
 

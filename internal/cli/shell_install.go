@@ -95,7 +95,11 @@ func runShellInstallRequest(ctx context.Context, self string, req shellinstaller
 	if req.Confirmation != token {
 		return errors.New("inspect the physical selection first with --inspect, then pass its --confirm SHA256; run gentle-ai shell install --help for selection flags or gentle-ai shell install for interactive review")
 	}
-	return shellInstallEntry(ctx, self, append([]string{"install"}, shellEntryValues(req)...), os.Stdin, stdout, os.Stderr)
+	args := ShellInstallArguments(ShellInstallSelection{Request: req, Confirmed: true})
+	if len(args) == 0 {
+		return errors.New("invalid or oversized experience selection; run gentle-ai shell install to review it again")
+	}
+	return shellInstallEntry(ctx, self, args, os.Stdin, stdout, os.Stderr)
 }
 
 func shellExecutionContext() (context.Context, context.CancelFunc, string, error) {
