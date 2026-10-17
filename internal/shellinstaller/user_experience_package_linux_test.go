@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"testing"
 	"time"
 )
@@ -42,8 +41,8 @@ func TestUserStageExperienceFrozenPackageConsumers(t *testing.T) {
 	pkg := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/usr/bin/tar", "-xzf", "/frozen-gentle-pi.tgz", "--strip-components=1", "-C", pkg)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	cmd := context7ProofCommand(ctx, "/usr/bin/tar", "-xzf", "/frozen-gentle-pi.tgz", "--strip-components=1", "-C", pkg)
+	if output, err := context7ProofOutput(cmd); err != nil {
 		t.Fatalf("authenticated package extraction failed: %v\n%s", err, output)
 	}
 	for _, persona := range []string{"gentleman", "neutral", "unmanaged"} {
@@ -54,8 +53,8 @@ func TestUserStageExperienceFrozenPackageConsumers(t *testing.T) {
 				if err := userPrepareInstallStage(ctx, root, &profile); err != nil {
 					t.Fatal(err)
 				}
-				cmd := exec.CommandContext(ctx, "/opt/node/bin/node", "--experimental-strip-types", "/source/e2e/shell-experience-canonical.mjs", root, persona, background, pkg)
-				if output, err := cmd.CombinedOutput(); err != nil {
+				cmd := context7ProofCommand(ctx, "/opt/node/bin/node", "--experimental-strip-types", "/source/e2e/shell-experience-canonical.mjs", root, persona, background, pkg)
+				if output, err := context7ProofOutput(cmd); err != nil {
 					t.Fatalf("frozen package consumer failed: %v\n%s", err, output)
 				} else {
 					t.Logf("%s", output)
