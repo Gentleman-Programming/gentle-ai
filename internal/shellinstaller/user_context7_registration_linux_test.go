@@ -51,7 +51,7 @@ func TestUserContext7FrozenRegistration(t *testing.T) {
 	}
 	script, marker, cases := "/source/e2e/shell-context7-registration.mjs", "FROZEN_PI_REGISTRATION_PASS", 4
 	if os.Getenv("GENTLE_EXPERIENCE_PRIVATE_CONTEXT7_PROBE") == "1" {
-		script, marker, cases = "/source/e2e/shell-context7-private.mjs", "FROZEN_PI_PRIVATE_POLICY_PASS", 7
+		script, marker, cases = "/source/e2e/shell-context7-private.mjs", "FROZEN_PI_PRIVATE_POLICY_PASS", 9
 	}
 	if os.Getenv("GENTLE_EXPERIENCE_PRIVATE_CONTEXT7_CLI_PROBE") == "1" {
 		script, marker, cases = "/source/e2e/shell-context7-private-cli.mjs", "FROZEN_PI_PRIVATE_CLI_PASS", 3
