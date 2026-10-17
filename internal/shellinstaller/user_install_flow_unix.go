@@ -188,7 +188,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	root := filepath.Join(workspace, "installed")
-	if err = userPrepareInstallStage(ctx, root, req.Experience); err != nil {
+	if err = userPrepareInstallStage(ctx, root, req.Mode, req.Experience); err != nil {
 		return result, err
 	}
 	if err = userBootstrap(ctx, root, workspace); err != nil {

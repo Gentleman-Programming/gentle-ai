@@ -11,11 +11,21 @@ import (
 // userPrepareInstallStage is called after physical confirmation, before any
 // acquisition or Shared provisioning. Its caller owns unpublished-workspace
 // cleanup and uncertain failure evidence; this function never removes roots.
-func userPrepareInstallStage(ctx context.Context, root string, profile *UserExperience) error {
+func userPrepareInstallStage(ctx context.Context, root, mode string, profile *UserExperience) error {
 	if ctx == nil || ctx.Err() != nil {
 		return privateError("canceled", context.Canceled)
 	}
-	if err := userValidateStageExperience(profile); err != nil {
+	if mode != "separate" && mode != "shared" {
+		return experienceError("installation stage requires separate or shared mode")
+	}
+	if err := userValidateStagePreferences(profile); err != nil {
+		return err
+	}
+	if profile != nil && profile.Context7 != "" && mode != "separate" {
+		return experienceError("explicit Context7 requires a private Separate agent")
+	}
+	files, err := userExperienceConfigFiles(profile)
+	if err != nil {
 		return err
 	}
 	if !privateHierarchyPath(root) {
@@ -37,5 +47,15 @@ func userPrepareInstallStage(ctx context.Context, root string, profile *UserExpe
 			return err
 		}
 	}
-	return userStageExperience(ctx, root, profile)
+	// Ordinary profiles retain the complete generic validator and native writer.
+	if profile != nil && profile.Context7 == "" {
+		return userStageExperience(ctx, root, profile)
+	}
+	if err := userStageExperienceConfig(ctx, root, files); err != nil {
+		return err
+	}
+	if profile == nil {
+		return nil
+	}
+	return userStageContext7(ctx, root, mode, profile.Context7)
 }

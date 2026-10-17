@@ -23,6 +23,15 @@ func userStageExperience(ctx context.Context, root string, profile *UserExperien
 	if err != nil {
 		return err
 	}
+	return userStageExperienceConfig(ctx, root, files)
+}
+
+// Reuse the native config writer after the preparer validates the full profile
+// and mode. Generic callers still enter through userStageExperience's guards.
+func userStageExperienceConfig(ctx context.Context, root string, files []userExperienceStageFile) error {
+	if len(files) == 0 {
+		return nil
+	}
 	if ctx == nil || ctx.Err() != nil {
 		return privateError("canceled", context.Canceled)
 	}
