@@ -75,6 +75,7 @@ func TestDefaultRegistrySupportedAgentsMatchesFactoryAgents(t *testing.T) {
 		model.AgentConductor,
 		model.AgentCursor,
 		model.AgentGeminiCLI,
+		model.AgentGitHubCopilotCLI,
 		model.AgentHermes,
 		model.AgentKilocode,
 		model.AgentKimi,

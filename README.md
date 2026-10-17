@@ -12,7 +12,7 @@
 <p>
 <a href="https://github.com/Gentleman-Programming/gentle-ai/releases"><img src="https://img.shields.io/github/v/release/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Release"></a>
 <a href="https://github.com/Gentleman-Programming/gentle-ai/stargazers"><img src="https://img.shields.io/github/stars/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Stars"></a>
-<img src="https://img.shields.io/badge/agents-17-F095C8?style=for-the-badge&labelColor=1A1218" alt="17 agents">
+<img src="https://img.shields.io/badge/agents-18-F095C8?style=for-the-badge&labelColor=1A1218" alt="18 agents">
 <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Platform">
 <a href="LICENSE"><img src="https://img.shields.io/badge/MIT-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
 </p>

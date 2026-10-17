@@ -320,14 +320,15 @@ func TestEveryManifestDigestStaysByteStable(t *testing.T) {
 		model.AgentVSCodeCopilot: "sha256:cc800f1eca6d5ea36ae83ae4fd43b59223093196970bdfee59096c60fe22fffe",
 		model.AgentWindsurf:      "sha256:2ccb52ebf0926b16f39f59e3df4bbf392c7bdd7fcc76dfb38ee758574be3ad00",
 	}
+	wantNonPiDigests[model.AgentGitHubCopilotCLI] = "sha256:fbb2c100b08f1e5e1f8923dcc7d439f7fce516111d3b19081a9f216b8295ca01"
 
 	nonPiAgents := make([]model.AgentID, 0, len(wantNonPiDigests))
 	for agent := range wantNonPiDigests {
 		nonPiAgents = append(nonPiAgents, agent)
 	}
 
-	if got := len(nonPiAgents); got != 16 {
-		t.Fatalf("want 16 non-Pi agents, got %d", got)
+	if got := len(nonPiAgents); got != 17 {
+		t.Fatalf("want 17 non-Pi agents, got %d", got)
 	}
 
 	for _, agent := range nonPiAgents {

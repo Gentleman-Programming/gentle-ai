@@ -14,6 +14,7 @@ import (
 // every known agent. The shim must enumerate all adapters from the default
 // registry, not just the ones that are installed.
 func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
+	t.Setenv("COPILOT_HOME", "")
 	home := t.TempDir()
 
 	// Create only claude-code config dir — others intentionally absent.
@@ -25,9 +26,9 @@ func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
 	configs := ScanConfigs(home)
 
 	// Must return at least as many entries as the registry has adapters with
-	// a non-empty GlobalConfigDir. Currently 17 agents are supported.
-	if len(configs) < 17 {
-		t.Fatalf("ScanConfigs() returned %d entries, want >= 17; got %v", len(configs), configs)
+	// a non-empty GlobalConfigDir. Currently 18 agents are supported.
+	if len(configs) < 18 {
+		t.Fatalf("ScanConfigs() returned %d entries, want >= 18; got %v", len(configs), configs)
 	}
 
 	// Find claude — must be Exists=true.
@@ -64,6 +65,7 @@ func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
 // in each ConfigState matches the canonical model.AgentID string values used
 // by the TUI and validate.go switch statements.
 func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
+	t.Setenv("COPILOT_HOME", "")
 	home := t.TempDir()
 	configs := ScanConfigs(home)
 
@@ -87,6 +89,7 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 		"hermes":         false,
 		"conductor":      false,
 	}
+	knownAgents["github-copilot-cli"] = false
 
 	for _, c := range configs {
 		if _, known := knownAgents[c.Agent]; known {
@@ -287,4 +290,43 @@ func TestScanConfigs_KimiLegacyFallback(t *testing.T) {
 	if !kimi.Exists || !kimi.IsDirectory {
 		t.Errorf("kimi Exists=%v IsDirectory=%v, want both true", kimi.Exists, kimi.IsDirectory)
 	}
+}
+
+func TestScanConfigs_CopilotCLIAndVSCodeDoNotCollide(t *testing.T) {
+	t.Setenv("COPILOT_HOME", "")
+	home := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(home, ".copilot"), 0o755)
+	_ = os.MkdirAll(filepath.Join(home, ".vscode", "extensions", "github.copilot-chat-0.12.0"), 0o755)
+
+	configs := ScanConfigs(home)
+	if !configStateFor(t, configs, "github-copilot-cli").Exists || configStateFor(t, configs, "vscode-copilot").Exists {
+		t.Errorf("github-copilot-cli must exist and vscode-copilot must not exist for copilot-chat")
+	}
+
+	_ = os.MkdirAll(filepath.Join(home, ".vscode", "extensions", "github.copilot-1.2.3"), 0o755)
+	if !configStateFor(t, ScanConfigs(home), "vscode-copilot").Exists {
+		t.Errorf("vscode-copilot Exists = false, want true for github.copilot-1.2.3")
+	}
+}
+
+func TestScanConfigs_UsesCopilotHome(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "custom-copilot")
+	t.Setenv("COPILOT_HOME", root)
+	_ = os.MkdirAll(root, 0o755)
+
+	config := configStateFor(t, ScanConfigs(t.TempDir()), "github-copilot-cli")
+	if config.Path != root || !config.Exists || !config.IsDirectory {
+		t.Fatalf("github-copilot-cli = %+v, want path %q present directory", config, root)
+	}
+}
+
+func configStateFor(t *testing.T, configs []ConfigState, agent string) ConfigState {
+	t.Helper()
+	for _, config := range configs {
+		if config.Agent == agent {
+			return config
+		}
+	}
+	t.Fatalf("ScanConfigs() missing %s entry", agent)
+	return ConfigState{}
 }

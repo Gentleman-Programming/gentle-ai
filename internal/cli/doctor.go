@@ -62,6 +62,10 @@ var agentToolBinaries = map[string]string{
 	"hermes":         "hermes",
 }
 
+func init() {
+	agentToolBinaries["github-copilot-cli"] = "copilot"
+}
+
 const (
 	engramHealthEnvVar = "ENGRAM_BASE_URL"
 	diskWarnThreshold  = int64(100 * 1024 * 1024) // 100 MB
