@@ -33,8 +33,11 @@ func TargetPath(homeDir string, adapter agents.Adapter) string {
 // Claude Code prefix rules only match the literal start of the command string, so
 // an agent can otherwise sidestep Bash(ssh:*) by invoking the interpreter-free
 // utilities through an absolute path (/usr/bin/ssh ...), a backslash escape
-// (\ssh ...), a shell resolution wrapper (command ssh ..., exec ssh ...), or
-// direct env execution (env ssh ...).
+// (\ssh ...), a shell resolution wrapper (command ssh ..., exec ssh ...),
+// direct env execution (env ssh ...), or a quoted command name ('ssh' ...,
+// "ssh" ...). The list closes these known spellings; it is not a shell parser,
+// so other spellings (for example s"s"h or $(echo ssh)) stay covered only by
+// the always-on routing guidance.
 // The enumerated directories are the canonical install prefixes of the OpenSSH
 // client and rsync across the supported platforms (FHS Linux /bin and /usr/bin,
 // custom /usr/local/bin, Apple Silicon /opt/homebrew/bin, NixOS
@@ -79,6 +82,8 @@ var claudeCodeOverlayJSON = []byte(`{
       "Bash(command ssh:*)",
       "Bash(exec ssh:*)",
       "Bash(env ssh:*)",
+      "Bash('ssh':*)",
+      "Bash(\"ssh\":*)",
       "Bash(scp)",
       "Bash(scp:*)",
       "Bash(/bin/scp:*)",
@@ -90,6 +95,8 @@ var claudeCodeOverlayJSON = []byte(`{
       "Bash(command scp:*)",
       "Bash(exec scp:*)",
       "Bash(env scp:*)",
+      "Bash('scp':*)",
+      "Bash(\"scp\":*)",
       "Bash(sftp)",
       "Bash(sftp:*)",
       "Bash(/bin/sftp:*)",
@@ -101,6 +108,8 @@ var claudeCodeOverlayJSON = []byte(`{
       "Bash(command sftp:*)",
       "Bash(exec sftp:*)",
       "Bash(env sftp:*)",
+      "Bash('sftp':*)",
+      "Bash(\"sftp\":*)",
       "Bash(rsync)",
       "Bash(rsync:*)",
       "Bash(/bin/rsync:*)",
@@ -111,7 +120,9 @@ var claudeCodeOverlayJSON = []byte(`{
       "Bash(\\rsync:*)",
       "Bash(command rsync:*)",
       "Bash(exec rsync:*)",
-      "Bash(env rsync:*)"
+      "Bash(env rsync:*)",
+      "Bash('rsync':*)",
+      "Bash(\"rsync\":*)"
     ]
   }
 }

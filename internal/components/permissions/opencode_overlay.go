@@ -1,6 +1,10 @@
 package permissions
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"sort"
+)
 
 // openCodeOverlayJSON mirrors the Gentle Pi safety model for OpenCode (and
 // Kilocode): everything is allowed by design; recognized destructive commands
@@ -25,10 +29,42 @@ import "encoding/json"
 // The remote shell utilities are the carve-out (#4324): their canonical
 // install prefixes, root-level path (which also reaches backslash escapes,
 // because the matcher normalizes backslashes to forward slashes), command
-// and exec resolution wrappers, and direct env execution (env tool ...) are
+// and exec resolution wrappers, direct env execution (env tool ...), and the
+// single- and double-quoted command names ('tool' ..., "tool" ...) are
 // enumerated explicitly, mirroring the Claude Code deny list. A human who
 // wants a utility back re-enables it in their own config.
 var openCodeOverlayJSON = buildOpenCodeOverlayJSON()
+
+// catchAllFirst encodes one rule map with "*" first and the remaining keys
+// sorted. OpenCode applies the last matching rule, and a quoted rule such as
+// "'ssh' *" sorts before "*" in plain map order, where the catch-all would
+// override it.
+func catchAllFirst(rules map[string]string) json.RawMessage {
+	keys := make([]string, 0, len(rules))
+	for key := range rules {
+		if key != "*" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if _, ok := rules["*"]; ok {
+		keys = append([]string{"*"}, keys...)
+	}
+	var encoded bytes.Buffer
+	encoded.WriteByte('{')
+	for i, key := range keys {
+		if i > 0 {
+			encoded.WriteByte(',')
+		}
+		name, _ := json.Marshal(key)
+		value, _ := json.Marshal(rules[key])
+		encoded.Write(name)
+		encoded.WriteByte(':')
+		encoded.Write(value)
+	}
+	encoded.WriteByte('}')
+	return encoded.Bytes()
+}
 
 var (
 	// openCodeRecursiveRMFlags are the recursive rm flag spellings guarded,
@@ -157,6 +193,8 @@ func buildOpenCodeOverlayJSON() []byte {
 		deny("command " + command + " *")
 		deny("exec " + command + " *")
 		deny("env " + command + " *")
+		deny("'" + command + "' *")
+		deny(`"` + command + `" *`)
 	}
 	for _, client := range openCodeDatabaseClients {
 		for _, statement := range openCodeDestructiveSQL {
@@ -170,7 +208,7 @@ func buildOpenCodeOverlayJSON() []byte {
 	}
 
 	overlay, err := json.MarshalIndent(map[string]any{
-		"permission": map[string]any{"bash": bash, "read": paths, "edit": paths},
+		"permission": map[string]any{"bash": catchAllFirst(bash), "read": catchAllFirst(paths), "edit": catchAllFirst(paths)},
 	}, "", "  ")
 	if err != nil {
 		panic(err)

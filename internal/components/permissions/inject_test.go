@@ -357,7 +357,7 @@ func TestRemoteMatcherBoundaryFixtures(t *testing.T) {
 	// overlay itself. Pattern-only rules are bypassable through these forms
 	// (the command token is not the bare utility name), so the deny entries
 	// enumerate them explicitly instead of relying on guidance alone.
-	for _, input := range []string{"/usr/bin/ssh example.invalid", "/bin/scp file example.invalid:file", "\\ssh example.invalid", "command ssh example.invalid", "exec rsync -a src dst", "env ssh example.invalid"} {
+	for _, input := range []string{"/usr/bin/ssh example.invalid", "/bin/scp file example.invalid:file", "\\ssh example.invalid", "command ssh example.invalid", "exec rsync -a src dst", "env ssh example.invalid", "'ssh' example.invalid", `"scp" file example.invalid:file`, "'rsync' -a src dst", `"sftp" example.invalid`} {
 		if got := remoteAction(t, openCodeOverlayJSON, input); got != "deny" {
 			t.Errorf("bypass invocation %q not denied: %s", input, got)
 		}
@@ -429,8 +429,8 @@ var remoteShellPathPrefixes = []string{
 // remoteShellEscapeForms returns every deny surface one tool needs beyond the
 // bare name: one entry per absolute install prefix, the root-level absolute
 // form (which OpenCode's matcher also reaches for backslash-escaped
-// invocations because it normalizes backslashes to forward slashes), and the
-// shell resolution wrappers.
+// invocations because it normalizes backslashes to forward slashes), the
+// shell resolution wrappers, and the single- and double-quoted command names.
 func remoteShellEscapeForms(tool, openCodeSuffix, claudeCodeSuffix string) (openCode []string, claudeCode []string) {
 	for _, prefix := range remoteShellPathPrefixes {
 		openCode = append(openCode, prefix+tool+openCodeSuffix)
@@ -438,6 +438,10 @@ func remoteShellEscapeForms(tool, openCodeSuffix, claudeCodeSuffix string) (open
 	}
 	openCode = append(openCode, "/"+tool+openCodeSuffix, "command "+tool+openCodeSuffix, "exec "+tool+openCodeSuffix)
 	claudeCode = append(claudeCode, "Bash(\\"+tool+claudeCodeSuffix+")", "Bash(command "+tool+claudeCodeSuffix+")", "Bash(exec "+tool+claudeCodeSuffix+")")
+	for _, quote := range []string{"'", `"`} {
+		openCode = append(openCode, quote+tool+quote+openCodeSuffix)
+		claudeCode = append(claudeCode, "Bash("+quote+tool+quote+claudeCodeSuffix+")")
+	}
 	return openCode, claudeCode
 }
 
@@ -515,6 +519,15 @@ func TestInjectOpenCodeDeniesRemoteShellUtilities(t *testing.T) {
 			// The remote denials must coexist with the global bash allow.
 			if bashNode["*"] != "allow" {
 				t.Errorf("global bash allow rule \"*\" missing or changed after Inject; got: %v", bashNode["*"])
+			}
+
+			// The written file must resolve the quoted spellings to deny, not
+			// only list them: OpenCode applies the last matching rule, and a
+			// quote sorts before "*", so the catch-all must precede them.
+			for _, input := range []string{"'ssh' example.invalid", `"rsync" -a src dst`} {
+				if got := permissionAction(t, content, "bash", input); got != "deny" {
+					t.Errorf("injected bash %q resolved to %s, want deny", input, got)
+				}
 			}
 		})
 	}
