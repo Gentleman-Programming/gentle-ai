@@ -87,3 +87,9 @@ There is no automatic migration. Review user-authored data before manual transfe
 Stock Pi's updater is retained. Readback accepts only complete known prior/modern graphs; unknown versions, bytes or placement fail closed and retain evidence. Package lifecycle scripts stay disabled. Installation/UI opening or a same-version reinstall does not qualify the full update journey.
 
 Never delete uncertain roots, stages, locks or evidence to retry. Inspection inventories are not backups; recovery is not hostile-same-UID custody or full disaster recovery. Actual manager, cancellation, startup/update and recovery qualification remains pending on the current candidate.
+
+## Global RDD source interface
+
+The source CLI supports `gentle-ai review mode status --global-only --json` and the corresponding `enable`/`disable` operations. This route reads or writes only the global HOME source without repository resolution, including its unknown-value repair commands. It requires global scope and refuses every supplied `--expected-revision`. Ordinary status/review resolution is unchanged: a clone-local OFF still wins even when the global-source view reports ON.
+
+This source-only interface does not alter the current user switch or installed binaries, admit installer profiles, or supply a compatible published artifact. Explicit staged RDD preferences remain refused until their actual supported native effect and readback are integrated. POSIX no-Git-invocation and unreadable-file controls accompany the following proof cut.
