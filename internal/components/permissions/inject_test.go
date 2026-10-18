@@ -373,7 +373,7 @@ func TestRemoteMatcherBoundaryFixtures(t *testing.T) {
 
 func TestRemoteCommandApprovalDefaults(t *testing.T) {
 	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
-		for _, seed := range []string{`{}`, `{"permission":{"bash":{"*":"allow"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"deny"}}}`, `{"permission":"deny"}`, `{"permission":{"bash":"ask"}}`, `{"permission":{"bash":"deny"}}`, `{"permission":{"bash":{"*":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh *":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"allow"}}}`} {
+		for _, seed := range []string{`{}`, `{"permission":{"bash":{"*":"allow"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"deny"}}}`, `{"permission":"deny"}`, `{"permission":{"bash":"ask"}}`, `{"permission":{"bash":"deny"}}`, `{"permission":{"bash":{"*":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh *":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"allow"}}}`, `{"permission":{"bash":{"make deploy":"ask","*":"allow"}}}`} {
 			t.Run(string(id)+seed, func(t *testing.T) {
 				home := t.TempDir()
 				adapter, _ := agents.NewAdapter(id)
@@ -404,6 +404,13 @@ func TestRemoteCommandApprovalDefaults(t *testing.T) {
 					}
 					if got := remoteAction(t, raw, command); got != want {
 						t.Errorf("%q: got %s, want %s", command, got, want)
+					}
+				}
+				// A rule the user placed before their catch-all allow keeps the
+				// resolution it had: the overlay must not reorder user rules.
+				if strings.HasPrefix(seed, `{"permission":{"bash":{"make deploy"`) {
+					if got := remoteAction(t, raw, "make deploy"); got != "allow" {
+						t.Errorf("user rule before catch-all changed resolution: make deploy = %s, want allow", got)
 					}
 				}
 				if result, err := Inject(home, adapter); err != nil || result.Changed {
