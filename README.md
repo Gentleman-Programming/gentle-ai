@@ -134,6 +134,8 @@ Small changes should not need a planning pipeline, and larger work should not lo
 
 Tasks are sized by understanding, risk, and resumability, never by file count. A small task — understood, with contained risk, and resumable from the diff alone — runs inline: no subagents, no task document. The feature document of a large task holds your spec verbatim, and every handoff points at it instead of paraphrasing it.
 
+https://github.com/user-attachments/assets/857a2195-34b8-4720-87af-f71bca3dec92
+
 **[Docs →](docs/usage.md#organic-driven-development-odd)**
 
 ---
@@ -150,6 +152,8 @@ A subagent costs a fresh session, uncached reads, and a handoff. So the orchestr
 | **Independent verifier** | A change that names a high-risk item (data, security, shared contracts, concurrency, delivery, or no test that would catch a regression); never a native risk tier alone, an unclear or failed assessment, or the model that wrote the change |
 
 A trigger holds only when its condition truly holds; none holds by default, and when in doubt the parent works inline. Without a reason the parent writes inline, following its feature document. File count, task size, or a model price ratio never decide the route on their own.
+
+https://github.com/user-attachments/assets/ccd96c9e-e0fd-4504-ad94-0302398f13a9
 
 **[Docs →](docs/trigger-rules.md)**
 
@@ -185,6 +189,8 @@ ODD applies test-first development by default when a relevant runnable test and 
 Receipt-Driven Development (RDD) is on by default and opt-out: run `gentle-ai review mode disable` to turn it off. Explicit global or clone-local OFF choices remain OFF. Its point is that a review cannot drift: the candidate is frozen before anything reads it, so the evidence belongs to the exact version you are about to rely on — not to whatever the worktree looked like a moment later. The depth comes from that frozen candidate rather than from the model's judgment, and the result is informational. Commit, push and release stay your call.
 
 Review is proportionate: an automatic review is due only for a high-risk candidate, and the agent can name the 4R lenses that fit what it touched — with a reason frozen alongside the authority — instead of paying for all four. Verification by risk tier covers the rest.
+
+https://github.com/user-attachments/assets/9d3b176f-6e59-48f3-aba2-1196f20a4a6f
 
 **[Docs →](docs/review-integration.md)**
 
