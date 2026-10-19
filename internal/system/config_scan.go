@@ -53,6 +53,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")},
 		{Agent: "conductor", Path: filepath.Join(homeDir, ".conductor")},
 		{Agent: "github-copilot-cli", Path: copilotconfig.Root(homeDir)},
+		{Agent: "command-code", Path: filepath.Join(homeDir, ".commandcode")},
 	}
 }
 
