@@ -2,10 +2,13 @@ package skills
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
@@ -150,6 +153,12 @@ func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.S
 		return InjectionResult{}, err
 	}
 	result := InjectionResult{Files: make([]string, 0, len(entries)), Skipped: skipped}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		// If we cannot determine home, we skip backup but continue.
+		homeDir = ""
+	}
+	timestamp := time.Now().Format("20060102150405")
 	for _, entry := range entries {
 		content, err := assets.Read(entry.source)
 		if err != nil {
@@ -161,26 +170,48 @@ func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.S
 		if capability != "" {
 			content = extractModelSection(content, capability)
 		}
-		writeResult, err := writeFile(entry.destination, []byte(content), 0o644)
+		dest := entry.destination
+		// Backup existing file if present
+		if homeDir != "" {
+			if _, err := os.Stat(dest); err == nil {
+				// Determine relative path from skillDir to dest for backup structure
+				rel, err := filepath.Rel(skillDir, dest)
+				if err != nil {
+					rel = dest // fallback: use full path
+				}
+				backupDir := filepath.Join(homeDir, ".gentle-ai", "backups", timestamp)
+				backupPath := filepath.Join(backupDir, rel)
+				if err := os.MkdirAll(filepath.Dir(backupPath), 0o755); err != nil {
+					log.Printf("skills: failed to create backup dir for %s: %v", dest, err)
+				} else {
+					srcFile, err := os.Open(dest)
+					if err == nil {
+						dstFile, err := os.Create(backupPath)
+						if err == nil {
+							_, copyErr := io.Copy(dstFile, srcFile)
+							srcFile.Close()
+							dstFile.Close()
+							if copyErr != nil {
+								log.Printf("skills: failed to backup %s to %s: %v", dest, backupPath, copyErr)
+							}
+						} else {
+							log.Printf("skills: failed to create backup file %s: %v", backupPath, err)
+						}
+					} else {
+						log.Printf("skills: failed to open existing file %s for backup: %v", dest, err)
+					}
+				}
+			}
+		}
+		writeResult, err := writeFile(dest, []byte(content), 0o644)
 		if err != nil {
-			return InjectionResult{}, fmt.Errorf("write %q: %w", entry.destination, err)
+			return InjectionResult{}, fmt.Errorf("write %q: %w", dest, err)
 		}
 		result.Changed = result.Changed || writeResult.Changed
-		result.Files = append(result.Files, entry.destination)
+		result.Files = append(result.Files, dest)
 	}
 	return result, nil
 }
-
-// Inject writes the embedded SKILL.md files for each requested skill
-// to the correct directory for the given agent adapter.
-//
-// The skills directory is determined by adapter.SkillsDir(), removing
-// the need for any agent-specific switch statements.
-//
-// Retired SDD skill IDs are skipped; they cannot be restored by explicit selection.
-//
-// Individual skill failures (e.g., missing embedded asset) are logged
-// and skipped rather than aborting the entire operation.
 func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (InjectionResult, error) {
 	return InjectWithCapability(homeDir, adapter, skillIDs, "")
 }
