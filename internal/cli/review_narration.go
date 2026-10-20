@@ -139,6 +139,8 @@ var reviewStopReasonNarration = map[string]string{
 		"<repo>", "<id>"),
 	"lens_context_budget_exceeded": "This frozen candidate cannot fit complete reviewer evidence without truncation, so this review stops before an inspection result. " +
 		"Reduce the candidate scope or target identity, then run `gentle-ai review start` for that new candidate; or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
+	"fresh_candidate_runtime_budget_exceeded": "The pending candidate's frozen evidence exceeds the runtime context budget, so its START was never offered: it would ask for consent and then refuse in preflight, forever. " +
+		"Run the stop's continuation (`review start` with `--base-ref <parent>` and `--committed-only=true`) to review one work unit at a time; after each acknowledgement the next STATUS offers the next unit.",
 	"managed_assets_outdated": "This installation's reviewer assets no longer match this version of Gentle AI, so this review stops before it starts. " +
 		"Run `gentle-ai sync --agent " + reviewUndeclaredRuntimeIdentitySlot + "` to bring them back in sync, then re-run " +
 		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition`.",

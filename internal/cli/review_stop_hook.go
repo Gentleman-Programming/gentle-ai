@@ -174,9 +174,18 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 	if !ok {
 		return nil
 	}
-	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
-		status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
-		return nil
+	// Issue #4790: an over-budget pending candidate must not silence the hook
+	// (that would hollow out RDD enforcement) and must not route into the
+	// blocked full-range START either. The budget stop's reminder shares the
+	// baseline dedupe and once-per-candidate persistence below, but routes to
+	// the stop's one-work-unit slice START instead.
+	budgetStop := status.NextTransition != nil && status.NextTransition.Kind == reviewNextTransitionStop &&
+		status.NextTransition.ReasonCode == "fresh_candidate_runtime_budget_exceeded" && status.NextTransition.Continuation != nil
+	if !budgetStop {
+		if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
+			status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+			return nil
+		}
 	}
 
 	// Check first, persist after delivery below: recording before the write
@@ -212,10 +221,16 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 		}
 	}
 
+	reason := ""
+	if budgetStop {
+		reason = reviewStopHookBudgetReasonText(targetIdentity, root, status.NextTransition.Continuation.Command)
+	} else {
+		reason = reviewStopHookReasonText(targetIdentity, root, runtimeAgent, status.NextTransition.Execute.Command)
+	}
 	output := reviewStopHookOutput{
 		Schema:   reviewStopHookSchema,
 		Decision: "block",
-		Reason:   reviewStopHookReasonText(targetIdentity, root, runtimeAgent, status.NextTransition.Execute.Command),
+		Reason:   reason,
 	}
 	encoded, err := json.Marshal(output)
 	if err != nil {
@@ -279,6 +294,22 @@ func reviewStopHookResolveTargetIdentity(ctx context.Context, repo, runtimeAgent
 		return "", "", ReviewTargetStatusResult{}, false, fmt.Errorf("review stop-hook: decode review status: %w", err)
 	}
 	return root, result.TargetIdentity, result, true, nil
+}
+
+// reviewStopHookBudgetReasonText composes the over-budget reminder (#4790):
+// the pending candidate's frozen evidence exceeds the runtime budget, so the
+// full-range START was never offered -- routing into it would ask for consent
+// and then refuse in preflight forever. The hook routes the agent to the
+// stop's one-work-unit slice START instead, with the same lossless-consent and
+// once-per-candidate scope the ordinary reminder states.
+func reviewStopHookBudgetReasonText(targetIdentity, root, continuationCommand string) string {
+	return strings.Join([]string{
+		"Receipt-driven development is enabled for this repository, and it holds a pending candidate (target_identity " + targetIdentity + ") whose frozen evidence exceeds the runtime context budget (stop fresh_candidate_runtime_budget_exceeded).",
+		"The full-range START was never offered: it would ask for consent and then refuse in preflight, re-offering the same unexecutable START forever.",
+		"Run the stop's continuation to review one work unit at a time; after each acknowledgement the next STATUS offers the next unit: " + continuationCommand,
+		"If that START returns a consent envelope, relay it to the human losslessly and never answer it on the human's behalf.",
+		"This hook never runs review start itself, and it reminds once per session and candidate.",
+	}, "\n")
 }
 
 // reviewStopHookReasonText composes the one-paragraph reminder Claude Code

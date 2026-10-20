@@ -115,6 +115,12 @@ type ReviewTargetStatusResult struct {
 	// object the derived snapshot froze), letting the caller see and override
 	// the offered scope.
 	committedRangeBaseRef string
+	// committedRangeBudgetStop carries the typed over-budget stop continuation
+	// the offer site computed for a derived committed-range candidate whose raw
+	// frozen evidence exceeds the runtime context budget (issue #4790). The
+	// next-transition builder renders it as the fresh_candidate_runtime_budget_exceeded
+	// stop instead of a START no reviewer could collect.
+	committedRangeBudgetStop *ReviewStopContinuation
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -797,8 +803,15 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			if err := validateCorrectionReleaseContinuation(continuation); err != nil {
 				return fmt.Errorf("invalid correction release STATUS continuation: %w", err)
 			}
+		case "fresh_candidate_runtime_budget_exceeded":
+			// Issue #4790: the over-budget stop is the only channel carrying the
+			// one-work-unit slice START, so its shape is checked just as strictly:
+			// the printed command must run exactly as printed.
+			if continuation.Operation != "review.start" || continuation.Command == "" {
+				return fmt.Errorf("invalid fresh-candidate budget STATUS continuation") // refusal:by-design world-action: the producer emitted a continuation the contract cannot route and requires a code fix, not an operator command
+			}
 		default:
-			return errors.New("next_transition.continuation is valid only on a managed_assets_outdated or correction_context_budget_exceeded stop") // refusal:by-design world-action: a producer that attaches this continuation to any other stop built a malformed envelope and requires a code fix, not an operator command
+			return errors.New("next_transition.continuation is valid only on a managed_assets_outdated, correction_context_budget_exceeded, or fresh_candidate_runtime_budget_exceeded stop") // refusal:by-design world-action: a producer that attaches this continuation to any other stop built a malformed envelope and requires a code fix, not an operator command
 		}
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
@@ -874,6 +887,22 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		}
 		if result.NextTransition.Kind == reviewNextTransitionCollect && result.NextTransition.ReasonCode == "intended_untracked_selection_required" {
 			return result.validateIntendedUntrackedSelectionTransition()
+		}
+		// Issue #4790: the one fresh derived committed-range target whose START
+		// can never be collected stops instead, carrying the one-work-unit slice
+		// continuation the caller runs. Any other shape on this classification
+		// is a producer defect.
+		if result.committedRangeBudgetStop != nil {
+			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "fresh_candidate_runtime_budget_exceeded" ||
+				result.NextTransition.Continuation == nil {
+				return errors.New("over-budget fresh target lacks the budget STOP transition with its slice continuation") // refusal:by-design world-action: offering a START the offer site already proved uncollectable is a producer code fix, not an operator command
+			}
+			continuation := result.NextTransition.Continuation
+			if continuation.Operation != "review.start" || continuation.Command == "" ||
+				!strings.Contains(continuation.Command, "--committed-only=true") {
+				return errors.New("over-budget fresh target continuation is not an executable committed-range slice START") // refusal:by-design world-action: the producer emitted a non-runnable slice command and requires a code fix, not an operator command
+			}
+			return nil
 		}
 		return result.validateStartNextTransition()
 	}

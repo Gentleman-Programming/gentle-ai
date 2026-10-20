@@ -213,6 +213,16 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 }
 
 func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, artifactErr error, input reviewNextTransitionInput) ReviewNextTransition {
+	// Issue #4790: the offer site already proved this derived committed-range
+	// candidate's frozen evidence exceeds the runtime that would hold it, so
+	// STATUS stops here with the executable one-work-unit slice continuation
+	// instead of offering a START that asks for consent and then refuses in
+	// preflight -- and then re-offers the same unexecutable START forever.
+	if status.committedRangeBudgetStop != nil {
+		transition := reviewStopTransition("fresh_candidate_runtime_budget_exceeded")
+		transition.Continuation = status.committedRangeBudgetStop
+		return transition
+	}
 	if status.Applicability != reviewtransaction.TargetApplicabilityCurrent {
 		switch status.Applicability {
 		case reviewtransaction.TargetApplicabilityUnrelated:
@@ -1419,6 +1429,8 @@ func reviewReasonDescription(reason string) string {
 		return "Committed base-diff has no paths; empty-root bootstrap is required"
 	case "lens_context_budget_exceeded":
 		return "Frozen reviewer context exceeds the native evidence budget"
+	case "fresh_candidate_runtime_budget_exceeded":
+		return "The pending candidate's frozen evidence exceeds the runtime context budget; review it one work unit at a time through the stop's continuation, or split the commit when no slice exists"
 	case reviewCorrectionContextBudgetCode:
 		return "Correction evidence and findings exceed the native context budget"
 	case "corrupted_or_unverifiable_authority":

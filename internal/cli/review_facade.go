@@ -1029,6 +1029,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		var native reviewtransaction.TargetStatusResult
 		var liveSnapshot reviewtransaction.Snapshot
 		derivedBaseRef := ""
+		var derivedBudgetStop *ReviewStopContinuation
 		// Issue #3932: a continuation START issued carries the opaque
 		// repository context, so it is a resume of an existing lineage, never
 		// a pre-named fresh START. A process cwd that does not hold that
@@ -1070,6 +1071,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					liveSnapshot, target = derived, derivedTarget
 					derivedBaseRef = derivedTarget.BaseRef
 					selector = &reviewTransitionSelector{Kind: target.Kind, Projection: liveSnapshot.Projection, BaseRef: derivedBaseRef, PrePRRepresentable: true}
+					// Issue #4790: prove the frozen evidence fits the runtime BEFORE the
+					// START is offered, so an uncollectable candidate never reaches a
+					// consent question or a reviewer slot. Fail-open: any measurement or
+					// slice-resolution failure keeps today's offer.
+					derivedBudgetStop = reviewCommittedRangeBudgetStop(ctx, root, liveSnapshot, derivedBaseRef, string(runtime))
 				}
 			}
 			// #3900: a zero-lens START closes approved with a pending
@@ -1152,6 +1158,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
 		result.committedRangeBaseRef = derivedBaseRef
+		result.committedRangeBudgetStop = derivedBudgetStop
 		// Issue #4040: publish the digest once, here, before every path that
 		// could suppress it — the compact-reviewing replacement immediately
 		// below (which deliberately zeros Digest for the #1972 fail-closed
@@ -1556,6 +1563,60 @@ func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, build
 	snapshot, err := builder.BuildStoredSnapshot(ctx, derivedTarget)
 	// Empty commits and ambiguous ranges retain the base-selection fallback.
 	return snapshot, derivedTarget, err == nil && len(snapshot.Paths) > 0
+}
+
+// reviewCommittedRangeBudgetStop returns the typed over-budget stop
+// continuation for a derived committed-range candidate whose raw frozen
+// evidence exceeds the runtime context budget (issue #4790), and nil when the
+// candidate fits, the measurement or slice resolution fails, or no
+// controller-side slice exists. A single-commit over-budget candidate cannot
+// be sliced by the controller, so it returns nil and the offer stands: START's
+// own exact probe refuses it pre-persist with the honest not_started failure.
+// The bound is deliberately the RAW frozen diff against the runtime budget:
+// raw evidence above the budget implies every assembled reviewer block exceeds
+// it, so the refusal can never false-positive, and any borderline candidate
+// keeps today's offer.
+func reviewCommittedRangeBudgetStop(ctx context.Context, root string, snapshot reviewtransaction.Snapshot, derivedBaseRef, runtimeAgent string) *ReviewStopContinuation {
+	if strings.TrimSpace(runtimeAgent) == "" {
+		return nil
+	}
+	frozenBytes, measureErr := reviewtransaction.MeasureSnapshotCandidateDiffBytes(ctx, root, snapshot)
+	if measureErr != nil || frozenBytes <= reviewLensContextRuntimeBudget(runtimeAgent) {
+		return nil
+	}
+	sliceBase, sliceErr := reviewtransaction.ResolveCommitParent(ctx, root)
+	if sliceErr != nil || sliceBase == "" || sliceBase == derivedBaseRef {
+		return nil
+	}
+	// The negotiated START is target-bound, so the continuation carries the
+	// sliced candidate's own frozen identity: the one work unit the slice
+	// reviews, computed with the same builder the offer site already uses. A
+	// slice that freezes zero paths has no candidate to review; the full-range
+	// offer stands and START's own probe refuses it pre-persist.
+	sliceSnapshot, sliceBuildErr := (reviewtransaction.SnapshotBuilder{Repo: root}).Build(ctx, reviewtransaction.Target{
+		Kind: reviewtransaction.TargetBaseDiff, Projection: reviewtransaction.ProjectionWorkspace,
+		BaseRef: sliceBase, IntendedUntracked: []string{},
+	})
+	if sliceBuildErr != nil || reviewStartEmptyCandidateScope(sliceSnapshot) {
+		return nil
+	}
+	arguments := []ReviewTransitionArgument{
+		{Name: "cwd", Value: root},
+		{Name: "contract", Value: ReviewIntegrationContractV2},
+		{Name: "target", Value: sliceSnapshot.Identity},
+		{Name: "projection", Value: string(facadeProjection(sliceSnapshot.Projection))},
+		{Name: "agent", Value: runtimeAgent},
+		{Name: "base-ref", Value: sliceBase},
+		{Name: "committed-only", Value: "true"},
+		{Name: "consent", Value: string(reviewConsentModeRelay)},
+	}
+	tokenized := reviewTokenizedTransitionArguments(arguments)
+	return &ReviewStopContinuation{
+		Operation: "review.start",
+		Command:   reviewTransitionCommandLine("review.start", tokenized),
+		Agent:     runtimeAgent,
+		Detail:    "one work unit at a time; after it is acknowledged the next STATUS offers the next unit",
+	}
 }
 
 // reviewFreshStatusPreflight makes the fresh, store-free STATUS classification

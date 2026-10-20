@@ -186,6 +186,40 @@ func (builder SnapshotBuilder) WithLegacyCandidateDiff(ctx context.Context, snap
 	return frozen, nil
 }
 
+// MeasureSnapshotCandidateDiffBytes returns the raw byte size of the exact
+// frozen candidate diff the immutable transport renders for this snapshot's
+// base..candidate trees, capped at MaxFrozenCandidateDiffBytes. The fresh
+// STATUS offer site uses it as a conservative pre-consent bound (issue #4790):
+// raw evidence above a runtime's context budget implies every assembled
+// reviewer block exceeds it, so refusing the offer can never false-positive;
+// the exact per-role probe at START remains the admission authority.
+func MeasureSnapshotCandidateDiffBytes(ctx context.Context, repo string, snapshot Snapshot) (int, error) {
+	isolation, cleanup, err := isolatedImmutableTreeGit(ctx, repo)
+	if err != nil {
+		return -1, err
+	}
+	defer cleanup()
+	payload, err := runGitLimited(ctx, repo, isolation, nil, MaxFrozenCandidateDiffBytes,
+		"diff", "--binary", "--full-index", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv",
+		"--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3", "--ignore-submodules=none",
+		"--src-prefix=a/", "--dst-prefix=b/", snapshot.BaseTree, snapshot.CandidateTree, "--")
+	if err != nil {
+		return -1, err
+	}
+	return len(payload), nil
+}
+
+// ResolveCommitParent returns HEAD's first-parent commit, the base a
+// one-work-unit commit-range slice reviews (issue #4790). A repository with a
+// single commit has no parent, which surfaces as the Git error.
+func ResolveCommitParent(ctx context.Context, repo string) (string, error) {
+	output, err := runGit(ctx, repo, nil, nil, "rev-parse", "HEAD~1")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 // FrozenCandidateContext returns immutable Git tree references and their typed
 // path manifest. Reviewers read only path-scoped diffs between these trees.
 func (builder SnapshotBuilder) FrozenCandidateContext(ctx context.Context, snapshot Snapshot) (FrozenCandidateContext, error) {

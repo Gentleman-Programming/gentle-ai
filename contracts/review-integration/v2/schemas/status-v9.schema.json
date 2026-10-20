@@ -24,6 +24,25 @@
   },
   "dependentRequired": {"forecast": ["next_transition"]},
   "$defs": {
+    "review_budget_continuation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "command"],
+      "properties": {
+        "operation": {"const": "review.start"},
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "allOf": [
+            {"pattern": " review start(?: --[a-z-]+=\\S+)+$"},
+            {"pattern": "--base-ref=[0-9a-f]{40,64}"},
+            {"pattern": "--committed-only=true"}
+          ]
+        },
+        "agent": {"type": "string", "minLength": 1},
+        "detail": {"type": "string", "minLength": 1}
+      }
+    },
     "next_transition": {"oneOf": [
       {"allOf": [
         {"$ref": "status-v8.schema.json#/$defs/next_transition"},
@@ -31,6 +50,14 @@
           "provider_refuter_required", "targeted_validation_required", "targeted_validation_inconclusive_recapture_required"
         ]}}, "required": ["reason_code"]}}
       ]},
+      {
+        "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "continuation"],
+        "properties": {
+          "kind": {"const": "stop"},
+          "reason_code": {"const": "fresh_candidate_runtime_budget_exceeded"},
+          "continuation": {"$ref": "#/$defs/review_budget_continuation"}
+        }
+      },
       {
         "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "collect"],
         "properties": {
