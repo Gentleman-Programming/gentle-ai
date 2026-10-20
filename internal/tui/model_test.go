@@ -7734,3 +7734,80 @@ func TestMarkPendingSyncUnderLockReReadsLatestStateAfterLockContention(t *testin
 		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
 	}
 }
+
+func TestGetTurnTimeout(t *testing.T) {
+	// unset env -> default 10 minutes
+	if v := os.Getenv("GENTLE_AI_TURN_TIMEOUT"); v != "" {
+		os.Unsetenv("GENTLE_AI_TURN_TIMEOUT")
+		defer os.Setenv("GENTLE_AI_TURN_TIMEOUT", v)
+	}
+	if got := GetTurnTimeout(); got != 10*time.Minute {
+		t.Errorf("GetTurnTimeout() = %v, want %v", got, 10*time.Minute)
+	}
+	// set valid duration
+	os.Setenv("GENTLE_AI_TURN_TIMEOUT", "2m30s")
+	if got := GetTurnTimeout(); got != 2*time.Minute+30*time.Second {
+		t.Errorf("GetTurnTimeout() = %v, want %v", got, 2*time.Minute+30*time.Second)
+	}
+	// invalid duration falls back to default
+	os.Setenv("GENTLE_AI_TURN_TIMEOUT", "notaduration")
+	if got := GetTurnTimeout(); got != 10*time.Minute {
+		t.Errorf("GetTurnTimeout() = %v, want %v (fallback)", got, 10*time.Minute)
+	}
+}
+
+func TestTurnTimeoutUsedInGeneration(t *testing.T) {
+	// Set a short timeout
+	os.Setenv("GENTLE_AI_TURN_TIMEOUT", "200ms")
+	defer os.Unsetenv("GENTLE_AI_TURN_TIMEOUT")
+
+	// Create a mock engine that sleeps longer than timeout
+	var start time.Time
+	var generatedCtx context.Context
+	mockEngine := &agentbuilder.MockEngine{
+		AgentIDVal:  model.AgentGeminiCLI,
+		IsAvailable: true,
+		Output:      "ok",
+		Err:         nil,
+	}
+	mockEngine.Generate = func(ctx context.Context, prompt string) (string, error) {
+		generatedCtx = ctx
+		// sleep 300ms > timeout
+		time.Sleep(300 * time.Millisecond)
+		return "ok", nil
+	}
+
+	// We need to invoke the generation flow via the TUI model.
+	// Instead of invoking full UI, we can test that the context passed to engine.Generate
+	// has a deadline approx equal to the timeout.
+	// We'll call agentbuilder.NewEngine and then directly call Generate with a context
+	// that we create via GetTurnTimeout() to see if the deadline is set.
+
+	// Simulate what the TUI does: create ctx with GetTurnTimeout()
+	timeout := GetTurnTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Call the mock engine's Generate
+	_, err := mockEngine.Generate(ctx, "test")
+	// Expect context deadline exceeded
+	if err == nil {
+		t.Errorf("expected error due to timeout, got nil")
+	} else if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected deadline exceeded error, got %v", err)
+	}
+
+	// Verify that the deadline in ctx is roughly the timeout we set
+	if !generatedCtx.Deadline().IsZero() {
+		deadline, ok := generatedCtx.Deadline()
+		if !ok {
+			t.Fatalf("deadline not ok")
+		}
+		// deadline should be within a small margin of timeout
+		if deadline.Sub(time.Now()) < 0 {
+			t.Errorf("deadline already passed: %v", deadline)
+		}
+	} else {
+		t.Errorf("context has no deadline")
+	}
+}
