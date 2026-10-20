@@ -151,6 +151,7 @@ func invalidReviewRepositoryContextV2Resolution(cause error) error {
 // OpenRepositoryIdentityLease resolves and captures one exact Git worktree
 // without creating repository or authority storage.
 func OpenRepositoryIdentityLease(ctx context.Context, repo string) (*RepositoryIdentityLease, error) {
+	defer StartStatusPhase(ctx, StatusPhaseRepositoryIdentityResolution)()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
