@@ -104,9 +104,10 @@ https://github.com/user-attachments/assets/6d2bc422-a4dd-4ecf-a04b-fcd3bea7fea9
 <strong><a href="docs/agents.md#windsurf">Windsurf</a></strong> ·
 <strong><a href="docs/agents.md#openclaw">OpenClaw</a></strong> ·
 <strong><a href="docs/agents.md#trae">Trae</a></strong> ·
-<strong><a href="docs/agents.md#conductor">Conductor</a></strong>
+<strong><a href="docs/agents.md#conductor">Conductor</a></strong> ·
+<strong><a href="docs/agents.md#command-code">Command Code</a></strong>
 
-<sub>17 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
+<sub>18 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
 
 </div>
 
@@ -218,11 +219,11 @@ On a clean machine, the [Gentle Shell installers](https://github.com/Gentleman-P
 
 ---
 
-### 17 agents — Keep the agent you already use
+### 18 agents — Keep the agent you already use
 
 <img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
 
-Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and thirteen more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
+Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and fourteen more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
 
 **[Docs →](docs/agents.md)**
 
@@ -282,7 +283,7 @@ Then use your agent normally. Your configs are snapshotted before every write, a
 | :--- | :--- |
 | **[Intended Usage](docs/intended-usage.md)** | The mental model. If you read one page, read this one. |
 | **[Quickstart](docs/quickstart.md)** · **[Usage](docs/usage.md)** | Install, prerequisites, every CLI command and flag |
-| **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 17 |
+| **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 18 |
 | **[ODD](docs/usage.md#organic-driven-development-odd)** · **[Routing](docs/trigger-rules.md)** | Everyday direct and delegated work |
 | **[Review](docs/review-integration.md)** · **[Architecture](docs/architecture/organic-rdd.md)** | The RDD contract, lifecycle and threat model |
 | **[Engram](docs/engram.md)** · **[Components](docs/components.md)** | Memory commands, skills, presets and personas |
