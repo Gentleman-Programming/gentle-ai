@@ -179,6 +179,17 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 		return nil
 	}
 
+	// Issue #4815: the reminder routes the agent into the full consent + review
+	// round, so it must honor the same review_due decision the ODD contract
+	// tells agents to read from `review assess` for this same candidate. An
+	// under-budget slice stays pending in the slice and a passive candidate
+	// needs no review at all; only a due candidate (high risk, slice budget
+	// reached) reminds. Any evaluation failure keeps today's reminder: this
+	// gate fails open toward the reminder, never toward silence.
+	if due, dueErr := reviewStopHookCandidateDue(ctx, root, status); dueErr == nil && !due {
+		return nil
+	}
+
 	// Check first, persist after delivery below: recording before the write
 	// risks losing the reminder if it fails or the process dies in between.
 	if reviewStopHookSessionIDPattern.MatchString(payload.SessionID) {
@@ -279,6 +290,51 @@ func reviewStopHookResolveTargetIdentity(ctx context.Context, repo, runtimeAgent
 		return "", "", ReviewTargetStatusResult{}, false, fmt.Errorf("review stop-hook: decode review status: %w", err)
 	}
 	return root, result.TargetIdentity, result, true, nil
+}
+
+// reviewStopHookCandidateDue evaluates the same review_due decision
+// `review assess` publishes for the candidate the hook's STATUS preflight just
+// offered (issue #4815): the candidate is rebuilt exactly as assess builds it
+// -- base-diff when the offered START names --base-ref, current-changes
+// otherwise -- classified by the shared risk assessor, and resolved against
+// the same terminal-consumption evidence. The returned boolean is the
+// reviewAssessDue verdict; every error propagates so the caller can fail open
+// toward the reminder instead of silently weakening RDD enforcement.
+func reviewStopHookCandidateDue(ctx context.Context, root string, status ReviewTargetStatusResult) (bool, error) {
+	if status.NextTransition == nil || status.NextTransition.Execute == nil {
+		return true, nil
+	}
+	arguments, err := reviewTransitionArgumentMap(status.NextTransition.Execute.Arguments, status.NextTransition.Execute.Operation)
+	if err != nil {
+		return true, err
+	}
+	builder := reviewtransaction.SnapshotBuilder{Repo: root}
+	target := reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
+		IntendedUntracked: []string{},
+	}
+	if baseRef := arguments["base-ref"]; baseRef != "" {
+		target.Kind = reviewtransaction.TargetBaseDiff
+		target.BaseRef = baseRef
+	}
+	snapshot, err := builder.Build(ctx, target)
+	if err != nil {
+		return true, err
+	}
+	assessment, err := builder.AssessSnapshotRisk(ctx, snapshot)
+	if err != nil {
+		return true, err
+	}
+	publicRisk, err := reviewAssessPublicRisk(assessment.Level)
+	if err != nil {
+		return true, err
+	}
+	consumed, err := reviewtransaction.CompactTargetConsumed(ctx, root, snapshot.Identity)
+	if err != nil {
+		return true, err
+	}
+	due, _ := reviewAssessDue(consumed, publicRisk, assessment.ChangedLines)
+	return due, nil
 }
 
 // reviewStopHookReasonText composes the one-paragraph reminder Claude Code
