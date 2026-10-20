@@ -256,6 +256,8 @@ func TestEffectiveCodeGraphWiringAbsoluteBinaryPath(t *testing.T) {
 		configured bool
 	}{
 		{name: "codegraph binary", binary: filepath.Join(binDir, "codegraph"), configured: true},
+		{name: "codegraph exe", binary: filepath.Join(binDir, "codegraph.exe"), configured: true},
+		{name: "codegraph cmd", binary: filepath.Join(binDir, "codegraph.cmd"), configured: true},
 		{name: "other binary", binary: filepath.Join(binDir, "other")},
 	}
 
