@@ -57,6 +57,34 @@ func TestNativeCodeGraphCommandVariants(t *testing.T) {
 	}
 }
 
+func TestNativeCodeGraphLegacyFilePriority(t *testing.T) {
+	for _, lower := range []string{`["codegraph","serve","--mcp"]`, `["other"]`} {
+		t.Run(lower, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", "")
+			a := NewAdapter()
+			path := a.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			for file, body := range map[string]string{
+				path:       fmt.Sprintf(`{"mcp":{"servers":{"codegraph":{"type":"local","command":%s}}}}`, lower),
+				path + "c": `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":false}}}`,
+			} {
+				if err := os.WriteFile(file, []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if gotPath, configured := a.EffectiveCodeGraphWiring(home); gotPath != "" || configured {
+				t.Errorf("effective = (%q, %v), want missing", gotPath, configured)
+			}
+			if err := a.NativeCodeGraphWiringError(home); err != nil {
+				t.Errorf("authoritative legacy entry must retain installer path, got %v", err)
+			}
+		})
+	}
+}
+
 func TestNativeCodeGraphWiring(t *testing.T) {
 	for _, tt := range []struct {
 		name, body string

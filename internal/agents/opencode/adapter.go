@@ -145,9 +145,12 @@ func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
 			continue
 		}
 		entry, native := config.MCPEntry(root, "codegraph")
+		if entry == nil {
+			continue
+		}
 		if native {
 			if disabled, exists := entry["disabled"]; exists && disabled != false {
-				continue
+				return "", false
 			}
 			// V2 does not interpret legacy enabled inside a native server.
 			entry = map[string]any{"type": entry["type"], "command": entry["command"]}
@@ -155,6 +158,7 @@ func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
 		if isEffectiveCodeGraphEntry(entry) {
 			return path, true
 		}
+		return "", false
 	}
 	return "", false
 }
@@ -162,7 +166,9 @@ func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
 func (a *Adapter) codeGraphSettingsPaths(homeDir string) []string {
 	path := a.SettingsPath(homeDir)
 	paths := []string{path}
-	if strings.HasSuffix(path, ".json") {
+	if strings.HasSuffix(path, ".jsonc") {
+		paths = append(paths, strings.TrimSuffix(path, ".jsonc")+".json")
+	} else if strings.HasSuffix(path, ".json") {
 		paths = append(paths, strings.TrimSuffix(path, ".json")+".jsonc")
 	}
 	return paths
@@ -181,14 +187,17 @@ func (a *Adapter) NativeCodeGraphWiringError(homeDir string) error {
 			continue
 		}
 		entry, native := config.MCPEntry(root, "codegraph")
-		if !native {
+		if entry == nil {
 			continue
+		}
+		if !native {
+			return nil
 		}
 		reason := ""
 		disabled, exists := entry["disabled"]
 		switch {
 		case exists && disabled != false:
-			reason = "disabled must be false (or absent); leave it disabled if intentional"
+			reason = "disabled must be false (or absent); enable or remove this entry to complete sync"
 		case entry["type"] != "local":
 			reason = "type must be local"
 		case !isCodeGraphCommand(entry["command"]):
@@ -197,6 +206,7 @@ func (a *Adapter) NativeCodeGraphWiringError(homeDir string) error {
 		if reason != "" {
 			return fmt.Errorf("edit %s at mcp.servers.codegraph: %s; expected type local and command [codegraph serve --mcp], optionally --no-watch and --path <directory> (-p <directory>), with a bare codegraph or absolute executable path; the legacy CodeGraph installer cannot repair this native entry", path, reason)
 		}
+		return nil
 	}
 	return nil
 }

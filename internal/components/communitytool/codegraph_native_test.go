@@ -6,7 +6,77 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 )
+
+func TestReconcileOpenCodeCodeGraphFilePriority(t *testing.T) {
+	valid := `{"type":"local","command":["codegraph","serve","--mcp"]}`
+	disabled := `{"type":"local","command":["codegraph","serve","--mcp"],"disabled":true}`
+	invalid := `{"type":"local","command":["other"]}`
+	wrap := func(entry string) string { return `{"mcp":{"servers":{"codegraph":` + entry + `}}}` }
+	for _, tt := range []struct {
+		name, json, jsonc      string
+		configured, diagnostic bool
+		wantJSON               bool
+	}{
+		{"empty JSONC", wrap(valid), `{}`, true, false, true},
+		{"unrelated JSONC", wrap(valid), "// preserve metadata\n" + `{"metadata":"keep","mcp":{"servers":{"other":{"type":"local","command":["other"]}}}}`, true, false, true},
+		{"valid JSONC over invalid JSON", wrap(invalid), wrap(valid), true, false, false},
+		{"valid JSONC over disabled JSON", wrap(disabled), wrap(valid), true, false, false},
+		{"disabled JSONC over valid JSON", wrap(valid), wrap(disabled), false, true, false},
+		{"invalid JSONC over valid JSON", wrap(valid), wrap(invalid), false, true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", "")
+			jsonPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			jsoncPath := jsonPath + "c"
+			mustWrite(t, jsonPath, tt.json)
+			mustWrite(t, jsoncPath, tt.jsonc)
+			calls := 0
+			runner := RunnerFunc(func(string, ...string) error { calls++; return nil })
+			for attempt := 0; attempt < 2; attempt++ {
+				wantPath := ""
+				if tt.configured {
+					wantPath = jsoncPath
+					if tt.wantJSON {
+						wantPath = jsonPath
+					}
+				}
+				adapter := opencode.NewAdapter()
+				if path, configured := adapter.EffectiveCodeGraphWiring(home); path != wantPath || configured != tt.configured {
+					t.Errorf("attempt %d: effective = (%q, %v), want (%q, %v)", attempt, path, configured, wantPath, tt.configured)
+				}
+				if err := adapter.NativeCodeGraphWiringError(home); (err != nil) != tt.diagnostic {
+					t.Errorf("native diagnostic = %v, want error=%v", err, tt.diagnostic)
+				}
+				if got := NeedsOpenCodeCodeGraphReconcile(home); got == tt.configured {
+					t.Errorf("needs reconcile = %v, configured=%v", got, tt.configured)
+				}
+				result, err := ReconcileOpenCodeCodeGraph(home, runner)
+				if (err != nil) != tt.diagnostic || result.Changed || len(result.Files) != 0 {
+					t.Errorf("reconcile = (%#v, %v), want unchanged, error=%v", result, err, tt.diagnostic)
+				}
+				if tt.diagnostic && err != nil {
+					for _, want := range []string{jsoncPath, "mcp.servers.codegraph", "edit"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("diagnostic %q must name %q", err, want)
+						}
+					}
+				}
+				for path, before := range map[string]string{jsonPath: tt.json, jsoncPath: tt.jsonc} {
+					if after, err := os.ReadFile(path); err != nil || string(after) != before {
+						t.Errorf("attempt %d: %s bytes = %q, error=%v", attempt, path, after, err)
+					}
+				}
+			}
+			if calls != 0 {
+				t.Errorf("installer calls = %d, want zero", calls)
+			}
+		})
+	}
+}
 
 func TestReconcileOpenCodeCodeGraphNativeValidPreservesBytes(t *testing.T) {
 	for _, extension := range []string{".json", ".jsonc"} {
@@ -99,6 +169,14 @@ func TestReconcileOpenCodeCodeGraphNativeUnmetCondition(t *testing.T) {
 							}
 						}
 						if tt.disabled {
+							for _, want := range []string{"enable or remove", "complete sync"} {
+								if !strings.Contains(message, want) {
+									t.Errorf("diagnostic %q must say %q", message, want)
+								}
+							}
+							if strings.Contains(message, "leave it disabled if intentional") {
+								t.Errorf("diagnostic promises unsupported disabled sync: %q", message)
+							}
 							if !strings.Contains(strings.ToLower(message), "disabled") {
 								t.Errorf("diagnostic %q must explain disabled native entry", message)
 							}
