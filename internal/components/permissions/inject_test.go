@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
@@ -530,6 +531,94 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(text, `"read"`) {
 		t.Fatal("opencode.json permission missing read section")
+	}
+}
+
+func TestInjectClaudeCodePreservesExistingDeny(t *testing.T) {
+	for _, deny := range []string{
+		`["Read(private.txt)","Read(.env.local)","Edit(custom/**)"]`,
+		`[]`,
+	} {
+		t.Run(deny, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			seed := `{"permissions":{"deny":` + deny + `,"allow":["Read(public.txt)"],"ask":["Bash(git push *)"]},"unrelated":"keep"}`
+			if err := os.WriteFile(settingsPath, []byte(seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result, err := Inject(home, claudeAdapter())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Changed || len(result.Files) != 1 || result.Files[0] != settingsPath {
+				t.Fatalf("first injection result = %#v", result)
+			}
+			content, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(content, &got); err != nil {
+				t.Fatal(err)
+			}
+			var wantDeny any
+			if err := json.Unmarshal([]byte(deny), &wantDeny); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{
+				"permissions": map[string]any{
+					"deny": wantDeny, "allow": []any{"Read(public.txt)"},
+					"ask": []any{"Bash(git push *)"}, "defaultMode": "bypassPermissions",
+				},
+				"unrelated": "keep",
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("settings = %#v; want %#v", got, want)
+			}
+			second, err := InjectAtPath(settingsPath, claudeAdapter())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if second.Changed || len(second.Files) != 1 || second.Files[0] != settingsPath {
+				t.Errorf("second injection result = %#v; want unchanged", second)
+			}
+			after, err := os.ReadFile(settingsPath)
+			if err != nil || string(after) != string(content) {
+				t.Errorf("reinjection changed settings: %s; error %v", after, err)
+			}
+		})
+	}
+}
+
+func TestInjectClaudeCodeSeedsMissingDeny(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"permissions":{"allow":["Read(public.txt)"]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got, defaults map[string]any
+	if err := json.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(claudeCodeOverlayJSON, &defaults); err != nil {
+		t.Fatal(err)
+	}
+	defaults["permissions"].(map[string]any)["allow"] = []any{"Read(public.txt)"}
+	if !reflect.DeepEqual(got, defaults) {
+		t.Fatalf("settings = %#v; want unchanged defaults plus existing allow %#v", got, defaults)
 	}
 }
 

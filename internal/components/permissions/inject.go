@@ -146,6 +146,8 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 
 	merge := filemerge.MergeJSONObjectsForPath
 	switch adapter.Agent() {
+	case model.AgentClaudeCode:
+		merge = mergeClaudeCodePermissionsForPath
 	case model.AgentOpenCode:
 		merge = filemerge.MergeOpenCodeJSONDefaultsForPath
 	case model.AgentKilocode:
@@ -163,6 +165,32 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+}
+
+// mergeClaudeCodePermissionsForPath seeds deny only when absent. Existing lists,
+// including an explicit empty list, belong to the user; reinjection must neither
+// replace them nor append defaults that undo a deliberately narrowed policy.
+func mergeClaudeCodePermissionsForPath(path string, base, overlay []byte) ([]byte, error) {
+	existing, err := filemerge.UnmarshalJSONObject(base)
+	if err != nil {
+		return filemerge.MergeJSONObjectsForPath(path, base, overlay)
+	}
+	permissions, _ := existing["permissions"].(map[string]any)
+	if _, exists := permissions["deny"]; !exists {
+		return filemerge.MergeJSONObjectsForPath(path, base, overlay)
+	}
+	defaults, err := filemerge.UnmarshalJSONObject(overlay)
+	if err != nil {
+		return nil, err
+	}
+	if permissions, ok := defaults["permissions"].(map[string]any); ok {
+		delete(permissions, "deny")
+	}
+	overlay, err = json.Marshal(defaults)
+	if err != nil {
+		return nil, err
+	}
+	return filemerge.MergeJSONObjectsForPath(path, base, overlay)
 }
 
 // withoutRulesLooserThanUserDefault drops overlay tool rules looser than the

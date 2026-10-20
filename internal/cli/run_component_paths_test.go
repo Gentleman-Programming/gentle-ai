@@ -30,8 +30,13 @@ func TestNativeReviewPostApplyErrorsRestoreDeduplicatedSnapshot(t *testing.T) {
 	for _, branch := range []string{"install digest", "sync comparison", "sync digest"} {
 		t.Run(branch, func(t *testing.T) {
 			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("USERPROFILE", home)
+			for _, key := range []string{"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "PI_CODING_AGENT_DIR", "TEMP", "TMP"} {
+				t.Setenv(key, home)
+			}
+			originalAddPath, originalPrioritizePath := addUserPath, ensureUserPathFirst
+			addUserPath = func(string) error { return nil }
+			ensureUserPathFirst = func(string) error { return nil }
+			t.Cleanup(func() { addUserPath, ensureUserPathFirst = originalAddPath, originalPrioritizePath })
 			originalHome, originalCommand, originalLookPath := osUserHomeDir, runCommand, cmdLookPath
 			osUserHomeDir = func() (string, error) { return home, nil }
 			runCommand = func(string, ...string) error { return nil }
@@ -97,7 +102,17 @@ func TestNativeReviewPostApplyErrorsRestoreDeduplicatedSnapshot(t *testing.T) {
 			var runErr error
 			if branch == "install digest" {
 				installStagePlan = func(rt *installRuntime) pipeline.StagePlan {
-					return planFor(rt.backupRoot, rt.workspaceDir, rt.state, selection, nil)
+					plan := planFor(rt.backupRoot, rt.workspaceDir, rt.state, selection, nil)
+					// Keep the real component outcome: unmapped Kiro deliberately
+					// leaves GGA config absent, which verification must observe.
+					for _, step := range originalInstall(rt).Apply {
+						if component, ok := step.(componentApplyStep); ok && component.component == model.ComponentGGA {
+							plan.Apply = append(plan.Apply, step)
+							return plan
+						}
+					}
+					t.Fatal("normal install plan has no GGA apply step")
+					return plan
 				}
 				_, runErr = RunInstall([]string{"--agent", "kiro-ide"}, system.DetectionResult{})
 			} else {

@@ -43,6 +43,11 @@ type InjectionResult struct {
 	AgentsFile    string
 	ConfigChanged bool
 	AgentsChanged bool
+	// Notices explain successful config skips and are emitted even on repeats.
+	Notices []string
+	// ConfigCreationSkipped is true only when a missing config was deliberately
+	// left absent because selected agents have no known provider mapping.
+	ConfigCreationSkipped bool
 }
 
 // FilesWritten returns the list of file paths that were written.
@@ -66,7 +71,8 @@ func PostInstallMessages() []string {
 }
 
 // ProviderForAgents auto-detects the GGA provider based on selected agents.
-// Priority: claude > opencode > gemini > claude (default).
+// Priority: claude > opencode > gemini/antigravity > codex.
+// An empty result means there is no known mapping, not a default provider.
 func ProviderForAgents(agentIDs []model.AgentID) string {
 	has := make(map[model.AgentID]bool, len(agentIDs))
 	for _, id := range agentIDs {
@@ -86,7 +92,7 @@ func ProviderForAgents(agentIDs []model.AgentID) string {
 	case has[model.AgentCodex]:
 		return "codex"
 	default:
-		return "claude"
+		return ""
 	}
 }
 
@@ -128,15 +134,39 @@ func AgentsTemplatePath(homeDir string) string {
 }
 
 // Inject writes the GGA global config and starter AGENTS.md template.
-// The provider is auto-detected from the selected agents.
+// Existing literal providers win; inference is only used when none is configured.
 func Inject(homeDir string, agentIDs []model.AgentID) (InjectionResult, error) {
-	provider := ProviderForAgents(agentIDs)
-	configContent := BuildConfig(provider)
 	configPath := ConfigPath(homeDir)
-
-	configResult, err := filemerge.WriteFileAtomic(configPath, configContent, 0o644)
-	if err != nil {
-		return InjectionResult{}, fmt.Errorf("write gga config: %w", err)
+	existing, err := os.ReadFile(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return InjectionResult{}, fmt.Errorf("read gga config: %w", err)
+	}
+	word, safe := existingProvider(existing)
+	result := InjectionResult{}
+	provider := ProviderForAgents(agentIDs)
+	switch {
+	case !safe:
+		result.Notices = []string{fmt.Sprintf("GGA config unchanged: %s contains ambiguous, dynamic, duplicate or unsupported assignments. Set one literal PROVIDER assignment in a simple assignment-only config, then rerun gentle-ai sync; no shell was evaluated.", configPath)}
+	case word != "" && provider == "":
+		// No mapped selection owns regeneration of this existing config.
+		// Preserve all user settings and formatting; refresh the template below.
+	case word == "" && provider == "":
+		result.ConfigCreationSkipped = os.IsNotExist(err)
+		result.Notices = []string{fmt.Sprintf("GGA config unchanged: no provider is configured and selected agents have no known GGA mapping. Set a literal PROVIDER in %s or select a mapped agent, then rerun gentle-ai sync.", configPath)}
+	default:
+		configContent := BuildConfig(provider)
+		if word != "" {
+			// Preserve the shell word verbatim, rather than interpreting it with
+			// Go %q (which is not shell escaping).
+			generated := fmt.Sprintf("PROVIDER=%q", provider)
+			configContent = []byte(strings.Replace(string(configContent), generated, "PROVIDER="+word, 1))
+		}
+		configResult, err := filemerge.WriteFileAtomic(configPath, configContent, 0o644)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("write gga config: %w", err)
+		}
+		result.ConfigFile = configPath
+		result.ConfigChanged = configResult.Changed
 	}
 
 	agentsContent, err := assets.Read("gga/AGENTS.md")
@@ -150,10 +180,7 @@ func Inject(homeDir string, agentIDs []model.AgentID) (InjectionResult, error) {
 		return InjectionResult{}, fmt.Errorf("write gga AGENTS.md template: %w", err)
 	}
 
-	return InjectionResult{
-		ConfigFile:    configPath,
-		AgentsFile:    agentsPath,
-		ConfigChanged: configResult.Changed,
-		AgentsChanged: agentsResult.Changed,
-	}, nil
+	result.AgentsFile = agentsPath
+	result.AgentsChanged = agentsResult.Changed
+	return result, nil
 }

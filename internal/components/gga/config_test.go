@@ -44,19 +44,19 @@ func TestProviderForAgents(t *testing.T) {
 			want:   "opencode",
 		},
 		{
-			name:   "empty agents defaults to claude",
+			name:   "empty agents have no mapping",
 			agents: []model.AgentID{},
-			want:   "claude",
+			want:   "",
 		},
 		{
-			name:   "nil agents defaults to claude",
+			name:   "nil agents have no mapping",
 			agents: nil,
-			want:   "claude",
+			want:   "",
 		},
 		{
-			name:   "cursor only defaults to claude",
+			name:   "cursor only has no mapping",
 			agents: []model.AgentID{model.AgentCursor},
-			want:   "claude",
+			want:   "",
 		},
 		{
 			name:   "codex maps to codex",
