@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -214,6 +215,12 @@ func TestEffectiveCodeGraphWiring(t *testing.T) {
 		{name: "disabled entry", fileName: "opencode.json", content: `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":false}}}`},
 		{name: "wrong command", fileName: "opencode.json", content: `{"mcp":{"codegraph":{"type":"local","command":["other","serve","--mcp"]}}}`},
 		{name: "malformed config", fileName: "opencode.json", content: `{"mcp":`},
+		{name: "native with no-watch flag", fileName: "opencode.json", content: `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp","--no-watch"]}}}}`, configured: true},
+		{name: "legacy with no-watch flag", fileName: "opencode.json", content: `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp","--no-watch"]}}}`, configured: true},
+		{name: "relative binary path", fileName: "opencode.json", content: `{"mcp":{"codegraph":{"type":"local","command":["bin/codegraph","serve","--mcp"]}}}`},
+		{name: "unsupported extra flag", fileName: "opencode.json", content: `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp","--path","/tmp/project"]}}}`},
+		{name: "duplicate no-watch flag", fileName: "opencode.json", content: `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp","--no-watch","--no-watch"]}}}`},
+		{name: "missing mcp flag", fileName: "opencode.json", content: `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--no-watch"]}}}`},
 	}
 
 	for _, tt := range tests {
@@ -236,6 +243,43 @@ func TestEffectiveCodeGraphWiring(t *testing.T) {
 			}
 			if configured && gotPath != path {
 				t.Fatalf("EffectiveCodeGraphWiring() path = %q, want %q", gotPath, path)
+			}
+		})
+	}
+}
+
+func TestEffectiveCodeGraphWiringAbsoluteBinaryPath(t *testing.T) {
+	binDir := t.TempDir()
+	tests := []struct {
+		name       string
+		binary     string
+		configured bool
+	}{
+		{name: "codegraph binary", binary: filepath.Join(binDir, "codegraph"), configured: true},
+		{name: "other binary", binary: filepath.Join(binDir, "other")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("XDG_CONFIG_HOME", "")
+			command, err := json.Marshal([]string{tt.binary, "serve", "--mcp"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(ConfigPath(home), "opencode.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			content := `{"mcp":{"servers":{"codegraph":{"type":"local","command":` + string(command) + `}}}}`
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, configured := NewAdapter().EffectiveCodeGraphWiring(home); configured != tt.configured {
+				t.Fatalf("EffectiveCodeGraphWiring() configured = %v, want %v", configured, tt.configured)
 			}
 		})
 	}

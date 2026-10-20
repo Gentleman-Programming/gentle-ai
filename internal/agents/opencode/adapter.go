@@ -172,7 +172,32 @@ func isEffectiveCodeGraphEntry(value any) bool {
 		return false
 	}
 	command, ok := entry["command"].([]any)
-	return ok && len(command) == 3 && command[0] == "codegraph" && command[1] == "serve" && command[2] == "--mcp"
+	if !ok || len(command) < 3 || !isCodeGraphExecutable(command[0]) || command[1] != "serve" || command[2] != "--mcp" {
+		return false
+	}
+	// --no-watch is the only extra `codegraph serve` flag that keeps the
+	// client-scoped MCP semantics; --path would pin a single project.
+	extra := command[3:]
+	return len(extra) == 0 || (len(extra) == 1 && extra[0] == "--no-watch")
+}
+
+// isCodeGraphExecutable accepts the bare `codegraph` command or an absolute
+// path to the codegraph binary.
+func isCodeGraphExecutable(value any) bool {
+	name, ok := value.(string)
+	if !ok {
+		return false
+	}
+	if name == "codegraph" {
+		return true
+	}
+	if !filepath.IsAbs(name) {
+		return false
+	}
+	base := filepath.Base(name)
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	ext := strings.ToLower(filepath.Ext(name))
+	return base == "codegraph" && (ext == "" || ext == ".exe" || ext == ".cmd")
 }
 
 // --- Optional capabilities ---
