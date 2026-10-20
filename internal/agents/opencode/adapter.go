@@ -2,8 +2,10 @@ package opencode
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -133,13 +135,7 @@ func (a *Adapter) MCPConfigPath(homeDir string, serverName string) string {
 // EffectiveCodeGraphWiring validates OpenCode's effective MCP entry while
 // keeping OpenCode's JSON/JSONC schema behind the adapter boundary.
 func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
-	settingsPath := a.SettingsPath(homeDir)
-	paths := []string{settingsPath}
-	if strings.HasSuffix(settingsPath, ".json") {
-		paths = append(paths, strings.TrimSuffix(settingsPath, ".json")+".jsonc")
-	}
-
-	for _, path := range paths {
+	for _, path := range a.codeGraphSettingsPaths(homeDir) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -163,6 +159,48 @@ func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
 	return "", false
 }
 
+func (a *Adapter) codeGraphSettingsPaths(homeDir string) []string {
+	path := a.SettingsPath(homeDir)
+	paths := []string{path}
+	if strings.HasSuffix(path, ".json") {
+		paths = append(paths, strings.TrimSuffix(path, ".json")+".jsonc")
+	}
+	return paths
+}
+
+// NativeCodeGraphWiringError explains native conditions a legacy installer cannot
+// repair. Call after effective-wiring detection; absent native entries need the installer.
+func (a *Adapter) NativeCodeGraphWiringError(homeDir string) error {
+	for _, path := range a.codeGraphSettingsPaths(homeDir) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		root, err := filemerge.UnmarshalJSONObject(data)
+		if err != nil {
+			continue
+		}
+		entry, native := config.MCPEntry(root, "codegraph")
+		if !native {
+			continue
+		}
+		reason := ""
+		disabled, exists := entry["disabled"]
+		switch {
+		case exists && disabled != false:
+			reason = "disabled must be false (or absent); leave it disabled if intentional"
+		case entry["type"] != "local":
+			reason = "type must be local"
+		case !isCodeGraphCommand(entry["command"]):
+			reason = "command must be a string array with only supported arguments"
+		}
+		if reason != "" {
+			return fmt.Errorf("edit %s at mcp.servers.codegraph: %s; expected type local and command [codegraph serve --mcp], optionally --no-watch and --path <directory> (-p <directory>), with a bare codegraph or absolute executable path; the legacy CodeGraph installer cannot repair this native entry", path, reason)
+		}
+	}
+	return nil
+}
+
 func isEffectiveCodeGraphEntry(value any) bool {
 	entry, ok := value.(map[string]any)
 	if !ok || entry["type"] != "local" {
@@ -171,8 +209,52 @@ func isEffectiveCodeGraphEntry(value any) bool {
 	if enabled, exists := entry["enabled"]; exists && enabled != true {
 		return false
 	}
-	command, ok := entry["command"].([]any)
-	return ok && len(command) == 3 && command[0] == "codegraph" && command[1] == "serve" && command[2] == "--mcp"
+	return isCodeGraphCommand(entry["command"])
+}
+
+func isCodeGraphCommand(value any) bool {
+	values, ok := value.([]any)
+	if !ok || len(values) < 3 {
+		return false
+	}
+	command := make([]string, len(values))
+	for i, value := range values {
+		command[i], ok = value.(string)
+		if !ok {
+			return false
+		}
+	}
+	executable := command[0]
+	if executable != "codegraph" {
+		// Recognize Windows absolute paths even when inspecting config on POSIX.
+		normalized := strings.ReplaceAll(executable, `\`, "/")
+		driveAbsolute := len(normalized) > 3 && ((normalized[0] >= 'A' && normalized[0] <= 'Z') || (normalized[0] >= 'a' && normalized[0] <= 'z')) && normalized[1:3] == ":/"
+		basename := strings.ToLower(normalized[strings.LastIndex(normalized, "/")+1:])
+		if !(path.IsAbs(executable) || filepath.IsAbs(executable) || driveAbsolute || strings.HasPrefix(normalized, "//")) || (basename != "codegraph" && basename != "codegraph.exe" && basename != "codegraph.cmd") {
+			return false
+		}
+	}
+	if command[1] != "serve" {
+		return false
+	}
+	mcp := false
+	for i := 2; i < len(command); i++ {
+		switch command[i] {
+		case "--mcp":
+			mcp = true
+		case "--no-watch":
+		case "--path", "-p":
+			i++
+			if i >= len(command) || command[i] == "" || strings.HasPrefix(command[i], "-") {
+				return false
+			}
+		default:
+			if !strings.HasPrefix(command[i], "--path=") || strings.TrimPrefix(command[i], "--path=") == "" {
+				return false
+			}
+		}
+	}
+	return mcp
 }
 
 // --- Optional capabilities ---
