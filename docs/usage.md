@@ -233,6 +233,8 @@ gentle-ai sync --agent openclaw
 
 Sync is safe and idempotent — running it twice produces no changes the second time. When files change, the summary reports the changed file count and lists the changed file paths.
 
+OpenCode sync keeps retired SDD prompt files while remaining settings entries still reference them, including customized agents. It validates `{file:...}` references in the selected settings document and, for global sync, both global `opencode.json` and `opencode.jsonc` files. Relative paths resolve beside their settings document; `~/` resolves under your home directory. A missing target fails sync and rolls back its managed changes. Restore the named file or correct its reference, then rerun `gentle-ai sync --agent opencode`.
+
 `sync` refreshes the managed component set for the selected agents. It does not support `--component`; use `--include-permissions` or `--include-theme` for the opt-in components that are excluded from the default sync scope.
 
 After upgrading the binary, `gentle-ai sync --dry-run` previews the selected targets; `gentle-ai sync` refreshes their primary remote-authorization guidance. To select a specific managed client, use e.g. `gentle-ai sync --agent opencode`. This behavioral section is delivered with unconditional routing guidance, without requiring persona or `--include-permissions`. It requires explicit destination, operation, and credential/session authorization before remote work or ambient access discovery/reuse.
