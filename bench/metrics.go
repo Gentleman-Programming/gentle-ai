@@ -199,10 +199,21 @@ type accumulator struct {
 	// with nothing runnable in it, across every observation of the journey.
 	// It is a corpus error, not a metric: see DeadExecuteTransitions.
 	deadTransitions []string
+
+	// normalizer projects machine-specific paths onto the canonical token
+	// vocabulary in every recorded string. A nil normalizer records strings
+	// unchanged; the classifier always reads the raw observation.
+	normalizer *PathNormalizer
 }
 
 func newAccumulator() *accumulator {
 	return &accumulator{stderrCaptured: true}
+}
+
+// newAccumulatorWithNormalizer builds an accumulator that projects every
+// recorded string through the canonical token vocabulary at record time.
+func newAccumulatorWithNormalizer(normalizer *PathNormalizer) *accumulator {
+	return &accumulator{stderrCaptured: true, normalizer: normalizer}
 }
 
 // observe folds one invocation into the running metrics and returns the
@@ -210,9 +221,11 @@ func newAccumulator() *accumulator {
 func (a *accumulator) observe(step string, o Observation, gitCalls *int, modelRun bool) CommandRecord {
 	a.commands++
 	record := CommandRecord{
-		Sequence:    a.commands,
-		Step:        step,
-		Args:        o.Args,
+		Sequence: a.commands,
+		// The step string is the joined argv and can carry machine paths,
+		// so it projects through the same canonical vocabulary as Args.
+		Step:        a.normalizer.Normalize(step),
+		Args:        a.normalizer.NormalizeAll(o.Args),
 		ExitCode:    o.ExitCode,
 		StdoutBytes: len(o.Stdout),
 		StderrBytes: len(o.Stderr),
@@ -254,7 +267,7 @@ func (a *accumulator) observe(step string, o Observation, gitCalls *int, modelRu
 
 	if IsUnsupported(o) {
 		record.Unsupported = true
-		record.Message = blockMessage(o)
+		record.Message = a.normalizer.Normalize(blockMessage(o))
 		if outcome := byDesignOutcome(o, NotABlock); outcome != nil {
 			outcome.Reason = "this build lacks that CLI surface, so the step recorded `unsupported` rather than a block"
 			record.ByDesign = outcome
@@ -271,7 +284,7 @@ func (a *accumulator) observe(step string, o Observation, gitCalls *int, modelRu
 	record.ByDesign = byDesignOutcome(o, class)
 	record.DeadEnd = deadEndOutcome(o, class)
 	if class != NotABlock {
-		record.Message = blockMessage(o)
+		record.Message = a.normalizer.Normalize(blockMessage(o))
 		a.blocks.add(class)
 		if class != BlockSelfRecovered {
 			if !a.pendingActive {
