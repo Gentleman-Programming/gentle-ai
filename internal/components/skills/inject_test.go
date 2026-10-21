@@ -512,3 +512,65 @@ func requiredBundledSkillIDs() []model.SkillID {
 		model.SkillGentleAIBench,
 	}
 }
+
+func TestInjectBackupsExistingSkillFiles(t *testing.T) {
+	// Create a temporary home with an existing user-authored skill file
+	home := t.TempDir()
+	// Inject a skill first to establish the file
+	homeDir := home
+	_, err := Inject(homeDir, opencodeAdapter(), []model.SkillID{model.SkillCreator})
+	if err != nil {
+		t.Fatalf("first Inject() error = %v", err)
+	}
+
+	// Verify the file was created
+	skillsDir := filepath.Join(homeDir, ".config", "opencode", "skills")
+	tskPath := filepath.Join(skillsDir, "skill-creator", "SKILL.md")
+	_, err = os.ReadFile(tskPath)
+	if err != nil {
+		t.Fatalf("read original skill: %v", err)
+	}
+
+	// Modify the skill file to simulate a user-authored change
+	userContent := []byte("---\nname: skill-creator\ndescription: USER MODIFIED\n---\n# User Modified\n")
+	if err := os.WriteFile(tskPath, userContent, 0o644); err != nil {
+		t.Fatalf("write user modification: %v", err)
+	}
+
+	// Inject again - this should backup the user-modified file before overwriting
+	_, err = Inject(homeDir, opencodeAdapter(), []model.SkillID{model.SkillCreator})
+	if err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+
+	// Verify the file was overwritten with the managed skill content
+	newContent, err := os.ReadFile(tskPath)
+	if err != nil {
+		t.Fatalf("read new skill: %v", err)
+	}
+	if string(newContent) == string(userContent) {
+		t.Fatalf("skill file was not overwritten")
+	}
+	if !strings.Contains(string(newContent), "Trigger: new skills") { // skill-creator managed content
+		t.Fatalf("managed skill content not written")
+	}
+
+	// Verify backup was created in ~/.gentle-ai/backups/timestamp/
+	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	entries, err := os.ReadDir(backupRoot)
+	if err != nil {
+		t.Fatalf("read backup root: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("no backup directories created")
+	}
+	latestBackup := entries[len(entries)-1]
+	backupPath := filepath.Join(backupRoot, latestBackup.Name(), "skill-creator", "SKILL.md")
+	backupContent, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	if string(backupContent) != string(userContent) {
+		t.Fatalf("backup does not match user-modified content: got %q, want %q", string(backupContent), string(userContent))
+	}
+}

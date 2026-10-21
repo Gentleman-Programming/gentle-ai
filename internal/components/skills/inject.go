@@ -38,7 +38,7 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 	if skillDir == "" {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
-	result, err := InjectDirectoryWithCapability(skillDir, skillIDs, capability)
+	result, err := InjectDirectoryWithCapability(skillDir, skillIDs, capability, homeDir)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -110,8 +110,8 @@ func directoryAssets(skillDir string, skillIDs []model.SkillID, capability strin
 // InjectDirectoryWithCapability writes skills directly to an already-selected
 // skills directory. Operation-level compatibility refreshes use this to avoid
 // routing the shared directory through every selected agent adapter.
-func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
-	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, capability, filemerge.WriteFileAtomic)
+func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, capability string, homeDir string) (InjectionResult, error) {
+	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, capability, homeDir, filemerge.WriteFileAtomic)
 }
 
 // InjectDirectoryWithWriter refreshes the shared ~/.agents/skills
@@ -124,7 +124,9 @@ func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, ca
 // whether a file was removed and is responsible for only removing a regular
 // file.
 func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeFile func(string) (bool, error)) (InjectionResult, error) {
-	result, err := InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, "", writeFile)
+	// For backward compatibility, use os.UserHomeDir as fallback
+	homeDir, _ := os.UserHomeDir()
+	result, err := InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, "", homeDir, writeFile)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -147,16 +149,14 @@ func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeF
 }
 
 // InjectDirectoryWithCapabilityWithWriter writes skills with a caller-selected writer.
-func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.SkillID, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
+func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.SkillID, capability string, homeDir string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
 	entries, skipped, err := directoryAssets(skillDir, skillIDs, capability)
 	if err != nil {
 		return InjectionResult{}, err
 	}
 	result := InjectionResult{Files: make([]string, 0, len(entries)), Skipped: skipped}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		// If we cannot determine home, we skip backup but continue.
-		homeDir = ""
+	if homeDir == "" {
+		homeDir, _ = os.UserHomeDir()
 	}
 	timestamp := time.Now().Format("20060102150405")
 	for _, entry := range entries {
@@ -212,6 +212,7 @@ func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.S
 	}
 	return result, nil
 }
+
 func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (InjectionResult, error) {
 	return InjectWithCapability(homeDir, adapter, skillIDs, "")
 }
