@@ -280,6 +280,7 @@ func TestManagedAssetsNarrationMatchesTheAgentlessContinuation(t *testing.T) {
 		"`gentle-ai sync`",
 		"`gentle-ai sync --agent " + reviewUndeclaredRuntimeIdentitySlot + "`",
 		"the one the last sync recorded and the one this binary carries",
+		"still differ after a sync that completed successfully (a failed or partial sync",
 	} {
 		if !strings.Contains(statement, want) {
 			t.Errorf("managed_assets_outdated narration lacks %q: %q", want, statement)
