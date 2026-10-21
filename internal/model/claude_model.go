@@ -47,6 +47,14 @@ func (a ClaudeModelAlias) Valid() bool {
 	}
 }
 
+// Assignment rows for Claude Code's built-in Explore and general-purpose
+// agents. Unlike every other row they have no preset value: without a pick
+// the built-in agent runs on the session model (#5611).
+const (
+	ClaudeBuiltInExploreRole        = "builtin-explore"
+	ClaudeBuiltInGeneralPurposeRole = "builtin-general-purpose"
+)
+
 // ClaudeEffort represents a Claude Code subagent effort frontmatter value.
 // The empty value means inherit the session/model default and should not be
 // written as frontmatter.
