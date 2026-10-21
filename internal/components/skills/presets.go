@@ -33,6 +33,7 @@ var selectableFoundationSkills = []model.SkillID{
 	model.SkillWorkUnitCommits,
 	model.SkillRDDDefectWorkflow,
 	model.SkillSystemicIssueTriage,
+	model.SkillDesignMinimality,
 }
 
 var foundationSkills = excludeSkills(selectableFoundationSkills, contributorSkills)

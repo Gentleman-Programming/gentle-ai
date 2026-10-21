@@ -565,7 +565,7 @@ test_cc_skills_minimal() {
 }
 
 test_cc_skills_full() {
-    log_test "Claude Code: skills injection (full-gentleman = 7 foundation skills)"
+    log_test "Claude Code: skills injection (full-gentleman = 8 foundation skills)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component skills --preset full-gentleman 2>&1; then
@@ -573,7 +573,7 @@ test_cc_skills_full() {
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
         # #4669: the six contributor workflow skills are selectable, never default.
-        assert_file_count "$skills_dir" "SKILL.md" 8 "Full preset (skills alone): 8 skill files"
+        assert_file_count "$skills_dir" "SKILL.md" 9 "Full preset (skills alone): 9 skill files"
 
         # Verify foundation skills exist
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
@@ -581,6 +581,7 @@ test_cc_skills_full() {
         assert_file_not_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr NOT installed by default"
         assert_file_not_exists "$skills_dir/issue-creation/SKILL.md" "issue-creation NOT installed by default"
         assert_file_exists "$skills_dir/skill-registry/SKILL.md" "skill-registry SKILL.md"
+        assert_file_exists "$skills_dir/design-minimality/SKILL.md" "design-minimality SKILL.md"
 
         # Real content check
         assert_file_size_min "$skills_dir/go-testing/SKILL.md" 200 "go-testing skill has real content"
@@ -594,7 +595,7 @@ test_cc_skills_full() {
 }
 
 test_cc_skills_ecosystem() {
-    log_test "Claude Code: skills injection (ecosystem-only = 7 foundation skills)"
+    log_test "Claude Code: skills injection (ecosystem-only = 8 foundation skills)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component skills --preset ecosystem-only 2>&1; then
@@ -602,10 +603,11 @@ test_cc_skills_ecosystem() {
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
         # #4669: contributor workflow skills are not part of this preset.
-        assert_file_count "$skills_dir" "SKILL.md" 8 "Ecosystem preset (skills alone): 8 skill files"
+        assert_file_count "$skills_dir" "SKILL.md" 9 "Ecosystem preset (skills alone): 9 skill files"
         # Foundation skills present
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "Foundation skills present"
         assert_file_exists "$skills_dir/skill-creator/SKILL.md" "skill-creator present"
+        assert_file_exists "$skills_dir/design-minimality/SKILL.md" "design-minimality present"
         assert_file_not_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr NOT in ecosystem default"
         assert_file_not_exists "$skills_dir/issue-creation/SKILL.md" "issue-creation NOT in ecosystem default"
         # Stack-specific skills NOT present
@@ -775,16 +777,17 @@ test_oc_skills_minimal() {
 }
 
 test_oc_skills_full() {
-    log_test "OpenCode: skills injection (full-gentleman = 7 foundation skills)"
+    log_test "OpenCode: skills injection (full-gentleman = 8 foundation skills)"
     cleanup_test_env
 
     # #4669: the six contributor workflow skills are selectable, never default.
     if $BINARY install --agent opencode --component skills --preset full-gentleman 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 8 "Full preset (skills alone): 8 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 9 "Full preset (skills alone): 9 skill files"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"
+        assert_file_exists "$skill_dir/design-minimality/SKILL.md" "design-minimality skill"
         assert_file_not_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr NOT installed by default"
         assert_file_not_exists "$skill_dir/issue-creation/SKILL.md" "issue-creation NOT installed by default"
         assert_file_size_min "$skill_dir/go-testing/SKILL.md" 200 "go-testing skill has real content"
@@ -925,7 +928,7 @@ test_full_preset_claude_code() {
         assert_valid_json "$registry" "user registry is valid JSON"
 
         # Skills
-        assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 8 "At least 8 foundation skill files"
+        assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 9 "At least 9 foundation skill files"
 
         log_pass "Full preset: all Claude Code injection-only components coexist"
     else
@@ -955,7 +958,7 @@ test_full_preset_opencode() {
         assert_file_contains "$settings" "gentle-ai:agent-routing" "OpenCode orchestrator has ODD routing"
         assert_file_contains "$agents_md" "gentle-ai:engram-protocol" "AGENTS.md has engram protocol"
         assert_no_duplicate_section "$agents_md" "engram-protocol" "No duplicate engram section in AGENTS.md"
-        assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 8 "At least 8 foundation skill files"
+        assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 9 "At least 9 foundation skill files"
 
         log_pass "Full preset: all OpenCode injection-only components coexist"
     else
@@ -1023,11 +1026,11 @@ test_ecosystem_both_agents() {
         assert_file_exists "$HOME/.claude/CLAUDE.md" "Claude CLAUDE.md"
         assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:agent-routing" "Claude has ODD routing"
         assert_file_contains "$HOME/.claude.json" '"context7"' "Claude context7 MCP"
-        assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 8 "Claude foundation skills"
+        assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 9 "Claude foundation skills"
 
         # OpenCode
         assert_file_contains "$HOME/.config/opencode/opencode.json" "gentle-ai:agent-routing" "OpenCode orchestrator has ODD routing"
-        assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 8 "OpenCode foundation skills"
+        assert_file_count_min "$HOME/.config/opencode/skills" "SKILL.md" 9 "OpenCode foundation skills"
         assert_file_contains "$HOME/.config/opencode/opencode.json" '"context7"' "OpenCode context7"
         assert_valid_json "$HOME/.config/opencode/opencode.json" "OpenCode opencode.json valid JSON"
 
@@ -1546,7 +1549,7 @@ test_integrity_full_preset_all_skills_nonempty() {
 
     if $BINARY install --agent opencode --component skills --preset full-gentleman 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
-        assert_file_count "$skill_dir" "SKILL.md" 8 "Full preset installs 8 foundation skills"
+        assert_file_count "$skill_dir" "SKILL.md" 9 "Full preset installs 9 foundation skills"
         local all_ok=true
         local empty_count=0
 
@@ -1562,10 +1565,10 @@ test_integrity_full_preset_all_skills_nonempty() {
 
         local total
         total=$(find "$skill_dir" -name "SKILL.md" -type f | wc -l | tr -d ' ')
-        if $all_ok && [ "$total" -eq 8 ]; then
-            log_pass "All 8 foundation skill files have >= 100 bytes of real content"
+        if $all_ok && [ "$total" -eq 9 ]; then
+            log_pass "All 9 foundation skill files have >= 100 bytes of real content"
         else
-            log_fail "Expected 8 non-empty foundation skills (found $total; $empty_count empty or corrupt)"
+            log_fail "Expected 9 non-empty foundation skills (found $total; $empty_count empty or corrupt)"
         fi
     else
         log_fail "Full preset install for integrity check failed"

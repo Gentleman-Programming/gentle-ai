@@ -103,7 +103,7 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	)
 	_, _ = fmt.Fprintf(
 		&output,
-		"- **Delegated direct:** understanding that needs more evidence or more than approximately %d sequential lookups takes one read-only explorer, then task size is re-evaluated; a writer is delegated only by the Writer trigger.\n",
+		"- **Delegated direct:** understanding that needs more evidence or more than approximately %d sequential lookups takes one read-only explorer, then task size is re-evaluated; a writer is delegated only by the Writer trigger. Resolve the `design-minimality` skill by registry name before composing the writer brief, never hardcode its path.\n",
 		routing.DelegatedDirect.ApproxSequentialLookupLimit,
 	)
 	output.WriteString("- File count, changed lines, size, or perceived risk alone never forces a heavier route.\n")

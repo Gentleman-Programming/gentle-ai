@@ -209,6 +209,9 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"disclose unresolved uncertainty and pause affected unsafe decisions",
 			"Neither research nor a proposal is mandatory",
 		}},
+		{"design-minimality resolved by registry name before writer brief", []string{
+			"Resolve the `design-minimality` skill by registry name before composing the writer brief, never hardcode its path",
+		}},
 		{"adaptive research and product questions", []string{
 			"Establish the problem, intended outcome, constraints, and current evidence; inspect relevant code",
 			"Adapt depth to uncertainty and consequence, not a fixed questionnaire or mandatory rounds",

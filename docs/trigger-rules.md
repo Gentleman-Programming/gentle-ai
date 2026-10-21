@@ -31,7 +31,7 @@ verification cost or external side effects, accepted residual risk, or delivery.
 | Route | Use it when | What happens |
 |---|---|---|
 | **Direct inline** | The task is **small**: understood within the inline evidence budget, risk contained, and resumable from the request plus `git diff`, whatever the number of files. | Read, edit, and run the focused test and suite inline. |
-| **Delegated direct** | Understanding exceeds the inline evidence budget; or a writer has a named reason (two or more independent units of behavior with disjoint edit surfaces launched together, each with its code, tests, and docs and several minutes of work, or the long-session context backstop), so reading that prepares that write delegates with it; or the change names a **high-risk** item and needs an independent verifier. Size, a large task alone, file count, or a price ratio never decides it. | Delegate the narrow exploration, one bounded writer per unit with a reason, and/or the verifier needed for that action. |
+| **Delegated direct** | Understanding exceeds the inline evidence budget; or a writer has a named reason (two or more independent units of behavior with disjoint edit surfaces launched together, each with its code, tests, and docs and several minutes of work, or the long-session context backstop), so reading that prepares that write delegates with it; or the change names a **high-risk** item and needs an independent verifier. Size, a large task alone, file count, or a price ratio never decides it. | Delegate the narrow exploration, one bounded writer per unit with a reason (resolving the `design-minimality` skill before composing the writer brief), and/or the verifier needed for that action. |
 
 File count never decides the route or the task size. High risk takes a task
 out of the small path; a named high-risk item adds an independent verifier
@@ -50,7 +50,7 @@ depends on another is not independent, and several small independent changes
 run inline, one after another, because a subagent spends one to two minutes
 reading before it writes.
 
-Delegation also applies per action. Tests, builds, installs, and native review
+Delegation also applies per action. For delegated direct implementation, resolve the `design-minimality` skill by registry name before composing the writer brief to evaluate the minimality ladder, intentional cuts, and invariants. Tests, builds, installs, and native review
 actors may use fresh workers without changing the implementation route.
 
 If work reveals uncertainty, use optional scoped research or clarify the affected
