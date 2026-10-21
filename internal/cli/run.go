@@ -1305,7 +1305,7 @@ func (s retiredOpenCodeSDDSettingsStep) Run() error {
 	}
 	actions := settings.ManualActions()
 	if s.target.prompts != "" {
-		prompts, err := legacyassets.RetireOpenCodeSDDPrompts(s.target.prompts)
+		prompts, err := legacyassets.RetireOpenCodeSDDPrompts(s.target.prompts, settings.RetainedPromptRefs...)
 		if s.changedFiles != nil {
 			*s.changedFiles = append(*s.changedFiles, prompts.Removed...)
 		}
