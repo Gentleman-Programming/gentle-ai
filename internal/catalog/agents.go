@@ -32,6 +32,7 @@ var allAgents = []Agent{
 	{ID: model.AgentPi, Name: "Pi", Tier: model.TierFull, ConfigPath: "~/.pi"},
 	{ID: model.AgentTrae, Name: "Trae IDE", Tier: model.TierFull, ConfigPath: "~/.trae"},
 	{ID: model.AgentHermes, Name: "Hermes", Tier: model.TierFull, ConfigPath: "~/.hermes"},
+	{ID: model.AgentGitHubCopilotCLI, Name: "GitHub Copilot CLI", Tier: model.TierFull, ConfigPath: "~/.copilot"},
 	// Conductor is detection/catalog-only: its workspaces inherit Claude Code
 	// configuration, and Gentle AI writes no Conductor-specific files. The note
 	// sets that expectation before the user confirms the install.
