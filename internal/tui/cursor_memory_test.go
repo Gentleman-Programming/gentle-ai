@@ -9,6 +9,21 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
+func TestEscOnWelcomeKeepsCurrentCursor(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.CursorMemory[ScreenWelcome] = 0
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
+	if m.Cursor != 1 {
+		t.Fatalf("expected Down to move cursor to 1, got %d", m.Cursor)
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.Screen != ScreenWelcome || m.Cursor != 1 || cmd != nil {
+		t.Fatalf("Esc should preserve Welcome selection without a command: screen=%v cursor=%d cmd=%v", m.Screen, m.Cursor, cmd)
+	}
+}
+
 func TestEscRestoreCursorPosition(t *testing.T) {
 	tests := []struct {
 		name   string

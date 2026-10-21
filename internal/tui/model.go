@@ -1895,8 +1895,11 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		var cmd tea.Cmd
+		from := m.Screen
 		m = m.goBack(&cmd)
-		m.restoreCursorMemory()
+		if m.Screen != from {
+			m.restoreCursorMemory()
+		}
 		return m, cmd
 	case " ":
 		switch m.Screen {
