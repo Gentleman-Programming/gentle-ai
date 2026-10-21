@@ -145,6 +145,43 @@ func (builder SnapshotBuilder) BuildStoredSnapshot(ctx context.Context, target T
 	return builder.Build(ctx, target)
 }
 
+// BuildStoredSnapshotWithTiming builds a stored snapshot and records timing
+// for snapshot construction and repo identity resolution if timing is provided.
+func (builder SnapshotBuilder) BuildStoredSnapshotWithTiming(ctx context.Context, target Target, timing *TargetStatusTiming) (Snapshot, error) {
+	var snap Snapshot
+	var err error
+	
+	snapshotStart := time.Time{}
+	if timing != nil {
+		snapshotStart = time.Now()
+	}
+	
+	if target.Kind == TargetBaseWorkspaceOverlay && target.Projection == ProjectionStaged {
+		snap, err = builder.BuildStagedWorkspaceOverlayRecovery(ctx, target)
+	} else {
+		snap, err = builder.Build(ctx, target)
+	}
+	
+	if timing != nil {
+		timing.SnapshotConstruction = time.Since(snapshotStart).Nanoseconds()
+	}
+	return snap, err
+}
+
+// ResolveRepositoryRootWithTiming resolves the repository root and records
+// timing for repo identity resolution if timing is provided.
+func (builder SnapshotBuilder) ResolveRepositoryRootWithTiming(ctx context.Context, timing *TargetStatusTiming) (string, error) {
+	var start time.Time
+	if timing != nil {
+		start = time.Now()
+	}
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if timing != nil {
+		timing.RepoIdentityResolution = time.Since(start).Nanoseconds()
+	}
+	return root, err
+}
+
 func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowStagedIntended bool) (Snapshot, error) {
 	repo, err := builder.repositoryRoot(ctx)
 	if err != nil {

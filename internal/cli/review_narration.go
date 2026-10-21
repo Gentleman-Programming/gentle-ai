@@ -90,8 +90,7 @@ const reviewtransactionEscalationCauseSample = "budget_exceeded"
 // statement names the outcome in domain terms plus the single decision or
 // command, per spec "Three-Tier Narration Contract"; commands and flags are
 // backtick-quoted so TestNarrationTierAAndCBanInternalVocabulary's code-span
-// exemption applies to them. corrected_candidate_unavailable and
-// staged_workspace_overlay_recovery_unavailable carry the exact content
+// exemption applies to them. staged_workspace_overlay_recovery_unavailable carries the exact content
 // organic-dx tasks.md 3b.10 already recorded as Phase 4 registry input.
 // reviewModeDisableCloneCommand is the scoped form of the self-service
 // delivery exit named throughout this registry (adversarial finding F6):
@@ -117,14 +116,6 @@ var reviewStopReasonNarration = map[string]string{
 	"captured_result_selection_unavailable": "This run reached a state that should never happen: every review result it expected was already present. " +
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
-	"corrected_candidate_unavailable": "For a committed-only review, commit the bounded correction (or amend its commit); unrelated tracked worktree edits are ignored. " +
-		"The accepted correction forecast cannot be captured again. Change the candidate content so it differs from the frozen original, then re-run " +
-		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition`. " +
-		"That is the right path when the review found real defects. If instead the reviewers were given the wrong input " +
-		"and their findings describe content that was never the candidate, a maintainer can quarantine those results and " +
-		"reopen their lenses over the same frozen content: run `gentle-ai review reopen-results --prepare --cwd <repo> --lineage <id> " +
-		"--expected-revision <revision> --target <target> --reason <reason> --actor <actor> --quarantine-lens <lens>` " +
-		"(repeat `--quarantine-lens` per affected lens) and follow its output.",
 	"empty_base_diff_bootstrap_required": "This selected committed base has no changes to review. " +
 		"If you are following the authorized first-publication bootstrap, a maintainer must first insert an empty root below the content commit. " +
 		"Then run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition --base-ref <empty-root> --committed-only`.",

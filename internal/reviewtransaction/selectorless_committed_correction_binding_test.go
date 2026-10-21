@@ -152,7 +152,7 @@ func TestSelectorlessCommittedBaseDiffCorrectionsRequireMatchingPredecessor(t *t
 	gitSnapshot(t, repo, "add", "candidate.go")
 	gitSnapshot(t, repo, "commit", "-qm", "small unrelated follow-up")
 
-	candidates, err := selectorlessCommittedBaseDiffCorrections(ctx, repo)
+	candidates, err := selectorlessCommittedBaseDiffCorrections(ctx, repo, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestSelectorlessCommittedBaseDiffCorrectionsPredecessorResolve(t *testing.T
 		if hasParent, err := selectorlessCommittedBaseDiffHasParentCommit(ctx, repo); err != nil || hasParent {
 			t.Fatalf("fixture precondition: hasParent=%v err=%v, want a true root commit", hasParent, err)
 		}
-		candidates, err := selectorlessCommittedBaseDiffCorrections(ctx, repo)
+		candidates, err := selectorlessCommittedBaseDiffCorrections(ctx, repo, nil)
 		if err != nil {
 			t.Fatalf("root commit produced an error, want a clean empty result: %v", err)
 		}
@@ -231,7 +231,7 @@ func TestSelectorlessCommittedBaseDiffCorrectionsPredecessorResolve(t *testing.T
 		}
 		t.Cleanup(func() { _ = os.WriteFile(headPath, original, 0o644) })
 
-		if _, err := selectorlessCommittedBaseDiffAncestors(ctx, repo); err == nil {
+		if _, err := selectorlessCommittedBaseDiffAncestors(ctx, repo, nil); err == nil {
 			t.Fatal("corrupted HEAD produced no error, want the resolve failure to surface")
 		}
 	})
@@ -267,7 +267,7 @@ func TestSelectorlessCommittedBaseDiffAncestorsWalksMultipleCommits(t *testing.T
 		gitSnapshot(t, repo, "commit", "-qm", name)
 		trees = append(trees, strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}")))
 	}
-	ancestors, err := selectorlessCommittedBaseDiffAncestors(ctx, repo)
+	ancestors, err := selectorlessCommittedBaseDiffAncestors(ctx, repo, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

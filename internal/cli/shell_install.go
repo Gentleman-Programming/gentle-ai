@@ -92,5 +92,10 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 	if req.Confirmation != token {
 		return errors.New("inspect the physical selection first with --inspect, then pass its --confirm SHA256; run gentle-ai shell install --help for selection flags or gentle-ai shell install for interactive review")
 	}
+	// Gate: enforce protected provisioning/consent/verification for shell installation
+	// Fail-closed for production; test-only seam accepts ProvisionedContext
+	if err := GateShellInstallCandidate(ctx, req.Mode); err != nil {
+		return err
+	}
 	return shellinstaller.RunUserEntry(ctx, self, append([]string{"install"}, shellEntryValues(req)...), os.Stdin, stdout, os.Stderr)
 }

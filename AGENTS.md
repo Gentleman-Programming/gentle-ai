@@ -2,6 +2,12 @@
 
 When working on this project, load the relevant skill(s) BEFORE writing any code.
 
+## CodeGraph Usage (mandatory)
+
+- **Use codegraph for refactors, code fixes and investigations**, including in subagents and when working in worktrees.
+- Codegraph is workspace-scoped: in a worktree, run `operation: init` before the first query there.
+- When a subagent cannot call codegraph, the parent session runs the query and passes the findings in the task handoff.
+
 Naming convention: `gentle-ai-*` skills are repo-specific workflow skills. Unprefixed skills are portable writing or work-unit skills and intentionally keep their canonical names.
 
 ## How to Use

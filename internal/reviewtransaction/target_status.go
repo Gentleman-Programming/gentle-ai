@@ -47,9 +47,10 @@ const (
 )
 
 type TargetStatusRequest struct {
-	Target    Target
-	LineageID string
-	PrePR     *PrePRRequest
+	Target         Target
+	LineageID      string
+	PrePR          *PrePRRequest
+	TimingEnabled  bool
 }
 
 type TargetProjectionStatus struct {
@@ -64,6 +65,17 @@ type TargetProjectionStatus struct {
 	IntendedUntrackedProof  string     `json:"intended_untracked_proof"`
 	InitialSnapshotIdentity string     `json:"initial_snapshot_identity"`
 	CurrentSnapshotIdentity string     `json:"current_snapshot_identity"`
+}
+
+// TargetStatusTiming captures opt-in phase timing diagnostics for the
+// native STATUS operation. Each field is the wall-clock duration in
+// nanoseconds for the corresponding phase.
+type TargetStatusTiming struct {
+	SnapshotConstruction     int64 `json:"snapshot_construction_ns,omitempty"`
+	BaseRangeDerivation      int64 `json:"base_range_derivation_ns,omitempty"`
+	AncestryResolution       int64 `json:"ancestry_resolution_ns,omitempty"`
+	PredecessorResolution    int64 `json:"predecessor_resolution_ns,omitempty"`
+	RepoIdentityResolution   int64 `json:"repo_identity_resolution_ns,omitempty"`
 }
 
 // TargetStatusDecision is the core-owned executable projection of one status
@@ -100,6 +112,7 @@ type TargetStatusResult struct {
 	CandidateLineageIDs                []string                   `json:"candidate_lineage_ids"`
 	Escalation                         *CompactEscalationEvidence `json:"escalation,omitempty"`
 	Decision                           TargetStatusDecision       `json:"-"`
+	TimingDiagnostics                  *TargetStatusTiming        `json:"timing_diagnostics,omitempty"`
 	authorityTargetKind                TargetKind
 	authorityProjection                Projection
 	selectorFreeAccountingOnlyRecovery bool
@@ -136,18 +149,24 @@ func AssessTargetStatus(ctx context.Context, repo string, request TargetStatusRe
 // status classification so callers can derive related routing artifacts from
 // the same immutable candidate tree instead of rereading a mutable worktree.
 func AssessTargetStatusWithSnapshot(ctx context.Context, repo string, request TargetStatusRequest) (TargetStatusResult, Snapshot, error) {
+	var timing TargetStatusTiming
+	
 	if request.LineageID != "" {
 		request.LineageID = strings.TrimSpace(request.LineageID)
 		if err := validateLineageID(request.LineageID); err != nil {
 			return TargetStatusResult{}, Snapshot{}, err
 		}
 	}
-	live, err := (SnapshotBuilder{Repo: repo}).BuildStoredSnapshot(ctx, request.Target)
+	
+	// Snapshot construction timing (includes repo identity resolution)
+	live, err := (SnapshotBuilder{Repo: repo}).BuildStoredSnapshotWithTiming(ctx, request.Target, &timing)
 	if err != nil {
 		return TargetStatusResult{}, Snapshot{}, err
 	}
+	
 	if request.LineageID == "" && request.Target.Kind == TargetCurrentChanges && request.Target.Projection == ProjectionWorkspace {
-		candidates, recoveryErr := selectorlessCommittedBaseDiffCorrections(ctx, repo)
+		// Implicit base/range derivation timing
+		candidates, recoveryErr := selectorlessCommittedBaseDiffCorrections(ctx, repo, &timing)
 		if recoveryErr != nil {
 			return TargetStatusResult{}, Snapshot{}, recoveryErr
 		}
@@ -160,17 +179,24 @@ func AssessTargetStatusWithSnapshot(ctx context.Context, repo string, request Ta
 			for index, candidate := range candidates {
 				lineages[index] = candidate.lineage
 			}
-			return projectTargetStatusDecision(TargetStatusResult{
+			result := projectTargetStatusDecision(TargetStatusResult{
 				Applicability: TargetApplicabilityAmbiguous, Action: TargetStatusActionSelectLineage,
 				Replayability: ReplayabilityStatusRequired, TargetIdentity: live.Identity,
 				Projection: targetProjectionFromSnapshot(live), CandidateLineageIDs: lineages,
-			}), live, nil
+			})
+			if request.TimingEnabled {
+				result.TimingDiagnostics = &timing
+			}
+			return result, live, nil
 		}
 	}
 	result, err := assessTargetStatusSnapshot(ctx, repo, request, live)
 	if err == nil {
 		result = projectTargetStatusDecision(result)
 		result = bindTargetStatusDecisionBaseRef(result, request.Target, request.PrePR)
+	}
+	if request.TimingEnabled {
+		result.TimingDiagnostics = &timing
 	}
 	return result, live, err
 }
@@ -212,18 +238,31 @@ func selectorlessCommittedBaseDiffHasParentCommit(ctx context.Context, repo stri
 // selectorlessCommittedBaseDiffAncestors returns HEAD's first-parent
 // ancestry, bounded, as (nil, nil) only for the unambiguous root-commit
 // case; every other Git failure is returned so the caller fails closed.
-func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([]selectorlessCommittedBaseDiffAncestor, error) {
+func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string, timing *TargetStatusTiming) ([]selectorlessCommittedBaseDiffAncestor, error) {
+	var start time.Time
+	if timing != nil {
+		start = time.Now()
+	}
 	hasParent, err := selectorlessCommittedBaseDiffHasParentCommit(ctx, repo)
 	if err != nil || !hasParent {
+		if timing != nil {
+			timing.AncestryResolution = time.Since(start).Nanoseconds()
+		}
 		return nil, err
 	}
 	output, err := runGit(ctx, repo, nil, nil, "log", "--first-parent", "--format=%H %T",
 		"-n", strconv.Itoa(selectorlessCommittedBaseDiffAncestorLimit), "HEAD~1")
 	if err != nil {
+		if timing != nil {
+			timing.AncestryResolution = time.Since(start).Nanoseconds()
+		}
 		return nil, err
 	}
 	trimmed := strings.TrimSpace(string(output))
 	if trimmed == "" {
+		if timing != nil {
+			timing.AncestryResolution = time.Since(start).Nanoseconds()
+		}
 		return nil, nil
 	}
 	lines := strings.Split(trimmed, "\n")
@@ -231,9 +270,15 @@ func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([
 	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) != 2 {
+			if timing != nil {
+				timing.AncestryResolution = time.Since(start).Nanoseconds()
+			}
 			return nil, fmt.Errorf("unexpected HEAD ancestry log line %q", line) // refusal:by-design world-action: git log --format=%H %T produced a line this parser cannot shape into a commit/tree pair; needs operator inspection, no command can repair it
 		}
 		ancestors = append(ancestors, selectorlessCommittedBaseDiffAncestor{commit: fields[0], tree: fields[1]})
+	}
+	if timing != nil {
+		timing.AncestryResolution = time.Since(start).Nanoseconds()
 	}
 	return ancestors, nil
 }
@@ -252,38 +297,69 @@ func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([
 // other outcome -- no origin/HEAD, a criss-cross history, an empty range, or any
 // Git fault -- is returned as an error so the caller keeps the truthful
 // fallback.
-func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error) {
+func ResolveCommittedRangeBase(ctx context.Context, repo string, timing *TargetStatusTiming) (string, error) {
+	var start time.Time
+	if timing != nil {
+		start = time.Now()
+	}
 	refOutput, err := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
 	if err != nil {
+		if timing != nil {
+			timing.BaseRangeDerivation = time.Since(start).Nanoseconds()
+		}
 		return "", err
 	}
 	ref := strings.TrimSpace(string(refOutput))
 	if ref == "" {
+		if timing != nil {
+			timing.BaseRangeDerivation = time.Since(start).Nanoseconds()
+		}
 		return "", fmt.Errorf("refs/remotes/origin/HEAD does not resolve to a remote branch") // refusal:by-design world-action: an absent remote default branch is not a decision a command can make unambiguous; the caller falls back to collecting a base_ref
 	}
 	head, err := resolveCommit(ctx, repo, "HEAD")
 	if err != nil {
+		if timing != nil {
+			timing.BaseRangeDerivation = time.Since(start).Nanoseconds()
+		}
 		return "", err
 	}
 	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, ref)
 	if err != nil {
+		if timing != nil {
+			timing.BaseRangeDerivation = time.Since(start).Nanoseconds()
+		}
 		return "", err
 	}
 	merges := strings.Fields(string(bases))
 	if len(merges) != 1 {
+		if timing != nil {
+			timing.BaseRangeDerivation = time.Since(start).Nanoseconds()
+		}
 		return "", fmt.Errorf("remote default branch history has %d merge bases", len(merges)) // refusal:by-design world-action: a criss-cross history has no single base to derive, so the caller falls back to collecting a base_ref
 	}
 	base := merges[0]
 	if base == head {
+		if timing != nil {
+			timing.BaseRangeDerivation = time.Since(start).Nanoseconds()
+		}
 		return "", fmt.Errorf("HEAD is the remote default branch merge-base") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
 	}
 	countOutput, err := runGit(ctx, repo, nil, nil, "rev-list", "--count", base+".."+head)
 	if err != nil {
+		if timing != nil {
+			timing.BaseRangeDerivation = time.Since(start).Nanoseconds()
+		}
 		return "", err
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(string(countOutput)))
 	if err != nil || count <= 0 {
+		if timing != nil {
+			timing.BaseRangeDerivation = time.Since(start).Nanoseconds()
+		}
 		return "", fmt.Errorf("committed range between the merge-base and HEAD is empty") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
+	}
+	if timing != nil {
+		timing.BaseRangeDerivation = time.Since(start).Nanoseconds()
 	}
 	return base, nil
 }
@@ -302,7 +378,7 @@ func selectorlessCommittedBaseDiffMatchedPredecessor(ancestors []selectorlessCom
 	return ""
 }
 
-func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) ([]selectorlessCommittedBaseDiffCorrection, error) {
+func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string, timing *TargetStatusTiming) ([]selectorlessCommittedBaseDiffCorrection, error) {
 	stores, err := DiscoverCompactStores(ctx, repo)
 	if err != nil {
 		return nil, err
@@ -311,11 +387,18 @@ func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) 
 	// Issue #2345: a lineage may only resume selector-free when its own
 	// frozen candidate tree sits in HEAD's history; a resolve failure here
 	// fails closed instead of silently emptying the candidate list.
-	ancestors, err := selectorlessCommittedBaseDiffAncestors(ctx, repo)
+	ancestors, err := selectorlessCommittedBaseDiffAncestors(ctx, repo, timing)
 	if err != nil {
 		return nil, err
 	}
 	bindings := []selectorlessCommittedBaseDiffCorrectionBinding{}
+	
+	// Predecessor resolution timing
+	predStart := time.Time{}
+	if timing != nil {
+		predStart = time.Now()
+	}
+	
 	for _, store := range stores {
 		record, loadErr := store.LoadContext(ctx)
 		if loadErr != nil {
@@ -358,6 +441,9 @@ func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) 
 		bindings = append(bindings, selectorlessCommittedBaseDiffCorrectionBinding{
 			candidate: selectorlessCommittedBaseDiffCorrection{lineage: record.State.LineageID, snapshot: live}, modTime: modTime,
 		})
+	}
+	if timing != nil {
+		timing.PredecessorResolution = time.Since(predStart).Nanoseconds()
 	}
 	if len(bindings) == 0 {
 		return nil, nil
