@@ -72,7 +72,7 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 | Focused test and suite of the change being made | ✅ once each | — |
 | High-risk change, or long suites, builds, installs, or native review actions of a large task | — | ✅ independent verifier or fresh per-action worker |
 
-Use Claude Code's native Agent/Task mechanism for delegated-direct work. Summarize any needed handoff explicitly.
+Use Claude Code's native Agent tool for delegated-direct work, with the managed ODD agent for the role so it runs on the model and effort picked for it: `subagent_type: gentle-ai-explore` for a read-only explorer, `subagent_type: gentle-ai-worker` for a bounded writer, and `subagent_type: gentle-ai-verify` for an independent verifier. Do not pass a `model` argument; the agent's own frontmatter selects it. Summarize any needed handoff explicitly.
 
 Pass the authorized edit surfaces, acceptance criteria, the applicable test-first policy and runner from `## Implementation Routing`, applicable verification commands, and relevant prior context explicitly to bounded implementation workers. Workers preserve unrelated working-tree changes and return observed outcomes and checks.
 
