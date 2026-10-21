@@ -10,10 +10,13 @@ import (
 // repository's current unreviewed-candidate identity for the session, and on
 // Stop reminds the agent -- once per session and candidate, and only for a
 // candidate the session itself produced -- to run the selectorless STATUS
-// preflight instead of reporting completion silently. The stdin payloads'
-// own cwd is left empty here because Step's Stdin field is a literal string,
-// not a per-sandbox template like Args; the sandbox path is supplied through
-// --cwd via productArgs instead, exactly as the hook's own --cwd override is
+// preflight instead of reporting completion silently. Since #4815 the reminder
+// honors the same review_due decision `review assess` publishes for the same
+// candidate, so the corpus drives both halves: a passive candidate stays
+// silent, and a review_due candidate still blocks. The stdin payloads' own cwd
+// is left empty here because Step's Stdin field is a literal string, not a
+// per-sandbox template like Args; the sandbox path is supplied through --cwd
+// via productArgs instead, exactly as the hook's own --cwd override is
 // documented to take precedence.
 func stopHookJourneys() []Journey {
 	sessionStart := `{"session_id":"bench-stop-hook","hook_event_name":"SessionStart","source":"startup"}`
@@ -23,7 +26,7 @@ func stopHookJourneys() []Journey {
 		ID:     "j125-claude-code-stop-hook-reminds-once-per-candidate",
 		Review: reviewOptedIn,
 		Title:  "Claude Code Stop hook reminds once per session and candidate",
-		Source: "#4064: the hook hands the agent the STATUS preflight route instead of letting it report completion silently",
+		Source: "#4064: the hook hands the agent the STATUS preflight route instead of letting it report completion silently; #4815: the reminder honors the same review_due decision review assess publishes, so only a due candidate reminds",
 		Steps: []Step{
 			{Name: "fixture: repo", Fixture: baseRepo},
 			{
@@ -40,17 +43,34 @@ func stopHookJourneys() []Journey {
 					return nil
 				},
 			},
-			{Name: "fixture: stage docs", Fixture: stageDocs("stop-hook")},
+			{Name: "fixture: stage passive docs", Fixture: stageDocs("stop-hook")},
 			{
-				Name:  "an unreviewed candidate blocks with the STATUS preflight route",
+				Name:  "a passive candidate the session produced stays silent",
 				Args:  productArgs("review", "stop-hook", "--agent", "claude-code"),
 				Stdin: stdin,
 				After: func(_ *Sandbox, observation Observation) error {
 					if observation.ExitCode != 0 {
 						return fmt.Errorf("stop-hook exited %d, want 0: %s", observation.ExitCode, observation.Stderr)
 					}
+					if strings.TrimSpace(observation.Stdout) != "" {
+						return fmt.Errorf("expected empty stdout for a passive candidate (passive needs no review, #4815), got: %s", observation.Stdout)
+					}
+					return nil
+				},
+			},
+			{Name: "fixture: stage auth code", Fixture: stageAuthCode},
+			{
+				Name:  "a review_due candidate blocks with the STATUS preflight route",
+				Args:  productArgs("review", "stop-hook", "--agent", "claude-code"),
+				Stdin: stdin,
+				After: func(sb *Sandbox, observation Observation) error {
+					if observation.ExitCode != 0 {
+						return fmt.Errorf("stop-hook exited %d, want 0: %s", observation.ExitCode, observation.Stderr)
+					}
 					if !strings.Contains(observation.Stdout, `"decision":"block"`) {
-						return fmt.Errorf("stdout missing %q: %s", `"decision":"block"`, observation.Stdout)
+						diag := sb.invoke([]string{"review", "status", "--cwd", sb.Repo, "--contract", "gentle-ai.review-integration/v2", "--agent", "claude-code", "--next-transition"})
+						return fmt.Errorf("hook stdout=%q stderr=%q exit=%d args=%v | STATUS stdout=%.450s stderr=%.200s",
+							observation.Stdout, observation.Stderr, observation.ExitCode, observation.Args, diag.Stdout, diag.Stderr)
 					}
 					if !strings.Contains(observation.Stdout, "gentle-ai review start") {
 						return fmt.Errorf("stdout missing %q: %s", "gentle-ai review start", observation.Stdout)
