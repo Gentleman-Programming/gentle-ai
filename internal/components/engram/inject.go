@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type InjectionResult struct {
@@ -706,6 +707,11 @@ func injectAntigravityOwnership(configHomeDir, settingsPath, mcpPath string) (bo
 }
 
 func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions, userScope bool) (InjectionResult, error) {
+	if adapter.Agent() == model.AgentCodex {
+		if err := system.ValidateCodexHome(configHomeDir); err != nil {
+			return InjectionResult{}, err
+		}
+	}
 	if provisioner, ok := adapter.(piEngramProvisioner); ok {
 		changed, files, err := provisioner.ProvisionEngramMCP(configHomeDir)
 		if err != nil {

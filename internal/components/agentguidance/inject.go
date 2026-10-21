@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // RoutingSectionID is the managed marker section that owns routing guidance.
@@ -112,6 +113,9 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 		return Result{}, err
 	}
 	if agent == model.AgentCodex {
+		if err := system.ValidateCodexHome(targetDir); err != nil {
+			return Result{}, err
+		}
 		rendered += "\n\n### Codex ODD worker assignments\n\nUse the exact model and reasoning_effort for the selected worker class when calling `spawn_agent`; set `fork_turns: \"none\"` for overrides. These assignments apply to ODD delegation, not native RDD review.\n\n" +
 			model.RenderCodexODDAssignments(options.CodexPhaseModelAssignments, options.CodexModelAssignments, options.CodexCarrilModelAssignments)
 	}

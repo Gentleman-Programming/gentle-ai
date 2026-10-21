@@ -4721,6 +4721,15 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 		defer cancel()
 		_ = ctx // timeout enforced; Install itself is synchronous
 
+		// Validate before any adapter writes, including earlier non-Codex targets.
+		for _, adapter := range adapters {
+			if adapter.AgentID == model.AgentCodex {
+				if err := system.ValidateCodexHome(homeDir()); err != nil {
+					return AgentBuilderInstallDoneMsg{Err: err}
+				}
+			}
+		}
+
 		// Resolve agent name, applying conflict suffix if needed.
 		installAgent := agent
 		if agentbuilder.HasConflictWithBuiltin(agent.Name) {

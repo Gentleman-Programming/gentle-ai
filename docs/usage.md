@@ -342,6 +342,10 @@ For Codex, efforts and speed come from the installed runtime (`codex debug model
 - **Speed.** After you choose a preset, the picker asks for speed only when the runtime advertises a service tier for that preset's orchestrator model. Fast is a service tier, not a reasoning effort. Gentle AI writes it once as the top-level `service_tier` in `~/.codex/config.toml`, and Codex workers inherit it.
 - **Standard.** Choosing Standard removes only the `service_tier` value Gentle AI wrote, and only while the config still holds that exact value. A `service_tier` you set yourself is never changed.
 
+### Codex configuration root
+
+For the real user home, a non-empty `CODEX_HOME` must point to an existing directory. Relative values resolve against the process working directory. Codex mutations reject invalid overrides instead of creating them. Isolated or sandbox homes ignore the ambient override and keep their own `<home>/.codex` configuration.
+
 ### doctor
 
 Read-only ecosystem health diagnostics — no changes made to your configuration:

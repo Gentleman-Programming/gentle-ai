@@ -10,6 +10,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type Result struct {
@@ -77,6 +78,9 @@ func installSkillRegistry(homeDir string, adapter agents.Adapter, platform strin
 	var path, event, command string
 	switch adapter.Agent() {
 	case model.AgentCodex:
+		if err := system.ValidateCodexHome(homeDir); err != nil {
+			return Result{}, err
+		}
 		path = filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")
 		event = "SessionStart"
 		command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
