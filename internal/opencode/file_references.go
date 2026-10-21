@@ -11,7 +11,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 )
 
-var settingsFileReference = regexp.MustCompile(`\{file:([^}]*)\}`)
+var settingsFileReference = regexp.MustCompile(`\{file:([^}]+)\}`)
 
 // SettingsFileReferences resolves file substitutions in settings values, including
 // embedded substitutions and arrays. JSONC comments are not runtime values.

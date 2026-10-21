@@ -9,6 +9,50 @@ import (
 	"testing"
 )
 
+func TestSettingsFileReferencesLeavesEmptyPlaceholderLiteral(t *testing.T) {
+	home := t.TempDir()
+	settings := filepath.Join(home, "opencode.json")
+	promptFile := filepath.Join(home, "prompt.md")
+	if err := os.WriteFile(promptFile, []byte("Keep this prompt.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, prompt string
+		wantFile     bool
+	}{
+		{"empty", "{file:}", false},
+		{"embedded empty", "Before {file:} after", false},
+		{"empty alongside valid", "Before {file:} and {file:./prompt.md} after", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original, err := json.Marshal(map[string]any{"agent": map[string]any{"custom": map[string]any{"prompt": tc.prompt}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settings, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			refs, err := SettingsFileReferences(settings, home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want []string
+			if tc.wantFile {
+				want = []string{promptFile}
+			}
+			if !slices.Equal(refs, want) {
+				t.Fatalf("references = %v, want %v", refs, want)
+			}
+			if err := ValidateSettingsFileReferences(settings, home); err != nil {
+				t.Fatalf("literal placeholder rejected: %v", err)
+			}
+			if after, err := os.ReadFile(settings); err != nil || string(after) != string(original) {
+				t.Fatalf("settings changed: %s (%v)", after, err)
+			}
+		})
+	}
+}
+
 func TestSettingsFileReferences(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".config", "opencode")
