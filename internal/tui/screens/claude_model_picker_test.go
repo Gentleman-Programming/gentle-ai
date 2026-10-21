@@ -329,3 +329,93 @@ func TestRenderClaudeModelPicker_ShowsCurrentPreset(t *testing.T) {
 		})
 	}
 }
+
+// #5612 review: no preset sets the ODD rows, so their agents inherit the
+// session model until the user picks one.
+func TestClaudePresetsLeaveODDRowsInherit(t *testing.T) {
+	for cursor, preset := range claudePresetOrder {
+		if preset == ClaudePresetCustom {
+			continue
+		}
+		state := NewClaudeModelPickerState()
+		_, saved := HandleClaudeModelPickerNav("enter", &state, cursor)
+		if saved == nil {
+			t.Fatalf("%s: preset not confirmed", preset)
+		}
+		for _, role := range model.ClaudeODDRoles {
+			if value, ok := saved[role]; ok {
+				t.Errorf("%s seeds %s = %+v", preset, role, value)
+			}
+		}
+	}
+}
+
+// #5612 review: an ODD row shows [inherit] without a pick, and its model list
+// offers inherit to clear a pick. Other rows keep their model-only list.
+func TestClaudePickerODDRowsOfferInherit(t *testing.T) {
+	state := NewClaudeModelPickerState()
+	state.InCustomMode = true
+	state.Mode = ClaudeModePhaseList
+	rows := RenderClaudeModelPicker(state, 0)
+	for _, role := range model.ClaudeODDRoles {
+		line := ""
+		for _, candidate := range strings.Split(rows, "\n") {
+			if strings.Contains(candidate, claudePhaseLabels[role]) {
+				line = candidate
+			}
+		}
+		if !strings.Contains(line, "[inherit]") {
+			t.Errorf("%s row = %q, want [inherit]", role, line)
+		}
+	}
+
+	state.Mode = ClaudeModeModelSelect
+	state.SelectedPhase = "odd-worker"
+	if got, want := ClaudeModelPickerOptionCount(state), len(claudeAliasOrder)+2; got != want {
+		t.Fatalf("ODD model options = %d, want %d (aliases, inherit, Back)", got, want)
+	}
+	if view := RenderClaudeModelPicker(state, 0); !strings.Contains(view, "inherit") {
+		t.Fatalf("ODD model list does not offer inherit: %s", view)
+	}
+	HandleClaudeModelPickerNav("enter", &state, 1) // opus
+	if state.CustomAssignments["odd-worker"].Model != model.ClaudeModelOpus {
+		t.Fatalf("odd-worker pick = %+v", state.CustomAssignments["odd-worker"])
+	}
+	state.Mode = ClaudeModeModelSelect
+	HandleClaudeModelPickerNav("enter", &state, len(claudeAliasOrder)) // inherit
+	if value, ok := state.CustomAssignments["odd-worker"]; ok {
+		t.Fatalf("inherit kept odd-worker = %+v", value)
+	}
+	if state.Mode != ClaudeModePhaseList {
+		t.Fatalf("Mode = %v after inherit, want the phase list", state.Mode)
+	}
+
+	state.Mode = ClaudeModeModelSelect
+	state.SelectedPhase = "risk"
+	if got, want := ClaudeModelPickerOptionCount(state), len(claudeAliasOrder)+1; got != want {
+		t.Fatalf("risk model options = %d, want %d (aliases, Back)", got, want)
+	}
+}
+
+// #5612 review: a preset an older picker saved with Sonnet-seeded ODD rows
+// still opens as that preset, with the ODD rows on inherit.
+func TestClaudePickerTreatsLegacyODDSeedAsInherit(t *testing.T) {
+	seeded := model.ClaudePhaseAssignmentsFromModelPreset(model.ClaudeModelPresetPerformance())
+	for key := range seeded {
+		if strings.HasPrefix(key, "sdd-") {
+			delete(seeded, key)
+		}
+	}
+	for _, role := range model.ClaudeODDRoles {
+		seeded[role] = model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
+	}
+	state := NewClaudeModelPickerStateFromPhaseAssignments(seeded)
+	if state.Preset != ClaudePresetPerformance {
+		t.Fatalf("Preset = %q, want performance", state.Preset)
+	}
+	for _, role := range model.ClaudeODDRoles {
+		if value, ok := state.CustomAssignments[role]; ok {
+			t.Errorf("legacy seed kept %s = %+v", role, value)
+		}
+	}
+}

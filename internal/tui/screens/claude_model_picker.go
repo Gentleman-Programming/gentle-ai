@@ -72,6 +72,22 @@ var claudePhaseLabels = map[string]string{
 	"default":      "General delegation",
 }
 
+// isClaudeInheritRole reports whether a row has no preset value: without a pick
+// its agent runs on the session model, and its model list offers inherit to
+// clear a pick.
+func isClaudeInheritRole(phase string) bool {
+	return model.IsClaudeODDRole(phase)
+}
+
+// claudeModelOptionCount is the number of model choices for a row, including
+// inherit on inherit rows and excluding Back.
+func claudeModelOptionCount(phase string) int {
+	if isClaudeInheritRole(phase) {
+		return len(claudeAliasOrder) + 1
+	}
+	return len(claudeAliasOrder)
+}
+
 // claudeAliasOrder defines the display order in the model selection screen.
 var claudeAliasOrder = []model.ClaudeModelAlias{
 	model.ClaudeModelFable,
@@ -136,6 +152,7 @@ func NewClaudeModelPickerStateFromPhaseAssignments(assignments map[string]model.
 	if len(assignments) == 0 {
 		return NewClaudeModelPickerState()
 	}
+	assignments = model.WithoutLegacyClaudeODDSeeds(assignments)
 	for preset, constructor := range presetConstructors {
 		presetAssignments := claudePickerPresetAssignments(constructor())
 		if phaseAssignmentsEqual(presetAssignments, visibleClaudeAssignments(assignments)) ||
@@ -177,9 +194,6 @@ func claudePickerPresetAssignments(preset map[string]model.ClaudeModelAlias) map
 			delete(assignments, key)
 		}
 	}
-	assignments["odd-explorer"] = model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
-	assignments["odd-worker"] = model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
-	assignments["odd-verify"] = model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
 	return assignments
 }
 
@@ -329,11 +343,17 @@ func handleClaudeCustomModelSelectNav(
 		state.Mode = ClaudeModePhaseList
 		return true, nil
 	case "enter":
+		phase := state.SelectedPhase
+		if cursor == len(claudeAliasOrder) && isClaudeInheritRole(phase) {
+			// Inherit: no pick, so the agent runs on the session model.
+			delete(state.CustomAssignments, phase)
+			state.Mode = ClaudeModePhaseList
+			return true, nil
+		}
 		if cursor >= len(claudeAliasOrder) {
 			state.Mode = ClaudeModePhaseList
 			return true, nil
 		}
-		phase := state.SelectedPhase
 		assignment := state.CustomAssignments[phase]
 		assignment.Model = claudeAliasOrder[cursor]
 		if !model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
@@ -456,14 +476,18 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor, height int) str
 		}
 		focused := idx == cursor
 		assignment := state.CustomAssignments[phase]
-		if !assignment.Model.Valid() {
-			assignment.Model = model.ClaudeModelSonnet
+		var label string
+		if !assignment.Model.Valid() && isClaudeInheritRole(phase) {
+			label = fmt.Sprintf("%-20s %s", claudePhaseLabels[phase], styles.SubtextStyle.Render("[inherit]"))
+		} else {
+			if !assignment.Model.Valid() {
+				assignment.Model = model.ClaudeModelSonnet
+			}
+			if !model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
+				assignment.Effort = model.ClaudeEffortDefault
+			}
+			label = fmt.Sprintf("%-20s %s %s", claudePhaseLabels[phase], aliasTag(assignment.Model), effortTag(assignment.Effort))
 		}
-		if !model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
-			assignment.Effort = model.ClaudeEffortDefault
-		}
-
-		label := fmt.Sprintf("%-20s %s %s", claudePhaseLabels[phase], aliasTag(assignment.Model), effortTag(assignment.Effort))
 
 		if focused {
 			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
@@ -487,22 +511,30 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor, height int) str
 func renderCustomModelSelect(state ClaudeModelPickerState, cursor int) string {
 	var b strings.Builder
 	phase := state.SelectedPhase
-	current := state.CustomAssignments[phase]
+	current := string(state.CustomAssignments[phase].Model)
+	if current == "" && isClaudeInheritRole(phase) {
+		current = model.ClaudeModelInherit
+	}
 	b.WriteString(styles.TitleStyle.Render("Select Claude model"))
 	b.WriteString("\n")
-	b.WriteString(styles.SubtextStyle.Render(claudePhaseLabels[phase] + " — current " + string(current.Model)))
+	b.WriteString(styles.SubtextStyle.Render(claudePhaseLabels[phase] + " — current " + current))
 	b.WriteString("\n\n")
-	for idx, alias := range claudeAliasOrder {
-		focused := idx == cursor
-		label := fmt.Sprintf("%-8s %s", alias, effortSummary(alias))
-		if focused {
+	labels := make([]string, 0, claudeModelOptionCount(phase))
+	for _, alias := range claudeAliasOrder {
+		labels = append(labels, fmt.Sprintf("%-8s %s", alias, effortSummary(alias)))
+	}
+	if isClaudeInheritRole(phase) {
+		labels = append(labels, fmt.Sprintf("%-8s %s", model.ClaudeModelInherit, "no pick: the agent runs on the session model"))
+	}
+	for idx, label := range labels {
+		if idx == cursor {
 			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
 		} else {
 			b.WriteString(styles.UnselectedStyle.Render("  "+label) + "\n")
 		}
 	}
 	b.WriteString("\n")
-	b.WriteString(renderOptions([]string{"← Back"}, cursor-len(claudeAliasOrder)))
+	b.WriteString(renderOptions([]string{"← Back"}, cursor-len(labels)))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select model • esc: back"))
 	return b.String()
@@ -576,7 +608,7 @@ func ClaudeModelPickerOptionCount(state ClaudeModelPickerState) int {
 	if state.InCustomMode {
 		switch state.Mode {
 		case ClaudeModeModelSelect:
-			return len(claudeAliasOrder) + 1 // aliases + Back
+			return claudeModelOptionCount(state.SelectedPhase) + 1 // aliases (+ inherit) + Back
 		case ClaudeModeEffortSelect:
 			assignment := state.CustomAssignments[state.SelectedPhase]
 			return len(model.ClaudeEffortsForModel(assignment.Model)) + 1 // efforts + Back

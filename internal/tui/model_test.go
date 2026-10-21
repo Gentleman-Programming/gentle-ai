@@ -1626,8 +1626,8 @@ func TestClaudeModelPickerBalancedSelectionStoresAssignments(t *testing.T) {
 	if got := state.Selection.ClaudeModelAssignments["default"]; got != model.ClaudeModelSonnet {
 		t.Fatalf("default = %q, want %q", got, model.ClaudeModelSonnet)
 	}
-	if got := state.Selection.ClaudeModelAssignments["odd-worker"]; got != model.ClaudeModelSonnet {
-		t.Fatalf("odd-worker = %q, want %q", got, model.ClaudeModelSonnet)
+	if got, ok := state.Selection.ClaudeModelAssignments["odd-worker"]; ok {
+		t.Fatalf("odd-worker = %q, want no preset value so the ODD agent inherits", got)
 	}
 	if _, exists := state.Selection.ClaudeModelAssignments["sdd-archive"]; exists {
 		t.Fatal("fresh preset introduced retired SDD role")
