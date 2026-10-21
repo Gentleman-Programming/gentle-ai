@@ -4,10 +4,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
 func TestEscRestoreCursorPosition(t *testing.T) {
@@ -16,7 +15,7 @@ func TestEscRestoreCursorPosition(t *testing.T) {
 		from   Screen
 		cursor int
 	}{
-		{name: "welcome remembers selection after esc", from: ScreenWelcome, cursor: 2},
+		{name: "welcome remembers selection after esc", from: ScreenWelcome, cursor: 4},
 		{name: "model config remembers selection after esc", from: ScreenModelConfig, cursor: 1},
 	}
 	for _, tt := range tests {
@@ -106,15 +105,6 @@ func TestBackOptionRestoresCursorAcrossScreens(t *testing.T) {
 			saved: 1,
 		},
 		{
-			name: "agent builder sdd phase back returns to sdd menu position",
-			setup: func(m *Model) {
-				m.Screen = ScreenAgentBuilderSDDPhase
-				m.Cursor = len(screens.ABSDDPhases())
-			},
-			want:  ScreenAgentBuilderSDD,
-			saved: 1,
-		},
-		{
 			name: "uninstall agents back returns to uninstall mode position",
 			setup: func(m *Model) {
 				m.Screen = ScreenUninstall
@@ -152,44 +142,53 @@ func TestBackOptionRestoresCursorAcrossScreens(t *testing.T) {
 	}
 }
 
-func TestPickerAdvanceRemembersSourceCursor(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Selection.Agents = []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE}
-	m.Selection.Components = []model.ComponentID{model.ComponentSDD}
-	m.Screen = ScreenClaudeModelPicker
-	m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
-	m.Cursor = 1 // "Performance" preset row
-
-	// Enter on a named preset advances to the next picker in the chain,
-	// bypassing confirmSelection.
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
-	if m.Screen != ScreenKiroModelPicker {
-		t.Fatalf("expected ScreenKiroModelPicker, got %v", m.Screen)
+func TestModelConfigPickerBackRestoresSourceCursor(t *testing.T) {
+	tests := []struct {
+		name   string
+		cursor int
+		screen Screen
+	}{
+		{name: "claude", cursor: 0, screen: ScreenClaudeModelPicker},
+		{name: "kiro", cursor: 2, screen: ScreenKiroModelPicker},
+		{name: "codex", cursor: 3, screen: ScreenCodexModelPicker},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenModelConfig
+			m.Cursor = tt.cursor
 
-	// Esc walks back to the Claude picker and must restore the source row.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = updated.(Model)
-	if m.Screen != ScreenClaudeModelPicker {
-		t.Fatalf("expected ScreenClaudeModelPicker, got %v", m.Screen)
-	}
-	if m.Cursor != 1 {
-		t.Errorf("cursor not restored after picker advance: got %d, want 1", m.Cursor)
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = updated.(Model)
+			if m.Screen != tt.screen {
+				t.Fatalf("expected picker %v, got %v", tt.screen, m.Screen)
+			}
+
+			m.Cursor = m.optionCount() - 1 // Back
+			updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = updated.(Model)
+			if m.Screen != ScreenModelConfig {
+				t.Fatalf("expected ScreenModelConfig, got %v", m.Screen)
+			}
+			if m.Cursor != tt.cursor {
+				t.Errorf("cursor not restored after picker Back: got %d, want %d", m.Cursor, tt.cursor)
+			}
+		})
 	}
 }
 
-func TestNoProviderBackRestoresSDDModeCursor(t *testing.T) {
+func TestNoProviderBackRestoresModelConfigCursor(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelPicker // zero AvailableIDs → "Continue with defaults" / "Back"
 	m.Cursor = 1                 // "Back"
-	m.CursorMemory[ScreenSDDMode] = 1
+	m.ModelConfigMode = true
+	m.CursorMemory[ScreenModelConfig] = 1
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 
-	if m.Screen != ScreenSDDMode {
-		t.Fatalf("expected ScreenSDDMode, got %v", m.Screen)
+	if m.Screen != ScreenModelConfig {
+		t.Fatalf("expected ScreenModelConfig, got %v", m.Screen)
 	}
 	if m.Cursor != 1 {
 		t.Errorf("cursor not restored on no-provider Back: got %d, want 1", m.Cursor)
