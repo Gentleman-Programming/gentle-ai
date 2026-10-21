@@ -25,7 +25,7 @@ var claudePresetDescriptions = map[ClaudeModelPreset]string{
 	ClaudePresetPerformance: "Maximum quality for delegation and review roles",
 	ClaudePresetEconomy:     "Cost-optimised delegation and review roles",
 	ClaudePresetDiversity:   "Diversity: Opus for Judge A, Haiku for Judge B, Sonnet for fixes",
-	ClaudePresetCustom:      "Pick model and supported effort for ODD, JD and RDD roles individually",
+	ClaudePresetCustom:      "Pick model and supported effort for ODD, JD, RDD and built-in roles individually",
 }
 
 // claudePresetOrder is the display order for presets.
@@ -52,6 +52,8 @@ var claudePhases = []string{
 	"refuter",
 	"validator",
 	"default",
+	model.ClaudeBuiltInExploreRole,
+	model.ClaudeBuiltInGeneralPurposeRole,
 }
 
 // claudePhaseLabels are the human-readable labels for each configurable
@@ -70,13 +72,16 @@ var claudePhaseLabels = map[string]string{
 	"refuter":      "RDD Refuter",
 	"validator":    "RDD Validator",
 	"default":      "General delegation",
+
+	model.ClaudeBuiltInExploreRole:        "Built-in Explore",
+	model.ClaudeBuiltInGeneralPurposeRole: "Built-in general-purpose",
 }
 
 // isClaudeInheritRole reports whether a row has no preset value: without a pick
 // its agent runs on the session model, and its model list offers inherit to
-// clear a pick.
+// clear a pick. For a built-in row, inherit means no override at all.
 func isClaudeInheritRole(phase string) bool {
-	return model.IsClaudeODDRole(phase)
+	return model.IsClaudeODDRole(phase) || phase == model.ClaudeBuiltInExploreRole || phase == model.ClaudeBuiltInGeneralPurposeRole
 }
 
 // claudeModelOptionCount is the number of model choices for a row, including
@@ -478,7 +483,7 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor, height int) str
 		assignment := state.CustomAssignments[phase]
 		var label string
 		if !assignment.Model.Valid() && isClaudeInheritRole(phase) {
-			label = fmt.Sprintf("%-20s %s", claudePhaseLabels[phase], styles.SubtextStyle.Render("[inherit]"))
+			label = fmt.Sprintf("%-24s %s", claudePhaseLabels[phase], styles.SubtextStyle.Render("[inherit]"))
 		} else {
 			if !assignment.Model.Valid() {
 				assignment.Model = model.ClaudeModelSonnet
@@ -486,7 +491,7 @@ func renderCustomPhaseList(state ClaudeModelPickerState, cursor, height int) str
 			if !model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
 				assignment.Effort = model.ClaudeEffortDefault
 			}
-			label = fmt.Sprintf("%-20s %s %s", claudePhaseLabels[phase], aliasTag(assignment.Model), effortTag(assignment.Effort))
+			label = fmt.Sprintf("%-24s %s %s", claudePhaseLabels[phase], aliasTag(assignment.Model), effortTag(assignment.Effort))
 		}
 
 		if focused {

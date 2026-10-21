@@ -50,8 +50,10 @@ func TestClaudePickerOffersOnlyActiveRoles(t *testing.T) {
 			t.Errorf("missing active role %q: %s", role, rows)
 		}
 	}
+	// The built-in Explore row is active; only the retired SDD Explore row is not.
+	retired := strings.ReplaceAll(rows, claudePhaseLabels[model.ClaudeBuiltInExploreRole], "")
 	for _, role := range []string{"sdd-", "SDD phase", "Explore   ", "Apply   "} {
-		if strings.Contains(rows, role) {
+		if strings.Contains(retired, role) {
 			t.Errorf("retired SDD role %q visible: %s", role, rows)
 		}
 	}
@@ -417,5 +419,80 @@ func TestClaudePickerTreatsLegacyODDSeedAsInherit(t *testing.T) {
 		if value, ok := state.CustomAssignments[role]; ok {
 			t.Errorf("legacy seed kept %s = %+v", role, value)
 		}
+	}
+}
+
+func claudePhaseRow(t *testing.T, role string) int {
+	t.Helper()
+	for i, key := range claudePhases {
+		if key == role {
+			return i
+		}
+	}
+	t.Fatalf("missing custom picker row for %s", role)
+	return -1
+}
+
+// #5611: Claude Code's built-in Explore and general-purpose agents get their
+// own rows, which inherit the session model until the user picks one.
+func TestClaudePickerBuiltInRowsInheritUntilPicked(t *testing.T) {
+	picker := NewClaudeModelPickerState()
+	picker.InCustomMode = true
+	rows := RenderClaudeModelPicker(picker, 0)
+	for _, label := range []string{"Built-in Explore", "Built-in general-purpose"} {
+		line := ""
+		for _, candidate := range strings.Split(rows, "\n") {
+			if strings.Contains(candidate, label) {
+				line = candidate
+			}
+		}
+		if !strings.Contains(line, "[inherit]") || strings.Contains(line, "[sonnet]") {
+			t.Errorf("unpicked row %q does not show inherit: %q", label, line)
+		}
+	}
+	for _, preset := range []map[string]model.ClaudeModelAlias{model.ClaudeModelPresetBalanced(), model.ClaudeModelPresetPerformance(), model.ClaudeModelPresetEconomy(), model.ClaudeModelPresetDiversity()} {
+		assignments := claudePickerPresetAssignments(preset)
+		for _, role := range []string{model.ClaudeBuiltInExploreRole, model.ClaudeBuiltInGeneralPurposeRole} {
+			if _, ok := assignments[role]; ok {
+				t.Fatalf("preset assigns built-in row %s", role)
+			}
+		}
+	}
+}
+
+// #5611: picking a model and effort for a built-in row saves and reopens it,
+// and choosing inherit removes the pick again.
+func TestClaudePickerBuiltInRowPickAndInherit(t *testing.T) {
+	picker := NewClaudeModelPickerState()
+	picker.InCustomMode = true
+	row := claudePhaseRow(t, model.ClaudeBuiltInExploreRole)
+	HandleClaudeModelPickerNav("enter", &picker, row)
+	if got := ClaudeModelPickerOptionCount(picker); got != len(claudeAliasOrder)+2 {
+		t.Fatalf("built-in model options = %d, want aliases + inherit + back", got)
+	}
+	if view := RenderClaudeModelPicker(picker, 0); !strings.Contains(view, "inherit") {
+		t.Fatalf("model select does not offer inherit: %s", view)
+	}
+	HandleClaudeModelPickerNav("enter", &picker, 2) // sonnet
+	HandleClaudeModelPickerNav("enter", &picker, 1) // low
+	_, saved := HandleClaudeModelPickerNav("enter", &picker, len(claudePhases))
+	want := model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet, Effort: model.ClaudeEffortLow}
+	if saved[model.ClaudeBuiltInExploreRole] != want {
+		t.Fatalf("saved built-in Explore = %+v, want %+v", saved[model.ClaudeBuiltInExploreRole], want)
+	}
+	reopened := NewClaudeModelPickerStateFromPhaseAssignments(saved)
+	if reopened.Preset != ClaudePresetCustom || reopened.CustomAssignments[model.ClaudeBuiltInExploreRole] != want {
+		t.Fatalf("reopened = %s %+v", reopened.Preset, reopened.CustomAssignments[model.ClaudeBuiltInExploreRole])
+	}
+
+	reopened.InCustomMode = true
+	HandleClaudeModelPickerNav("enter", &reopened, row)
+	HandleClaudeModelPickerNav("enter", &reopened, len(claudeAliasOrder)) // inherit
+	if reopened.Mode != ClaudeModePhaseList {
+		t.Fatalf("inherit did not return to the role list: mode %v", reopened.Mode)
+	}
+	_, cleared := HandleClaudeModelPickerNav("enter", &reopened, len(claudePhases))
+	if _, ok := cleared[model.ClaudeBuiltInExploreRole]; ok {
+		t.Fatalf("inherit kept the pick: %+v", cleared)
 	}
 }

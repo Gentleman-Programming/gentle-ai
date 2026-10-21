@@ -336,7 +336,7 @@ The TUI **Configure Models** screen lets you assign models to supported agents, 
 
 For Claude Code, the Custom picker offers `default`, `low`, `medium`, `high`, `xhigh`, and `max` for Sonnet, Opus, and Fable. An explicit effort is passed to the in-process reviewer with `--effort` and written to generated agent frontmatter; `default` inherits the runtime default. Haiku offers only `default`.
 
-For Claude Code, the **ODD Explorer**, **ODD Worker**, and **ODD Verify** rows pick the model for the managed `gentle-ai-explore`, `gentle-ai-worker`, and `gentle-ai-verify` agents. They start as `inherit` and no preset sets them: the agents run on the session model until you pick one, and choosing `inherit` clears a pick. Run `gentle-ai sync` to apply the picks.
+For Claude Code, the **ODD Explorer**, **ODD Worker**, and **ODD Verify** rows pick the model for the managed `gentle-ai-explore`, `gentle-ai-worker`, and `gentle-ai-verify` agents. They start as `inherit` and no preset sets them: the agents run on the session model until you pick one, and choosing `inherit` clears a pick. The **Built-in Explore** and **Built-in general-purpose** rows work the same way for Claude Code's own agents: while one has a pick, sync writes an `Explore.md` or `general-purpose.md` override, and `inherit` removes it. Run `gentle-ai sync` to apply the picks.
 
 For Codex, efforts and speed come from the installed runtime (`codex debug models`):
 
