@@ -290,6 +290,50 @@ func TestManagedAssetsNarrationMatchesTheAgentlessContinuation(t *testing.T) {
 	}
 }
 
+// TestCollectCaptureManagedAssetsRefusalPublishesOnlyUnderV2 pins the
+// ordering the classifier relies on (#4379 review): capture verbs carry no
+// --contract flag, so newReviewIntegrationFailure classifies them under v1
+// yet attaches the continuation, an intermediate envelope Validate rejects.
+// Only the collect dispatcher's v2 identity, applied after classification and
+// before emission, makes it publishable. The published-schema shape of the
+// emitted envelope is pinned end to end by
+// TestCaptureResultClassifiesStaleManagedAssetsAsTypedRefusal.
+func TestCollectCaptureManagedAssetsRefusalPublishesOnlyUnderV2(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	staleManagedReviewerAssets(t, home)
+	captures := 0
+	for _, metadata := range reviewIntegrationOperationRegistry {
+		if !metadata.CollectCapture {
+			continue
+		}
+		captures++
+		t.Run(metadata.Command, func(t *testing.T) {
+			classified := newReviewIntegrationFailure(metadata.Operation, nil, authorizeManagedReviewerAssets())
+			if classified.Contract != ReviewIntegrationContractV1 || classified.Code != "managed_assets_outdated" || classified.Continuation == nil {
+				t.Fatalf("classified collect capture failure = %#v, want the v1 intermediate carrying the continuation", classified)
+			}
+			if err := classified.Validate(); err == nil {
+				t.Fatal("Validate accepted the pre-upgrade collect capture envelope; the dispatcher order is no longer load-bearing")
+			}
+			published := reviewCollectCaptureFailureIdentity(classified)
+			if published.Contract != ReviewIntegrationContractV2 || published.Schema != ReviewIntegrationFailureSchemaV2 ||
+				!reflect.DeepEqual(published.Continuation, classified.Continuation) {
+				t.Fatalf("published collect capture failure = %#v", published)
+			}
+			var output bytes.Buffer
+			requireManagedAssetProvenanceNoError(t, emitReviewIntegrationFailure(&output, published))
+			if decoded := decodeReviewIntegrationFailure(t, output.Bytes()); decoded.Contract != ReviewIntegrationContractV2 || decoded.Continuation == nil {
+				t.Fatalf("emitted collect capture failure = %#v", decoded)
+			}
+		})
+	}
+	if captures == 0 {
+		t.Fatal("no CollectCapture rows in reviewIntegrationOperationRegistry; the extraction is stale")
+	}
+}
+
 func TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts(t *testing.T) {
 	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/current-assets.md", "# Candidate\n", 0o644)
