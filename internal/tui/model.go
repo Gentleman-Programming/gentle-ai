@@ -2661,7 +2661,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	case ScreenReviewMode:
 		options := screens.ReviewModeOptions(m.ReviewModeStatus, m.ReviewModeErr)
 		if m.Cursor != 0 || len(options) == 1 {
-			m.setScreen(ScreenWelcome)
+			m.returnToScreen(ScreenWelcome)
 			return m, nil
 		}
 		m.OperationRunning = true
@@ -2678,7 +2678,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.startReviewStoreReset(), tickCmd())
 		}
 		m = m.withResetReviewStoreResetState()
-		m.setScreen(ScreenWelcome)
+		m.returnToScreen(ScreenWelcome)
 	case ScreenReviewStoreResetResult:
 		m = m.withResetReviewStoreResetState()
 		m.setScreen(ScreenWelcome)
@@ -3474,7 +3474,7 @@ func (m Model) finishBackupResult(clearDeleteError bool) Model {
 	if clearDeleteError {
 		m.DeleteErr = nil
 	}
-	m.setScreen(ScreenBackups)
+	m.returnToScreen(ScreenBackups)
 	return m
 }
 
