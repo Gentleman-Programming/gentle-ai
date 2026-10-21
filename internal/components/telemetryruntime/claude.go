@@ -36,7 +36,7 @@ func SendClaude(ctx context.Context, home string, getenv func(string) string, in
 		if tail, firstPartial, err := readClaudeFile(home, hook.AgentTranscriptPath, telemetry.ClaudeTranscriptMaxBytes, true); err == nil {
 			usage, _ = telemetry.ParseClaudeTranscriptTail(tail, firstPartial, hook.LastAssistantDigest)
 		}
-		if telemetry.ClaudeNamedAgent(hook.AgentType) {
+		if telemetry.ClaudeAgentHasDefinition(hook.AgentType) {
 			definition, _, _ = readClaudeFile(home, filepath.Join(home, ".claude", "agents", hook.AgentType+".md"), telemetry.ClaudeAgentMaxBytes, false)
 		}
 	case "Stop":
