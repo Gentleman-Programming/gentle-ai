@@ -16,6 +16,8 @@ COMMANDS
   install      Configure AI coding agents on this machine
   uninstall    Remove Gentle AI managed files from this machine
   sync         Sync agent configs and skills to current version
+               GGA preserves existing literal providers; initializes only from mapped agents.
+               Missing mappings or unsafe shell config leave config unchanged with guidance.
   codegraph init --cwd <project-root>
                Initialize a project's CodeGraph index; codegraph [init] --help shows local help
   skill-registry refresh

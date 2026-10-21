@@ -296,6 +296,9 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
+	// Keep notices visible even if a later pipeline step failed. The shared
+	// component records them without writing to TUI stderr.
+	writeGGAProviderNotices(os.Stderr, runtime.state.ggaNotices)
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
@@ -787,6 +790,8 @@ type runtimeState struct {
 	nativeReviewActions      []string
 	retiredSDDActions        []string
 	compatibilityTransaction compatibilityRefreshTransaction
+	ggaConfigCreationSkipped bool
+	ggaNotices               []string
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
 	// single `engram version` invocation performed by componentApplyStep.Run
@@ -800,6 +805,19 @@ type runtimeState struct {
 	// codexServiceTier is the tier the global engram injection left in Codex's
 	// config.toml (nil = not written); state records it as the managed tier.
 	codexServiceTier *string
+}
+
+// recordGGAInjection carries the actual write decision into verification. Agent
+// selection alone cannot excuse a missing config that should have been written.
+func (s *runtimeState) recordGGAInjection(result gga.InjectionResult) {
+	if s != nil {
+		s.ggaConfigCreationSkipped = result.ConfigCreationSkipped
+		s.ggaNotices = append([]string(nil), result.Notices...)
+	}
+}
+
+func (s *runtimeState) skipsGGAConfigVerification(homeDir string, component model.ComponentID, path string) bool {
+	return s != nil && s.ggaConfigCreationSkipped && component == model.ComponentGGA && path == gga.ConfigPath(homeDir)
 }
 
 func (s *runtimeState) cleanupRollbackSnapshot() {
@@ -3401,9 +3419,11 @@ func (s componentApplyStep) Run() error {
 				fmt.Fprintf(os.Stderr, "WARNING: could not add %s to PATH: %v\n", ggaBinDir, err)
 			}
 		}
-		if _, err := gga.Inject(s.homeDir, s.agents); err != nil {
+		res, err := gga.Inject(s.homeDir, s.agents)
+		if err != nil {
 			return fmt.Errorf("inject gga config: %w", err)
 		}
+		s.state.recordGGAInjection(res)
 		return nil
 	case model.ComponentTheme:
 		for _, adapter := range adapters {
@@ -3435,6 +3455,14 @@ func (s componentApplyStep) Run() error {
 		return nil
 	default:
 		return fmt.Errorf("component %q is not supported in install runtime", s.component)
+	}
+}
+
+// writeGGAProviderNotices keeps installation skips visible without treating
+// missing inference or conservative preservation as an installation failure.
+func writeGGAProviderNotices(w io.Writer, notices []string) {
+	for _, notice := range notices {
+		fmt.Fprintf(w, "WARNING: %s\n", notice)
 	}
 }
 
@@ -3524,6 +3552,7 @@ func executeTUIInstall(homeDir string, selection model.Selection, resolved plann
 	runtime.piBackgroundProjection = preparePiBackgroundProjection(homeDir, &piBackgroundResolution, containsAgent(resolved.Agents, model.AgentPi))
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress), pipeline.WithTerminalCleanup(runtime.state.cleanupRollbackSnapshot))
 	result := orchestrator.Execute(tuiInstallStagePlan(runtime))
+	result.ManualActions = append(result.ManualActions, runtime.state.ggaNotices...)
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
@@ -4499,7 +4528,7 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 			continue
 		}
 		for _, path := range verificationComponentPaths(input.HomeDir, input.WorkspaceDir, input.Scope, input.Selection, adapters, component) {
-			if path == "" {
+			if path == "" || input.State.skipsGGAConfigVerification(input.HomeDir, component, path) {
 				continue
 			}
 			if _, dup := seenPath[path]; dup {

@@ -1550,6 +1550,10 @@ func (s componentSyncStep) Run() error {
 		if err != nil {
 			return fmt.Errorf("sync gga config: %w", err)
 		}
+		s.state.recordGGAInjection(res)
+		if s.skipped != nil {
+			*s.skipped = append(*s.skipped, res.Notices...)
+		}
 		// Count GGA files changed based on individual Changed flags.
 		total := boolToInt(res.ConfigChanged) + boolToInt(res.AgentsChanged)
 		var ggaFiles []string
@@ -2136,7 +2140,7 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	}
 
 	// Post-apply verification reuses the same component paths as install.
-	result.Verify = runPostSyncVerificationScoped(homeDir, rt.workspaceDir, scope, selection)
+	result.Verify = runPostSyncVerificationWithState(homeDir, rt.workspaceDir, scope, selection, rt.state)
 	configChecks := verify.RunChecks(context.Background(), openCodeConfigChecks(homeDir, rt.workspaceDir, agentIDs))
 	result.Verify = verify.BuildReport(append(result.Verify.Checks, configChecks...))
 	result.Verify = withFailedSyncVerificationNote(result.Verify)
@@ -2578,7 +2582,7 @@ func RenderSyncReport(result SyncResult) string {
 			if len(result.ManualActions) == 0 {
 				fmt.Fprintln(&b, "All managed assets are already up to date. No files changed.")
 			} else {
-				fmt.Fprintln(&b, "No managed files changed; preserved native agents were not updated.")
+				fmt.Fprintln(&b, "No managed files changed; review the manual actions below.")
 			}
 		}
 		renderSyncSkippedAgents(&b, result.SkippedAgents)
@@ -2686,12 +2690,10 @@ func withFailedSyncVerificationNote(report verify.Report) verify.Report {
 	return report
 }
 
-// runPostSyncVerification verifies that managed files exist after sync.
-// runPostSyncVerificationScoped verifies that the files a scoped sync writes
-// exist after the run. Under ScopeWorkspace, globally-managed components are
-// skipped and any declared path that still resolves under the home root is
-// dropped, because a workspace sync never writes there (issue #1074).
-func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection) verify.Report {
+// runPostSyncVerificationWithState verifies the files a scoped sync writes,
+// accounting for actual component outcomes. Workspace scope excludes globally
+// managed components and paths belonging only to the global home (issue #1074).
+func runPostSyncVerificationWithState(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, state *runtimeState) verify.Report {
 	workspace := scope == ScopeWorkspace
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(selection.Agents)
@@ -2713,6 +2715,9 @@ func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallSc
 			paths = verificationComponentPaths(homeDir, workspaceDir, scope, selection, componentAdapters, component)
 		}
 		for _, path := range paths {
+			if state.skipsGGAConfigVerification(homeDir, component, path) {
+				continue
+			}
 			if workspace && pathUnderHomeOnly(path, homeDir, workspaceDir) {
 				continue
 			}

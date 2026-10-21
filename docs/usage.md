@@ -209,6 +209,12 @@ The installer’s **Community Tools** screen offers opt-in integrations that are
 
 Refresh managed assets to the current version. Run it after replacing or upgrading the `gentle-ai` binary, including with `brew upgrade`, `gentle-ai upgrade`, or `go install`. It does NOT reinstall binaries (engram, GGA) — only updates managed prompts, skills, MCP configs, and agent guidance.
 
+GGA sync preserves your existing literal provider, even if selected agents change. With only unmapped agents (such as Pi or Cursor), or no selected agents, it also preserves the entire existing config byte-for-byte: custom patterns, timeout, comments and formatting remain intact while the starter `AGENTS.md` can refresh. Mapped selections still regenerate managed defaults while retaining the literal provider; this is not a general config merge.
+
+A missing provider is initialized only from a known agent mapping—never a Claude fallback. If both provider and mapping are missing, set a literal `PROVIDER='your-provider'` in the config path printed by the notice, or select a mapped agent, then rerun `gentle-ai sync`. Dynamic, duplicate, malformed, or unsupported shell assignments leave the whole config unchanged and print manual guidance, including on no-op repeats; Gentle AI never evaluates shell config. Runtime/template refresh can continue. Install notices appear once in CLI output or the TUI completion screen's manual actions. See [GGA behavior](components.md#gga-behavior) for mappings and examples.
+
+When no managed files change but manual actions remain, sync reports `No managed files changed; review the manual actions below.` The listed actions explain what was preserved or skipped; this summary does not imply a native agent was preserved.
+
 Managed reviewer and runtime assets are version-bound to the binary. Until sync succeeds, review lifecycle operations fail closed when managed writer provenance is missing or mismatched.
 
 > **Important:** `gentle-ai sync` updates the agents recorded as installed by Gentle AI™, not every AI agent config directory on your machine.
@@ -327,6 +333,8 @@ If you choose to install several tools from this tap, run `brew trust gentleman-
 ### model assignment
 
 The TUI **Configure Models** screen lets you assign models to supported agents, including Judgment Day roles (`jd-judge-a`, `jd-judge-b`, `jd-fix-agent`). Configure the available slots for your selected agent.
+
+For Claude Code, the Custom picker offers `default`, `low`, `medium`, `high`, `xhigh`, and `max` for Sonnet, Opus, and Fable. An explicit effort is passed to the in-process reviewer with `--effort` and written to generated agent frontmatter; `default` inherits the runtime default. Haiku offers only `default`.
 
 For Codex, efforts and speed come from the installed runtime (`codex debug models`):
 
