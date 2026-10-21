@@ -269,6 +269,27 @@ func TestManagedAssetsRefusalHonorsV1FailureSchema(t *testing.T) {
 	})
 }
 
+// TestManagedAssetsNarrationMatchesTheAgentlessContinuation keeps the human
+// statement for managed_assets_outdated consistent with the continuations the
+// refusal actually carries (#4379 review): mutation verbs carry an agentless
+// `sync`, STATUS and START bind the runtime agent, and the refusal names both
+// asset versions so a sync run by a different binary is diagnosable.
+func TestManagedAssetsNarrationMatchesTheAgentlessContinuation(t *testing.T) {
+	statement := reviewStopReasonNarration["managed_assets_outdated"]
+	for _, want := range []string{
+		"`gentle-ai sync`",
+		"`gentle-ai sync --agent " + reviewUndeclaredRuntimeIdentitySlot + "`",
+		"the one the last sync recorded and the one this binary carries",
+	} {
+		if !strings.Contains(statement, want) {
+			t.Errorf("managed_assets_outdated narration lacks %q: %q", want, statement)
+		}
+	}
+	if strings.HasPrefix(statement, "Run `gentle-ai sync --agent") || strings.Contains(statement, "stops before it starts") {
+		t.Errorf("managed_assets_outdated narration still reads as a START-only refusal: %q", statement)
+	}
+}
+
 func TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts(t *testing.T) {
 	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/current-assets.md", "# Candidate\n", 0o644)
