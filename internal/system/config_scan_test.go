@@ -288,3 +288,61 @@ func TestScanConfigs_KimiLegacyFallback(t *testing.T) {
 		t.Errorf("kimi Exists=%v IsDirectory=%v, want both true", kimi.Exists, kimi.IsDirectory)
 	}
 }
+
+// TestScanConfigs_CodexHonorsCodexHome pins issue #5031 for the detection
+// screen: with CODEX_HOME set to an existing directory and the supplied home
+// equal to the real user home, the codex entry must report the override root
+// (present when it exists), never <home>/.codex.
+func TestScanConfigs_CodexHonorsCodexHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	override := t.TempDir()
+	t.Setenv("CODEX_HOME", override)
+
+	canonical, err := filepath.EvalSymlinks(override)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+
+	configs := ScanConfigs(home)
+	for i := range configs {
+		if configs[i].Agent != "codex" {
+			continue
+		}
+		if configs[i].Path != canonical {
+			t.Errorf("codex Path: got %q, want CODEX_HOME root %q", configs[i].Path, canonical)
+		}
+		if !configs[i].Exists {
+			t.Errorf("codex Exists: got false, want true (override dir exists)")
+		}
+		return
+	}
+	t.Fatal("ScanConfigs: no codex entry found")
+}
+
+// TestScanConfigs_CodexPreservesIsolatedHomeUnderOverride: an ambient
+// CODEX_HOME must not redirect the scan of an isolated home (issue #5031,
+// suggested-shape guard).
+func TestScanConfigs_CodexPreservesIsolatedHomeUnderOverride(t *testing.T) {
+	realHome := t.TempDir()
+	t.Setenv("HOME", realHome)
+	t.Setenv("USERPROFILE", realHome)
+
+	override := t.TempDir()
+	t.Setenv("CODEX_HOME", override)
+
+	isolated := t.TempDir()
+	configs := ScanConfigs(isolated)
+	for i := range configs {
+		if configs[i].Agent != "codex" {
+			continue
+		}
+		if want := filepath.Join(isolated, ".codex"); configs[i].Path != want {
+			t.Errorf("codex Path (isolated home): got %q, want %q", configs[i].Path, want)
+		}
+		return
+	}
+	t.Fatal("ScanConfigs: no codex entry found")
+}

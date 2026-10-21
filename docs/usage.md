@@ -339,7 +339,7 @@ For Claude Code, the Custom picker offers `default`, `low`, `medium`, `high`, `x
 For Codex, efforts and speed come from the installed runtime (`codex debug models`):
 
 - **Effort.** The Custom picker offers only the reasoning efforts each model advertises. `max` and `ultra` appear only on models that list them. Without discovery, the picker falls back to `low`–`xhigh`.
-- **Speed.** After you choose a preset, the picker asks for speed only when the runtime advertises a service tier for that preset's orchestrator model. Fast is a service tier, not a reasoning effort. Gentle AI writes it once as the top-level `service_tier` in `~/.codex/config.toml`, and Codex workers inherit it.
+- **Speed.** After you choose a preset, the picker asks for speed only when the runtime advertises a service tier for that preset's orchestrator model. Fast is a service tier, not a reasoning effort. Gentle AI writes it once as the top-level `service_tier` in the Codex `config.toml` (under `CODEX_HOME` when it is set, else `~/.codex`), and Codex workers inherit it.
 - **Standard.** Choosing Standard removes only the `service_tier` value Gentle AI wrote, and only while the config still holds that exact value. A `service_tier` you set yourself is never changed.
 
 ### doctor
