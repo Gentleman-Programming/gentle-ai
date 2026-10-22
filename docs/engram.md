@@ -224,6 +224,39 @@ gentle-ai upgrade engram
 
 If `ENGRAM_BIN` selects a custom runtime, update that runtime or select a compatible one before retrying. Gentle AI does not silently change that override or automatically run an upgrade. Additional upgrade guidance is shown only when both stdin and stdout are terminals; scripted runs do not wait for upgrade consent.
 
+### Cores owned by Homebrew
+
+When `which -a engram` resolves the core under a Homebrew prefix, the formula owns the binary and `gentle-ai upgrade engram` cannot replace it safely. Upgrade the formula instead:
+
+```sh
+brew upgrade engram
+```
+
+Then re-run the install or sync. The diagnostic reports the effective runtime path, so a Homebrew-owned core is visible before any upgrade is attempted.
+
+### Processes holding the previous store
+
+OpenCode and long-lived MCP clients keep the Engram store open across sessions. An upgrade started while they are running can leave the old process writing to a store the new core has already migrated.
+
+Before upgrading, list the holders:
+
+```sh
+pgrep -af 'opencode|engram'
+```
+
+Close the agents you own, upgrade, then start them again. Do not kill a process you do not own: a shared workstation or a remote `ENGRAM_URL` server is outside this check.
+
+### Consent before migrating a shared store
+
+The store at `~/.engram` (or `ENGRAM_DATA_DIR`) is shared state. When more than one agent, workspace or person reads it, migration is a coordination step, not a local one:
+
+1. Confirm every writer is stopped.
+2. Copy the store directory somewhere outside the upgrade path.
+3. Run the upgrade.
+4. Start one client and verify `engram instance-id` returns a single non-empty line before starting the rest.
+
+The compatibility probe itself never mutates the store: it disables update checks and uses a temporary data directory. Migration only happens in the upgrade step you run explicitly.
+
 ### Retained work is not readiness
 
 An incompatible or inconclusive core check fails verification without reverting correctly applied managed files. Install and sync persist the retained selections and managed-asset provenance, return a verification error, and keep `Verify.Ready` false. Readiness is a verification result, not a new field in `state.json`.
