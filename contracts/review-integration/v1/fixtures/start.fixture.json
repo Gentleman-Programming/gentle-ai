@@ -35,7 +35,7 @@
   ],
   "repository_context": {
     "capability": "review.opaque_repository_context",
-    "handle": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "handle": "rctx2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
     "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5"
   }

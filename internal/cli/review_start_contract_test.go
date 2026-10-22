@@ -159,9 +159,7 @@ func TestNegotiatedReviewStartAcceptsDangerousSinkReason(t *testing.T) {
 		contract, schemaVersion, schemaName string
 	}{
 		{contract: ReviewIntegrationContractV2, schemaVersion: "v2", schemaName: "start-v4.schema.json"},
-		// The v1 envelope is not validated whole here: its frozen repository
-		// context pattern predates the current handle, which is a separate gap.
-		{contract: ReviewIntegrationContractV1},
+		{contract: ReviewIntegrationContractV1, schemaVersion: "v1", schemaName: "start-v2.schema.json"},
 	} {
 		t.Run(tt.contract, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
