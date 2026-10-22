@@ -388,16 +388,37 @@ func TestCompactStoreStillRejectsUnknownNonRetiredFieldsAfterCompatibilityFallba
 		t.Fatal(err)
 	}
 	injectRetiredCompactStateField(t, store.StatePath(), "candidate_artifact_required")
-	injectRetiredCompactStateField(t, store.StatePath(), "zz_future_unknown_field")
-	if _, err := store.Load(); err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("unknown non-retired field load error = %v", err)
-	}
-	payload, err := os.ReadFile(store.StatePath())
+	injectRetiredCompactStateField(t, store.StatePath(), "evidence_record_digest")
+	before, err := os.ReadFile(store.StatePath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseHistoricalCompactRecord(payload); err == nil || !strings.Contains(err.Error(), `unknown field "zz_future_unknown_field"`) {
-		t.Fatalf("historical compatibility fallback error = %v", err)
+	record, loadErr := store.Load()
+	if loadErr == nil || record.Revision != "" || record.State.LineageID != "" {
+		t.Fatalf("rejected load returned authority: record=%#v err=%v", record, loadErr)
+	}
+	want := `compact review state "unknown-field-lineage": strict decode: json: unknown field "candidate_artifact_required"; historical compatibility: json: unknown field "evidence_record_digest"`
+	if loadErr.Error() != want {
+		t.Errorf("load diagnostic = %q, want %q", loadErr, want)
+	}
+	if strictErr := errors.Unwrap(loadErr); strictErr == nil || strictErr.Error() != `json: unknown field "candidate_artifact_required"` {
+		t.Errorf("wrapped strict cause = %v", strictErr)
+	}
+	if errors.Is(loadErr, ErrCompactAuthorityFromNewerRelease) || errors.Is(loadErr, ErrHistoricalCompatReadOnly) {
+		t.Errorf("rejected record acquired a different authority classification: %v", loadErr)
+	}
+	report, err := InspectCompactRecoveryEdges(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Complete || report.Valid || report.Totals.CompactEntries != 1 || report.Totals.LoadedEntries != 0 || len(report.Edges) != 0 || len(report.EntryDiagnostics) != 1 {
+		t.Fatalf("rejected record inspection = %#v", report)
+	}
+	if diagnostic := report.EntryDiagnostics[0]; diagnostic.LineageID != state.LineageID || diagnostic.Problem != "malformed_compact_state" {
+		t.Errorf("rejected record diagnostic = %#v", diagnostic)
+	}
+	if after, err := os.ReadFile(store.StatePath()); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected authority bytes changed: %v", err)
 	}
 }
 

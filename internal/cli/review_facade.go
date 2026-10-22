@@ -801,6 +801,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
 	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
 	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
+	requestContextSource := flags.String("request-context", "", "preflight review start --request-context: validate the request file without creating authority and render it into the fresh START next transition")
+	escalateItem := flags.String("escalate-item", "", "preflight review start --escalate-item (1-6) and render it into the fresh START next transition")
+	escalateReason := flags.String("escalate-reason", "", "preflight review start --escalate-reason and render it into the fresh START next transition")
+	lensSelection := flags.String("lenses", "", "preflight review start --lenses and render it into the fresh START next transition")
+	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason and render it into the fresh START next transition")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -825,6 +830,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *contract != "" {
 		if err := validateReviewIntegrationContract(*contract); err != nil {
 			return err
+		}
+		// rdd-risk-gated S17: the START options are validated before the
+		// repository is touched, so a refused preflight writes nothing.
+		startOptions, err := parseReviewStatusStartOptions(args, *nextTransition, *contract, *requestContextSource, *escalateItem, *escalateReason, *lensSelection, *lensSelectionReason)
+		if err != nil {
+			return reviewPreflightError(err)
 		}
 		var runtime model.AgentID
 		// A declared runtime identity is validated exactly as before, so an
@@ -1030,6 +1041,13 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		var native reviewtransaction.TargetStatusResult
 		var liveSnapshot reviewtransaction.Snapshot
 		derivedBaseRef := ""
+		// passiveDeltaIdentity names the fresh target whose START was withheld
+		// because it only adds passive content to an acknowledged candidate.
+		passiveDeltaIdentity := ""
+		// boundaryReachesHead marks the #5638 outcome where every commit since
+		// the acknowledged boundary was empty: nothing unreviewed remains, and
+		// the fresh offer becomes the acknowledged_boundary_reaches_head stop.
+		boundaryReachesHead := false
 		// Issue #3932: a continuation START issued carries the opaque
 		// repository context, so it is a resume of an existing lineage, never
 		// a pre-named fresh START. A process cwd that does not hold that
@@ -1067,10 +1085,19 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// Resolve the effective candidate before acknowledgement discovery or
 			// consumption lookup, so STATUS and START share one identity.
 			if requestedLineage == "" && selectedBaseRef == "" && !*workspaceOverlay {
-				if derived, derivedTarget, ok := reviewDerivedCommittedRangeSnapshot(ctx, root, builder, liveSnapshot, target); ok {
-					liveSnapshot, target = derived, derivedTarget
-					derivedBaseRef = derivedTarget.BaseRef
-					selector = &reviewTransitionSelector{Kind: target.Kind, Projection: liveSnapshot.Projection, BaseRef: derivedBaseRef, PrePRRepresentable: true}
+				if derived, derivedTarget, outcome := reviewDerivedCommittedRangeSnapshot(ctx, root, builder, liveSnapshot, target); outcome != derivedRangeNone {
+					if outcome == derivedRangeCandidate {
+						liveSnapshot, target = derived, derivedTarget
+						derivedBaseRef = derivedTarget.BaseRef
+						selector = &reviewTransitionSelector{Kind: target.Kind, Projection: liveSnapshot.Projection, BaseRef: derivedBaseRef, PrePRRepresentable: true}
+					}
+					if outcome == derivedRangeBoundaryReachesHead {
+						// Issue #5638: nothing unreviewed remains between the
+						// acknowledged boundary and HEAD. The guards below still
+						// evaluate the full-range candidate truthfully; only the
+						// final fresh offer becomes the boundary stop.
+						boundaryReachesHead = true
+					}
 				}
 			}
 			// #3900: a zero-lens START closes approved with a pending
@@ -1095,6 +1122,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				}
 			} else {
 				native = reviewFreshAtomicTargetStatus(target, liveSnapshot)
+				// A lineage already holding this exact START is live authority.
+				startOccupied := false
 				if requestedLineage == "" {
 					// Only the lineage derived for this exact frozen START can block
 					// it. Avoid selectorless authority scans (and HEAD ancestry reads)
@@ -1107,6 +1136,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					if occupancyErr != nil {
 						return fmt.Errorf("inspect negotiated START lineage occupancy: %w", occupancyErr)
 					}
+					startOccupied = occupied
 					if occupied {
 						assessed, _, assessErr := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{Target: target, LineageID: startLineage, PrePR: prePR})
 						if assessErr != nil {
@@ -1124,6 +1154,23 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				}
 				if consumed {
 					native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
+				} else if requestedLineage == "" && !startOccupied && native.Action == reviewtransaction.TargetStatusActionStart {
+					// #4739: a committed range that only adds passive content to
+					// an approved, acknowledged candidate has nothing new to
+					// review. This only withholds a fresh offer: it grants no
+					// authority, never hides a lineage already holding this
+					// START, and any lookup failure keeps the offer.
+					if passive, passiveErr := reviewtransaction.AcknowledgedPassivePredecessor(ctx, root, liveSnapshot); passiveErr == nil && passive {
+						native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
+						passiveDeltaIdentity = liveSnapshot.Identity
+					} else if passiveErr == nil && boundaryReachesHead {
+						// Issue #5638: the acknowledged boundary reaches HEAD --
+						// every commit since it was empty, so nothing unreviewed
+						// remains. Same withholding contract as the passive
+						// sibling: no authority, live lineages stay visible, and
+						// any earlier failure kept the offer.
+						native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
+					}
 				}
 			}
 		} else {
@@ -1153,6 +1200,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
 		result.committedRangeBaseRef = derivedBaseRef
+		result.startOptions = startOptions
+		result.passiveDeltaAfterAcknowledgement = passiveDeltaIdentity != "" && native.TargetIdentity == passiveDeltaIdentity &&
+			native.Action == reviewtransaction.TargetStatusActionStop
+		result.acknowledgedBoundaryReachesHead = boundaryReachesHead &&
+			native.Action == reviewtransaction.TargetStatusActionStop
 		// Issue #4040: publish the digest once, here, before every path that
 		// could suppress it — the compact-reviewing replacement immediately
 		// below (which deliberately zeros Digest for the #1972 fail-closed
@@ -1330,7 +1382,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								// Only the probe's deterministic verdict stops STATUS: an unproven
 								// probe says nothing about artifacts that just verified, so it must
 								// never become a terminal captured-artifact failure (issue #3367).
-								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.State.CapturePhaseRevision)
+								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.State.CapturePhaseRevision, runtime)
 							}
 							if artifactErr == nil && !lensContextBudgetExceeded {
 								repositoryContext, artifactErr = reviewtransaction.DeriveReviewRepositoryContextHandle(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
@@ -1367,12 +1419,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							// transport; the pi host relay collects the same roles
 							// through the printed materialize + submission route.
 							// Both discover pending roles identically here.
-							if runtime == "" && validationRequest != nil && record.State.RuntimeAgent != "" {
+							if runtime == "" && record.State.RuntimeAgent != "" {
 								// The lineage froze its runtime at START, so a STATUS
-								// that omits --agent still binds the validator role to
-								// it instead of stopping (#3805). A record without the
-								// field keeps the manual route.
-								if recorded, recordedErr := reviewRuntimeWithImmutableTransport(record.State.RuntimeAgent); recordedErr == nil {
+								// that omits --agent still binds every lens, refuter,
+								// and validator slot to the runtime driving it: Pi
+								// under its relay handshake, else the frozen one
+								// (#3805, #4808). A record without the field keeps
+								// the manual route.
+								if recorded, recordedErr := reviewRuntimeWithImmutableTransport(string(reviewEffectiveRuntime("", record.State.RuntimeAgent))); recordedErr == nil {
 									runtime = recorded
 								}
 							}
@@ -1464,6 +1518,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				}
 				transition = newReviewNextTransition(result, native.SelectedLenses, artifacts, artifactErr, input)
 			}
+			// Only an OpenCode-driven STATUS seals a handle. When sealing failed,
+			// an unsafe key is an environment fault with its own repair, not a
+			// lifecycle stop; every other runtime never consults the key.
+			if runtime == model.AgentOpenCode && transition.ReasonCode == "captured_artifacts_unverifiable" {
+				if keyErr := reviewtransaction.ReviewRepositoryContextKeyHealth(); keyErr != nil {
+					return reviewPreflightRefusal(reviewRepositoryContextKeyUnsafeReason, keyErr)
+				}
+			}
 			result.NextTransition = &transition
 			providerTargetedValidation := (transition.ReasonCode == "targeted_validation_required" || transition.ReasonCode == reviewInconclusiveTargetedValidationReason) &&
 				transition.Collect != nil && len(transition.Collect.Inputs) == 1 && transition.Collect.Inputs[0].ProviderTask != nil
@@ -1492,6 +1554,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if *contract == ReviewIntegrationContractV2 {
 			result.Action = reviewRootActionForTransition(result.Action, result.NextTransition)
 		}
+		if err := reviewStatusStartOptionsUnapplied(startOptions, result.NextTransition, *contract); err != nil {
+			return reviewPreflightError(err)
+		}
 		if *contract == ReviewIntegrationContractV2 && result.NextTransition != nil {
 			// The forecast is structural only: it rides the v2 envelope's
 			// `forecast` field and is never narrated to stderr, because a
@@ -1509,6 +1574,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			return fmt.Errorf("validate negotiated review status: %w", validationErr)
 		}
 		return encodeReviewJSON(stdout, result)
+	}
+	if reviewStatusStartOptionsDeclared(args) {
+		return reviewPreflightError(errors.New("review status --request-context, --escalate-item, and --escalate-reason preflight a negotiated START, so they require --contract and --next-transition; rerun `gentle-ai review status --contract " + ReviewIntegrationContractV2 + " --next-transition` with them"))
 	}
 	if *actionEligibility || *nextTransition {
 		return errors.New(reviewContractRequiredForActionEligibilityReason)
@@ -1556,25 +1624,76 @@ func reviewFreshAtomicTargetStatus(target reviewtransaction.Target, snapshot rev
 	}
 }
 
+// reviewDerivedRangeOutcome says what the selectorless committed-range
+// derivation resolved for this fresh workspace.
+type reviewDerivedRangeOutcome int
+
+const (
+	// derivedRangeNone: no derivation happened; the caller keeps the live
+	// current-changes candidate and its base-selection fallback.
+	derivedRangeNone reviewDerivedRangeOutcome = iota
+	// derivedRangeCandidate: snapshot/target hold the effective candidate --
+	// the full committed range, or the delta since the acknowledged boundary
+	// when the boundary walk found one with a non-passive delta (issue #5638).
+	derivedRangeCandidate
+	// derivedRangeBoundaryReachesHead: every commit since the acknowledged
+	// boundary was empty, so nothing unreviewed remains between the boundary
+	// and HEAD. snapshot/target still hold the full-range candidate so the
+	// pending-lineage and occupancy guards keep evaluating truthfully; the
+	// caller turns the fresh offer into the acknowledged_boundary_reaches_head
+	// stop and never hides a live lineage.
+	derivedRangeBoundaryReachesHead
+)
+
 // reviewDerivedCommittedRangeSnapshot resolves an empty selectorless workspace
-// to the remote default branch's unique committed range before classification.
-// The result is the effective STATUS candidate, not a second transition-only
-// identity. Ambiguous or empty ranges retain the existing base-selection fallback.
-func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target) (reviewtransaction.Snapshot, reviewtransaction.Target, bool) {
+// to the unique committed range before classification. The result is the
+// effective STATUS candidate, not a second transition-only identity. Ambiguous
+// or empty ranges retain the existing base-selection fallback. When the
+// acknowledged-boundary walk (issue #5638) finds a consumed first-parent
+// ancestor with a non-passive delta, the effective candidate is the delta
+// since that boundary -- its --base-ref names the boundary commit -- and every
+// walk failure, passive delta, or beyond-window boundary keeps the full-range
+// candidate exactly as before.
+func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target) (reviewtransaction.Snapshot, reviewtransaction.Target, reviewDerivedRangeOutcome) {
 	if live.Kind != reviewtransaction.TargetCurrentChanges || len(live.Paths) != 0 {
-		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, derivedRangeNone
 	}
 	base, err := reviewtransaction.ResolveCommittedRangeBase(ctx, root)
 	if err != nil || base == "" {
-		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, derivedRangeNone
 	}
 	derivedTarget := reviewtransaction.Target{
 		Kind: reviewtransaction.TargetBaseDiff, BaseRef: base,
 		IntendedUntracked: append([]string{}, target.IntendedUntracked...),
 	}
 	snapshot, err := builder.BuildStoredSnapshot(ctx, derivedTarget)
-	// Empty commits and ambiguous ranges retain the base-selection fallback.
-	return snapshot, derivedTarget, err == nil && len(snapshot.Paths) > 0
+	if err != nil || len(snapshot.Paths) == 0 {
+		// Empty commits and ambiguous ranges retain the base-selection fallback.
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, derivedRangeNone
+	}
+	// Issue #5638: the reviewed boundary advances on acknowledgement. A
+	// non-passive delta from the nearest acknowledged ancestor is the whole
+	// change actually attributable to the session; everything else -- walk
+	// failure, no boundary, passive delta, or beyond-window -- keeps the
+	// full-range candidate and its existing suppression paths.
+	if boundary, ok, boundaryErr := reviewtransaction.AcknowledgedBoundaryCommit(ctx, root, snapshot); boundaryErr == nil && ok {
+		if len(boundary.DeltaPaths) == 0 {
+			return snapshot, derivedTarget, derivedRangeBoundaryReachesHead
+		}
+		if !boundary.Passive {
+			deltaTarget := reviewtransaction.Target{
+				Kind: reviewtransaction.TargetBaseDiff, BaseRef: boundary.Commit,
+				IntendedUntracked: append([]string{}, target.IntendedUntracked...),
+			}
+			deltaSnapshot, deltaErr := builder.BuildStoredSnapshot(ctx, deltaTarget)
+			if deltaErr == nil && len(deltaSnapshot.Paths) > 0 {
+				return deltaSnapshot, deltaTarget, derivedRangeCandidate
+			}
+			// A delta rebuild failure keeps the full-range offer; START's own
+			// gates still decide on it.
+		}
+	}
+	return snapshot, derivedTarget, derivedRangeCandidate
 }
 
 // reviewFreshStatusPreflight makes the fresh, store-free STATUS classification
@@ -1800,6 +1919,9 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// A recovered successor keeps the agent escalation its predecessor froze,
+	// so re-assessing the repository never drops it below high.
+	assessment = escalateReviewStartAssessment(assessment, predecessorRecord.State.AgentEscalation)
 	risk, changedLines := assessment.Level, assessment.ChangedLines
 	// Prepare the frozen review shape for possible evidence reuse, not its
 	// eligibility. The core still proves every accounting-only predicate.
@@ -1809,6 +1931,11 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	prepareFrozenShape := reviewtransaction.RecoveryDisposition(*disposition) == reviewtransaction.RecoveryEscalated &&
 		prior.State == reviewtransaction.StateEscalated && snapshot.CandidateTree == prior.CurrentSnapshot.CandidateTree
 	lenses, err := facadeSelectedLenses(assessment, *focus)
+	if prior.LensSelectionReason != "" {
+		// A recovered successor keeps the lenses the agent selected for its
+		// predecessor instead of falling back to the tier default.
+		lenses, err = reviewtransaction.SelectAgentReviewLenses(assessment, prior.SelectedLenses)
+	}
 	if err != nil {
 		if prepareFrozenShape && reviewFlagWasProvided(flags, "focus") {
 			return reviewFrozenShapeConflictRefusal(flags, "--focus", *cwd, *predecessor, *expected, *successor, *disposition)
@@ -1834,6 +1961,9 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 			frozenFocus = strings.TrimPrefix(prior.SelectedLenses[0], "review-")
 		}
 		liveLenses, lensErr := facadeSelectedLenses(assessment, frozenFocus)
+		if prior.LensSelectionReason != "" {
+			liveLenses, lensErr = reviewtransaction.SelectAgentReviewLenses(assessment, prior.SelectedLenses)
+		}
 		if lensErr != nil || risk != prior.RiskLevel || !slices.Equal(liveLenses, prior.SelectedLenses) {
 			return errors.New("frozen recovery review shape is incompatible with current repository risk; evidence reuse cannot preserve that shape, and changing --focus or --policy cannot make it compatible") // refusal:by-design world-action: repository risk classification drift requires a provider code fix before frozen-shape evidence reuse can be safe
 		}
@@ -1843,10 +1973,22 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
 		LineageID: *successor, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: prior.Generation + 1,
 		Snapshot: snapshot, PolicyHash: policyHash, PolicyContent: frozenPolicy,
-		RiskLevel: risk, SelectedLenses: lenses, OriginalChangedLines: &changedLines,
+		RiskLevel: risk, SelectedLenses: lenses, LensSelectionReason: prior.LensSelectionReason, OriginalChangedLines: &changedLines,
 	})
 	if err != nil {
 		return err
+	}
+	// A recovered successor reviews the same request its predecessor froze;
+	// recovery never drops or replaces the request a lineage judges against.
+	if prior.FrozenRequestContext != nil {
+		if err := state.FreezeRequestContext(*prior.FrozenRequestContext); err != nil {
+			return err
+		}
+	}
+	if prior.AgentEscalation != nil {
+		if err := state.FreezeAgentEscalation(*prior.AgentEscalation); err != nil {
+			return err
+		}
 	}
 	// Self-derived recovery (organic-dx Duty 2): for one of the deterministic
 	// recovery shapes already proven legal, derive actor (from repository
@@ -2130,6 +2272,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	targetEvidence := flags.String("target-evidence", "", "self-describing negotiated candidate evidence (v1:kind:projection:base_tree:candidate_tree:paths_digest) bound to --target, so a stale refusal names the truthful cause (#4494)")
 	lineage := flags.String("lineage", "", "optional explicit review lineage identifier")
 	policySource := flags.String("policy", "", "optional review policy file; the native bounded policy is used by default")
+	requestContextSource := flags.String("request-context", "", "optional file with the verbatim request or feature specs this candidate was built for, plus an optional `## Verify` section with per-spec verdicts and probes; frozen with the review and shown to every lens")
+	escalateItem := flags.String("escalate-item", "", "raise the risk to high by citing one high-risk item (1-6), exactly like review assess; never lowers a tier and is frozen with the review")
+	escalateReason := flags.String("escalate-reason", "", "one-line reason for --escalate-item")
+	lensSelection := flags.String("lenses", "", "comma-separated 4R lenses the agent selected for what it touched and how (risk, resilience, readability, reliability); replaces --focus and is frozen with the authority")
+	lensSelectionReason := flags.String("lenses-reason", "", "one-line reason for --lenses")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus: risk, resilience, readability, or reliability; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "candidate projection: workspace or staged; staged base-diff records post-commit delivery provenance")
@@ -2185,6 +2332,18 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		}
 	}
 	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay, *consent, *locale, strings.TrimSpace(*targetEvidence)); err != nil {
+		return reviewPreflightError(err)
+	}
+	requestContext, err := reviewRequestContextContent(*requestContextSource)
+	if err != nil {
+		return reviewPreflightError(err)
+	}
+	escalation, err := parseReviewStartEscalation(args, *escalateItem, *escalateReason)
+	if err != nil {
+		return reviewPreflightError(err)
+	}
+	selection, err := parseReviewStartLensSelection(args, *lensSelection, *lensSelectionReason)
+	if err != nil {
 		return reviewPreflightError(err)
 	}
 	consentMode := reviewStartConsentMode(strings.TrimSpace(*consent))
@@ -2271,8 +2430,17 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if err != nil {
 		return fmt.Errorf("classify facade review target: %w", err)
 	}
+	// The agent escalation raises the tier before lenses, consent, and the
+	// frozen binding are derived, exactly as review assess reports it.
+	assessment = escalateReviewStartAssessment(assessment, escalation)
 	changedLines := assessment.ChangedLines
 	lenses, err := facadeSelectedLenses(assessment, *focus)
+	if selection != nil {
+		lenses, err = reviewtransaction.SelectAgentReviewLenses(assessment, selection.Lenses)
+		if err != nil {
+			return reviewPreflightError(fmt.Errorf("%w; omit --lenses for a candidate without review lenses, or %s", err, reviewLensSelectionRerun))
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -2310,7 +2478,8 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			question, questionErr := newReviewIntegrationConsentResult(snapshot, assessment,
 				reviewConsentFollowUpBase(*cwd, snapshot.Identity, formatReviewTargetEvidence(snapshot), selectedProjection, strings.TrimSpace(*lineage),
 					strings.TrimSpace(*baseRef), strings.TrimSpace(*policySource), strings.TrimSpace(*focus),
-					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, *runtimeAgent, strings.TrimSpace(*locale), intendedScope), *contract, *runtimeAgent, consentLocale)
+					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, *runtimeAgent, strings.TrimSpace(*locale), intendedScope)+
+					reviewRequestContextFollowUpArgument(strings.TrimSpace(*requestContextSource))+reviewEscalationFollowUpArguments(escalation)+reviewLensSelectionFollowUpArguments(selection), *contract, *runtimeAgent, consentLocale)
 			if questionErr != nil {
 				return questionErr
 			}
@@ -2339,9 +2508,33 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// routing; explicit compatibility owners remain responsible for any manual
 	// inspection or disposition.
 	{
-		request, err := prepareReviewFacadeCompactAtomicStart(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, startRuntime)
+		request, err := prepareReviewFacadeCompactAtomicStartFor(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, reviewLensSelectionReason(selection), startRuntime)
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
+		}
+		// The request is frozen before the budget probe below, so a request
+		// that cannot fit beside the evidence is refused before authority.
+		if requestContext != "" {
+			if err := request.State.FreezeRequestContext(requestContext); err != nil {
+				return reviewPreflightError(fmt.Errorf("freeze review request context: %w", err))
+			}
+			request.Binding.RequestContextHash = request.State.RequestContextHash
+		}
+		if escalation != nil {
+			if err := request.State.FreezeAgentEscalation(*escalation); err != nil {
+				return reviewPreflightError(fmt.Errorf("freeze review agent escalation: %w", err))
+			}
+			frozen := *escalation
+			request.Binding.AgentEscalation = &frozen
+		}
+		request.Binding.LensSelectionReason = request.State.LensSelectionReason
+		// A resume keeps the lens selection its active lineage froze: an agent
+		// that names another selection while resuming replays that lineage
+		// instead of hitting atomic_start_conflict (gentle-shell#1207).
+		if requestedLineage := strings.TrimSpace(*lineage); requestedLineage != "" {
+			if _, active, loadErr := discoverCompactFacadeReview(ctx, root, requestedLineage, false); loadErr == nil {
+				request.AdoptFrozenLensSelection(active)
+			}
 		}
 		// #1854: threaded through so the exact atomic START commit below can
 		// also report a requested trace's committed-but-degraded outcome,
@@ -2449,6 +2642,23 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 }
 func validateReviewStartBinding(args []string, negotiated bool, target, projection, baseRef, lineage string, committedOnly, workspaceOverlay bool, consent, locale, targetEvidence string) error {
 	counts := reviewStartBindingFlagCounts(args)
+	// Both routes freeze the request, so a second file would silently replace
+	// the first on either one.
+	if counts["request-context"] > 1 {
+		return errors.New("review start repeats --request-context") // refusal:by-design operator-knowledge: only the caller knows which single request file the candidate was built for
+	}
+	if counts["escalate-item"] > 1 {
+		return errors.New("review start repeats --escalate-item") // refusal:by-design operator-knowledge: only the caller knows which single high-risk item it cites
+	}
+	if counts["escalate-reason"] > 1 {
+		return errors.New("review start repeats --escalate-reason") // refusal:by-design operator-knowledge: only the caller knows its one-line escalation reason
+	}
+	if counts["lenses"] > 1 {
+		return errors.New("review start repeats --lenses") // refusal:by-design operator-knowledge: only the caller knows which lenses fit what it touched
+	}
+	if counts["lenses-reason"] > 1 {
+		return errors.New("review start repeats --lenses-reason") // refusal:by-design operator-knowledge: only the caller knows why it chose its lenses
+	}
 	switch reviewStartConsentMode(strings.TrimSpace(consent)) {
 	case reviewConsentModeNone, reviewConsentModeRelay, reviewConsentModeGranted, reviewConsentModeDeclined:
 	default:
@@ -2542,7 +2752,7 @@ func reviewStartBindingFlagCounts(args []string) map[string]int {
 			continue
 		}
 		switch name {
-		case "contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale":
+		case "contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale", "request-context", "escalate-item", "escalate-reason", "lenses", "lenses-reason":
 			counts[name]++
 		}
 		if kind != reviewIntegrationBoolFlag && !hasValue {

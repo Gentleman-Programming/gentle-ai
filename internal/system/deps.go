@@ -36,6 +36,10 @@ var versionRegexp = regexp.MustCompile(`(\d+\.\d+(?:\.\d+)?)`)
 // goVersionRegexp handles "go version go1.22.5 darwin/arm64" and "go1.22.5".
 var goVersionRegexp = regexp.MustCompile(`go(\d+\.\d+(?:\.\d+)?)`)
 
+// runProbe executes a detection command and returns its stdout. Tests
+// replace it to observe which commands detection would run.
+var runProbe = func(cmd *exec.Cmd) ([]byte, error) { return cmd.Output() }
+
 // defineDependencies returns the canonical dependency list for the installer.
 func defineDependencies(profile PlatformProfile) []Dependency {
 	deps := []Dependency{
@@ -89,7 +93,14 @@ func defineDependencies(profile PlatformProfile) []Dependency {
 
 // DetectDependencies checks all prerequisites for the installer.
 // Checks run concurrently for speed.
+//
+// A caller that supplies Engram (EngramBinEnv) gets an empty report and no
+// command runs: the report only feeds warnings and dry-run output, and the
+// go and brew probes exist for Engram acquisition, which that caller replaces.
 func DetectDependencies(ctx context.Context, profile PlatformProfile) DependencyReport {
+	if callerSuppliesEngram() {
+		return DependencyReport{AllPresent: true}
+	}
 	deps := defineDependencies(profile)
 	return detectDeps(ctx, deps)
 }
@@ -144,7 +155,7 @@ func detectSingleDep(ctx context.Context, dep Dependency) Dependency {
 	// Run version command to extract version string.
 	cmd := exec.CommandContext(ctx, dep.DetectCmd[0], dep.DetectCmd[1:]...)
 	EnsureCommandDir(cmd)
-	out, err := cmd.Output()
+	out, err := runProbe(cmd)
 	if err != nil {
 		// Binary exists but version command failed — still mark as installed.
 		return dep

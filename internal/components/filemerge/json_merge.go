@@ -220,28 +220,40 @@ func marshalPermissionOrder(base []byte, value any, ordered bool) ([]byte, error
 }
 
 func unmarshalJSONObject(raw []byte) (map[string]any, error) {
-	object := map[string]any{}
 	if len(bytes.TrimSpace(raw)) == 0 {
+		return map[string]any{}, nil
+	}
+
+	if object, err := DecodeStrictJSONObject(raw); err == nil {
 		return object, nil
 	}
 
-	if err := json.Unmarshal(raw, &object); err == nil {
-		return object, nil
-	}
-
-	normalized := normalizeJSON(raw)
-	if err := json.Unmarshal(normalized, &object); err != nil {
-		return nil, err
-	}
-
-	return object, nil
+	return DecodeStrictJSONObject(normalizeJSON(raw))
 }
 
 // UnmarshalJSONObject decodes a JSON object using the same JSONC normalization
 // accepted by MergeJSONObjects: comments are stripped and trailing commas are
-// removed before falling back to strict JSON decoding errors.
+// removed before falling back to strict JSON decoding errors. Numbers decode
+// as json.Number, as in DecodeStrictJSONObject.
 func UnmarshalJSONObject(raw []byte) (map[string]any, error) {
 	return unmarshalJSONObject(raw)
+}
+
+// DecodeStrictJSONObject decodes exactly one JSON document with the validation
+// and error text of json.Unmarshal, but keeps numbers as json.Number so a
+// rewrite re-encodes every number token exactly as the user wrote it.
+func DecodeStrictJSONObject(raw []byte) (map[string]any, error) {
+	var document json.RawMessage
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return nil, err
+	}
+	var object map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	decoder.UseNumber()
+	if err := decoder.Decode(&object); err != nil {
+		return nil, err
+	}
+	return object, nil
 }
 
 // RejectDuplicateJSONKeys checks decoded JSON/JSONC object keys at every depth.
@@ -257,6 +269,7 @@ func rejectDuplicateJSONKeys(raw []byte) error {
 		return nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(normalizeJSON(raw)))
+	decoder.UseNumber()
 	var walk func() error
 	walk = func() error {
 		token, err := decoder.Token()

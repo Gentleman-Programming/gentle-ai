@@ -67,8 +67,8 @@ Because the agent has no prompt, this suite does not cover the shipped orchestra
 
 | Journey | Invariant under test |
 |---|---|
-| `direct inline implementation` | The `direct_inline` route stays inline and creates no SDD artifacts |
-| `delegated direct implementation` | The `delegated_direct` route delegates without entering an SDD lifecycle |
+| `direct inline implementation` | The `direct_inline` route stays inline and creates no retired-workflow, trace, or evaluation state |
+| `delegated direct implementation` | The `delegated_direct` route delegates without creating retired-workflow, trace, or evaluation state |
 
 Both are routing invariants from the architecture plan.
 
@@ -248,7 +248,7 @@ In CI the `organic-runtime-e2e` job runs this across a matrix of `ubuntu-latest`
 
 ## What it proves, and what it does not
 
-**Proved.** Given a known agent behaviour, the CLI classifies the implementation route correctly, creates no SDD artifacts when it must not, freezes the candidate, runs applicable verification, records any selected review as content-bound evidence only, performs a real compare-and-swap against the remote under ordinary repository policy, and stops when the kill switch is set (`TestOrganicKillSwitchStopsAtTheDeliveryBoundary`, which the same CI job runs) — on Linux and Windows. Review evidence never authorizes delivery or archive.
+**Proved.** Given a known agent behaviour, the CLI classifies the implementation route correctly, creates no retired-workflow, trace, or evaluation state when it must not, freezes the candidate, runs applicable verification, records any selected review as content-bound evidence only, performs a real compare-and-swap against the remote under ordinary repository policy, and stops when the kill switch is set (`TestOrganicKillSwitchStopsAtTheDeliveryBoundary`, which the same CI job runs) — on Linux and Windows. Review evidence never authorizes delivery or archive.
 
 **Not proved.** That a live model, given the shipped prompt, produces the same tool calls the fixture scripts. That leap is non-deterministic by nature and does not belong in a merge gate; it is covered by real usage and by the cross-adapter asset parity fixtures.
 

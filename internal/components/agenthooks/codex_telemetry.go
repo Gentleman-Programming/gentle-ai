@@ -1,11 +1,9 @@
 package agenthooks
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
@@ -18,7 +16,7 @@ func InstallCodexTelemetry(homeDir string, adapter agents.Adapter) (Result, erro
 		return Result{}, nil
 	}
 	hooksPath := filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")
-	root := map[string]any{}
+	var data []byte
 	info, err := os.Lstat(hooksPath)
 	if err != nil && !os.IsNotExist(err) {
 		return Result{}, err
@@ -27,15 +25,13 @@ func InstallCodexTelemetry(homeDir string, adapter agents.Adapter) (Result, erro
 		if !info.Mode().IsRegular() {
 			return Result{}, fmt.Errorf("Codex hooks %q is not a regular file", hooksPath)
 		}
-		data, readErr := os.ReadFile(hooksPath)
-		if readErr != nil {
-			return Result{}, readErr
+		if data, err = os.ReadFile(hooksPath); err != nil {
+			return Result{}, err
 		}
-		if len(strings.TrimSpace(string(data))) > 0 {
-			if err := json.Unmarshal(data, &root); err != nil {
-				return Result{}, fmt.Errorf("parse Codex hooks %q: %w", hooksPath, err)
-			}
-		}
+	}
+	root, err := decodeHookSettings(data)
+	if err != nil {
+		return Result{}, fmt.Errorf("parse Codex hooks %q: %w", hooksPath, err)
 	}
 	hooksRaw, hasHooks := root["hooks"]
 	hooksMap, _ := hooksRaw.(map[string]any)
@@ -65,12 +61,10 @@ func InstallCodexTelemetry(homeDir string, adapter agents.Adapter) (Result, erro
 	if !changed {
 		return Result{Files: []string{hooksPath}}, nil
 	}
-	root["hooks"] = hooksMap
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := encodeHookSettings(data, root, hooksMap)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("rewrite Codex hooks %q: %w", hooksPath, err)
 	}
-	out = append(out, '\n')
 	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
 		return Result{}, err
 	}

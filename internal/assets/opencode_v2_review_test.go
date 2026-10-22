@@ -91,15 +91,19 @@ const denied=call('denied');await reject(()=>a.hooks['execute.before'](denied));
 
 // Go's refused frame names one bounded reason; only allow-listed codes reach the
 // parent, and any other relay text collapses to relay_unavailable.
-const refusedSpawn=(stage,reason)=>(...args)=>{const child=normalSpawn(...args);const refuse=()=>queueMicrotask(()=>{child.stdout.emit('data',Buffer.from(JSON.stringify({schema:'gentle-ai.provider-transport/v1',operation:'refused',error:reason})+'\n'));child.emit('close',1)});if(stage==='start')child.stdin.write=line=>{child.frames.push(JSON.parse(line));refuse()};else child.stdin.end=line=>{child.frames.push(JSON.parse(line));refuse()};return child};
-for(const [stage,reason,want] of [['start','agent_mismatch','agent_mismatch'],['start','stale_authority','stale_authority'],['start','/Users/someone/RAW CHILD TEXT','relay_unavailable'],['complete','output_refused','output_refused'],['complete','provider_failed','provider_failed'],['complete','RAW BYTES','relay_unavailable']]){
-  globalThis.__spawn=refusedSpawn(stage,reason);
-  const c=call(stage+':'+want);let thrown;
+// An optional cause beside the reason reaches the parent only when it is an
+// allow-listed code; an absent or unknown cause keeps the reason-only refusal.
+const refusedSpawn=(stage,reason,cause)=>(...args)=>{const child=normalSpawn(...args);const frame={schema:'gentle-ai.provider-transport/v1',operation:'refused',error:reason};if(cause!==undefined)frame.cause=cause;const refuse=()=>queueMicrotask(()=>{child.stdout.emit('data',Buffer.from(JSON.stringify(frame)+'\n'));child.emit('close',1)});if(stage==='start')child.stdin.write=line=>{child.frames.push(JSON.parse(line));refuse()};else child.stdin.end=line=>{child.frames.push(JSON.parse(line));refuse()};return child};
+for(const [stage,reason,want,cause,wantCause] of [['start','agent_mismatch','agent_mismatch'],['start','stale_authority','stale_authority'],['start','/Users/someone/RAW CHILD TEXT','relay_unavailable'],['complete','output_refused','output_refused'],['complete','provider_failed','provider_failed'],['complete','RAW BYTES','relay_unavailable'],['complete','output_refused','output_refused','proof_path_out_of_scope','proof_path_out_of_scope'],['complete','output_refused','output_refused','role_capture_failed','role_capture_failed'],['complete','output_refused','output_refused','RAW BYTES at /Users/someone'],['complete','output_refused','output_refused',{nested:'RAW'}],['complete','RAW BYTES','relay_unavailable','proof_path_out_of_scope','proof_path_out_of_scope']]){
+  globalThis.__spawn=refusedSpawn(stage,reason,cause);
+  const c=call(stage+':'+want+':'+wantCause);let thrown;
   try{await a.hooks['execute.before'](c)}catch(error){thrown=error}
   if(stage==='start'&&(!thrown||thrown.reason!==want||thrown.message!=='opencode_review_transport_relay_refused (reason: '+want+')'||c.input.prompt!=='opencode_review_transport_relay_refused'))throw Error(stage+': before refusal reason '+reason+' '+thrown?.message);
   const result=completed(c);let after;
   try{await a.hooks['execute.after'](result)}catch(error){after=error}
-  if(!after||after.reason!==want||result.result.output.reason!==want||result.result.output.code!=='opencode_review_transport_relay_refused'||result.result.content!=='opencode_review_transport_relay_refused (reason: '+want+')')throw Error(stage+': parent refusal reason '+reason+' '+JSON.stringify(result.result));
+  const text='opencode_review_transport_relay_refused (reason: '+want+(wantCause?', cause: '+wantCause:'')+')';
+  if(!after||after.reason!==want||result.result.output.reason!==want||result.result.output.code!=='opencode_review_transport_relay_refused'||result.result.content!==text||after.message!==text)throw Error(stage+': parent refusal reason '+reason+' '+JSON.stringify(result.result));
+  if(wantCause?(after.cause!==wantCause||result.result.output.cause!==wantCause):('cause' in after||'cause' in result.result.output))throw Error(stage+': parent refusal cause '+JSON.stringify(cause)+' '+JSON.stringify(result.result));
   if(JSON.stringify(result.result).includes('RAW')||JSON.stringify(result.result).includes('/Users/'))throw Error('relay text escaped');
 }
 globalThis.__spawn=normalSpawn;

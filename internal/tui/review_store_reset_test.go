@@ -38,7 +38,7 @@ func settledStoreResetReport() reviewtransaction.StoreResetReport {
 // the TUI at all, and that it sits in the maintenance cluster at the bottom
 // rather than among the everyday entries.
 func TestWelcomeMenuOffersTheReviewStoreReset(t *testing.T) {
-	options := screens.WelcomeOptions(nil, true, false, 0, true)
+	options := screens.WelcomeOptions(nil, true, true)
 	reset, backups, uninstall := -1, -1, -1
 	for index, option := range options {
 		switch option {
@@ -72,7 +72,7 @@ func TestWelcomeSelectionEntersTheSurvey(t *testing.T) {
 		t.Fatal("selecting the menu entry applied a reset")
 		return reviewtransaction.StoreResetReport{}, nil
 	}
-	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), 0, m.hasAgentBuilderEngines())
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines())
 	for index, option := range options {
 		if option == "Reset review store" {
 			m.Cursor = index
@@ -324,7 +324,7 @@ func TestReviewStoreResetConfirmStartsOnCancel(t *testing.T) {
 		t.Fatal("the second Enter after entering the screen destroyed the store")
 		return reviewtransaction.StoreResetReport{}, nil
 	}
-	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), 0, m.hasAgentBuilderEngines())
+	options := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines())
 	for index, option := range options {
 		if option == "Reset review store" {
 			m.Cursor = index

@@ -2,11 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -230,7 +232,7 @@ func TestRunInstallCodexKeepsOldRuntimeFailure(t *testing.T) {
 	}
 }
 
-func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) {
+func TestRunInstallEngramForPiAndOpenCodeProvisionsNativePiAndOpenCodeMCP(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -251,21 +253,14 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	t.Cleanup(restorePreflightLookPath)
 
 	seedLegacyPiMCPAdapter(t, filepath.Join(home, ".pi", "agent"))
+	settingsPath := filepath.Join(home, ".pi", "agent", "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"packages":["npm:other@1.0.0","npm:pi-mcp-adapter","npm:gentle-engram","npm:gentle-engram@0.1.16"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	var commands []string
 	runCommand = func(name string, args ...string) error {
 		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
-		// Simulate pi-engram init writing mcp.json with the new schema.
-		isNpmEngramInit := name == "npm" && len(args) >= 7 && args[5] == "pi-engram" && args[6] == "init"
-		if isNpmEngramInit {
-			mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
-			if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
-				return err
-			}
-			if err := os.WriteFile(mcpPath, []byte(`{"activeMCP":"engram","mcpServers":{"engram":{"command":"node","args":["--eval","require('child_process').spawn('engram',['mcp','--tools=agent'],{stdio:'inherit'})"]}}}`+"\n"), 0o644); err != nil {
-				return err
-			}
-		}
 		return nil
 	}
 
@@ -281,18 +276,81 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	assertFileContains(t, filepath.Join(home, ".pi", "agent", "mcp.json"), "engram")
+	if _, err := os.Stat(filepath.Join(home, ".pi", "agent", "mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("native Pi Engram must not create MCP config: %v", err)
+	}
 	assertFileContains(t, filepath.Join(home, ".pi", "agent", "settings.json"), "npm:other@1.0.0")
 	assertFileNotContains(t, filepath.Join(home, ".pi", "agent", "settings.json"), "pi-mcp-adapter")
 	assertFileContains(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), "left-pad")
 	assertFileNotContains(t, filepath.Join(home, ".pi", "agent", "npm", "package.json"), "pi-mcp-adapter")
 	assertFileContains(t, filepath.Join(home, ".config", "opencode", "opencode.json"), "engram")
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Packages []string `json:"packages"`
+	}
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(settings.Packages, []string{"npm:other@1.0.0", "npm:gentle-engram@0.1.16"}) {
+		t.Fatalf("install did not repair duplicate Engram declarations: %v", settings.Packages)
+	}
 
 	if stringSliceContains(commands, "pi install npm:pi-mcp-adapter") {
 		t.Fatalf("commands still install the retired pi-mcp-adapter; got %v", commands)
 	}
-	if !stringSliceContains(commands, engramInitCommandForTest) {
-		t.Fatalf("commands missing %q; got %v", engramInitCommandForTest, commands)
+	if stringSliceContains(commands, engramInitCommandForTest) {
+		t.Fatalf("commands still run redundant Engram init; got %v", commands)
+	}
+}
+
+// TestRunInstallPiExcludePackageSkipsExcludedSource proves an excluded
+// managed Pi package never reaches `pi install` while the rest of the stack
+// still installs.
+func TestRunInstallPiExcludePackageSkipsExcludedSource(t *testing.T) {
+	t.Setenv(PiExcludePackagesEnv, "")
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	}
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	})
+	t.Cleanup(restorePreflightLookPath)
+
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}
+
+	if _, err := RunInstall([]string{
+		"--agent", "pi",
+		"--component", "engram",
+		"--pi-exclude-package", "npm:gentle-pi",
+	}, system.DetectionResult{}); err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if stringSliceContains(commands, "pi install npm:gentle-pi") {
+		t.Fatalf("commands install the excluded npm:gentle-pi; got %v", commands)
+	}
+	for _, want := range []string{"pi install npm:gentle-engram", "pi install npm:pi-web-access", "pi install npm:pi-btw"} {
+		if !stringSliceContains(commands, want) {
+			t.Fatalf("commands missing %q; got %v", want, commands)
+		}
 	}
 }
 
@@ -334,19 +392,6 @@ func TestRunInstallEngramForPiTargetsConfiguredAgentDirectory(t *testing.T) {
 	t.Cleanup(restorePreflightLookPath)
 
 	runCommand = func(name string, args ...string) error {
-		// Simulate pi-engram init writing mcp.json with the new schema,
-		// exactly as it does under the real Pi binary, under the
-		// configured agent directory rather than the default one.
-		isNpmEngramInit := name == "npm" && len(args) >= 7 && args[5] == "pi-engram" && args[6] == "init"
-		if isNpmEngramInit {
-			mcpPath := filepath.Join(configured, "mcp.json")
-			if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
-				return err
-			}
-			if err := os.WriteFile(mcpPath, []byte(`{"activeMCP":"engram","mcpServers":{"engram":{"command":"node","args":["--eval","require('child_process').spawn('engram',['mcp','--tools=agent'],{stdio:'inherit'})"]}}}`+"\n"), 0o644); err != nil {
-				return err
-			}
-		}
 		return nil
 	}
 
@@ -361,7 +406,9 @@ func TestRunInstallEngramForPiTargetsConfiguredAgentDirectory(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	assertFileContains(t, filepath.Join(configured, "mcp.json"), "engram")
+	if _, err := os.Stat(filepath.Join(configured, "mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("native Pi Engram must not create MCP config: %v", err)
+	}
 	assertFileNotContains(t, filepath.Join(configured, "settings.json"), "pi-mcp-adapter")
 	assertFileNotContains(t, filepath.Join(configured, "npm", "package.json"), "pi-mcp-adapter")
 
@@ -445,7 +492,7 @@ func TestPiAgentInstallProgressUsesAdapterCommandNames(t *testing.T) {
 		t.Fatalf("agentInstallStep.Run() error = %v", err)
 	}
 
-	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", engramInitCommandForTest, "pi install npm:pi-web-access", "pi install npm:pi-btw"}
+	wantPackages := []string{"pi install npm:gentle-pi", "pi install npm:gentle-engram", "pi install npm:pi-web-access", "pi install npm:pi-btw"}
 	if len(events) != len(wantPackages)*2 {
 		t.Fatalf("progress events = %d, want %d: %v", len(events), len(wantPackages)*2, events)
 	}
@@ -510,7 +557,7 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		case "pi":
 			return fakePi, nil
 		case "npm":
-			// Pi's install runs npm exec for engram init, so npm must be present.
+			// Pi's npm-backed package installs still require npm.
 			return fakeNpm, nil
 		default:
 			return "", exec.ErrNotFound
@@ -540,7 +587,6 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 	for _, want := range []string{
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
-		engramInitCommandForTest,
 		"pi install npm:pi-web-access",
 		"pi install npm:pi-btw",
 	} {

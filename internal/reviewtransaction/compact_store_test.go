@@ -458,3 +458,37 @@ func bindTargetedValidationForTest(validation ScopedValidationResult, fix Snapsh
 	validation.CorrectionTargetIdentity = fix.Identity
 	return validation
 }
+
+// TestCompactSuccessorPinsRequestContextAndEscalation is A4: every successor
+// write keeps the frozen request and agent escalation exactly like the frozen
+// policy, even for authority whose START binding is absent and so cannot pin
+// them first.
+func TestCompactSuccessorPinsRequestContextAndEscalation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	previous := newCompactFixtureStateForTarget(t, repo, "successor-pins-request", Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	previous.RiskLevel, previous.SelectedLenses = RiskHigh, append([]string(nil), supportedLenses...)
+	if err := previous.FreezeRequestContext("S1 budget set --year rejects years before 2000.\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := previous.FreezeAgentEscalation(CompactAgentEscalation{Item: 2, Reason: "token parsing changed"}); err != nil {
+		t.Fatal(err)
+	}
+	other := "S1 a different request.\n"
+	for name, mutate := range map[string]func(*CompactState){
+		"request replaced": func(next *CompactState) {
+			next.RequestContextHash, next.FrozenRequestContext = compactPolicyContentHash(other), &other
+		},
+		"request dropped": func(next *CompactState) { next.RequestContextHash, next.FrozenRequestContext = "", nil },
+		"escalation replaced": func(next *CompactState) {
+			next.AgentEscalation = &CompactAgentEscalation{Item: 3, Reason: "token parsing changed"}
+		},
+		"escalation dropped": func(next *CompactState) { next.AgentEscalation = nil },
+	} {
+		next := previous
+		mutate(&next)
+		if err := validateCompactSuccessor("sha256:"+strings.Repeat("a", 64), previous, next, "review/complete-review"); !errors.Is(err, ErrInvalidSuccessor) || !strings.Contains(err.Error(), "immutable") {
+			t.Fatalf("successor with %s = %v, want the immutable-scope refusal", name, err)
+		}
+	}
+}

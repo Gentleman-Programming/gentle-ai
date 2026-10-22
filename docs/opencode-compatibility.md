@@ -35,6 +35,17 @@ with a detected V2 runtime. Any other declaration refuses before the version
 probe, and a disagreeing pair refuses, so a V2 host whose PATH resolves a
 coexisting V1 binary never inherits V1 capability (or the reverse).
 
+Each `gentle-ai` process runs the `opencode --version` probe at most once per
+resolved executable and reuses that answer, failures included, at every review
+gate (assess, STATUS, START, consent, relay, capture), so eligibility cannot
+change between steps of one invocation. The supported-runtime list in a refusal
+never probes: it names what the binary supports, and an OpenCode refusal states
+the host condition that failed. Runtime-major detection allows up to 15 seconds
+for `opencode --version`, accommodating slow external CLI startup while keeping
+the probe bounded. A timeout reports the elapsed budget and that managed runtime
+assets were not selected; it is not reported as an unsupported runtime. Re-run
+once `opencode --version` answers within that budget.
+
 Proven scope, on a real OpenCode 2.0.19 host with SDK 2.0.4 and external network
 denied: the managed V2 review plugin and the real Go relay admit the lens,
 refuter and targeted-validator roles; the production gate decides (the relay
@@ -55,7 +66,17 @@ one bound to its role.
   `opencode_review_transport_relay_refused (reason: <reason>)`, where the reason
   is one bounded code (`capability_unavailable`, `envelope_invalid`,
   `agent_mismatch`, `binding_mismatch`, `stale_authority`, `output_refused`,
-  `provider_failed`, `relay_unavailable`, `dispatch_refused`). Raw child output,
+  `provider_failed`, `relay_unavailable`, `dispatch_refused`). When native
+  admission refused the child's result, the refusal also names one bounded cause:
+  `opencode_review_transport_relay_refused (reason: output_refused, cause: <cause>)`,
+  where the cause is `reviewer_result_not_admissible`,
+  `validator_result_not_admissible`, `targeted_validation_inconclusive`,
+  `role_capture_failed`, or a native admission diagnostic code
+  (`inspection_coverage`, `invalid_finding_location`,
+  `evidence_path_out_of_scope`, `proof_path_out_of_scope`,
+  `candidate_causality_unclaimed_id`, `candidate_causality_evidence_degraded`).
+  The refused bytes and the full admission reason are preserved under
+  `<git common dir>/gentle-ai/rejected-results/<lineage>/`. Raw child output,
   paths and free text never reach the parent.
 - **Host subagent preamble.** OpenCode 2.0.19 prepends
   `You are a subagent spawned by another session.` to every subagent prompt, so
@@ -77,6 +98,101 @@ New CLI installation advice uses `@opencode/cli`; its required install scripts m
 not be disabled. Plugin dependencies differ: V1 uses `@opencode-ai/plugin`, while
 V2 uses `@opencode/plugin`. Existing user-owned incompatible assets are preserved.
 The accepted temporary logo omission does not authorize dropping other features.
+
+Install and global sync converge the managed plugins identically on both runtime
+majors: they rewrite them from the running binary, recreate missing ones, and
+retire legacy plugins. Retired plugins are `background-agents.ts` and
+`review-result-artifacts.ts` (OpenCode and Kilocode) and
+`sdd-task-result-artifacts.ts` (OpenCode only). A plugin path counts as Gentle
+AI-owned only when it is a regular file whose bytes match a plugin some Gentle AI
+release shipped for that name (the digest registry in
+`internal/components/opencoderuntimeplugins/`, regenerated with `go generate`
+from the release tags; the generator refuses an incomplete local tag set, so run
+`git fetch --tags` first). Anything else, including a `plugins` path that is a
+symlink or not a directory, stops the operation before any plugin changes and
+names the path to move or delete. A symlinked config root is followed. Install,
+sync, and upgrade snapshot every plugin path install can write or remove, and
+post-sync verification checks that every retired plugin is gone for OpenCode and
+Kilocode. Uninstall removes only bytes the same registry recognizes and leaves a
+symlinked `plugins` directory and its contents untouched.
+
+Install and sync also remove the retired agents earlier releases wrote to the
+settings file, on both runtime majors: `sdd-orchestrator` and `sdd-<phase>`
+entries, their profile-suffixed copies (`sdd-apply-fallback`), every entry of
+the plural `agents` map 3.7.0 left in some configs (OpenCode 1.x refuses that
+map, #5182), and the orchestrator `task` permissions that named a removed
+agent. The old `sdd-*` wildcard permission stays while any agent it matches
+remains, in the settings or as a markdown agent in an `agent/` or `agents/`
+directory OpenCode loads. An entry counts as Gentle AI's when it carries the 3.x
+`__managed_by: gentle-ai/sdd` marker or every field holds a value some release
+wrote (the registry in `internal/components/legacyassets/`, generated with the
+native agent registry). Global runs also remove the `prompts/sdd/*.md` files
+those agents loaded when their bytes match a release; a `prompts/sdd` that is
+a symlink is left untouched, like a symlinked `plugins` directory. Only the
+removed members are edited, so JSONC comments elsewhere survive; an entry with
+a comment inside it or directly above it, any other same-name entry, and an
+edited prompt are preserved and listed under manual actions. In a plain
+`.json` file Gentle AI's writers do not keep comments, so a commented entry is
+removed by a later sync. A workspace sync edits only the project settings
+file. The settings file and prompts are in the install, sync, and upgrade
+snapshots.
+
+The managed `gentle-orchestrator` relays blocking prompts through the native
+`question` tool, which OpenCode 1.x denies to custom agents, so install and sync
+set its `permission.question` to `"allow"` on both majors (OpenCode and Kilo,
+#4816). They write nothing when the user already set a question rule for it, or
+has a deny that covers the tool, globally or on the orchestrator (`agent` or
+native `agents` entry):
+
+- `permission` set to `"deny"`, or a `"*"` or `question` rule of `"deny"`;
+- a `question` pattern map with `"*": "deny"`;
+- `tools` with `question: false`;
+- a native `permissions` rule with action `"*"` or `question`, effect `"deny"`,
+  and resource `"*"` or no resource.
+
+Agent rules are evaluated after global ones and the last match wins, so an
+agent-level `"allow"` would override that deny. Uninstall removes the `"allow"`
+only when the
+orchestrator's permission object still has the shape install wrote, `question`
+beside a `task` map of Gentle AI delegation grants. Otherwise it keeps the
+value and lists it under manual actions.
+
+The orchestrator delegates only to Gentle AI agents. Install and sync write its
+`permission.task` as `"*": "deny"` followed by an `"allow"` for every Gentle AI
+agent; the wildcard comes first because the last matching rule wins. Without it,
+OpenCode 2 can route delegation to its built-in `explore` or `general` subagent,
+which has no skill tool. A wildcard task rule the user already set is kept, and
+uninstall removes the wildcard deny once the Gentle AI grants are gone.
+
+Every install and sync writer of `opencode.jsonc` rewrites only the top-level
+values it owns (the managed agents, `default_agent`, `share`, `mcp`,
+`permission`, `theme`), so comments and trailing commas elsewhere survive on
+both runtime majors. Before any file changes, install and sync refuse a document
+those writers cannot edit that way: malformed JSONC, duplicate keys, or an
+escaped key spelling or a comment inside a value a selected writer touches. Move
+the comment outside that value, or spell the key plainly, and retry. Kilocode
+goes through the same writers, but its `opencode.json` is strict JSON.
+
+Before writing V2 managed plugins, install and sync check the SDK installed in
+the OpenCode config directory. Any 2.x release at or above 2.0.4 is accepted, so
+an SDK that matches a newer OpenCode runtime is kept as is. A missing SDK, an older
+release, a prerelease or another major is refused, and the refusal names the
+version it found. `gentle-ai sync --dry-run` reports the same refusal as a
+`Would stop:` line without installing anything. The printed command pins the minimum exactly
+(`npm install --save-exact ... @opencode/plugin@2.0.4` or
+`bun add --exact @opencode/plugin@2.0.4`), so a later routine install or update in
+that directory cannot float it. Newer 2.x releases are accepted by semantic
+versioning; the managed assets only call `Plugin.define`, but SDK type contracts
+are checked against 2.0.4 only.
+
+A config directory that predates V2 can still hold the V1 SDK
+`@opencode-ai/plugin` and its peer-installed `@opentui` packages. Those conflict
+with the optional `@opentui/core` peer of `@opencode/plugin`, so npm stops with
+`ERESOLVE`. When the V1 SDK is present, the npm refusal says so and prints the
+same exact install with `--force`, which accepts that optional peer mismatch
+and, in the #5208 report, removed no packages. Do not use `--legacy-peer-deps`
+or uninstall `@opencode-ai/plugin`: both prune the peer-installed `@opentui`
+and `solid-js` packages that existing OpenCode TUI plugins load.
 
 The local conformance harness uses disposable configuration, an allowlisted
 environment, fixture authentication and process cleanup. Its loopback mode requires

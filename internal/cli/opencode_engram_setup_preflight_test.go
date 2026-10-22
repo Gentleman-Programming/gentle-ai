@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -51,12 +52,13 @@ func TestInstallEngramRefusesUnsafeOpenCodeSettingsBeforeSetup(t *testing.T) {
 		content string
 		mode    os.FileMode
 		symlink bool
+		want    string
 	}{
-		{name: "duplicate keys", content: "// project settings\n{\"mcp\":{},\"mcp\":{}}\n", mode: 0o600},
-		{name: "escaped mcp key", content: "// project settings\n{\"\\u006dcp\":{}}\n", mode: 0o600},
-		{name: "comment inside mcp", content: "// project settings\n{\"mcp\":{\n// keep\n\"other\":{}}}\n", mode: 0o600},
-		{name: "locked file", content: "// project settings\n{\"user\":true}\n", mode: 0},
-		{name: "symlink", content: "// project settings\n{\"user\":true}\n", mode: 0o600, symlink: true},
+		{name: "duplicate keys", content: "// project settings\n{\"mcp\":{},\"mcp\":{}}\n", mode: 0o600, want: "duplicate"},
+		{name: "escaped mcp key", content: "// project settings\n{\"\\u006dcp\":{}}\n", mode: 0o600, want: "escaped key spelling"},
+		{name: "comment inside mcp", content: "// project settings\n{\"mcp\":{\n// keep\n\"other\":{}}}\n", mode: 0o600, want: "nested comments"},
+		{name: "locked file", content: "// project settings\n{\"user\":true}\n", mode: 0, want: "locked settings"},
+		{name: "symlink", content: "// project settings\n{\"user\":true}\n", mode: 0o600, symlink: true, want: "symlink"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -90,8 +92,8 @@ func TestInstallEngramRefusesUnsafeOpenCodeSettingsBeforeSetup(t *testing.T) {
 
 			selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentEngram}}
 			step := componentApplyStep{component: model.ComponentEngram, homeDir: home, workspaceDir: workspace, scope: ScopeGlobal, agents: selection.Agents, selection: selection}
-			if err := step.Run(); err == nil {
-				t.Fatal("Run() error = nil, want an unsafe settings refusal")
+			if err := step.Run(); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Run() error = %v, want an unsafe settings refusal containing %q", err, tt.want)
 			}
 			if len(*setupCalls) != 0 {
 				t.Fatalf("engram setup ran before the settings refusal: %v", *setupCalls)

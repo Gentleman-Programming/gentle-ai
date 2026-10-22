@@ -18,6 +18,7 @@ import (
 // name the invoked executable's own path (and version) so RC reports are
 // unambiguous about which build was under test.
 func TestCheckOneTool_GentleAINamesTheInvokedExecutable(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origExec := osExecutableDoctor
 	defer func() { lookPathFn = origLook; osExecutableDoctor = origExec }()
@@ -46,6 +47,7 @@ func TestCheckOneTool_GentleAINamesTheInvokedExecutable(t *testing.T) {
 // binary are different files, the report says so explicitly instead of
 // silently reporting only the PATH copy as healthy.
 func TestCheckOneTool_GentleAIFlagsWhenInvokedDiffersFromPath(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origExec := osExecutableDoctor
 	defer func() { lookPathFn = origLook; osExecutableDoctor = origExec }()
@@ -68,6 +70,7 @@ func TestCheckOneTool_GentleAIFlagsWhenInvokedDiffersFromPath(t *testing.T) {
 // case (invoked == PATH-resolved) stays unambiguous and does not spuriously
 // claim a mismatch.
 func TestCheckOneTool_GentleAISameExecutableAsPathIsNotFlagged(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origExec := osExecutableDoctor
 	defer func() { lookPathFn = origLook; osExecutableDoctor = origExec }()
@@ -86,6 +89,7 @@ func TestCheckOneTool_GentleAISameExecutableAsPathIsNotFlagged(t *testing.T) {
 // TestCheckOneTool_OtherToolsUnaffected proves the new clause is scoped to
 // the gentle-ai tool only -- every other tool's Detail is unchanged.
 func TestCheckOneTool_OtherToolsUnaffected(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origExec := osExecutableDoctor
 	defer func() { lookPathFn = origLook; osExecutableDoctor = origExec }()
@@ -118,6 +122,7 @@ func TestCheckOneTool_OtherToolsUnaffected(t *testing.T) {
 // duplicate branch without changing the duplicate detection, its severity,
 // or the remedy.
 func TestCheckOneTool_GentleAIDuplicatesStillNameInvokedExecutable(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origExec := osExecutableDoctor
 	origExts := executableExtsFn
@@ -165,6 +170,7 @@ func TestCheckOneTool_GentleAIDuplicatesStillNameInvokedExecutable(t *testing.T)
 // a "differs from the PATH-resolved copy" comparison that has nothing to
 // compare against.
 func TestCheckOneTool_GentleAINotFoundNamesInvokedExecutableWithoutComparison(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origExec := osExecutableDoctor
 	defer func() { lookPathFn = origLook; osExecutableDoctor = origExec }()
@@ -195,6 +201,7 @@ func TestCheckOneTool_GentleAINotFoundNamesInvokedExecutableWithoutComparison(t 
 // a version — this covers the duplicate branch, which previously had no
 // clause call at all to exercise this path.
 func TestCheckOneTool_GentleAIExecutableUnresolvable(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origExec := osExecutableDoctor
 	origExts := executableExtsFn

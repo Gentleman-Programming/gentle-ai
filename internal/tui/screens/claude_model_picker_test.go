@@ -226,6 +226,30 @@ func TestHandleCustomPhaseNav_ConfirmAndBackRows(t *testing.T) {
 	}
 }
 
+func TestSonnetXHighSelectionAndRendering(t *testing.T) {
+	state := NewClaudeModelPickerState()
+	state.InCustomMode = true
+	state.Mode = ClaudeModeEffortSelect
+	phase := claudePhases[0]
+	state.SelectedPhase = phase
+	state.CustomAssignments[phase] = model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
+
+	out := RenderClaudeModelPicker(state, 0)
+	if !strings.Contains(out, "xhigh") {
+		t.Fatalf("Sonnet effort picker does not offer xhigh:\n%s", out)
+	}
+	handled, assignments := HandleClaudeModelPickerNav("enter", &state, 4) // xhigh
+	if !handled || assignments != nil || state.Mode != ClaudeModePhaseList {
+		t.Fatalf("effort selection = handled %v assignments %v mode %v", handled, assignments, state.Mode)
+	}
+	if got := state.CustomAssignments[phase]; got.Model != model.ClaudeModelSonnet || got.Effort != model.ClaudeEffortXHigh {
+		t.Fatalf("assignment = %+v, want sonnet/xhigh", got)
+	}
+	if out := RenderClaudeModelPicker(state, 0); !strings.Contains(out, "[xhigh]") {
+		t.Fatalf("saved Sonnet xhigh effort not rendered:\n%s", out)
+	}
+}
+
 func TestHandleCustomEffortSelect_OnlyOffersSupportedEfforts(t *testing.T) {
 	state := NewClaudeModelPickerState()
 	state.InCustomMode = true

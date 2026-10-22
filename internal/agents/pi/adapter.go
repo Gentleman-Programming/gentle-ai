@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
@@ -75,6 +76,26 @@ func ManagedPackageSources() []string {
 	return slices.Clone(managedPackageSources)
 }
 
+// ValidateExcludedPackageSources accepts only exact managed sources a caller
+// may skip at install time. The Engram source is required by the stack.
+func ValidateExcludedPackageSources(values []string) error {
+	allowed := make([]string, 0, len(managedPackageSources))
+	for _, source := range managedPackageSources {
+		if source != piGentleEngramPackageSource {
+			allowed = append(allowed, source)
+		}
+	}
+	for _, value := range values {
+		if value == piGentleEngramPackageSource {
+			return fmt.Errorf("package %q cannot be excluded: it provides Engram memory for the Pi stack", value)
+		}
+		if !slices.Contains(allowed, value) {
+			return fmt.Errorf("unknown Pi package %q; allowed values: %s", value, strings.Join(allowed, ", "))
+		}
+	}
+	return nil
+}
+
 // UninstallPackageSources returns every Pi package source an uninstall should
 // remove: the managed sources plus the retired pi-mcp-adapter, which older
 // Gentle AI releases installed and which may still be present.
@@ -109,10 +130,10 @@ type CodeGraphPathSet struct {
 // cross-contamination with the default global Pi manifest.
 func CodeGraphPaths(homeDir string) CodeGraphPathSet {
 	agentDir := AgentConfigPath(homeDir)
-	manifest := filepath.Join(homeDir, ".gentle-ai", "pi-codegraph.json")
+	manifest := filepath.Join(state.Dir(homeDir), "pi-codegraph.json")
 	if defaultDir := filepath.Join(ConfigPath(homeDir), "agent"); filepath.Clean(agentDir) != filepath.Clean(defaultDir) {
 		sum := sha256.Sum256([]byte(filepath.Clean(agentDir)))
-		manifest = filepath.Join(homeDir, ".gentle-ai", fmt.Sprintf("pi-codegraph-%x.json", sum[:8]))
+		manifest = filepath.Join(state.Dir(homeDir), fmt.Sprintf("pi-codegraph-%x.json", sum[:8]))
 	}
 	return CodeGraphPathSet{
 		AgentDir:  agentDir,
@@ -283,18 +304,71 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 }
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	commands := make([][]string, 0, len(managedPackageSources)+1)
+	commands := make([][]string, 0, len(managedPackageSources))
 	for _, source := range ManagedPackageSources() {
 		commands = append(commands, []string{"pi", "install", source})
-		if source == piGentleEngramPackageSource {
-			commands = append(commands, a.engramInitCommand())
+	}
+	return commands, nil
+}
+
+// PrepareInstall preserves the configured Engram source before Pi can replace
+// it. Compatible duplicates are normalized; conflicting declarations abort
+// without writes. The caller must snapshot settings before this preparation.
+// Excluded sources (validated by ValidateExcludedPackageSources) are skipped.
+func (a *Adapter) PrepareInstall(profile system.PlatformProfile, homeDir string, excluded ...string) ([][]string, error) {
+	commands, err := a.InstallCommand(profile)
+	if err != nil {
+		return nil, err
+	}
+	commands = slices.DeleteFunc(commands, func(command []string) bool {
+		return slices.Contains(excluded, command[2])
+	})
+	settings, packages, source, err := a.readInstallSettings(homeDir)
+	if err != nil {
+		return nil, err
+	}
+	path := a.SettingsPath(homeDir)
+	if source == "" {
+		return commands, nil
+	}
+	if !reflect.DeepEqual(settings["packages"], packages) {
+		settings["packages"] = packages
+		if _, err := writePiJSONObject(path, settings); err != nil {
+			return nil, err
+		}
+	}
+	for _, command := range commands {
+		if command[2] == piGentleEngramPackageSource {
+			command[2] = source
 		}
 	}
 	return commands, nil
 }
 
-func (a *Adapter) engramInitCommand() []string {
-	return []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
+// ValidateInstall checks settings without writes, for public install admission.
+func (a *Adapter) ValidateInstall(homeDir string) error {
+	_, _, _, err := a.readInstallSettings(homeDir)
+	return err
+}
+
+func (a *Adapter) readInstallSettings(homeDir string) (map[string]any, []any, string, error) {
+	path := a.SettingsPath(homeDir)
+	settings, exists, err := readExistingPiJSONObject(path)
+	if err != nil || !exists {
+		return nil, nil, "", err
+	}
+	packages := repairPiEngramPackages(piPackagesAsSlice(settings["packages"]))
+	source := ""
+	for _, pkg := range packages {
+		if !isPiEngramPackage(pkg) {
+			continue
+		}
+		if source != "" {
+			return nil, nil, "", fmt.Errorf("conflicting Engram package declarations in %q; resolve them before installing Pi packages", path)
+		}
+		source = piPackageIdentity(pkg)
+	}
+	return settings, packages, source, nil
 }
 
 // GlobalConfigDir returns Pi's global config directory: always
@@ -479,9 +553,9 @@ func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	return len(paths) > 0, paths, nil
 }
 
-// prunePiSettingsFile drops retired packages from an existing settings.json.
-// A missing file, a file without packages, or one with nothing to drop is
-// left untouched.
+// prunePiSettingsFile drops retired packages and repairs unambiguous Engram
+// duplicates in an existing settings.json. A missing file, a file without
+// packages, or one with nothing to change is left untouched.
 func prunePiSettingsFile(path string) (filemerge.WriteResult, error) {
 	settings, exists, err := readExistingPiJSONObject(path)
 	if err != nil || !exists {
@@ -492,7 +566,7 @@ func prunePiSettingsFile(path string) (filemerge.WriteResult, error) {
 		return filemerge.WriteResult{}, nil
 	}
 
-	retained := retainPiPackages(existing)
+	retained := repairPiEngramPackages(retainPiPackages(existing))
 	if current, isSlice := existing.([]any); isSlice && reflect.DeepEqual(current, retained) {
 		return filemerge.WriteResult{}, nil
 	}
@@ -595,8 +669,8 @@ func readPiJSONObject(path string) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
 
-	var object map[string]any
-	if err := json.Unmarshal(base, &object); err != nil {
+	object, err := filemerge.DecodeStrictJSONObject(base)
+	if err != nil {
 		return nil, fmt.Errorf("unmarshal pi json file %q: %w", path, err)
 	}
 	if object == nil {
@@ -621,6 +695,53 @@ func retainPiPackages(existing any) []any {
 		filtered = append(filtered, pkg)
 	}
 	return filtered
+}
+
+// repairPiEngramPackages keeps one Engram declaration when the choice is
+// unambiguous. A bare string is redundant next to a pin or an object with
+// options. Different pins or objects are left intact: choosing between them
+// would discard user constraints. Other packages are never deduplicated.
+func repairPiEngramPackages(packages []any) []any {
+	preferred := -1
+	first := -1
+	count := 0
+	for i, pkg := range packages {
+		if !isPiEngramPackage(pkg) {
+			continue
+		}
+		count++
+		if first < 0 {
+			first = i
+		}
+		if source, isString := pkg.(string); isString && source == piGentleEngramPackageSource {
+			continue
+		}
+		if preferred >= 0 && !reflect.DeepEqual(packages[preferred], pkg) {
+			return packages
+		}
+		if preferred < 0 {
+			preferred = i
+		}
+	}
+	if count < 2 {
+		return packages
+	}
+	if preferred < 0 {
+		preferred = first
+	}
+	retained := make([]any, 0, len(packages)-count+1)
+	for i, pkg := range packages {
+		if !isPiEngramPackage(pkg) || i == preferred {
+			retained = append(retained, pkg)
+		}
+	}
+	return retained
+}
+
+func isPiEngramPackage(pkg any) bool {
+	source := piPackageIdentity(pkg)
+	return source == piGentleEngramPackageSource ||
+		(strings.HasPrefix(source, piGentleEngramPackageSource+"@") && len(source) > len(piGentleEngramPackageSource)+1)
 }
 
 func piPackagesAsSlice(existing any) []any {

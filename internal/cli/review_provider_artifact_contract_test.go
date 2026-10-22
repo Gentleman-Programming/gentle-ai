@@ -36,7 +36,13 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
 		// Frozen v1 START artifacts do not project the v3 replay or retired
 		// stale-burn fields.
-		"schemas/start-v2.schema.json":             "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
+		//
+		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
+		// code and signal the classifier already publishes. Deliberate, not drift.
+		//
+		// rdd-risk-gated S14: the risk reason enums admit the agent_escalation
+		// code and signal START publishes for --escalate-item. Deliberate, not drift.
+		"schemas/start-v2.schema.json":             "efde388bc82be38c947bfab8de5c94b27f0a1cbb9983a16239abef9ac3342a36",
 		"schemas/status.schema.json":               "86d0a5ff09a833ff723804c3e31185a80826cbd81a73cf61026feea8c5df2314",
 		"schemas/status-v2.schema.json":            "7c51627d133592839ba4afa860b358b68109afd5f70ee998cd421f563201b23e",
 		"schemas/transition-execution.schema.json": "ddee03bd0c1b6e70f21c399bae7fe528aa4ad46cebb5a48ec72b6e6b3694aa2d",
@@ -136,7 +142,13 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// allowed property, but the native-git transport no longer needs to
 		// inline it since artifact_subject.changed_path_manifest_sha256 already
 		// commits to it. Deliberate, not drift.
-		"schemas/start.schema.json":     "27954ad34319719a68f90768c90f39254d94c62cf7f8ea90525ec4e2dbafd182",
+		//
+		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
+		// code and signal the classifier already publishes. Deliberate, not drift.
+		//
+		// rdd-risk-gated S14: the risk reason enums admit the agent_escalation
+		// code and signal START publishes for --escalate-item. Deliberate, not drift.
+		"schemas/start.schema.json":     "05271848b0619c73f4a9a66b5a1ad1d04d2bf975c9c91ffcd63749981a56c300",
 		"schemas/status-v5.schema.json": "8f6d05bd4ed64abc765bd7ce9ae8bed0470448cd260fc0a94dc5929b88f42a18",
 	}
 	for name, expected := range want {
@@ -160,8 +172,29 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 	want := map[string]string{
 		"fixtures/capabilities-v2.3.fixture.json": "ed5fb324791eec28287c621f19dffd69323120f61ce537e7b329fc018a29fe42",
 		"fixtures/start-v4.fixture.json":          "639a6e78b40cb5e000ec15265fd444c243e28594035c7d376c378142162bfb02",
-		"schemas/capabilities-v2.3.schema.json":   "606efa4b691605b0e7b668c616d48712a2a925c819244ebe2bc63d9885658bb3",
-		"schemas/start-v4.schema.json":            "770c6a7e40a62a945d1134cba933cfd811f4c5e6ab407a36a26ba56508bc00e4",
+		// rdd-risk-gated S14 (A3): the feature_name enum admits
+		// start_agent_escalation and start_request_context, which capabilities
+		// v2.6 advertises for review start --escalate-item/--escalate-reason and
+		// --request-context; the v2.3 optional count stays exactly 15, so v2.3
+		// through v2.5 advertisements are unchanged. Deliberate, not drift.
+		// rdd-risk-gated S17: the same enum admits start_options_preflight,
+		// which capabilities v2.6 advertises for the STATUS preflight of those
+		// two START inputs; the v2.3 optional count still stays exactly 15.
+		// Deliberate, not drift.
+		// verify-always-rdd-high S8: the same enum admits start_lens_selection,
+		// which capabilities v2.6 advertises for START and STATUS --lenses;
+		// the v2.3 optional count still stays exactly 15. Deliberate, not drift.
+		"schemas/capabilities-v2.3.schema.json": "c1bc328459af44233943dd7f9414cd3d9bc95079d14f4a732a8719a17cb849e4",
+		// rdd-risk-gated S15: the risk reason enums admit the dangerous_sink
+		// code and signal the classifier already publishes. Deliberate, not drift.
+		//
+		// rdd-risk-gated S14: the risk reason enums admit the agent_escalation
+		// code and signal START publishes for --escalate-item. Deliberate, not drift.
+		//
+		// issues #5136/#4516: the handle also admits the sealed rctx3 shape
+		// OpenCode hosts receive; rctx1/rctx2 are unchanged. Deliberate, not
+		// drift.
+		"schemas/start-v4.schema.json": "28efd5a6545cc72de2f978565af3bfe74098bcded3999f1738fe14308fcd121d",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -178,8 +211,10 @@ func TestReviewProviderArtifactV23StartContractsArePinned(t *testing.T) {
 func TestReviewProviderArtifactV24IntendedUntrackedContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"schemas/capabilities-v2.4.schema.json":            "fc4d55dbad6b19cc4c289e8ed94bd1839800ca2892e449640459b668e0c7b0b5",
-		"schemas/intended-untracked-selection.schema.json": "6f300c4cc10ab669fa3ef8cc608829df623a453cd5e6629958786e0724430259",
+		"schemas/capabilities-v2.4.schema.json": "fc4d55dbad6b19cc4c289e8ed94bd1839800ca2892e449640459b668e0c7b0b5",
+		// Issue #4821: an absolute document ID restores sibling $ref resolution;
+		// the wire envelope identity remains unchanged. Deliberate, not drift.
+		"schemas/intended-untracked-selection.schema.json": "2379d4b748ffd9719058aa5b10ed6640f0dec9a525198cf8e14cd827408a348e",
 		"schemas/status-v6.schema.json":                    "0aa731e4d3961d678b4e51a6be0af93f2de82a4a326c3366e2fbe6a3e687236c",
 	}
 	for name, expected := range want {
@@ -203,16 +238,18 @@ func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"schemas/gate-result.schema.json": "afe5e2a030fae9949305811bcac0a6dbc8b4f28802fa61d1e31e58e895f9fcae",
-		// issues #4226/#4453: last-event-closure documents terminal escalation
-		// and exposes complete admitted reviewer results before acknowledgement.
-		// Deliberate, not drift.
-		"schemas/last-event-closure.schema.json": "08a94def144d70c0c1e84b73a1a245cd36bc73dc1ade4aa733b42097b05593eb",
+		// issues #4223/#4226/#4453: last-event-closure publishes rejected
+		// targeted-validator evidence, terminal escalation, and complete admitted
+		// reviewer results before acknowledgement. Deliberate, not drift.
+		"schemas/last-event-closure.schema.json": "d0fa6e52fbe0cf22862ac0ab31f76996885dd9454b5dbe70eca17e7416af5d56",
 		// issue #3894: start/v4 publishes the reviewing status continuation, so
 		// transition-execution gains the start_status_execution definition it
 		// references. Deliberate, not drift.
 		// issue #3932: start_status_execution carries the opaque
 		// repository-context row, so a foreign process cwd fails closed.
-		"schemas/transition-execution.schema.json":   "3743a16d915f5d95be047af1f0454f342aa4c3eb7bcb0d8991f81ae3b89873c1",
+		// issues #5136/#4516: the repository-context row also admits the
+		// sealed rctx3 shape OpenCode hosts receive.
+		"schemas/transition-execution.schema.json":   "fcddf353a243d0e6d6553742e8c180c71a110465d9676f74b149f26b9e3cffd8",
 		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {
@@ -510,7 +547,7 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "capabilities-v2.4.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV24},
 		{name: "capabilities-v2.5.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV25},
 		{name: "capabilities-v2.6.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV26},
-		{name: "intended-untracked-selection.schema.json", id: reviewIntendedUntrackedSelectionSchema},
+		{name: "intended-untracked-selection.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/intended-untracked-selection.schema.json"},
 		{name: "consent.schema.json", id: ReviewIntegrationConsentSchemaIDV2},
 		{name: "consent-v3.schema.json", id: ReviewIntegrationConsentSchemaIDV3},
 		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},

@@ -627,6 +627,10 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 }
 
 func TestResolveComponentInstall(t *testing.T) {
+	// Keep the pre-trust command sequences deterministic on every host.
+	original := cmdBrewHelpTrust
+	cmdBrewHelpTrust = func(string) error { return fmt.Errorf("unknown command: trust") }
+	t.Cleanup(func() { cmdBrewHelpTrust = original })
 	r := NewResolver()
 
 	tests := []struct {

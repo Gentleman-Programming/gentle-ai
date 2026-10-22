@@ -109,20 +109,26 @@ Check exactly ONE in the template and add the matching label:
 ### 5. Test Plan
 
 ```markdown
-- [ ] Scripts run without errors: `shellcheck scripts/*.sh` (check only if run and passed)
+- [ ] Unit tests pass: `go test ./...` (check only if run and passed)
+- [ ] Go format passes: `go run ./internal/gofmtcheck` (check only if run and passed)
+- [ ] E2E tests pass: `cd e2e && ./docker-test.sh` (check only if run and passed)
 - [ ] Manually tested the affected functionality (check only if observed)
-- [ ] Skills load correctly in target agent (check only if verified)
 ```
 
 ### 6. Contributor Checklist
 
 Mark boxes only with observed evidence; leave pending actions unchecked and describe them. An unchecked required gate is not merge-ready:
 - Linked an approved issue using the human-selected closing or non-closing reference
+- PR stays within 400 changed lines, or the canonical `size:exception` authority is recorded
 - Added exactly one `type:*` label (confirmed by target-host readback)
-- Ran shellcheck on modified scripts where applicable
-- Skills tested in at least one agent where applicable
-- Docs updated if behavior changed
+- Unit tests pass (`go test ./...`)
+- Go format passes (`go run ./internal/gofmtcheck`)
+- E2E tests pass (`cd e2e && ./docker-test.sh`)
+- Benchmark validation completed, or explained as not applicable in the Test Plan
+- If behavior changed, docs in `docs/` are updated in the same PR
 - Conventional commit format
+- Understood, reviewed, and took responsibility for the complete submission
+- Selected exactly one AI-assistance option and completed the applicable declaration fields
 - No `Co-Authored-By` trailers
 
 ---
@@ -134,7 +140,10 @@ Mark boxes only with observed evidence; leave pending actions unchecked and desc
 | PR Validation | `Check Issue Reference` | Body contains a visible, well-formed base-repository `Closes/Fixes/Resolves #N` or `Refs #N` |
 | PR Validation | `Check Issue Has status:approved` | Linked issue has `status:approved` |
 | PR Validation | `Check PR Has type:* Label` | PR has exactly one `type:*` label |
-| CI | `Shellcheck` | Shell scripts pass `shellcheck` |
+| PR Validation | `Check PR Cognitive Load` | PR stays within 400 changed lines or uses `size:exception` |
+| CI | `Unit Tests` | `go test ./...` passes |
+| CI | `Go Format` | `go run ./internal/gofmtcheck` passes |
+| CI | `E2E Tests (<platform>)` | Docker E2E suite passes on each platform |
 
 ---
 
@@ -173,7 +182,7 @@ Type-to-label mapping:
 Examples:
 ```
 feat(scripts): add Codex support to setup.sh
-fix(skills): correct topic key format in sdd-apply
+fix(skills): correct topic key format in judgment-day
 docs(readme): update multi-model configuration guide
 refactor(skills): extract shared persistence logic
 chore(ci): add shellcheck to PR validation workflow

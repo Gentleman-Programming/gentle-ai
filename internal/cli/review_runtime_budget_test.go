@@ -238,18 +238,20 @@ func TestNegotiatedStartRuntimeBudgetRefusesManySmallPathsInAggregate(t *testing
 	}
 }
 
-// A candidate dominated by generated content is admitted on metadata
+// A candidate dominated by generated golden output is admitted on metadata
 // summaries, so every later role must be materializable from those same
-// summaries. If refuter evidence still read the complete lockfile patch, this
-// candidate would pass START and then dead-end with authority already frozen,
-// which is the unexecutable lineage #3367 closed and #4680 reopened.
+// summaries. Dependency locks are not interchangeable with this fixture: #5292
+// requires their complete semantic patches and refuses oversized lock evidence
+// before freezing authority. Generated goldens still exercise the materialization
+// invariant behind the unexecutable lineage #3367 closed and #4680 reopened.
 func TestNegotiatedStartAdmitsGeneratedDominatedCandidateEveryRoleCanMaterialize(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	lockfile := strings.Repeat("example.com/module v1.2.3 h1:0000000000000000000000000000000000000000000=\n", 5_000)
-	writeReviewStartCandidate(t, repo, "go.sum", lockfile, 0o644)
+	generated := strings.Repeat("generated fixture entry with opaque content that is irrelevant to authored review evidence\n", 5_000)
+	generatedPath := filepath.Join("testdata", "golden", "review-runtime.golden")
+	writeReviewStartCandidate(t, repo, generatedPath, generated, 0o644)
 	writeReviewStartCandidate(t, repo, "internal/auth/token.go", "package auth\n\nfunc Token() string { return \"candidate\" }\n", 0o644)
-	info, err := os.Stat(filepath.Join(repo, "go.sum"))
+	info, err := os.Stat(filepath.Join(repo, generatedPath))
 	if err != nil {
 		t.Fatal(err)
 	}

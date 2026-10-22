@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mutationjournal"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
@@ -25,6 +26,7 @@ import (
 var NativeAgentManifest = map[model.AgentID][]string{
 	model.AgentClaudeCode: {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md", "review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
 	model.AgentKiroIDE:    {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
+	model.AgentCursor:     {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
 	model.AgentKimi:       {"gentleman.yaml"},
 }
 
@@ -78,6 +80,7 @@ type claudeModelResolver interface {
 // InstallNativeAgents installs only retained review, Judgment Day, and Kimi native agents.
 // It never removes legacy SDD files or user-owned agents; it removes only the
 // retired review agents Gentle AI owns (see RetiredNativeAgentManifest).
+// legacyassets.RetireSDDAgents retires SDD agents after this runs.
 func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOptions) (InstallResult, error) {
 	if !NativeAgentsSupported(adapter.Agent()) {
 		return InstallResult{}, fmt.Errorf("unsupported native agent runtime: %s", adapter.Agent())
@@ -144,7 +147,10 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 			return result, err
 		}
 		expected, known := ledger.Files[name]
-		owned := exists && known && installedHash(data) == expected
+		// A file a release shipped before the ledger existed (v3 Kimi
+		// gentleman.yaml, which declares every SDD subagent) is owned by
+		// those exact bytes, so retiring SDD can rewrite it (#5253).
+		owned := exists && ((known && installedHash(data) == expected) || legacyassets.OwnsPreLedgerNativeAgent(adapter.Agent(), name, data))
 		if exists && !owned {
 			result.Skipped = append(result.Skipped, path)
 		}

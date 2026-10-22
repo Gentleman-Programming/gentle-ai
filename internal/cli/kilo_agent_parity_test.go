@@ -75,6 +75,11 @@ func assertKiloParityAgents(t *testing.T, agents map[string]any) {
 	}
 	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
 	permission, _ := orchestrator["permission"].(map[string]any)
+	// Kilo shares the OpenCode permission defaults and the orchestrator prompt
+	// that relays blocking prompts through the native question tool (#4816).
+	if permission["question"] != "allow" {
+		t.Fatalf("Kilo gentle-orchestrator permission.question = %#v, want \"allow\"", permission["question"])
+	}
 	task, _ := permission["task"].(map[string]any)
 	for _, name := range kiloParityAgentNames {
 		if task[name] != "allow" {

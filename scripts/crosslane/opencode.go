@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -116,6 +117,17 @@ func (b *battery) runOpenCodeLane() {
 		return
 	}
 	b.pass(openCodeLane, "lens frame: provider-owned", "exact provider task materialized and captured end to end")
+
+	// A deterministic BLOCKER routes through the provider refuter before the
+	// review can close, so the lens capture stages an artifact and the
+	// refuter role slot carries the terminal closure.
+	if operationState(lensClosure) == "" {
+		refuterClosure, ok := b.driveOpenCodeRefuter(node, repo)
+		if !ok {
+			return
+		}
+		lensClosure = refuterClosure
+	}
 
 	// Correction flow to reach a live validator role slot.
 	if !b.driveCorrectionToValidation(repo, base, lensClosure) {
@@ -257,8 +269,8 @@ func (b *battery) driveCorrectionToValidation(repo, fixedBase string, closure ma
 	statusDoc, stderr, code := b.statusFromClosure(repo, closure)
 	if code != 0 || getString(statusDoc, "authority", "lineage_id") != operationLineage(closure) ||
 		getString(statusDoc, "next_transition", "reason_code") != "correction_plan_required" {
-		b.fail(openCodeLane, "committed OpenCode correction re-entry", fmt.Sprintf("exit=%d lineage=%q reason=%q %s",
-			code, getString(statusDoc, "authority", "lineage_id"), getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
+		b.fail(openCodeLane, "committed OpenCode correction re-entry", fmt.Sprintf("exit=%d closure_state=%q lineage=%q reason=%q %s",
+			code, operationState(closure), getString(statusDoc, "authority", "lineage_id"), getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
 		return false
 	}
 	b.pass(openCodeLane, "committed OpenCode correction re-entry", "fresh Node/plugin process followed closure operation plus ordered tokens to correction_plan_required")
@@ -452,4 +464,60 @@ func providerTask(input map[string]any) (agent, prompt string, ok bool) {
 	agent, _ = task["agent"].(string)
 	prompt, _ = task["prompt"].(string)
 	return agent, prompt, agent != "" && prompt != ""
+}
+
+// driveOpenCodeRefuter answers the provider refuter role slot through the real
+// plugin. The refuter result must echo the Go-issued request hash and finding
+// IDs, which live only in the materialized child prompt, so a first probe
+// completion with a deliberate non-result exposes that prompt and leaves the
+// slot retryable; the second completion corroborates every supplied claim.
+func (b *battery) driveOpenCodeRefuter(node, repo string) (map[string]any, bool) {
+	statusDoc, stderr, _ := b.status(repo, "opencode")
+	input := collectInput(statusDoc)
+	if input == nil || input["capture_operation"] != "external.run_provider_role" {
+		b.fail(openCodeLane, "refuter role slot", fmt.Sprintf("no provider role collect input after the lens artifact; %s %s",
+			getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
+		return nil, false
+	}
+	agent, prompt, ok := providerTask(input)
+	if !ok {
+		b.fail(openCodeLane, "refuter role slot", "provider task prompt missing from status")
+		return nil, false
+	}
+	probe, err := b.runHookCase(node, harnessCase{Name: "refuter-request-probe", Directory: repo, Subagent: agent, Prompt: prompt, TaskOutput: "probe: no verdict submitted"})
+	if err != nil || !probe.BeforeOK || probe.ChildPrompt == "" {
+		b.fail(openCodeLane, "refuter role slot", fmt.Sprintf("relay materialized no refuter prompt: %v %s", err, firstLine(probe.Error)))
+		return nil, false
+	}
+	requestHash := regexp.MustCompile(`"request_hash":"(sha256:[0-9a-f]{64})"`).FindStringSubmatch(probe.ChildPrompt)
+	if requestHash == nil || !strings.Contains(probe.ChildPrompt, "gentle-ai.review-provider-refuter-request/v1") {
+		b.fail(openCodeLane, "refuter role slot", "materialized prompt is not a provider refuter request")
+		return nil, false
+	}
+	results := []map[string]any{}
+	seen := map[string]bool{}
+	for _, match := range regexp.MustCompile(`"finding_id":"([^"]+)"`).FindAllStringSubmatch(probe.ChildPrompt, -1) {
+		if seen[match[1]] {
+			continue
+		}
+		seen[match[1]] = true
+		results = append(results, map[string]any{"finding_id": match[1], "outcome": "corroborated", "proof_refs": []string{"src/greet.js:4-6"}})
+	}
+	refuterJSON, err := json.Marshal(map[string]any{"refuter_request_hash": requestHash[1], "results": results})
+	if err != nil {
+		b.fail(openCodeLane, "refuter frame: provider-owned", err.Error())
+		return nil, false
+	}
+	result, err := b.runHookCase(node, harnessCase{Name: "refuter-provider-owned", Directory: repo, Subagent: agent, Prompt: prompt, TaskOutput: string(refuterJSON)})
+	if err != nil || !result.AfterOK {
+		b.fail(openCodeLane, "refuter frame: provider-owned", fmt.Sprintf("%v %s", err, firstLine(result.Error)))
+		return nil, false
+	}
+	closure := b.record("provider-role", []byte(result.Output))
+	if !admittedCapture(closure) || operationState(closure) == "" {
+		b.fail(openCodeLane, "refuter frame: provider-owned", "refuter completion did not report an admitted terminal capture")
+		return nil, false
+	}
+	b.pass(openCodeLane, "refuter frame: provider-owned", "deterministic BLOCKER corroborated through the provider refuter role slot")
+	return closure, true
 }

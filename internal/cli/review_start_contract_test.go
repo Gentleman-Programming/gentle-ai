@@ -142,6 +142,96 @@ func TestNegotiatedReviewStartRiskReasonsUseOnlyImmutableSnapshotEvidence(t *tes
 	})
 }
 
+// TestNegotiatedReviewStartAcceptsDangerousSinkReason is S15: the dangerous
+// sink reason the classifier publishes passes the START contract, so a change
+// that disables certificate validation starts with the canonical 4R lenses,
+// and every published START schema that names reason codes admits it.
+func TestNegotiatedReviewStartAcceptsDangerousSinkReason(t *testing.T) {
+	reviewEnabledHome(t)
+	want := []reviewtransaction.RiskReason{{
+		Code: reviewtransaction.RiskReasonDangerousSink, Signal: reviewtransaction.SignalDangerousSink, Path: "internal/client/tls.go",
+	}}
+	wantLenses := []string{
+		reviewtransaction.LensRisk, reviewtransaction.LensResilience,
+		reviewtransaction.LensReadability, reviewtransaction.LensReliability,
+	}
+	for _, tt := range []struct {
+		contract, schemaVersion, schemaName string
+	}{
+		{contract: ReviewIntegrationContractV2, schemaVersion: "v2", schemaName: "start-v4.schema.json"},
+		// The v1 envelope is not validated whole here: its frozen repository
+		// context pattern predates the current handle, which is a separate gap.
+		{contract: ReviewIntegrationContractV1},
+	} {
+		t.Run(tt.contract, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			writeReviewStartCandidate(t, repo, "internal/client/tls.go", "package client\n\nvar config = tls.Config{InsecureSkipVerify: true}\n", 0o644)
+			var output bytes.Buffer
+			if err := RunReview(boundNegotiatedStartArgs(t, []string{
+				"start", "--contract", tt.contract, "--cwd", repo, "--lineage", "review-start-dangerous-sink",
+			}), &output); err != nil {
+				t.Fatal(negotiatedReviewStartFailure(err, output.String()))
+			}
+			result := decodeNegotiatedReviewStart(t, output.Bytes())
+			if err := result.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if result.RiskLevel != reviewtransaction.RiskHigh || !reflect.DeepEqual(result.RiskReasons, want) ||
+				!reflect.DeepEqual(result.SelectedLenses, wantLenses) {
+				t.Fatalf("dangerous-sink negotiated START = %#v", result)
+			}
+			if tt.schemaName != "" {
+				validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, tt.schemaVersion, tt.schemaName), output.Bytes())
+			}
+		})
+	}
+	// Every published risk reason definition, including the v3 envelope that is
+	// no longer emitted, must name every code the classifier publishes.
+	reason, err := json.Marshal(want[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, schema := range []struct{ version, name string }{
+		{"v1", "start-v2.schema.json"}, {"v2", "start.schema.json"}, {"v2", "start-v4.schema.json"},
+	} {
+		validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, schema.version, schema.name+"#/$defs/risk_reason"), reason)
+	}
+}
+
+func TestReviewStartContractValidatesDangerousSinkReason(t *testing.T) {
+	valid := reviewtransaction.RiskReason{
+		Code: reviewtransaction.RiskReasonDangerousSink, Signal: reviewtransaction.SignalDangerousSink, Path: "internal/client/tls.go",
+	}
+	if err := validateReviewStartRiskReasons([]reviewtransaction.RiskReason{valid}); err != nil {
+		t.Fatalf("validateReviewStartRiskReasons(valid dangerous sink) = %v", err)
+	}
+	if got := reviewStartRiskLevel([]reviewtransaction.RiskReason{valid}); got != reviewtransaction.RiskHigh {
+		t.Fatalf("reviewStartRiskLevel(dangerous sink) = %q, want %q", got, reviewtransaction.RiskHigh)
+	}
+	for name, malformed := range map[string]reviewtransaction.RiskReason{
+		"wrong signal":   {Code: valid.Code, Signal: reviewtransaction.SignalShellProcess, Path: valid.Path},
+		"missing signal": {Code: valid.Code, Path: valid.Path},
+		"missing path":   {Code: valid.Code, Signal: valid.Signal},
+		"stray modes":    {Code: valid.Code, Signal: valid.Signal, Path: valid.Path, OldMode: "100644", NewMode: "100755"},
+	} {
+		if err := validateReviewStartRiskReasons([]reviewtransaction.RiskReason{malformed}); err == nil {
+			t.Fatalf("validateReviewStartRiskReasons accepted malformed %s reason", name)
+		}
+	}
+	for locale, phrases := range map[string][]string{
+		"English": reviewConsentEvidencePhrases([]reviewtransaction.RiskReason{valid}),
+		"Spanish": reviewConsentSpanishEvidencePhrases([]reviewtransaction.RiskReason{valid}),
+	} {
+		want := map[string]string{
+			"English": "a dangerous code pattern in internal/client/tls.go",
+			"Spanish": "un patrón de código peligroso en internal/client/tls.go",
+		}[locale]
+		if !reflect.DeepEqual(phrases, []string{want}) {
+			t.Fatalf("%s dangerous-sink evidence = %#v, want %#v", locale, phrases, []string{want})
+		}
+	}
+}
+
 // TestNegotiatedReviewStartRoutesLargeCandidatesByEvidence pins the negotiated
 // START projection of the evidence-driven tiers: passive documentation is
 // structural readback with zero reviewers at any size, everything else without

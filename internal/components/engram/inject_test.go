@@ -1810,10 +1810,17 @@ func TestInjectAntigravityRegistersEngramViaPluginOnly(t *testing.T) {
 		"mem_judge",
 		"optional mem_review",
 		"if mem_review is unavailable",
+		// #1903: tools still load first, but the initial read is project-gated.
+		"CRITICAL FIRST ACTION",
+		"before any initial mem_context, follow the Engram startup protocol",
+		"pass only the resolved project to mem_context",
 	} {
 		if !strings.Contains(hooksText, want) {
 			t.Fatalf("Antigravity Engram hook missing %q; got:\n%s", want, hooksText)
 		}
+	}
+	if strings.Contains(hooksText, "Then call mem_context when") {
+		t.Fatalf("Antigravity Engram hook still requests an ungated initial mem_context; got:\n%s", hooksText)
 	}
 
 	desktopMCPPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
@@ -3809,11 +3816,12 @@ func TestProtocolForSelectsSlimOrFullPerDecision1Matrix(t *testing.T) {
 		{model.AgentKimi, false},
 		{model.AgentTrae, false},
 		{model.AgentHermes, false},
+		{model.AgentGitHubCopilotCLI, false},
 		{model.AgentOpenClaw, false},
 	}
 
-	if len(tests) != 15 {
-		t.Fatalf("expected 15 non-Pi adapters in the Decision 1 matrix, got %d", len(tests))
+	if len(tests) != 16 {
+		t.Fatalf("expected 16 non-Pi adapters in the Decision 1 matrix, got %d", len(tests))
 	}
 
 	slim := protocolSlim()

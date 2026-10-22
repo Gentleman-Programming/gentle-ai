@@ -127,7 +127,7 @@
                 {"pattern": "^--lineage=\\S+$"},
                 {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"},
                 {"pattern": "^--target=sha256:[0-9a-f]{64}$"},
-                {"pattern": "^--repository-context=rctx[12]_[0-9a-f]{64}$"},
+                {"pattern": "^--repository-context=(?:rctx[12]_[0-9a-f]{64}|rctx3_[A-Za-z0-9_-]{82,})$", "maxLength": 5569},
                 {"pattern": "^--agent=\\S+$"},
                 {"const": "--input={{value}}"}
               ], "items": false},
@@ -143,7 +143,7 @@
                 {"pattern": "^--lineage=\\S+$"},
                 {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"},
                 {"pattern": "^--target=sha256:[0-9a-f]{64}$"},
-                {"pattern": "^--repository-context=rctx[12]_[0-9a-f]{64}$"},
+                {"pattern": "^--repository-context=(?:rctx[12]_[0-9a-f]{64}|rctx3_[A-Za-z0-9_-]{82,})$", "maxLength": 5569},
                 {"pattern": "^--request-hash=sha256:[0-9a-f]{64}$"},
                 {"pattern": "^--agent=\\S+$"},
                 {"const": "--input={{value}}"}

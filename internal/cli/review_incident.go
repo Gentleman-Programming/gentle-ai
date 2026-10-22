@@ -149,9 +149,8 @@ func resolveOpaqueReviewRepositoryRoot(ctx context.Context, repo, handle string,
 
 // reviewRepositoryContextResolutionFailure classifies why an opaque repository
 // context could not be resolved. A Git ownership refusal gets its own code and
-// its own carry-outable instruction; everything else keeps the historical
-// generic code, so an unrelated failure is never mislabelled as a trust
-// problem.
+// its own carry-outable instruction. Typed V2 failures distinguish an unusable
+// tuple from an underlying resolution cause; unrelated errors keep their code.
 func reviewRepositoryContextResolutionFailure(err error) error {
 	if reviewGitOwnershipRefusal(err) {
 		return reviewOpaqueContextFailure(reviewGitTrustRefusalCode, reviewGitTrustRefusalAction)
@@ -163,6 +162,15 @@ func reviewRepositoryContextResolutionFailure(err error) error {
 	// identical failure every time.
 	if errors.Is(err, reviewtransaction.ErrCompactAuthorityFromNewerRelease) {
 		return reviewOpaqueContextCause(reviewAuthorityNewerReleaseCode, reviewAuthorityNewerReleaseAction, err)
+	}
+	var resolutionErr *reviewtransaction.ReviewRepositoryContextV2ResolutionError
+	if errors.As(err, &resolutionErr) {
+		return reviewOpaqueContextCause("rctx2_resolution_failed",
+			"inspect the underlying cause; verify --cwd names the intended repository and that its active authority matches the exact native binding; refreshing alone may not repair repository or authority failures", err)
+	}
+	if errors.Is(err, reviewtransaction.ErrReviewRepositoryContextV2BindingUnusable) {
+		return reviewOpaqueContextCause("rctx2_binding_unusable",
+			"the handle is structurally invalid or does not match the supplied repository and binding; verify --cwd, then refresh the exact native next_transition without reconstructing its tokens", err)
 	}
 	return reviewOpaqueContextCause("repository_context_unavailable", "refresh the exact native next_transition before retrying", err)
 }

@@ -152,10 +152,10 @@ func TestReviewInspectCandidateRejectsUnboundInput(t *testing.T) {
 		{name: "object without side", argv: append(slices.Clone(valid), "--operation", "object", "--path-index", pathIndex), want: "object candidate inspection"},
 		{name: "invalid side", argv: append(slices.Clone(valid), "--operation", "object", "--path-index", pathIndex, "--side", "worktree"), want: "object candidate inspection"},
 		{name: "out of range selector", argv: append(slices.Clone(valid), "--operation", "patch", "--path-index", "99"), want: "exact canonical path index"},
-		{name: "wrong context", argv: replaceInspectionArg(t, valid, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "stale binding", argv: replaceInspectionArg(t, valid, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "wrong lineage", argv: replaceInspectionArg(t, valid, "--lineage", "wrong-lineage"), want: "repository_context_"},
-		{name: "wrong target", argv: replaceInspectionArg(t, valid, "--target", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "wrong context", argv: replaceInspectionArg(t, valid, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "rctx2_binding_unusable"},
+		{name: "stale binding", argv: replaceInspectionArg(t, valid, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "rctx2_binding_unusable"},
+		{name: "wrong lineage", argv: replaceInspectionArg(t, valid, "--lineage", "wrong-lineage"), want: "rctx2_binding_unusable"},
+		{name: "wrong target", argv: replaceInspectionArg(t, valid, "--target", "sha256:"+strings.Repeat("0", 64)), want: "rctx2_binding_unusable"},
 		{name: "wrong binding", argv: replaceInspectionArg(t, valid, "--lens", "review-risk"), want: "binding does not match"},
 		{name: "wrong order", argv: replaceInspectionArg(t, valid, "--order", "99"), want: "binding does not match"},
 	}
@@ -224,14 +224,14 @@ func TestReviewInspectCandidateRejectsTargetedBindingDecoys(t *testing.T) {
 	lens = append(lens, "--operation", "name-status", "--request-hash", request.RequestHash)
 	tests := []inspectionCase{
 		{name: "missing context", argv: removeInspectionArg(targeted, "--repository-context"), want: "requires the exact provider-issued"},
-		{name: "forged context", argv: replaceInspectionArg(t, targeted, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "original lens context", argv: replaceInspectionArg(t, targeted, "--repository-context", lens[slices.Index(lens, "--repository-context")+1]), want: "repository_context_"},
+		{name: "forged context", argv: replaceInspectionArg(t, targeted, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "rctx2_binding_unusable"},
+		{name: "original lens context", argv: replaceInspectionArg(t, targeted, "--repository-context", lens[slices.Index(lens, "--repository-context")+1]), want: "rctx2_binding_unusable"},
 		// The provider-issued context is a digest over the exact repository and
 		// binding, so a decoy revision or target no longer reaches the authority
 		// comparison: it fails the digest first, which is the earlier and
 		// stricter refusal.
-		{name: "stale revision", argv: replaceInspectionArg(t, targeted, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "forged target", argv: replaceInspectionArg(t, targeted, "--target", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "stale revision", argv: replaceInspectionArg(t, targeted, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "rctx2_binding_unusable"},
+		{name: "forged target", argv: replaceInspectionArg(t, targeted, "--target", "sha256:"+strings.Repeat("0", 64)), want: "rctx2_binding_unusable"},
 		{name: "forged request hash", argv: replaceInspectionArg(t, targeted, "--request-hash", "sha256:"+strings.Repeat("0", 64)), want: "request hash does not match authority"},
 		{name: "lens supplied", argv: append(slices.Clone(targeted), "--lens", "review-risk"), want: "does not accept --lens or --order"},
 		{name: "order supplied", argv: append(slices.Clone(targeted), "--order", "0"), want: "does not accept --lens or --order"},

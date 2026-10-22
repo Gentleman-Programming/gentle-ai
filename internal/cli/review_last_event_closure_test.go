@@ -358,6 +358,7 @@ func providerCorrectionReadyWithoutVerificationEvidence(t *testing.T, startArgs 
 	if err := RunReviewCaptureResult(args, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)
@@ -686,6 +687,7 @@ func correctionRequiredForPlanCapture(t *testing.T) (string, ReviewFacadeStartRe
 		ProofRefs:     []string{"the changed line deterministically causes the reproduced failure"},
 		EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, &bytes.Buffer{})
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)
@@ -1123,6 +1125,9 @@ func TestNegotiatedStatusKeepsFreshStartForApprovedRecordOfDifferentTarget(t *te
 // bound to that recorded runtime, exactly as the `--agent` form does, instead
 // of stopping with manual_intervention_required.
 func TestNegotiatedStatusAfterInBudgetCorrectionExposesValidationWithoutHostRuntime(t *testing.T) {
+	// Inheritance applies only without the Pi relay handshake; a Pi host
+	// running this test must not turn the STATUS into a Pi-driven one.
+	t.Setenv(reviewPiHostRelayContractEnvironment, "")
 	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t, "--agent", string(model.AgentClaudeCode))
 

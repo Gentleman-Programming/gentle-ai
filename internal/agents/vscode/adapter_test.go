@@ -23,12 +23,12 @@ func TestDetectRequiresVSCodeAndCopilotExtension(t *testing.T) {
 		t.Fatalf("Detect() with skills only = %v, %v; want false, nil", installed, err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(home, ".vscode", "extensions", "github.copilot-1.2.3"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	installed, _, _, evidence, err := a.Detect(context.Background(), home)
-	if err != nil || !installed || !evidence {
-		t.Fatalf("Detect() with Copilot extension = %v, %v, %v; want true, true, nil", installed, evidence, err)
+	for _, ext := range []string{"github.copilot-1.2.3", "github.copilot-chat-0.12.0"} {
+		h := t.TempDir()
+		_ = os.MkdirAll(filepath.Join(h, ".vscode", "extensions", ext), 0o755)
+		if ins, _, _, ev, err := a.Detect(context.Background(), h); err != nil || !ins || !ev {
+			t.Fatalf("Detect() with %s = %v, %v, %v; want true, true, nil", ext, ins, ev, err)
+		}
 	}
 }
 

@@ -91,7 +91,7 @@
           "type": "array", "minItems": 7, "maxItems": 7, "items": {"$ref": "#/$defs/feature"}
         },
         "optional": {
-          "type": "array", "minItems": 13, "maxItems": 13, "items": {"$ref": "#/$defs/feature"}
+          "type": "array", "minItems": 13, "maxItems": 17, "items": {"$ref": "#/$defs/feature"}
         }
       }
     },
@@ -128,6 +128,10 @@
             "risk_reasons",
             "scope_change_diagnostics",
             "sdd_receipt_binding",
+            "start_agent_escalation",
+            "start_lens_selection",
+            "start_options_preflight",
+            "start_request_context",
             "target_scoped_status",
             "uniform_failure_envelope",
             "validating_result_reopen"

@@ -103,7 +103,7 @@ func TestOpaqueRepositoryContextSurfacesGitTrustRefusal(t *testing.T) {
 
 // TestUnrelatedRepositoryContextFailureIsNotLabelledUntrusted pins the other
 // half of the contract: an ordinary repository-context failure, including
-// another git failure that also exits 128, must keep its existing generic code.
+// another git failure that also exits 128, must retain its V2 resolution code.
 func TestUnrelatedRepositoryContextFailureIsNotLabelledUntrusted(t *testing.T) {
 	reviewEnabledHome(t)
 	args, _, repo := startedOpaqueCaptureBinding(t, "git-trust-unrelated")
@@ -117,8 +117,8 @@ func TestUnrelatedRepositoryContextFailureIsNotLabelledUntrusted(t *testing.T) {
 	if strings.Contains(message, "git_repository_untrusted") {
 		t.Fatalf("an unrelated git failure was mislabelled as a Git trust refusal: %s", message)
 	}
-	if !strings.Contains(message, "repository_context_unavailable") {
-		t.Fatalf("unrelated repository-context failure lost its existing code: %s", message)
+	if !strings.Contains(message, "rctx2_resolution_failed") {
+		t.Fatalf("unrelated Git failure lost its V2 resolution code: %s", message)
 	}
 	if strings.Contains(message, repo) {
 		t.Fatalf("failure leaked a private path: %s", message)

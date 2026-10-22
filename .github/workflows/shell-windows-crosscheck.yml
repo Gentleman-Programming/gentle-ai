@@ -1,0 +1,57 @@
+name: Gentle Shell Windows static Guest crosscheck
+
+on:
+  push:
+    branches: [feat/shell-windows-delivery-35]
+
+permissions: {}
+
+jobs:
+  crosscheck:
+    if: github.repository == 'decode2/gentle-ai'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Acquire exact public source as data without checkout credentials
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_ASKPASS: /bin/false
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git init -q
+          git -c credential.helper= -c core.askPass= -c http.followRedirects=false fetch --no-tags --depth=1 https://github.com/decode2/gentle-ai.git "$EXPECTED_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_SHA"
+          git checkout --detach FETCH_HEAD
+      - name: Prepare stock boundary with inert source archive
+        run: |
+          set -euo pipefail
+          context="$(mktemp -d "$RUNNER_TEMP/windows-crosscheck.XXXXXXXX")"
+          git archive --format=tar HEAD > "$context/source.tar"
+          git rev-parse HEAD > "$context/source-commit.txt"
+          cp e2e/Dockerfile.shell-windows-crosscheck "$context/Dockerfile"
+          cp e2e/shell-windows-crosscheck-guest.sh "$context/"
+          timeout --kill-after=5 180 docker build --quiet -t gentle-windows-crosscheck:ci "$context"
+      - name: Compile inside credentialless physically bounded Guest, not Windows qualification
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/windows-candidate"
+          timeout --kill-after=5 900 docker run --rm --pull=never --network bridge \
+            --read-only --user 65532:65532 --cap-drop=ALL --security-opt=no-new-privileges \
+            --cpus=1 --memory=3g --memory-swap=3g --pids-limit=64 \
+            -e HOST_NETNS="$(stat -Lc %i /proc/self/ns/net)" -e HOST_MNTNS="$(stat -Lc %i /proc/self/ns/mnt)" \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777,size=2g \
+            gentle-windows-crosscheck:ci > "$RUNNER_TEMP/windows-candidate/windows-candidate.tar"
+          test "$(stat -c %s "$RUNNER_TEMP/windows-candidate/windows-candidate.tar")" -le 269484032
+          sha256sum "$RUNNER_TEMP/windows-candidate/windows-candidate.tar" > "$RUNNER_TEMP/windows-candidate/archive.sha256"
+      - name: Export inert exact-head binaries for isolated Windows qualification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-candidate
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error

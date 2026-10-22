@@ -10,14 +10,22 @@ import "os"
 // non-fatal: recording telemetry must never fail the operation that
 // triggered it.
 //
-// The kill switches are evaluated here, centrally, before anything is
-// touched on disk: a missing state file means nothing has opted out
-// locally, an unreadable one fails safe (does nothing), and an opted-out
-// host (env or persisted enabled:false) returns nil without ever calling
-// EnsureState. This makes every call site gated by construction, including
-// ones (e.g. `gentle-ai sync`) that call IncrementCounter directly instead
-// of going through a CLI-side gate first.
+// Environment kill switches are evaluated before touching disk. Persisted
+// policy is read under the state lock: otherwise a policy reader can overlap
+// a Windows file replacement and silently skip an increment on a sharing
+// violation. Missing state defaults to enabled; unreadable state fails safe
+// and persisted opt-out leaves the state untouched. Only enabled callers
+// initialize state. The lock covers policy, initialization, mutation and save.
 func IncrementCounter(homeDir string, mutate func(*Counters)) error {
+	if !Decide(os.Getenv, State{Enabled: true}).Enabled {
+		return nil
+	}
+	unlock, err := lockState(homeDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	preState, err := loadForDecision(homeDir)
 	if err != nil {
 		return nil
@@ -25,7 +33,13 @@ func IncrementCounter(homeDir string, mutate func(*Counters)) error {
 	if !Decide(os.Getenv, preState).Enabled {
 		return nil
 	}
-	return Update(homeDir, func(s *State) { mutate(&s.Counters) })
+	// Do not call Update here: lockState is not re-entrant.
+	s, err := EnsureState(homeDir)
+	if err != nil {
+		return err
+	}
+	mutate(&s.Counters)
+	return Save(homeDir, s)
 }
 
 // IncrementSyncs records one successful `gentle-ai sync` run.

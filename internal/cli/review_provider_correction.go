@@ -167,7 +167,10 @@ func reviewProviderCaptureRetry[T any](
 	if len(corrective) > reviewLensContextRuntimeBudget(runtime) {
 		return zero, raw, &reviewProviderCaptureRefusedError{cause: fmt.Errorf("%w%s; the corrective re-invocation was skipped because its prompt exceeds the native reviewer context budget; re-query %s and run the reoffered capture", firstErr, firstClause, continuation())}
 	}
-	correctiveRaw, err := adapter.Review(ctx, reviewerprovider.NewInvocation(corrective))
+	// The corrective attempt keeps the original probe materializer and its
+	// source root (S11), so a Codex refuter still runs in the confined
+	// candidate copy its prompt describes.
+	correctiveRaw, err := adapter.Review(ctx, invocation.WithPrompt(corrective))
 	if err != nil {
 		return zero, nil, fmt.Errorf("invoke provider reviewer on corrective attempt %d of %d: %w (attempt 1 was refused: %v%s)", maxReviewerResultAdmissionAttempts, maxReviewerResultAdmissionAttempts, err, firstErr, firstClause)
 	}

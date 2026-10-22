@@ -60,7 +60,7 @@ func ApplyOpenCodeBackgroundPolicy(settingsPath string, enabled bool) (Result, e
 		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + policy + "\n"
 	}
 	managed["prompt"] = prompt
-	overlay, err := filemerge.MergeJSONObjects(raw, mustBackgroundOverlay(managed))
+	overlay, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, mustBackgroundOverlay(managed))
 	if err != nil {
 		return Result{}, err
 	}

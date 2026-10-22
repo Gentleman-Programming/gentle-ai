@@ -69,6 +69,15 @@ func stdioProbeDeadline(configured time.Duration) time.Duration {
 // otherwise valid Engram configuration unreadable: that consequence is worse
 // than the defect this fixes.
 func stdioTimeoutFromConfig(value any) time.Duration {
+	// JSON settings decode numbers as exact json.Number tokens; seconds keep
+	// the float64 semantics, and a token out of float64 range falls back.
+	if number, ok := value.(json.Number); ok {
+		seconds, err := number.Float64()
+		if err != nil {
+			return 0
+		}
+		value = seconds
+	}
 	switch typed := value.(type) {
 	case float64:
 		if typed > 0 {
@@ -129,6 +138,9 @@ func isBareEngramCommand(command string) bool {
 	}
 	return command == "engram"
 }
+
+// writeStdioInitializeRequest is a seam for forcing child-exit ordering in tests.
+var writeStdioInitializeRequest = io.WriteString
 
 // stdioHandshake spawns name with args and performs a minimal MCP initialize
 // handshake over the newline-delimited JSON-RPC stdio transport. A successful
@@ -202,9 +214,10 @@ func stdioHandshake(ctx context.Context, timeout time.Duration, name string, arg
 	}()
 
 	request := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"gentle-ai-doctor","version":"0"}}}` + "\n"
-	if _, err := io.WriteString(stdin, request); err != nil {
-		return fmt.Errorf("write engram mcp initialize request: %w", err)
-	}
+	_, writeErr := writeStdioInitializeRequest(stdin, request)
+	// An exited child can leave diagnostic stdout even though stdin is already
+	// closed. Validate that output before reporting a failed initialize write;
+	// the context watcher still bounds reads if the child keeps stdout open.
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -252,6 +265,9 @@ func stdioHandshake(ctx context.Context, timeout time.Duration, name string, arg
 		if !expectedProbeTermination(waitErr) {
 			return fmt.Errorf("wait for engram mcp process: %w", waitErr)
 		}
+		if writeErr != nil {
+			return fmt.Errorf("write engram mcp initialize request: %w", writeErr)
+		}
 		return nil
 	}
 	if err := contextCause(); err != nil {
@@ -259,6 +275,9 @@ func stdioHandshake(ctx context.Context, timeout time.Duration, name string, arg
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read engram mcp output: %w", err)
+	}
+	if writeErr != nil {
+		return fmt.Errorf("engram mcp exited without answering initialize: %w", writeErr)
 	}
 	return errors.New("engram mcp exited without answering initialize")
 }

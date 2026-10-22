@@ -242,13 +242,28 @@ func MergeConfiguredCatalog(runtimeCatalog, configuredCatalog map[string]Provide
 			runtimeProvider.Models = map[string]Model{}
 		}
 		for modelID, configuredModel := range configuredProvider.Models {
-			if _, exists := runtimeProvider.Models[modelID]; !exists {
+			if existingModel, exists := runtimeProvider.Models[modelID]; !exists {
 				if len(configuredModel.Variants) > 0 {
 					variants := make([]string, len(configuredModel.Variants))
 					copy(variants, configuredModel.Variants)
 					configuredModel.Variants = variants
 				}
 				runtimeProvider.Models[modelID] = configuredModel
+			} else if len(configuredModel.Variants) > 0 {
+				existingVariants := make(map[string]struct{}, len(existingModel.Variants))
+				for _, v := range existingModel.Variants {
+					existingVariants[v] = struct{}{}
+				}
+				mergedVariants := append([]string(nil), existingModel.Variants...)
+				for _, v := range configuredModel.Variants {
+					if _, ok := existingVariants[v]; !ok {
+						existingVariants[v] = struct{}{}
+						mergedVariants = append(mergedVariants, v)
+					}
+				}
+				sortVariants(mergedVariants)
+				existingModel.Variants = mergedVariants
+				runtimeProvider.Models[modelID] = existingModel
 			}
 		}
 		merged[providerID] = runtimeProvider
@@ -537,18 +552,29 @@ func isCatalogHeader(line string) bool {
 }
 
 // effortRank orders the known reasoning-effort variant names semantically.
-var effortRank = map[string]int{"low": 0, "medium": 1, "high": 2}
+var effortRank = map[string]int{
+	"low":    0,
+	"medium": 1,
+	"high":   2,
+	"xhigh":  3,
+	"max":    4,
+	"ultra":  5,
+}
 
-// sortVariants emits low/medium/high semantic order when every variant key is
-// a known effort name, falling back to lexical order for anything else.
+// sortVariants orders ranked effort levels first by rank, followed by
+// non-effort/speed variants in stable lexical order.
 func sortVariants(variants []string) {
-	for _, variant := range variants {
-		if _, known := effortRank[variant]; !known {
-			sort.Strings(variants)
-			return
+	sort.Slice(variants, func(i, j int) bool {
+		rI, okI := effortRank[variants[i]]
+		rJ, okJ := effortRank[variants[j]]
+		if okI && okJ {
+			return rI < rJ
 		}
-	}
-	sort.Slice(variants, func(i, j int) bool { return effortRank[variants[i]] < effortRank[variants[j]] })
+		if okI != okJ {
+			return okI
+		}
+		return variants[i] < variants[j]
+	})
 }
 
 // runCatalogCommand starts `opencode models --verbose` and returns a reader

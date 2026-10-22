@@ -68,7 +68,7 @@ shim detects Git Bash when the user first runs `gga`. The spec scenario is now
 inaccurate and should be updated to reflect the runtime detection model.
 
 **Recommended fix**: treat runtime detection as the contract (the original
-OpenSpec change is no longer in this repository), and add an integration test
+spec change is no longer in this repository), and add an integration test
 that exercises the not-found code path at PS runtime.
 
 ### Iteration 3 — Non-Windows guard test coverage (W-03)

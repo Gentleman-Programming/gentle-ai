@@ -1,6 +1,7 @@
 package filemerge
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -816,6 +817,95 @@ func TestJSONCTopLevelKeyIsEscaped(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := JSONCTopLevelKeyIsEscaped([]byte(tc.raw), "agent"); got != tc.want {
 				t.Fatalf("JSONCTopLevelKeyIsEscaped() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// exactNumberSettings holds number tokens that float64 decoding would round,
+// reformat or reject (#1672); every rewrite must keep them verbatim.
+const exactNumberSettings = `{"agent":{"gentleman":{"tools":{},"__managed_by":"gentle-ai/sdd"}},` +
+	`"big":9007199254740993,"neg":-9007199254740995,"max":9223372036854775807,` +
+	`"nested":{"list":[1.10,6.02214076e23,1E+2,{"min":-9223372036854775808}]},"huge":1e999}`
+
+// assertExactNumbers re-decodes encoded independently of the code under test
+// and checks every exactNumberSettings token at its own JSON path.
+func assertExactNumbers(t *testing.T, encoded []byte) {
+	t.Helper()
+	var root map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(normalizeJSON(encoded)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil {
+		t.Fatalf("decode rewritten JSON error = %v:\n%s", err, encoded)
+	}
+	nested, _ := root["nested"].(map[string]any)
+	list, _ := nested["list"].([]any)
+	if len(list) != 4 {
+		t.Fatalf("nested.list = %#v, want 4 entries:\n%s", nested["list"], encoded)
+	}
+	last, _ := list[3].(map[string]any)
+	got := []any{root["big"], root["neg"], root["max"], list[0], list[1], list[2], last["min"], root["huge"]}
+	want := []string{"9007199254740993", "-9007199254740995", "9223372036854775807",
+		"1.10", "6.02214076e23", "1E+2", "-9223372036854775808", "1e999"}
+	for i := range want {
+		if number, ok := got[i].(json.Number); !ok || number.String() != want[i] {
+			t.Fatalf("number %d = %#v, want exact %s:\n%s", i, got[i], want[i], encoded)
+		}
+	}
+}
+
+func TestJSONRewritesPreserveExactNumberTokens(t *testing.T) {
+	base := []byte(exactNumberSettings)
+	jsonc := []byte("// user note\n" + strings.TrimSuffix(exactNumberSettings, "}") + ",}")
+	for _, tc := range []struct {
+		name    string
+		rewrite func() ([]byte, error)
+	}{
+		{"merge", func() ([]byte, error) { return MergeJSONObjects(base, []byte(`{"added":true}`)) }},
+		{"merge normalized jsonc", func() ([]byte, error) { return MergeJSONObjects(jsonc, []byte(`{"added":true}`)) }},
+		{"merge jsonc touched value", func() ([]byte, error) {
+			return MergeJSONObjectsForPath("opencode.jsonc", base, []byte(`{"nested":{"added":true}}`))
+		}},
+		{"defaults", func() ([]byte, error) { return MergeJSONDefaultsForPath("x.json", base, []byte(`{"added":true}`)) }},
+		{"defaults jsonc touched value", func() ([]byte, error) {
+			return MergeOpenCodeJSONDefaultsForPath("x.jsonc", base, []byte(`{"nested":{"added":true}}`))
+		}},
+		{"remove agent tools", func() ([]byte, error) { return RemoveJSONAgentTools(base, "gentleman") }},
+		{"remove legacy markers", func() ([]byte, error) {
+			return RemoveLegacyOpenCodeAgentMarkers("x.json", base, []string{"gentleman"})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.rewrite()
+			if err != nil {
+				t.Fatalf("rewrite error = %v", err)
+			}
+			if string(got) == string(base) {
+				t.Fatalf("rewrite left the document unchanged; the test must exercise a re-encode")
+			}
+			assertExactNumbers(t, got)
+		})
+	}
+
+	root, err := UnmarshalJSONObject(base)
+	if err != nil || root["big"] != json.Number("9007199254740993") {
+		t.Fatalf("UnmarshalJSONObject() big = %#v (err %v), want exact json.Number", root["big"], err)
+	}
+}
+
+func TestUnmarshalJSONObjectKeepsStrictSingleDocument(t *testing.T) {
+	for _, tc := range []struct{ name, raw, wantErr string }{
+		{"second document", `{"a":1}{"b":2}`, "after top-level value"},
+		{"trailing text", `{"a":1} trailing`, "after top-level value"},
+		{"truncated", `{"a":`, "unexpected end of JSON input"},
+		{"non-object", `[1]`, "cannot unmarshal array"},
+		{"blank", "  \n", ""},
+		{"jsonc", "// note\n{\"a\":1,}", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := UnmarshalJSONObject([]byte(tc.raw))
+			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("UnmarshalJSONObject(%q) error = %v, want %q", tc.raw, err, tc.wantErr)
 			}
 		})
 	}
