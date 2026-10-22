@@ -80,7 +80,7 @@ func userBusEnvironment() ([]string, error) {
 		return nil, errors.New("existing user-manager bus unavailable; no delegation is created automatically")
 	}
 	home := os.Getenv("HOME")
-	if err := privateNativeDirectory(home); err != nil {
+	if err := privateNativeHome(home); err != nil {
 		return nil, err
 	}
 	return []string{"HOME=" + home, "XDG_RUNTIME_DIR=" + runtimeDir, "DBUS_SESSION_BUS_ADDRESS=unix:path=" + bus, "PATH=/usr/bin:/bin", "TERM=xterm-256color"}, nil
@@ -120,7 +120,16 @@ func userManagerVersion(version []byte) error {
 	return nil
 }
 
-func userService(ctx context.Context, self string, args []string, stdin io.Reader, stdout, stderr io.Writer) (resultErr error) {
+type userServicePlan struct {
+	arguments func(string, bool, string, string, []string, []string) ([]string, error)
+	cancel    func() error
+}
+
+func userService(ctx context.Context, self string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	return userServiceWithPlan(ctx, self, args, stdin, stdout, stderr, nil)
+}
+
+func userServiceWithPlan(ctx context.Context, self string, args []string, stdin io.Reader, stdout, stderr io.Writer, plan *userServicePlan) (resultErr error) {
 	if ctx == nil || ctx.Err() != nil || os.Getuid() == 0 {
 		return privateError("unavailable", errors.New("existing delegated non-root user manager required"))
 	}
@@ -178,11 +187,22 @@ func userService(ctx context.Context, self string, args []string, stdin io.Reade
 		}
 	}()
 	env = append(env, "GENTLE_SHELL_UNIT="+unit, "GENTLE_SHELL_UNIT_RECEIPT="+filepath.Join(receiptDir, "kernel.json"))
+	env = append(env, userProgressEnvironment(ctx)...)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "/usr/bin/systemd-run", userServiceArgs(unit, interactive, self, cwd, args, env)...)
+	commandArgs := userServiceArgs(unit, interactive, self, cwd, args, env)
+	if plan != nil {
+		if plan.arguments == nil {
+			return privateError("refused", errors.New("service argument builder unavailable"))
+		}
+		commandArgs, err = plan.arguments(unit, interactive, self, cwd, args, env)
+		if err != nil {
+			return err
+		}
+	}
+	cmd := exec.CommandContext(ctx, "/usr/bin/systemd-run", commandArgs...)
 	cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = env, stdin, stdout, stderr
 	cmd.WaitDelay = 3 * time.Second
 	cmd.Cancel = func() error {
@@ -195,6 +215,9 @@ func userService(ctx context.Context, self string, args []string, stdin io.Reade
 			return privateError("uncertain", errors.New("unit stop failed; preserve owned files and inspect unit"))
 		}
 		return nil
+	}
+	if plan != nil && plan.cancel != nil {
+		cmd.Cancel = plan.cancel
 	}
 	runErr := cmd.Run()
 	readbackErr := userUnitReadback(filepath.Join(receiptDir, "kernel.json"))
@@ -290,6 +313,29 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 	if len(args) == 0 {
 		return errors.New("missing shell entry")
 	}
+	if args[0] == "internal-native-own" {
+		return userNativeOwnerEntry(ctx, self, args[1:], stdin, stdout, stderr)
+	}
+	if args[0] == "internal-install-direct" {
+		req, err := UserInstallFromEntry(args[1:])
+		if err != nil {
+			return err
+		}
+		result, err := RunUserInstallDirect(ctx, req)
+		if err == nil {
+			_, err = fmt.Fprintf(stdout, "Installed %s; commands %s/bin/gentle-shell and %s/bin/pi\n", result.Destination, result.Destination, result.Destination)
+		}
+		return err
+	}
+	if args[0] == "install" {
+		req, fresh, err := userNativeFreshRequest(args[1:])
+		if err != nil {
+			return err
+		}
+		if fresh {
+			return userNativeInstall(ctx, self, args[1:], req, stdin, stdout, stderr)
+		}
+	}
 	inner := strings.HasPrefix(args[0], "internal-")
 	if err := UserKernelCheck(); err != nil {
 		if inner {
@@ -314,8 +360,17 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 			_, err = fmt.Fprintf(stdout, "Installed %s; commands %s/bin/gentle-shell and %s/bin/pi\n", result.Destination, result.Destination, result.Destination)
 		}
 		return err
+	case "native-coordinate":
+		return userNativeCoordinate(ctx, self, args[1:], stdin, stdout, stderr)
+	case "native-produce":
+		return userNativeChild(ctx, args[1:], stdout)
 	case "recover":
 		return userRecover(ctx, args[1:], stdout)
+	case "launch-pnpm":
+		if len(args) < 3 {
+			return errors.New("missing owned PNPM launch root or role")
+		}
+		return userLaunchPNPM(ctx, args[1], args[2], args[3:], stdin, stdout, stderr)
 	case "launch":
 		if len(args) < 2 {
 			return errors.New("missing owned launch root")
@@ -330,9 +385,30 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (UserInstallRes
 	return userRunInstall(ctx, req)
 }
 
-const userBinarySize int64 = 17109176
-const userBinarySHA = "50ba217b5138c1a9c7d5bf2f79931b1bb89b89c4cf650dcd7ee037657c88158d"
-const userNativeManifest = `{"version":"4.0.0","asset":"gentle-ai_4.0.0_linux_amd64.tar.gz","assetSha256":"5f4417cf29c969c86da4799942fd673368840901be1bb09c779a12d7ed6096ea","binarySha256":"50ba217b5138c1a9c7d5bf2f79931b1bb89b89c4cf650dcd7ee037657c88158d"}` + "\n"
+// RunUserInstallDirect is the portable user-level installer: no transient
+// service, no cgroup claim and no process replacement. It keeps the user
+// identity, no-new-privileges, verified artifacts and atomic publication.
+func RunUserInstallDirect(ctx context.Context, req UserInstallRequest) (result UserInstallResult, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		return UserInstallResult{}, privateError("refused", err)
+	}
+	return userRunInstall(context.WithValue(ctx, userDirectInstallKey{}, true), req)
+}
+
+func userDirectKernelCheck() error {
+	status, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return err
+	}
+	return userKernelStatus(string(status), os.Getuid())
+}
+
+const userBinarySize int64 = 18559160
+const userBinarySHA = "9212c7b16ea9abfe93e3a16b29d8390e7762b5c07730cf05df1f3e7892ff96a4"
+const userNativeManifest = `{"version":"4.2.0","asset":"gentle-ai_4.2.0_linux_amd64.tar.gz","assetSha256":"552c1642fd10f5d96cfe9bb1cc3b66b30eb47d3074cc7ca0559b598eb086defc","binarySha256":"9212c7b16ea9abfe93e3a16b29d8390e7762b5c07730cf05df1f3e7892ff96a4"}` + "\n"
 
 // The bootstrap publishes Node itself with mv -T --no-clobber.
 func userBootstrapPublish(context.Context, string, string) error {

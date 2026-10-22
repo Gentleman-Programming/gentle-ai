@@ -23,6 +23,7 @@ Gentle AI configures agents you already have; it does not install an AI agent fo
 | <a id="kiro-ide"></a>Kiro IDE | `kiro-ide` | Native agents, steering, skills and MCP |
 | <a id="openclaw"></a>OpenClaw | `openclaw` | Workspace instructions, skills and global MCP config |
 | <a id="trae"></a>Trae | `trae-ide` | User rules, skills and MCP |
+| <a id="github-copilot-cli"></a>GitHub Copilot CLI | `github-copilot-cli` | Standalone CLI assistant, user instructions, skills and MCP |
 | <a id="pi"></a>Pi | `pi` | Package-owned runtime through Gentle Shell; see [Pi](pi.md) |
 | <a id="hermes"></a>Hermes | `hermes` | Ephemeral `delegate_task` workers, skills and MCP |
 | <a id="conductor"></a>Conductor | `conductor` | Workspace orchestrator that inherits Claude Code configuration; detection and catalog only — no managed writes |
@@ -42,6 +43,7 @@ Delegated work stays focused: the parent supplies task context and exact relevan
 - **Kimi Code:** the system prompt hub includes its persona/output-style modules (`KIMI.md` for the legacy layout, `AGENTS.md` for the current layout); no Claude-style `settings.json` output-style mechanism is assumed. Config paths prefer the current kimi-code v0.11+ root `~/.kimi-code` when it exists as a directory and fall back to the legacy `~/.kimi` root; a plain file named `.kimi-code` is not treated as the current layout, and unexpected stat failures on the current root are surfaced instead of silently selecting the legacy root. Current-layout skills install to `~/.kimi-code/skills`; legacy installs keep the shared `~/.config/agents/skills` path. YAML agents (only discoverable by the legacy CLI via `--agent-file`) always install to the legacy `~/.kimi/agents` directory, so the current layout never receives agent files it cannot load.
 - **OpenClaw:** reads the active workspace from its configuration and writes managed `AGENTS.md`/`SOUL.md` there. MCP entries remain in global OpenClaw configuration.
 - **Hermes:** detected from its configuration directory; installation of the client itself is manual. Existing top-level configuration is preserved when MCP entries are merged.
+- **GitHub Copilot CLI:** detected from the `copilot` binary on PATH and the `~/.copilot` (or `$COPILOT_HOME`) configuration directory. Gentle AI manages its instruction file (`copilot-instructions.md`), skills, and MCP configuration (`mcp-config.json`).
 - **Conductor:** detected from the `~/.conductor` directory; installation of the desktop app itself is manual. Conductor workspaces inherit Claude Code configuration, so Gentle AI makes no Conductor-specific writes: it does not install skills, MCP servers, or system prompt files for Conductor — configure those through Claude Code instead.
 - **Pi:** the installer provisions companion packages, but Gentle Shell owns runtime prompts, model assignments, persona, and delegation. See [Pi integration](pi.md).
 

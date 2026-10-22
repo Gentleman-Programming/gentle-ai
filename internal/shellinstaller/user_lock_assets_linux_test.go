@@ -40,7 +40,7 @@ func TestUserProvisionAssetsStageAndReadback(t *testing.T) {
 	privateMust(t, userProvisionAssets(context.Background(), root, true))
 	files, err := assets.ReadUserAssets()
 	privateMust(t, err)
-	if len(files) != 4 {
+	if len(files) != 5 {
 		t.Fatalf("asset inventory: %v", files)
 	}
 	for name, expected := range files {
@@ -57,7 +57,7 @@ func TestUserProvisionAssetsStageAndReadback(t *testing.T) {
 }
 
 func TestUserProvisionAssetsRefusesChangedAssets(t *testing.T) {
-	for _, name := range []string{"provision.mjs", "user-global-graph.mjs", "user-locks/modern/package-lock.json", "user-locks/prior/package-lock.json"} {
+	for _, name := range []string{"provision.mjs", "user-global-graph.mjs", "user-main-bindings.mjs", "user-locks/modern/package-lock.json", "user-locks/prior/package-lock.json"} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			privateMust(t, os.Chmod(root, 0700))

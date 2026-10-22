@@ -1044,6 +1044,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// passiveDeltaIdentity names the fresh target whose START was withheld
 		// because it only adds passive content to an acknowledged candidate.
 		passiveDeltaIdentity := ""
+		// boundaryReachesHead marks the #5638 outcome where every commit since
+		// the acknowledged boundary was empty: nothing unreviewed remains, and
+		// the fresh offer becomes the acknowledged_boundary_reaches_head stop.
+		boundaryReachesHead := false
 		// Issue #3932: a continuation START issued carries the opaque
 		// repository context, so it is a resume of an existing lineage, never
 		// a pre-named fresh START. A process cwd that does not hold that
@@ -1081,10 +1085,19 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// Resolve the effective candidate before acknowledgement discovery or
 			// consumption lookup, so STATUS and START share one identity.
 			if requestedLineage == "" && selectedBaseRef == "" && !*workspaceOverlay {
-				if derived, derivedTarget, ok := reviewDerivedCommittedRangeSnapshot(ctx, root, builder, liveSnapshot, target); ok {
-					liveSnapshot, target = derived, derivedTarget
-					derivedBaseRef = derivedTarget.BaseRef
-					selector = &reviewTransitionSelector{Kind: target.Kind, Projection: liveSnapshot.Projection, BaseRef: derivedBaseRef, PrePRRepresentable: true}
+				if derived, derivedTarget, outcome := reviewDerivedCommittedRangeSnapshot(ctx, root, builder, liveSnapshot, target); outcome != derivedRangeNone {
+					if outcome == derivedRangeCandidate {
+						liveSnapshot, target = derived, derivedTarget
+						derivedBaseRef = derivedTarget.BaseRef
+						selector = &reviewTransitionSelector{Kind: target.Kind, Projection: liveSnapshot.Projection, BaseRef: derivedBaseRef, PrePRRepresentable: true}
+					}
+					if outcome == derivedRangeBoundaryReachesHead {
+						// Issue #5638: nothing unreviewed remains between the
+						// acknowledged boundary and HEAD. The guards below still
+						// evaluate the full-range candidate truthfully; only the
+						// final fresh offer becomes the boundary stop.
+						boundaryReachesHead = true
+					}
 				}
 			}
 			// #3900: a zero-lens START closes approved with a pending
@@ -1150,6 +1163,13 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					if passive, passiveErr := reviewtransaction.AcknowledgedPassivePredecessor(ctx, root, liveSnapshot); passiveErr == nil && passive {
 						native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
 						passiveDeltaIdentity = liveSnapshot.Identity
+					} else if passiveErr == nil && boundaryReachesHead {
+						// Issue #5638: the acknowledged boundary reaches HEAD --
+						// every commit since it was empty, so nothing unreviewed
+						// remains. Same withholding contract as the passive
+						// sibling: no authority, live lineages stay visible, and
+						// any earlier failure kept the offer.
+						native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
 					}
 				}
 			}
@@ -1182,6 +1202,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		result.committedRangeBaseRef = derivedBaseRef
 		result.startOptions = startOptions
 		result.passiveDeltaAfterAcknowledgement = passiveDeltaIdentity != "" && native.TargetIdentity == passiveDeltaIdentity &&
+			native.Action == reviewtransaction.TargetStatusActionStop
+		result.acknowledgedBoundaryReachesHead = boundaryReachesHead &&
 			native.Action == reviewtransaction.TargetStatusActionStop
 		// Issue #4040: publish the digest once, here, before every path that
 		// could suppress it — the compact-reviewing replacement immediately
@@ -1602,25 +1624,76 @@ func reviewFreshAtomicTargetStatus(target reviewtransaction.Target, snapshot rev
 	}
 }
 
+// reviewDerivedRangeOutcome says what the selectorless committed-range
+// derivation resolved for this fresh workspace.
+type reviewDerivedRangeOutcome int
+
+const (
+	// derivedRangeNone: no derivation happened; the caller keeps the live
+	// current-changes candidate and its base-selection fallback.
+	derivedRangeNone reviewDerivedRangeOutcome = iota
+	// derivedRangeCandidate: snapshot/target hold the effective candidate --
+	// the full committed range, or the delta since the acknowledged boundary
+	// when the boundary walk found one with a non-passive delta (issue #5638).
+	derivedRangeCandidate
+	// derivedRangeBoundaryReachesHead: every commit since the acknowledged
+	// boundary was empty, so nothing unreviewed remains between the boundary
+	// and HEAD. snapshot/target still hold the full-range candidate so the
+	// pending-lineage and occupancy guards keep evaluating truthfully; the
+	// caller turns the fresh offer into the acknowledged_boundary_reaches_head
+	// stop and never hides a live lineage.
+	derivedRangeBoundaryReachesHead
+)
+
 // reviewDerivedCommittedRangeSnapshot resolves an empty selectorless workspace
-// to the remote default branch's unique committed range before classification.
-// The result is the effective STATUS candidate, not a second transition-only
-// identity. Ambiguous or empty ranges retain the existing base-selection fallback.
-func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target) (reviewtransaction.Snapshot, reviewtransaction.Target, bool) {
+// to the unique committed range before classification. The result is the
+// effective STATUS candidate, not a second transition-only identity. Ambiguous
+// or empty ranges retain the existing base-selection fallback. When the
+// acknowledged-boundary walk (issue #5638) finds a consumed first-parent
+// ancestor with a non-passive delta, the effective candidate is the delta
+// since that boundary -- its --base-ref names the boundary commit -- and every
+// walk failure, passive delta, or beyond-window boundary keeps the full-range
+// candidate exactly as before.
+func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target) (reviewtransaction.Snapshot, reviewtransaction.Target, reviewDerivedRangeOutcome) {
 	if live.Kind != reviewtransaction.TargetCurrentChanges || len(live.Paths) != 0 {
-		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, derivedRangeNone
 	}
 	base, err := reviewtransaction.ResolveCommittedRangeBase(ctx, root)
 	if err != nil || base == "" {
-		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, derivedRangeNone
 	}
 	derivedTarget := reviewtransaction.Target{
 		Kind: reviewtransaction.TargetBaseDiff, BaseRef: base,
 		IntendedUntracked: append([]string{}, target.IntendedUntracked...),
 	}
 	snapshot, err := builder.BuildStoredSnapshot(ctx, derivedTarget)
-	// Empty commits and ambiguous ranges retain the base-selection fallback.
-	return snapshot, derivedTarget, err == nil && len(snapshot.Paths) > 0
+	if err != nil || len(snapshot.Paths) == 0 {
+		// Empty commits and ambiguous ranges retain the base-selection fallback.
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, derivedRangeNone
+	}
+	// Issue #5638: the reviewed boundary advances on acknowledgement. A
+	// non-passive delta from the nearest acknowledged ancestor is the whole
+	// change actually attributable to the session; everything else -- walk
+	// failure, no boundary, passive delta, or beyond-window -- keeps the
+	// full-range candidate and its existing suppression paths.
+	if boundary, ok, boundaryErr := reviewtransaction.AcknowledgedBoundaryCommit(ctx, root, snapshot); boundaryErr == nil && ok {
+		if len(boundary.DeltaPaths) == 0 {
+			return snapshot, derivedTarget, derivedRangeBoundaryReachesHead
+		}
+		if !boundary.Passive {
+			deltaTarget := reviewtransaction.Target{
+				Kind: reviewtransaction.TargetBaseDiff, BaseRef: boundary.Commit,
+				IntendedUntracked: append([]string{}, target.IntendedUntracked...),
+			}
+			deltaSnapshot, deltaErr := builder.BuildStoredSnapshot(ctx, deltaTarget)
+			if deltaErr == nil && len(deltaSnapshot.Paths) > 0 {
+				return deltaSnapshot, deltaTarget, derivedRangeCandidate
+			}
+			// A delta rebuild failure keeps the full-range offer; START's own
+			// gates still decide on it.
+		}
+	}
+	return snapshot, derivedTarget, derivedRangeCandidate
 }
 
 // reviewFreshStatusPreflight makes the fresh, store-free STATUS classification

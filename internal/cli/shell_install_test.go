@@ -128,3 +128,13 @@ func TestShellInstallInternalCommandsRetainKernelChecks(t *testing.T) {
 		})
 	}
 }
+
+func TestShellPNPMLaunchHelp(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("PNPM dispatch is Linux-only")
+	}
+	var output bytes.Buffer
+	if err := RunShell([]string{"--help"}, &output); err != nil || !strings.Contains(output.String(), "launch-pnpm ROOT pi|gentle-shell [ARGS...]") || !strings.Contains(output.String(), "shell launch ROOT [PI_ARGS...]") {
+		t.Fatal("missing PNPM or legacy launch help", err, output.String())
+	}
+}

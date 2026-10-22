@@ -12,14 +12,14 @@ import { projectGlobalGraph } from '../scripts/user-global-graph.mjs';
 // Execute the current provisioner's last comparison with semantic evidence in
 // memory. No acquisition, supplier code, native execution or physical proof.
 const helperSource = fs.readFileSync(new URL('../scripts/provision-gentle-shell-private-global.mjs', import.meta.url), 'utf8');
-const comparison = helperSource.slice(helperSource.indexOf('    const declaration = settings.packages?'),
+const comparison = helperSource.slice(helperSource.indexOf('    const selectedPackageRoot ='),
   helperSource.lastIndexOf('\n  }\n  if (!read(lockPath)'));
 async function compareGraph(observed, expected, lock, retainedPaths) {
   const root = fileURLToPath(new URL('../scripts/', import.meta.url));
   const finalPrefix = '/fixture/prefix', finalRoot = '/fixture/root', packageRoot = '/fixture/prefix/lib/node_modules/gentle-pi';
   const witness = Buffer.from(`${JSON.stringify(expected)}\n`);
   const context = vm.createContext({
-    root, finalPrefix, finalRoot, packageRoot, path, pathToFileURL, Buffer,
+    root, finalPrefix, finalRoot, packageRoot, path, pathToFileURL, Buffer, verifyingSelectedSDK: false,
     observed, lock, retained: { paths: retainedPaths }, preparing: false,
     settings: { packages: [packageRoot], npmCommand: [path.join(finalRoot, 'runtime/node/bin/node'),
       path.join(finalRoot, 'runtime/node/lib/node_modules/npm/bin/npm-cli.js'), '--prefix', finalPrefix] },
@@ -35,8 +35,19 @@ async function compareGraph(observed, expected, lock, retainedPaths) {
   assert.equal(witness.toString(), `${JSON.stringify(expected)}\n`);
 }
 
+// Frozen witnesses per compiled lock: total declared keys, applicable rows on
+// linux/x64/glibc, and the observed rows including each lock's retained
+// nonapplicable optional platform binaries.
+const witnesses = {
+  modern: { keys: 202, expected: 184, actual: 202, extras: ['node_modules/@yuuang/', 'node_modules/@ff-labs/'],
+    retained: 'node_modules/@yuuang/ffi-rs-darwin-arm64', applicable: 'node_modules/@yuuang/ffi-rs-linux-x64-gnu' },
+  prior: { keys: 315, expected: 272, actual: 297, extras: ['/node_modules/@esbuild/'],
+    retained: 'node_modules/@earendil-works/pi-coding-agent/node_modules/@esbuild/darwin-arm64',
+    applicable: 'node_modules/@earendil-works/pi-coding-agent/node_modules/@esbuild/linux-x64' },
+};
+
 for (const profile of ['modern', 'prior']) {
-  test(`${profile}: current helper compares 297 authenticated rows against the original 272-row witness`, async () => {
+  test(`${profile}: current helper compares ${witnesses[profile].actual} authenticated rows against the ${witnesses[profile].expected}-row witness`, async () => {
     const lock = JSON.parse(fs.readFileSync(new URL(`../scripts/user-locks/${profile}/package-lock.json`, import.meta.url)));
     const row = key => ({ directory: `lib/${key}`, name: lock.packages[key].name ?? key.split('node_modules/').at(-1),
       version: lock.packages[key].version, integrity: lock.packages[key].integrity });
@@ -45,11 +56,12 @@ for (const profile of ['modern', 'prior']) {
     const applicable = record => matches(record.os, 'linux') && matches(record.cpu, 'x64') && matches(record.libc, 'glibc');
     const keys = Object.keys(lock.packages).filter(Boolean);
     const expected = keys.filter(key => !lock.packages[key].optional || applicable(lock.packages[key])).map(row);
-    const retained = keys.filter(key => key.includes('/node_modules/@esbuild/') && lock.packages[key].optional && !applicable(lock.packages[key]));
+    const retained = keys.filter(key => witnesses[profile].extras.some(extra => key.includes(extra)) &&
+      lock.packages[key].optional && !applicable(lock.packages[key]));
     const actual = [...expected, ...retained.map(row)];
-    assert.equal(keys.length, 315);
-    assert.equal(expected.length, 272);
-    assert.equal(actual.length, 297);
+    assert.equal(keys.length, witnesses[profile].keys);
+    assert.equal(expected.length, witnesses[profile].expected);
+    assert.equal(actual.length, witnesses[profile].actual);
     const preimage = JSON.stringify({ actual, expected, lock, retained });
     await compareGraph(actual, expected, lock, retained);
     assert.equal(JSON.stringify({ actual, expected, lock, retained }), preimage);
@@ -63,8 +75,8 @@ for (const profile of ['modern', 'prior']) {
 
 // This pure projection follows, never replaces, the provisioner's physical,
 // retained-inventory, full-source-byte, range, bin, native and settings checks.
-const optionalPath = 'node_modules/@earendil-works/pi-coding-agent/node_modules/@esbuild/darwin-arm64';
 function fixture(profile) {
+  const optionalPath = witnesses[profile].retained;
   const lock = JSON.parse(fs.readFileSync(new URL(`../scripts/user-locks/${profile}/package-lock.json`, import.meta.url)));
   const row = key => ({ directory: `lib/${key}`, name: lock.packages[key].name ?? key.split('node_modules/').at(-1),
     version: lock.packages[key].version, integrity: lock.packages[key].integrity });
@@ -86,7 +98,7 @@ for (const profile of ['modern', 'prior']) {
     assert.deepEqual(projectGlobalGraph(f.expected, f.lock, f.retained), f.expected);
   });
 
-  test(`${profile}: complete declared platform graph tolerates all retained esbuild extras`, () => {
+  test(`${profile}: complete declared platform graph tolerates all retained optional extras`, () => {
     const f = fixture(profile);
     // Declarative corpus coverage, not npm/runtime acquisition proof.
     const matches = (rule, value) => !rule || (!rule.includes(`!${value}`) &&
@@ -94,11 +106,11 @@ for (const profile of ['modern', 'prior']) {
     const applicable = entry => matches(entry.os, 'linux') && matches(entry.cpu, 'x64') && matches(entry.libc, 'glibc');
     const keys = Object.keys(f.lock.packages).filter(Boolean);
     const expected = keys.filter(key => !f.lock.packages[key].optional || applicable(f.lock.packages[key])).map(f.row);
-    const retained = keys.filter(key => key.includes('/node_modules/@esbuild/') &&
+    const retained = keys.filter(key => witnesses[profile].extras.some(extra => key.includes(extra)) &&
       f.lock.packages[key].optional === true && !applicable(f.lock.packages[key]));
     const actual = [...expected, ...retained.map(f.row)];
-    assert.equal(expected.length, 272);
-    assert.equal(actual.length, 297);
+    assert.equal(expected.length, witnesses[profile].expected);
+    assert.equal(actual.length, witnesses[profile].actual);
     assert.deepEqual(projectGlobalGraph(actual, f.lock, retained), expected);
   });
 
@@ -106,9 +118,9 @@ for (const profile of ['modern', 'prior']) {
     'unknown name': row => { row.name = 'foreign'; },
     'unknown version': row => { row.version = '9.9.9'; },
     'changed integrity': row => { row.integrity = `sha512-${Buffer.alloc(64).toString('base64')}`; },
-    'relocated same identity': row => { row.directory = 'lib/node_modules/@esbuild/darwin-arm64'; },
-    'directory alias': row => { row.directory = `lib/./${optionalPath}`; },
-    'escaping directory': row => { row.directory = `lib/../${optionalPath}`; },
+    'relocated same identity': row => { row.directory = `lib/${witnesses[profile].applicable}`; },
+    'directory alias': row => { row.directory = `lib/./${witnesses[profile].retained}`; },
+    'escaping directory': row => { row.directory = `lib/../${witnesses[profile].retained}`; },
   };
   for (const [scenario, mutate] of Object.entries(mutations)) {
     test(`${profile}: ${scenario} remains visible to the graph seal`, () => {
@@ -124,7 +136,7 @@ for (const profile of ['modern', 'prior']) {
     const f = fixture(profile);
     const actual = [...f.expected, f.extra];
     assert.deepEqual(projectGlobalGraph(actual, f.lock, []), actual);
-    f.lock.packages[optionalPath].optional = false;
+    f.lock.packages[witnesses[profile].retained].optional = false;
     assert.deepEqual(projectGlobalGraph(actual, f.lock, f.retained), actual);
     // Even a forged optional flag/retained list cannot hide a selected root.
     const rootPath = 'node_modules/typebox';
@@ -145,7 +157,7 @@ for (const profile of ['modern', 'prior']) {
 
   test(`${profile}: applicable optional nodes and missing required nodes still drift`, () => {
     const f = fixture(profile);
-    const applicablePath = optionalPath.replace('darwin-arm64', 'linux-x64');
+    const applicablePath = witnesses[profile].applicable;
     assert.equal(f.lock.packages[applicablePath].optional, true);
     const actual = [...f.expected, f.row(applicablePath)];
     assert.deepEqual(projectGlobalGraph(actual, f.lock, f.retained), actual);
@@ -159,7 +171,7 @@ for (const profile of ['modern', 'prior']) {
 // refuse before projection (the projection module is deliberately not staged).
 for (const profile of ['modern', 'prior']) {
   for (const [scenario, retainedPath] of [
-    ['applicable optional', optionalPath.replace('darwin-arm64', 'linux-x64')],
+    ['applicable optional', witnesses[profile].applicable],
     ['selected root', 'node_modules/typebox'],
     ['required package', 'node_modules/@earendil-works/pi-ai'],
     ['unknown package', 'node_modules/foreign'],
@@ -180,7 +192,7 @@ for (const profile of ['modern', 'prior']) {
       fs.writeFileSync(path.join(root, `user-locks/${profile}/package-lock.json`), lockBytes);
       fs.writeFileSync(path.join(root, source, 'package-lock.json'), lockBytes);
       fs.writeFileSync(path.join(root, 'prefix/lib/node_modules/@earendil-works/pi-coding-agent/package.json'),
-        JSON.stringify({ version: profile === 'prior' ? '0.99.2' : '1.0.0' }));
+        JSON.stringify({ version: profile === 'prior' ? '0.99.2' : '1.3.0' }));
       if (profile === 'prior') fs.writeFileSync(path.join(root, 'state/prior-global-graph.json'), '[]');
       const emptyInventorySHA = crypto.createHash('sha256').update(JSON.stringify([['', 'dir', 0o700]])).digest('hex');
       fs.writeFileSync(path.join(root, source, '.gentle-shell-optional.json'),

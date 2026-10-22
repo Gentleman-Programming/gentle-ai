@@ -160,6 +160,8 @@ var reviewStopReasonNarration = map[string]string{
 	"target_already_acknowledged": "This exact target was already acknowledged and its review authority was burned. " +
 		"No further review action is required; delivery follows ordinary repository policy. Changed targets remain eligible for review. " +
 		"Only when deliberately requesting a new independent review, use `gentle-ai review start`; do not automatically restart this consumed target.",
+	"acknowledged_boundary_reaches_head": "The reviewed boundary advances on acknowledgement and reaches HEAD: every commit since the boundary was empty, so nothing unreviewed remains. " +
+		"Continue working; any new commit re-derives a fresh candidate and `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <agent> --next-transition` offers it.",
 	"acknowledged_predecessor_passive_delta": "This committed range only adds passive content (documentation or notes) to a candidate that was already approved and acknowledged, so there is nothing new to review. " +
 		"No review action is required and no review authority was created; delivery follows ordinary repository policy. Any non-passive change is offered for review again. " +
 		"Only when deliberately requesting a new independent review, use `gentle-ai review start`.",

@@ -15,6 +15,8 @@ prefers over PATH: the private agent (Separate) or the selected --agent (Shared)
 Shared creates AGENT/bin/fd and AGENT/bin/rg; existing tools refuse before changes.
 gentle-ai shell launch ROOT [PI_ARGS...]
   Launch the selected stock Pi; normal use is through TARGET/bin/pi or gentle-shell.
+gentle-ai shell launch-pnpm ROOT pi|gentle-shell [ARGS...]
+  Launch the selected authenticated PNPM entry through the same qualified worker.
 gentle-ai shell recover ROOT inspect
   Replace inspect with its printed confirmation to restore shared preimages.
 Requires Linux amd64 and qualified cgroup limits or an existing delegated

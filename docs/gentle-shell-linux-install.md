@@ -21,6 +21,20 @@ Other platforms: [macOS](gentle-shell-macos-install.md) and [Windows](gentle-she
 
 Run `gentle-ai shell install`. Arrows select mode; Tab cycles mode-appropriate fields (Shared adds prefix/agent). Enter reviews; `y` confirms and closes the TUI before terminal handoff. Escape aborts before installation; Ctrl-C during installation requests cancellation and waits for stop/reap.
 
+The ordinary `gentle-ai` Welcome screen starts with the featured **Install Gentle-Shell, our own agent** campaign below the logo. Enter opens the grouped configuration menu and its focused detail panel; narrower terminals use the same choices in a compact layout. End selects Continue. The selector uses the existing Bubble Tea program; a confirmed selection returns to the host before installation starts. The host then rechecks the physical selection and fresh confirmation token. Cancelling returns to Welcome without starting a worker.
+
+The embedded Welcome flow restores the original destination editor with a field-specific **About** column. Its Ready screen has **Install Gentle-Shell / Back / Cancel** on the left and the focused action’s pageable request/scopes on the right. Use arrows or j/k for actions and Enter to select; y/n, Ctrl-E and Escape keep their existing meanings. The `[offset/last]` footer reports review line offsets, not pages. Back preserves the complete request while clearing consent; no action focus, scrolling or rendering starts installation. This presentation does not change the standalone CLI selector.
+
+This entry-point slice connects the existing installation protocol. It does not establish original-installer/PNPM publication or installed-platform qualification.
+
+The internal request binds preference values to physical confirmation while preserving legacy bytes when no profile is supplied. Non-nil profiles are currently refused before installation effects; this slice does not expose new preference controls or silently drop unsupported choices.
+
+The private-stage preference writer is connected before runtime bootstrap. It preserves nil legacy stages, writes only canonical private files for supported internal selections, and leaves unmanaged persona bytes untouched. Public profile admission and installed-platform qualification remain disabled/pending; explicit RDD choices are still refused.
+
+Fresh private-stage creation and preferences are now composed by the installation path: validation precedes creation, the legacy layout is retained for nil profiles, and the caller keeps ownership of cleanup/evidence. This does not enable public profile admission.
+
+Persona/background serialization now has one side-effect-free canonical codec consumed by the POSIX writer. Native custody, exclusive writes and staged readback remain in that writer; Windows non-nil profiles stay refused and no Windows guest qualification is admitted.
+
 The confirmation review wraps to terminal width. Use PgUp/PgDn to scroll and Home/End to reach the first/last page, including the full Shared settings preview and recovery warnings; scrolling or resizing does not confirm or change your selection.
 
 For command-line installation, inspect, then use the **exact fresh printed confirmation** for that unchanged selection:
@@ -75,3 +89,13 @@ There is no automatic migration. Review user-authored data before manual transfe
 Stock Pi's updater is retained. Readback accepts only complete known prior/modern graphs; unknown versions, bytes or placement fail closed and retain evidence. Package lifecycle scripts stay disabled. Installation/UI opening or a same-version reinstall does not qualify the full update journey.
 
 Never delete uncertain roots, stages, locks or evidence to retry. Inspection inventories are not backups; recovery is not hostile-same-UID custody or full disaster recovery. Actual manager, cancellation, startup/update and recovery qualification remains pending on the current candidate.
+
+## Global RDD source interface
+
+The source CLI supports `gentle-ai review mode status --global-only --json` and the corresponding `enable`/`disable` operations. This route reads or writes only the global HOME source without repository resolution, including its unknown-value repair commands. It requires global scope and refuses every supplied `--expected-revision`. Ordinary status/review resolution is unchanged: a clone-local OFF still wins even when the global-source view reports ON.
+
+This source-only interface does not alter the current user switch or installed binaries, admit installer profiles, or supply a compatible published artifact. Explicit staged RDD preferences remain refused until their actual supported native effect and readback are integrated. The retained POSIX proof cut includes an actual Git-invocation shim with an ordinary-route negative control, printed global-only repairs, and unreadable-file byte/identity/mode/mtime preservation. These are recovered assertions, not a new execution, Windows custody proof or installed acceptance.
+
+## Context7 selection contract
+
+The internal DTO and named transport accept only explicit Context7 ON/OFF or omission, bind canonical bytes to confirmation, and preserve historical bytes when omitted. Empty/null/duplicate/unknown/invalid values remain refused. This is inert choice support: public profiles and explicit Context7 stage effects remain refused, without configuration writes or an implied Ready result. The default UI API remains with its actual future consumer.

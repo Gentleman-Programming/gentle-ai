@@ -60,6 +60,11 @@ func userWindowsVerifyArchive(ctx context.Context, root string, artifact userWin
 	return nil
 }
 
+// userWindowsVerify is the complete integrity verification. It stays on
+// install, idempotent install and explicit check: it walks the whole owned
+// inventory, compares every installed artefact with the retained archives and
+// runs provision verify. Launch must stay fast and therefore uses the
+// narrower userWindowsVerifyLaunch trust boundary instead.
 func userWindowsVerify(ctx context.Context, root string, stdout, stderr io.Writer) error {
 	manifest, err := userWindowsManifestRead(root)
 	if err != nil {
@@ -86,6 +91,15 @@ func userWindowsVerify(ctx context.Context, root string, stdout, stderr io.Write
 			return errors.Join(err, errors.New("owned Windows command binding differs"))
 		}
 	}
+	// The pinned Go artifact is intentionally absent when the installation
+	// reused a system Go toolchain. The decision is made once, before any
+	// archive is read: only a valid canonical in-target marker accepts the
+	// absence, and a present but invalid marker is refused outright. Every
+	// other artifact keeps its exact retained-archive comparison.
+	goZipRequired, err := userWindowsVerifyGoZipRequired(root)
+	if err != nil {
+		return err
+	}
 	for i, artifact := range userWindowsArtifacts {
 		destination, member := filepath.Join(root, "agent/bin"), strings.TrimSuffix(artifact.Archive, ".zip")+".exe"
 		if i < 2 {
@@ -98,6 +112,9 @@ func userWindowsVerify(ctx context.Context, root string, stdout, stderr io.Write
 			if i == 1 {
 				member = "bin/go.exe"
 			}
+		}
+		if i == 1 && !goZipRequired {
+			continue
 		}
 		if err := userWindowsVerifyArchive(ctx, root, artifact, destination, member); err != nil {
 			return err
@@ -117,6 +134,79 @@ func userWindowsVerify(ctx context.Context, root string, stdout, stderr io.Write
 		}
 	}
 	return userWindowsProvision(ctx, root, "verify", stdout, stderr)
+}
+
+// Launch trust boundary: launches run every second, so verification is
+// restricted to the objects the launch itself executes and their owned
+// identity — manifest/selection/lock custody, the supervisor image hash,
+// prefix/agent identity, the bin/*.cmd command bindings, and the presence and
+// ownership of the Node executable plus the owned shell package/CLI entry
+// points. It deliberately does not read or decompress runtime/archives, does
+// not walk the full installed inventory, and does not run provision verify;
+// that full archive, per-file and npm-package integrity remains enforced by
+// userWindowsVerify on install, idempotent install and explicit check.
+func userWindowsVerifyLaunch(ctx context.Context, root string) error {
+	manifest, err := userWindowsManifestRead(root)
+	if err != nil {
+		return err
+	}
+	image, err := userWindowsRead(filepath.Join(root, "supervisor.exe"), 256<<20)
+	if err != nil || userWindowsSHA(image) != manifest.SupervisorSHA {
+		return errors.Join(err, errors.New("owned Windows supervisor differs"))
+	}
+	prefix, err := userWindowsIdentity(filepath.Join(root, "prefix"), true)
+	if err != nil || prefix != manifest.PrefixIdentity {
+		return errors.Join(err, errors.New("owned Windows prefix identity differs"))
+	}
+	agent, err := userWindowsIdentity(filepath.Join(root, "agent"), true)
+	if err != nil || agent != manifest.AgentIdentity {
+		return errors.Join(err, errors.New("owned Windows agent identity differs"))
+	}
+	for _, product := range []string{"pi", "gentle-shell"} {
+		binding, err := userWindowsRead(filepath.Join(root, "bin", product+".cmd"), 8192)
+		if err != nil || !bytes.Equal(binding, userWindowsBinding(root, product)) {
+			return errors.Join(err, errors.New("owned Windows command binding differs"))
+		}
+	}
+	if _, err := userWindowsIdentity(filepath.Join(root, "runtime/node/node.exe"), true); err != nil {
+		return errors.Join(err, errors.New("owned Windows Node executable differs"))
+	}
+	for _, product := range []string{"pi", "gentle-shell"} {
+		if _, err := userWindowsIdentity(userWindowsLaunchCLI(root, product), true); err != nil {
+			return errors.Join(err, fmt.Errorf("owned Windows %s launch entry differs", product))
+		}
+	}
+	return ctx.Err()
+}
+
+// userWindowsLaunchVerify is the exact seam the launch case verifies through.
+// It is a variable only so tests can observe which verifier launch selects;
+// production behaviour is the fast userWindowsVerifyLaunch boundary above.
+var userWindowsLaunchVerify = userWindowsVerifyLaunch
+
+// userWindowsLaunch verifies the launch trust boundary and then runs the
+// owned product inside the bounded owned Job Object.
+func userWindowsLaunch(ctx context.Context, root, product string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	// The boundary reads only a few owned files; it cannot take the 900s the
+	// complete verification may legitimately need.
+	verification, cancel := context.WithTimeout(ctx, 120*time.Second)
+	cause := userWindowsLaunchVerify(verification, root)
+	cancel()
+	if cause != nil {
+		return cause
+	}
+	env, err := userWindowsEnvironment(root)
+	if err != nil {
+		return err
+	}
+	cli := userWindowsLaunchCLI(root, product)
+	forward := []string{cli}
+	if product == "gentle-shell" {
+		forward = append(forward, "--isolated", "--") // Caller flags cannot redirect the Shell home/package.
+	}
+	command := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/node.exe"), append(forward, args...)...)
+	command.Env, command.Stdin, command.Stdout, command.Stderr, command.WaitDelay = env, stdin, stdout, stderr, 2*time.Second
+	return command.Run() // Inherits the caller CWD and the bounded owned Job Object.
 }
 
 func userWindowsConsoleSave() func() error {
@@ -184,6 +274,15 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		forward := append([]string{"shell", "internal-" + args[0]}, args[1:]...)
 		command := exec.CommandContext(ctx, self, forward...)
 		command.Env, command.Stdin, command.Stdout, command.Stderr = env, stdin, stdout, stderr
+		if args[0] == "install" {
+			// The single caller context item for system-Go reuse: the absolute
+			// go.exe resolved on the original process PATH. The bounded worker
+			// revalidates the candidate completely before any trust decision;
+			// no caller PATH, credentials or configuration are forwarded.
+			if candidate := userWindowsSystemGoCandidate(); candidate != "" {
+				command.Env = append(command.Env, userWindowsSystemGoCandidateEnv+"="+candidate)
+			}
+		}
 		grace := 2 * time.Second
 		if args[0] == "install" {
 			grace = 120 * time.Second // Quiesce owned descendants and remove the owned stage.
@@ -224,25 +323,7 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		if len(args) < 3 || (args[2] != "pi" && args[2] != "gentle-shell") {
 			return errors.New("missing owned Windows product/root")
 		}
-		root := args[1]
-		verification, cancel := context.WithTimeout(ctx, 900*time.Second)
-		cause := userWindowsVerify(verification, root, io.Discard, io.Discard)
-		cancel()
-		if cause != nil {
-			return cause
-		}
-		env, err := userWindowsEnvironment(root)
-		if err != nil {
-			return err
-		}
-		cli := userWindowsLaunchCLI(root, args[2])
-		forward := []string{cli}
-		if args[2] == "gentle-shell" {
-			forward = append(forward, "--isolated", "--") // Caller flags cannot redirect the Shell home/package.
-		}
-		command := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/node.exe"), append(forward, args[3:]...)...)
-		command.Env, command.Stdin, command.Stdout, command.Stderr, command.WaitDelay = env, stdin, stdout, stderr, 2*time.Second
-		return command.Run() // Inherits the caller CWD and the bounded owned Job Object.
+		return userWindowsLaunch(ctx, args[1], args[2], args[3:], stdin, stdout, stderr)
 	default:
 		return errors.New("Windows MVP supports check, Separate install and owned launch; no Shared/update/recovery")
 	}

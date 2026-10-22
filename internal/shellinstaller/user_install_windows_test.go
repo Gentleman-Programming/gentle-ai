@@ -5,6 +5,8 @@ package shellinstaller
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,6 +63,112 @@ func TestUserWindowsMainArchiveAuthority(t *testing.T) {
 				t.Fatal("changed retained archive digest accepted")
 			}
 		})
+	}
+}
+
+func TestUserWindowsVerifyGoZipRequiredFollowsMarker(t *testing.T) {
+	root := t.TempDir()
+	required, err := userWindowsVerifyGoZipRequired(root)
+	if !required || err != nil {
+		t.Fatalf("absent marker must keep the pinned go.zip contract: required=%v err=%v", required, err)
+	}
+	goExe := userWindowsSystemGoFixture(t, "")
+	root = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsSystemGoStage(root, userWindowsSystemGo{Go: goExe, Version: "go1.27.1"}); err != nil {
+		t.Fatal(err)
+	}
+	required, err = userWindowsVerifyGoZipRequired(root)
+	if required || err != nil {
+		t.Fatalf("valid marker must accept the absent go.zip artifact: required=%v err=%v", required, err)
+	}
+	root = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsWrite(filepath.Join(root, "runtime", "system-go.json"), []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = userWindowsVerifyGoZipRequired(root)
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("malformed marker was not refused: %v", err)
+	}
+}
+
+// The complete verification must refuse a present but invalid reuse marker
+// outright, before any pinned-archive noise can mask it.
+func TestUserWindowsVerifyRefusesMalformedSystemGoMarker(t *testing.T) {
+	root := userWindowsLaunchFixture(t)
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsWrite(filepath.Join(root, "runtime", "system-go.json"), []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	err := userWindowsVerify(context.Background(), root, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "system Go") {
+		t.Fatalf("complete verification did not refuse the malformed system Go marker: %v", err)
+	}
+}
+
+// The owned provision/launch PATH entry for the Go toolchain follows the
+// reuse marker: a valid marker puts the system Go directory on PATH and
+// removes the pinned runtime entry; absence or any doubt keeps the pinned
+// entry, so launch never depends on the marker.
+func TestUserWindowsSystemGoBinFollowsMarker(t *testing.T) {
+	goExe := userWindowsSystemGoFixture(t, "")
+	root := t.TempDir()
+	if got := userWindowsSystemGoBin(root); got != filepath.Join(root, "runtime", "go", "bin") {
+		t.Fatalf("absent marker changed the pinned Go PATH entry: %q", got)
+	}
+	root = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsWrite(filepath.Join(root, "runtime", "system-go.json"), []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	if got := userWindowsSystemGoBin(root); got != filepath.Join(root, "runtime", "go", "bin") {
+		t.Fatalf("malformed marker changed the pinned Go PATH entry: %q", got)
+	}
+	root = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsSystemGoStage(root, userWindowsSystemGo{Go: goExe, Version: "go1.27.1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := userWindowsSystemGoBin(root); got != filepath.Dir(goExe) {
+		t.Fatalf("valid marker did not select the system Go directory: %q", got)
+	}
+}
+
+func TestUserWindowsEnvironmentCarriesSystemGoPath(t *testing.T) {
+	goExe := userWindowsSystemGoFixture(t, "")
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsSystemGoStage(root, userWindowsSystemGo{Go: goExe, Version: "go1.27.1"}); err != nil {
+		t.Fatal(err)
+	}
+	env, err := userWindowsEnvironment(root)
+	if err != nil {
+		t.Fatalf("owned environment refused: %v", err)
+	}
+	var path string
+	for _, entry := range env {
+		if name, value, found := strings.Cut(entry, "="); found && name == "PATH" {
+			path = value
+		}
+	}
+	if !strings.Contains(path, filepath.Dir(goExe)) {
+		t.Fatalf("provision PATH lacks the system Go directory: %q", path)
+	}
+	if strings.Contains(path, filepath.Join(root, "runtime", "go", "bin")) {
+		t.Fatalf("provision PATH retains the pinned Go entry under reuse: %q", path)
 	}
 }
 

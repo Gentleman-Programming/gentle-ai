@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"strings"
 	"testing"
 
 	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
@@ -75,7 +74,8 @@ func TestUserPinParity(t *testing.T) {
 		{"guest/archive-check", python, `(?m)^                require\(len\(raw\) == 57224421 and hashlib.sha256\(raw\).hexdigest\(\) == NODE_SHA, 'independent fixture Node pin'\)$`, nil},
 		{"workflow/user-archive", job[1], `(?m)^          printf '%s  %s\\n' ([a-f0-9]{64}) "\$RUNNER_TEMP/node.data" \| sha256sum -c -$`, []string{privateColdSHA}},
 		{"provision/suppliers", files["provision.mjs"], `(?m)^  for \(const \[relative, expected\] of \[\n    \['scripts/gentle-ai-installer.mjs', '([a-f0-9]{64})'\],\n    \['runtime/gentle-ai-binary.mjs', '([a-f0-9]{64})'\],\n  \]\) \{\n    if \(digest\(read\(path.join\(supplier, relative\)\)\) !== expected\) reject\('stock supplier pin'\);$`, []string{userInstallerSHA, privateNativeResolverSHA}},
-		{"provision/native", files["provision.mjs"], `(?m)^    const manifest = '([^'\n]+)';\n    if \(binary.length !== 17109176 \|\| digest\(binary\) !== '([a-f0-9]{64})' \|\| !read\(path.join\(version, 'integrity.json'\)\).equals\(Buffer.from\(manifest\)\)\)`, []string{strings.ReplaceAll(userNativeManifest, "\n", `\n`), userBinarySHA}},
+		{"provision/native-layout", files["provision.mjs"], `(?m)^    if \(entries.length !== 1 \|\| !versionPattern.test\(entries\[0\].slice\(1\)\) \|\| !entries\[0\].startsWith\('v'\)\) reject\('foreign native recovery state'\);$`, nil},
+		{"provision/native-digest", files["provision.mjs"], `(?m)^    if \(digest\(binary\) !== manifest.binarySha256\) reject\('native independent readback'\);$`, nil},
 		{"guest/native", python, `(?m)^    require\(hashlib.sha256\(native.read_bytes\(\)\).hexdigest\(\) == '([a-f0-9]{64})', 'authenticated native bytes differ'\)$`, []string{userBinarySHA}},
 	}
 	for _, tc := range cases {
@@ -110,6 +110,10 @@ func TestUserFrozenRootPinParity(t *testing.T) {
 	if len(initial) != 2 {
 		t.Fatal("live pnpm root acquisition tuple map absent")
 	}
+	modern := regexp.MustCompile(`(?ms)^    modern = \{\n(.*?)^    \}\n`).FindSubmatch(python)
+	if len(modern) != 2 {
+		t.Fatal("live modern cohort tuple map absent")
+	}
 	// Compiled live locks are root identity authority; do not invent independent Go SRI pins.
 	for _, profile := range []string{"modern", "prior"} {
 		t.Run(profile, func(t *testing.T) {
@@ -128,6 +132,9 @@ func TestUserFrozenRootPinParity(t *testing.T) {
 			for name, version := range lock.Packages[""].Dependencies {
 				entry := lock.Packages["node_modules/"+name]
 				source, pattern := initial[1], `(?m)^        '`+regexp.QuoteMeta(name)+`': \('([^']+)', '([^']+)'\),$`
+				if profile == "modern" {
+					source = modern[1]
+				}
 				if profile == "modern" && name == "@earendil-works/pi-coding-agent" {
 					source, pattern = python, `(?m)^    pins\['@earendil-works/pi-coding-agent'\] = \('([^']+)', '([^']+)'\)$`
 				}

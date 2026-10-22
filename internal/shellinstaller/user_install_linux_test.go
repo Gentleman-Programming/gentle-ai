@@ -362,7 +362,7 @@ func TestUserSharedConsentBindsFiles(t *testing.T) {
 }
 
 func TestUserModernNativeRejectsForeignState(t *testing.T) {
-	for _, name := range []string{"v3.7.0", ".v4.0.0.install.lock", "v4.0.0"} {
+	for _, name := range []string{"v3.7.0", ".v4.2.0.install.lock", "v4.2.0"} {
 		t.Run(name, func(t *testing.T) {
 			root := filepath.Dir(userFixture(t))
 			if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {

@@ -3,6 +3,7 @@
 package shellinstaller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 	"unsafe"
@@ -69,6 +71,12 @@ func userWindowsJobOwned() error {
 }
 
 func InspectUserInstall(req UserInstallRequest) (string, error) {
+	if req.Experience != nil && req.Experience.SDKSource == "main-preview" {
+		req.Channel = "main"
+	}
+	if err := userExperienceSupported(req.Experience); err != nil {
+		return "", err
+	}
 	channel, err := UserInstallChannel(req.Channel)
 	if err != nil {
 		return "", err
@@ -86,6 +94,9 @@ func InspectUserInstall(req UserInstallRequest) (string, error) {
 	}
 	identity := "absent"
 	if _, err := os.Lstat(req.Destination); err == nil {
+		if req.Experience != nil {
+			return "", experienceError("explicit experience requires a new empty target; existing preferences are preserved")
+		}
 		selected, err := userWindowsIdentity(req.Destination, true)
 		if err != nil {
 			return "", err
@@ -117,6 +128,7 @@ func userWindowsEnvironment(root string) ([]string, error) {
 	if root == "" {
 		return append(env, "PATH="+filepath.Join(system, "System32")), nil
 	}
+	goBin := userWindowsSystemGoBin(root) // Best-effort: doubt keeps the pinned runtime Go entry.
 	prefix, agent := filepath.Join(root, "prefix"), filepath.Join(root, "agent")
 	return append(env,
 		"HOME="+filepath.Join(root, "home"), "USERPROFILE="+filepath.Join(root, "home"),
@@ -128,7 +140,7 @@ func userWindowsEnvironment(root string) ([]string, error) {
 		// Go's own defaults below the private HOME/LOCALAPPDATA, made explicit
 		// because launch verification classifies them as mutable runtime state.
 		"GOPATH="+filepath.Join(root, "home/go"), "GOMODCACHE="+filepath.Join(root, "home/go/pkg/mod"), "GOCACHE="+filepath.Join(root, "state/go-build"),
-		"PATH="+strings.Join([]string{filepath.Join(root, "runtime/node"), filepath.Join(root, "runtime/go/bin"), filepath.Join(system, "System32")}, string(os.PathListSeparator)),
+		"PATH="+strings.Join([]string{filepath.Join(root, "runtime/node"), goBin, filepath.Join(root, "runtime/codegraph/bin"), filepath.Join(system, "System32")}, string(os.PathListSeparator)),
 		"NPM_CONFIG_PREFIX="+prefix, "NPM_CONFIG_IGNORE_SCRIPTS=true", "NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
 		"NPM_CONFIG_USERCONFIG="+filepath.Join(root, "config/user.npmrc"), "NPM_CONFIG_GLOBALCONFIG="+filepath.Join(root, "config/global.npmrc"),
 		"NPM_CONFIG_CACHE="+filepath.Join(root, "runtime/cache"), "NODE_USE_SYSTEM_CA=1"), nil
@@ -142,6 +154,9 @@ func userWindowsBinding(root, product string) []byte {
 func userWindowsSelection(data []byte, root string) (UserInstallRequest, error) {
 	var req UserInstallRequest
 	if err := json.Unmarshal(data, &req); err != nil {
+		return UserInstallRequest{}, err
+	}
+	if err := userExperienceSupported(req.Experience); err != nil {
 		return UserInstallRequest{}, err
 	}
 	canonical, _ := json.Marshal(req)
@@ -296,7 +311,7 @@ func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
 			}
 			total += info.Size()
 			bound := int64(32 << 20)
-			if strings.HasPrefix(path, filepath.Join(root, "runtime/node")+string(filepath.Separator)) || strings.HasPrefix(path, filepath.Join(root, "runtime/go")+string(filepath.Separator)) || path == filepath.Join(root, "runtime/archives/go.zip") || path == filepath.Join(root, "runtime/archives/node.zip") || path == filepath.Join(root, "supervisor.exe") {
+			if strings.HasPrefix(path, filepath.Join(root, "runtime/node")+string(filepath.Separator)) || strings.HasPrefix(path, filepath.Join(root, "runtime/go")+string(filepath.Separator)) || strings.HasPrefix(path, filepath.Join(root, "runtime/codegraph")+string(filepath.Separator)) || path == filepath.Join(root, "runtime/archives/go.zip") || path == filepath.Join(root, "runtime/archives/node.zip") || path == filepath.Join(root, "supervisor.exe") {
 				bound = 256 << 20
 			}
 			if info.Size() > bound || total > 2<<30 {
@@ -329,6 +344,11 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	req.Channel = channel
+	// GGA is retired from the shell installer. Force it inert before any
+	// inspection, staging or recording so an old profile or a crafted transport
+	// cannot silently enable it; such a request then fails its confirmation
+	// check below.
+	userForceGGAInert(req.Experience)
 	if err := userWindowsWorkerCheck(); err != nil {
 		return result, err
 	}
@@ -345,11 +365,20 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if err != nil || selectionErr != nil || selected.Channel != channel {
 			return result, errors.Join(err, selectionErr, errors.New("existing installation channel differs; no replacement"))
 		}
+		// A previous attempt can publish and verify the target before the
+		// launcher is registered. Repair that tail on an idempotent run.
+		if err := userWindowsPublishLauncher(req.Destination); err != nil {
+			return result, errors.Join(err, errors.New("existing Windows installation could not publish the gentle-shell command"))
+		}
+		if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
+			fmt.Fprintf(os.Stderr, "Windows installation is verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
+		}
 		return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed"}, nil
 	}
 	var mainArtifact userWindowsArtifact
 	var mainData []byte
 	if channel == "main" {
+		fmt.Fprintln(os.Stderr, "Windows install phase: main-acquire")
 		mainArtifact, mainData, err = userWindowsMainSnapshot(ctx) // Confirmed choice, before first filesystem effect.
 		if err != nil {
 			return result, err
@@ -388,7 +417,32 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 	}
-	selection, _ := json.Marshal(req)
+	// System-Go reuse is decided before any artifact is downloaded: a caller
+	// go.exe that passes the full reuse contract replaces the pinned go.zip
+	// acquisition and is recorded inside the staged target itself. Anything
+	// else falls back to the pinned artifact unchanged.
+	fmt.Fprintln(os.Stderr, "Windows install phase: system-go-detect")
+	systemGo, systemGoOK := userWindowsSystemGoDetect(ctx)
+	if systemGoOK {
+		if err := userWindowsSystemGoStage(stage, systemGo); err != nil {
+			return result, err
+		}
+		fmt.Fprintf(os.Stderr, "Windows install phase: system-go reused %s (%s)\n", systemGo.Version, systemGo.Go)
+	}
+	if err := userStageExperience(ctx, stage, req.Experience); err != nil {
+		return result, err
+	}
+	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-acquire")
+	codegraph := make(chan error, 1)
+	go func() {
+		codegraph <- userWindowsCodeGraphProvision(ctx, stage, req.Experience)
+	}()
+	// The Windows stock provision helper requires its exact six-field
+	// selection ABI. Preferences are already materialized in the staged
+	// config/state/mcp files and must not widen this helper boundary.
+	selectionRequest := req
+	selectionRequest.Experience = nil
+	selection, _ := json.Marshal(selectionRequest)
 	if err := userWindowsWrite(filepath.Join(stage, "selection.json"), selection); err != nil {
 		return result, err
 	}
@@ -396,16 +450,37 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	phase := func(step, artifact string) {
 		fmt.Fprintf(os.Stderr, "Windows install phase: %s %s %dms\n", step, artifact, time.Since(started).Milliseconds())
 	}
-	for i, artifact := range userWindowsArtifacts {
+	type fetchedArtifact struct {
+		data []byte
+		err  error
+	}
+	fetched := make([]fetchedArtifact, len(userWindowsArtifacts))
+	var downloads sync.WaitGroup
+	for index, artifact := range userWindowsArtifacts {
+		if userWindowsGoZipSkipped(systemGoOK, artifact.Archive) {
+			continue // System Go reused: the pinned Go artifact is never acquired.
+		}
 		phase("acquire", artifact.Archive)
-		data, err := userWindowsAcquire(ctx, artifact, filepath.Join(stage, "runtime/archives", artifact.Archive))
-		if err != nil {
-			return result, err
+		downloads.Add(1)
+		index, artifact := index, artifact
+		go func() {
+			defer downloads.Done()
+			fetched[index].data, fetched[index].err = userWindowsAcquire(ctx, artifact, filepath.Join(stage, "runtime/archives", artifact.Archive))
+		}()
+	}
+	downloads.Wait()
+	for index, artifact := range userWindowsArtifacts {
+		if userWindowsGoZipSkipped(systemGoOK, artifact.Archive) {
+			continue // The reused system Go needs no unpacked runtime/go tree.
+		}
+		if fetched[index].err != nil {
+			return result, fetched[index].err
 		}
 		phase("unpack", artifact.Archive)
-		if i < 2 {
+		data := fetched[index].data
+		if index < 2 {
 			directory := "node"
-			if i == 1 {
+			if index == 1 {
 				directory = "go"
 			}
 			if _, err := userWindowsZIP(ctx, data, artifact, filepath.Join(stage, "runtime", directory), ""); err != nil {
@@ -422,6 +497,10 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			}
 		}
 	}
+	if err := <-codegraph; err != nil {
+		return result, err
+	}
+	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-ready")
 	if channel == "main" {
 		metadata, _ := json.Marshal(mainArtifact)
 		if err := userWindowsWrite(filepath.Join(stage, "main.json"), metadata); err != nil {
@@ -463,11 +542,12 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	phase("provision", "stock")
-	if err := userWindowsProvision(ctx, stage, "install", io.Discard, io.Discard); err != nil {
+	if err := userWindowsProvision(ctx, stage, "install", io.Discard, os.Stderr); err != nil {
 		return result, err
 	}
 	phase("provision-ready", "stock")
 	if channel == "main" {
+		fmt.Fprintln(os.Stderr, "Windows install phase: overlay main")
 		if err := userWindowsInventory(stage, userWindowsInventoryInstalled); err != nil {
 			return result, err
 		}
@@ -492,9 +572,10 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if err := userWindowsCompareMain(ctx, mainData, mainArtifact, gentle); err != nil {
 			return result, err
 		}
-		if err := userWindowsProvision(ctx, stage, "overlay", io.Discard, io.Discard); err != nil {
+		if err := userWindowsProvision(ctx, stage, "overlay", io.Discard, os.Stderr); err != nil {
 			return result, err
 		}
+		fmt.Fprintln(os.Stderr, "Windows install phase: overlay-ready main")
 	}
 	for _, product := range []string{"pi", "gentle-shell"} {
 		if err := userWindowsWrite(filepath.Join(stage, "bin", product+".cmd"), userWindowsBinding(req.Destination, product)); err != nil {
@@ -532,14 +613,73 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err := userWindowsWrite(filepath.Join(stage, "manifest.json"), append(encoded, '\n')); err != nil {
 		return result, err
 	}
+	fmt.Fprintln(os.Stderr, "Windows install phase: publish")
 	from, _ := windows.UTF16PtrFromString(stage)
 	to, _ := windows.UTF16PtrFromString(req.Destination)
 	if err := windows.MoveFileEx(from, to, windows.MOVEFILE_WRITE_THROUGH); err != nil {
 		return result, err
 	} // No replace-existing flag.
 	published = true
+	fmt.Fprintln(os.Stderr, "Windows install phase: verify")
 	if err := userWindowsVerify(ctx, req.Destination, io.Discard, io.Discard); err != nil {
 		return result, errors.Join(err, errors.New("published Windows installation remains unqualified; preserved, no success reported"))
 	}
+	if err := userWindowsPublishLauncher(req.Destination); err != nil {
+		return result, errors.Join(err, errors.New("published Windows installation could not publish the gentle-shell command"))
+	}
+	// The installation is published and verified; drop only the ephemeral
+	// caches. runtime/archives stays: launch verification re-reads it.
+	// Failure is reported but never retracts the published installation.
+	if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
+		fmt.Fprintf(os.Stderr, "Windows installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
+	}
 	return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "installed"}, nil
+}
+
+// userWindowsPublishLauncher puts a tiny .cmd shim in the user's WindowsApps
+// PATH directory. It never overwrites a foreign command.
+func userWindowsLocalAppData() (string, error) {
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		return local, nil
+	}
+	// The worker environment is deliberately private and may omit
+	// LOCALAPPDATA. Resolve the real per-user folder from the token instead.
+	local, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, windows.KF_FLAG_DEFAULT)
+	if err != nil || local == "" {
+		return "", errors.Join(err, errors.New("LOCALAPPDATA is unavailable"))
+	}
+	return local, nil
+}
+
+func userWindowsPublishLauncher(destination string) error {
+	local, err := userWindowsLocalAppData()
+	if err != nil {
+		return errors.Join(err, errors.New("cannot publish the gentle-shell command"))
+	}
+	apps := filepath.Join(local, "Microsoft", "WindowsApps")
+	if info, err := os.Stat(apps); err != nil || !info.IsDir() {
+		return errors.Join(err, errors.New("WindowsApps PATH directory is unavailable"))
+	}
+	target := filepath.Join(destination, "bin", "gentle-shell.cmd")
+	if _, err := os.Stat(target); err != nil {
+		return err
+	}
+	link := filepath.Join(apps, "gentle-shell.cmd")
+	data := []byte("@echo off\r\ncall \"" + target + "\" %*\r\n")
+	if existing, err := os.ReadFile(link); err == nil {
+		if bytes.Equal(existing, data) {
+			return nil
+		}
+		return errors.New("a foreign gentle-shell command already exists in WindowsApps")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	file, err := os.OpenFile(link, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0700)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(data)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	return errors.Join(writeErr, syncErr, closeErr)
 }

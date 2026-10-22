@@ -802,15 +802,27 @@ def alan_pnpm_backend_probe():
     require('/pnpm/' in str(pi) and run([str(node), str(pi), '--version'], extra=env).strip() == '0.99.2', 'prior Pi did not execute from recognized pnpm layout')
     identity = (home.stat().st_dev, home.stat().st_ino)
     run([str(node), str(pi), 'update', '--self'], extra=env, timeout=180)
-    pins['@earendil-works/pi-coding-agent'] = ('1.0.0', 'sha512-/FtbxoSQU/mEv1QnichJjRjqteqaIaMWxmhB4G367+MwZfX7/DI5B9YAg5lqbN7nztFskBEtUSZ+FlmMBECtMw==')
+    pins['@earendil-works/pi-coding-agent'] = ('1.3.0', 'sha512-V/WoCjA2hQSe3QLWIUB24cTRdtEdeLiIzkDqU5RMXV6VWuD+KGZnzVBMhglwdnQTySkehZsjt8a3g6Jd2g4nnw==')
     roots = cohort()
     pi = roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'
-    require(run([str(node), str(pi), '--version'], extra=env).strip() == '1.0.0', 'stock pnpm prior-to-next update did not execute')
+    require(run([str(node), str(pi), '--version'], extra=env).strip() == '1.3.0', 'stock pnpm prior-to-next update did not execute')
     run([str(node), str(pi), 'update', '--self', '--force'], extra=env, timeout=180)
     roots = cohort()
     require((home.stat().st_dev, home.stat().st_ino) == identity, 'stock updater replaced selected pnpm home')
-    require(run([str(node), str(roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'), '--version'], extra=env).strip() == '1.0.0', 'stock pnpm forced reinstall did not execute')
-    REPORT['alanBackendProbe'] = {'pnpm': version, 'stockUpgrade': '0.99.2 to 1.0.0', 'stockForce': True, 'independentlyPinnedRoots': len(pins), 'functionalReady': False}
+    require(run([str(node), str(roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'), '--version'], extra=env).strip() == '1.3.0', 'stock pnpm forced reinstall did not execute')
+    # The live modern cohort is the compiled modern lock's frozen root set;
+    # acquiring it here pins the whole post-update pnpm home, not just Pi.
+    modern = {
+        'gentle-pi': ('4.3.0', 'sha512-xXBEZaGqden4bblEPagQEnkF12L0JHhsPr1REBGvhSeDy6mbHDQmEvUU5ATr9lvWb7xsTOXV7gwnfq4U+z7lpA=='),
+        '@earendil-works/pi-tui': ('1.3.0', 'sha512-AlKvEwEWyVtnuw7SVb4N/mUhlfIohyFslUNWarZVdLHHSdt3ca5EhMLwTzblBpDpaofSz+f+tAHie6CfxVrWKA=='),
+        '@heyhuynhgiabuu/pi-pretty': ('0.7.1', 'sha512-8cjOVRJHBvaHGnaNmYBRjmRWMd5V8fj4DvpTQHJWaEuLxdVJmL4dQqBSGODzhMbpaMKpeS394gNoK27Z1zT+uA=='),
+        'typebox': ('1.4.2', 'sha512-eSoZzgSIyOKDtTH9MI7XMAxMaiXq7UiSFWarysN1ka66baTLDxAVdQ6WkWn6qDqsJFVrcjzvuP+CqHo9yrlQpg=='),
+    }
+    run([str(wrapper), 'add', '-g', '--ignore-scripts', '--config.minimumReleaseAge=0', '--registry=https://registry.npmjs.org/'] + [f'{name}@{pin[0]}' for name, pin in modern.items()], extra=env, timeout=remaining())
+    pins.update(modern)
+    roots = cohort()
+    require(run([str(node), str(roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'), '--version'], extra=env).strip() == '1.3.0', 'stock pnpm modern cohort did not execute')
+    REPORT['alanBackendProbe'] = {'pnpm': version, 'stockUpgrade': '0.99.2 to 1.3.0', 'stockForce': True, 'modernCohort': 'acquired compiled modern frozen roots', 'independentlyPinnedRoots': len(pins), 'functionalReady': False}
 
 
 def mvp_smoke(personal):
@@ -830,17 +842,17 @@ def mvp_smoke(personal):
     manifest = install(target)
     require(manifest['Mode'] == 'separate', 'smoke installed a different mode')
     prefix = pathlib.Path(manifest['Prefix'])
-    require(run([str(target / 'bin/pi'), '--version']).strip() == '1.0.0', 'authenticated Pi version differs')
-    require(json.loads((prefix / 'lib/node_modules/gentle-pi/package.json').read_text())['version'] == '4.0.0', 'authenticated Gentle version differs')
-    native = prefix / 'lib/node_modules/gentle-pi/.gentle-ai/v4.0.0/gentle-ai'
-    require(hashlib.sha256(native.read_bytes()).hexdigest() == '50ba217b5138c1a9c7d5bf2f79931b1bb89b89c4cf650dcd7ee037657c88158d', 'authenticated native bytes differ')
-    require('4.0.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
+    require(run([str(target / 'bin/pi'), '--version']).strip() == '1.3.0', 'authenticated Pi version differs')
+    require(json.loads((prefix / 'lib/node_modules/gentle-pi/package.json').read_text())['version'] == '4.3.0', 'authenticated Gentle version differs')
+    native = prefix / 'lib/node_modules/gentle-pi/.gentle-ai/v4.2.0/gentle-ai'
+    require(hashlib.sha256(native.read_bytes()).hexdigest() == '9212c7b16ea9abfe93e3a16b29d8390e7762b5c07730cf05df1f3e7892ff96a4', 'authenticated native bytes differ')
+    require('4.2.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
     pty_status(pathlib.Path(SUPERVISOR), WORK / 'project', [SUPERVISOR, 'shell', 'install'], installer=target)
     for name in ['gentle-shell', 'pi']:
         pty_status(target / 'bin' / name, WORK / 'project', opening_only=True)
     require(before == [physical_inventory(root) for root in protected], 'personal Pi, agent or shell configuration changed')
     require((WORK / 'gofmt.data').is_file() and (WORK / 'gofmt.data').stat().st_size == 0, 'candidate source formatting differs')
-    REPORT.update(functionalReady=False, mvpSmoke={'outcome': 'PASS', 'sourceSHA': source, 'pi': '1.0.0', 'gentle': '4.0.0', 'native': '4.0.0', 'personalPiAndShellPreserved': True, 'coldInstallerTUI': 'deferred', 'fullJourney': 'deferred'})
+    REPORT.update(functionalReady=False, mvpSmoke={'outcome': 'PASS', 'sourceSHA': source, 'pi': '1.3.0', 'gentle': '4.3.0', 'native': '4.2.0', 'personalPiAndShellPreserved': True, 'coldInstallerTUI': 'deferred', 'fullJourney': 'deferred'})
 
 
 def main():
@@ -907,8 +919,8 @@ def main():
         REPORT['existingParentGuard'] = 'occupied installation refused under changed nonprivate parent'
         run(['git', '-c', 'core.hooksPath=/dev/null', 'init', '-q', str(WORK / 'project')])
         run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Guest Fixture', '-c', 'user.email=guest@invalid.local', 'commit', '--allow-empty', '-m', 'fixture'], cwd=WORK / 'project')
-        native = pathlib.Path(manifest['Prefix']) / 'lib/node_modules/gentle-pi/.gentle-ai/v4.0.0/gentle-ai'
-        require('4.0.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
+        native = pathlib.Path(manifest['Prefix']) / 'lib/node_modules/gentle-pi/.gentle-ai/v4.2.0/gentle-ai'
+        require('4.2.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
         backend = json.loads(run([str(native), 'review', 'status', '--contract', 'gentle-ai.review-integration/v2', '--cwd', str(WORK / 'project'), '--projection', 'workspace', '--next-transition'], cwd=WORK / 'project', timeout=35, stdout_only=True))
         require(backend.get('contract') == 'gentle-ai.review-integration/v2' and backend.get('operation') == 'review.status' and backend.get('applicability') == 'unrelated', 'native read-only negotiated status identity differs')
         require(backend.get('authority') is None and backend.get('candidates') == [], 'fresh native status unexpectedly contains review authority')
@@ -924,10 +936,10 @@ def main():
         nested = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/package.json'
         require(json.loads(nested.read_text())['version'] == '0.99.2', 'actual prior nested TUI placement differs')
         run([str(target / 'bin/pi'), 'update', '--self'], cwd=WORK / 'project', timeout=180)
-        require('1.0.0' in run([str(target / 'bin/pi'), '--version']), 'actual stock prior-to-next transition absent')
+        require('1.3.0' in run([str(target / 'bin/pi'), '--version']), 'actual stock prior-to-next transition absent')
         require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'update replaced physical selected roots')
         require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'update changed owned command bindings')
-        REPORT['trueUpgrade'] = 'actual published 0.99.2 to 1.0.0 stock updater; TEST-only Pi API selection, not public latest authority'
+        REPORT['trueUpgrade'] = 'actual published 0.99.2 to 1.3.0 stock updater; TEST-only Pi API selection, not public latest authority'
         run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180)
         run([str(target / 'bin/pi'), '--version'], cwd=WORK / 'project')
         REPORT['stockForce'] = 'actual separate same-version reinstall after true upgrade'
@@ -941,7 +953,7 @@ def main():
         upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
         run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
         require(coding_metadata.read_bytes() == expected_metadata, 'separate upgrade preimages did not restore known bytes')
-        require('1.0.0' in run([str(target / 'bin/pi'), '--version']), 'restored known cohort did not retry successfully')
+        require('1.3.0' in run([str(target / 'bin/pi'), '--version']), 'restored known cohort did not retry successfully')
         REPORT['upgradeRecovery'] = 'actual unknown cohort refused, full saved trees restored and authenticated retry observed'
         shared_prefix, shared_agent = WORK / 'shared-prefix', WORK / 'shared-agent'
         shutil.copytree(manifest['Prefix'], shared_prefix, symlinks=True)

@@ -4,7 +4,7 @@ import "embed"
 
 // The provisioner and authenticated locks are distinct from the runtime helpers.
 //
-//go:embed provision-gentle-shell-private-global.mjs user-global-graph.mjs user-locks/modern/package-lock.json user-locks/prior/package-lock.json
+//go:embed provision-gentle-shell-private-global.mjs user-global-graph.mjs user-main-bindings.mjs user-locks/modern/package-lock.json user-locks/prior/package-lock.json
 var userHelpers embed.FS
 
 func ReadUserHelper() ([]byte, error) {
@@ -15,7 +15,7 @@ func ReadUserHelper() ([]byte, error) {
 // Runtime paths stay distinct from the bootstrap-helper inventory.
 func ReadUserAssets() (map[string][]byte, error) {
 	files := map[string][]byte{}
-	for _, name := range []string{"provision-gentle-shell-private-global.mjs", "user-global-graph.mjs", "user-locks/modern/package-lock.json", "user-locks/prior/package-lock.json"} {
+	for _, name := range []string{"provision-gentle-shell-private-global.mjs", "user-global-graph.mjs", "user-main-bindings.mjs", "user-locks/modern/package-lock.json", "user-locks/prior/package-lock.json"} {
 		data, err := userHelpers.ReadFile(name)
 		if err != nil {
 			return nil, err

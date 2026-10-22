@@ -30,7 +30,6 @@ internal/agents/pi/model_routing.go	windowsDrivePath
 internal/agents/registry.go	Registry.CapabilityManifest
 internal/catalog/agents.go	IsMVPAgent
 internal/catalog/agents.go	MVPAgents
-internal/cli/doctor.go	checkToolBinaries
 internal/cli/restore.go	RunRestoreWithFn
 internal/cli/restore.go	RunRestoreWithFnAndInput
 internal/cli/review_facade.go	facadeValidationResult.native
@@ -146,7 +145,6 @@ internal/reviewtransaction/repository_locator.go	ResolveHistoricalReviewReposito
 internal/reviewtransaction/repository_locator.go	locatorPathStrictlyWithin
 internal/reviewtransaction/repository_locator.go	resolveReviewRepositoryDirectory
 internal/reviewtransaction/risk.go	deriveSemanticRiskSignals
-internal/reviewtransaction/snapshot.go	sanitizedGitEnvironment
 internal/reviewtransaction/snapshot.go	snapshotIdentity
 internal/reviewtransaction/store.go	SnapshotsEqualExact
 internal/reviewtransaction/store.go	WriteReceiptAtomic
@@ -242,7 +240,6 @@ internal/tui/screens/welcome.go	RenderWelcome
 internal/tui/screens/welcome.go	RenderWelcomeWithWidth
 internal/update/homebrew.go	homebrewPackageInstalledWith
 internal/update/homebrew.go	pathWithinPrefix
-internal/update/render.go	HasCheckFailures
 internal/update/upgrade/download.go	downloadBinary
 internal/update/upgrade/executor.go	enumerateFilesInDir
 internal/update/upgrade/homebrew.go	homebrewPackageInstalledWith

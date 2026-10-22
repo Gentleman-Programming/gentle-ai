@@ -4,7 +4,6 @@ package shellinstaller
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 )
 
@@ -20,20 +19,28 @@ type UserInstallRequest struct {
 	SharedPrefix string
 	SharedAgent  string
 	Confirmation string
+	Experience   *UserExperience `json:",omitempty"`
 }
 
 // Confirmation binds the human's approval to the inspected physical selection,
 // not a boolean flag or an unvalidated path alias.
 func userConfirmation(req UserInstallRequest, identity string) string {
-	data, _ := json.Marshal([]string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, identity})
+	data, err := userExperienceConfirmationData([]string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, identity}, req.Experience)
+	if err != nil {
+		return ""
+	}
 	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
 func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
+	args, profile, err := userEntryExperience(args)
+	if err != nil {
+		return UserInstallRequest{}, err
+	}
 	if len(args) != 5 {
 		return UserInstallRequest{}, fmt.Errorf("invalid internal install arguments")
 	}
 	return UserInstallRequest{
-		Destination: args[0], Mode: args[1], SharedPrefix: args[2], SharedAgent: args[3], Confirmation: args[4],
+		Destination: args[0], Mode: args[1], SharedPrefix: args[2], SharedAgent: args[3], Confirmation: args[4], Experience: profile,
 	}, nil
 }

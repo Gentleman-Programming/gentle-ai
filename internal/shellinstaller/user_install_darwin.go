@@ -34,6 +34,12 @@ func UserKernelCheck() error {
 	return userKernelGate()
 }
 
+// Darwin has no /proc/self/status direct-install preflight; the kernel gate is
+// the platform check every Darwin entry already repeats.
+func userDirectKernelCheck() error {
+	return UserKernelCheck()
+}
+
 func ValidateUserInstall(req UserInstallRequest) error {
 	return userValidateInstall(req)
 }
@@ -43,6 +49,10 @@ func InspectUserInstall(req UserInstallRequest) (string, error) {
 }
 
 func RunUserInstall(ctx context.Context, req UserInstallRequest) (UserInstallResult, error) {
+	return userRunInstall(ctx, req)
+}
+
+func RunUserInstallDirect(ctx context.Context, req UserInstallRequest) (UserInstallResult, error) {
 	return userRunInstall(ctx, req)
 }
 

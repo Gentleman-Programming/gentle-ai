@@ -71,7 +71,10 @@ for (const fixture of cases) {
 const configStart = source.indexOf("const configPath = path.join(root, 'config/gentle-shell.json');");
 assert.ok(configStart >= 0 && configStart < start, 'owned Shell config region must exist');
 const configBody = source.slice(configStart, start), homeKey = path.join(root, 'agent');
-const goodConfig = { home: 'isolated', provisioned: { [homeKey]: { gentleAi: '4.0.0', gentlePi: '4.0.0', at: '2026-01-01T00:00:00.000Z' } } };
+// The fixture proves no static version is trusted: 4.2.0 is deliberately not a
+// version the provisioner hardcodes; it flows in as the resolved dynamic value.
+const fixtureNativeVersion = '4.2.0';
+const goodConfig = { home: 'isolated', provisioned: { [homeKey]: { gentleAi: fixtureNativeVersion, gentlePi: fixtureNativeVersion, at: '2026-01-01T00:00:00.000Z' } } };
 for (const [name, value, want] of [
   ['owned-shell-config', goodConfig, 'accept'],
   ['shell-link-refused', { ...goodConfig, home: 'link' }, 'reject'],
@@ -82,7 +85,7 @@ for (const [name, value, want] of [
   let observed = 'accept';
   try {
     vm.runInNewContext(configBody, {
-      root, finalRoot: root, path, action: 'verify', gentleMetadata: { version: '4.0.0' },
+      root, finalRoot: root, path, action: 'verify', nativeVersion: fixtureNativeVersion, gentleMetadata: { version: fixtureNativeVersion },
       read(file) { assert.equal(file, path.join(root, 'config/gentle-shell.json')); return Buffer.from(JSON.stringify(value)); },
       exclusive() { assert.fail('verify attempted config write'); },
       reject(message) { throw Error(`Windows provision refused: ${message}`); },
@@ -96,7 +99,12 @@ for (const [name, value, want] of [
 }
 const supplierStart = source.indexOf('// Stock supplier pins authorize installation; Main source is bound by the frozen ZIP.');
 assert.ok(supplierStart >= 0 && supplierStart < configStart, 'native authority region must exist');
-const supplierBody = `${source.match(/^const mainOverlay = .*$/m)[0]}\n${source.slice(supplierStart, configStart)}`;
+const supplierBody = `${source.match(/^const mainOverlay = .*$/m)[0]}
+${['stockNativeDirectory', 'stockNativeIntegrity'].map(name => {
+  const begin = `function ${name}(`, at = source.indexOf(begin);
+  assert.ok(at >= 0, `${name} helper present`);
+  return `${source.slice(at, source.indexOf('\n}', at) + 2)}\n`;
+}).join('')}${source.slice(supplierStart, configStart)}`;
 for (const [name, action, channel, want] of [
   ['main-stock-install', 'install', 'main', 'reject'],
   ['stable-stock-verify', 'verify', 'stable', 'reject'],
@@ -109,10 +117,14 @@ for (const [name, action, channel, want] of [
   ['main-native-digest', 'verify', 'main', 'reject'],
 ]) {
   let supplierReads = 0, imports = 0, observed = 'accept';
-  const nativeManifest = { version: name === 'main-native-version' ? '4.1.0' : '4.0.0', method: name === 'main-native-method' ? 'signed-release-asset' : 'go-sumdb-source-build', moduleChecksum: name === 'main-native-checksum' ? 'changed' : 'h1:pZ/XZ2Pk3U9lgXigOTY62zlxxFOHnc9CjQhLgaV/Hfc=', binarySha256: 'owned-native' };
+  // The native layout is discovered dynamically from the resolved gentle-pi
+  // version; the fixture supplies a non-legacy version to prove no static pin.
+  const nativeManifest = { version: name === 'main-native-version' ? '4.3.0' : fixtureNativeVersion, method: name === 'main-native-method' ? 'signed-release-asset' : 'go-sumdb-source-build', moduleChecksum: name === 'main-native-checksum' ? 'changed' : `h1:${'A'.repeat(43)}=`, binarySha256: 'owned-native' };
   try {
     await vm.runInNewContext(`(async () => {${supplierBody}})()`, {
       gentle: path.join(root, 'prefix/node_modules/gentle-pi'), selection: { Channel: channel }, action, path,
+      resolved: { 'gentle-pi': fixtureNativeVersion },
+      fs: { readdirSync: () => [`v${fixtureNativeVersion}`], lstatSync: () => ({ isDirectory: () => true }) },
       read(file) {
         if (file.endsWith('.mjs')) supplierReads++;
         return Buffer.from(file.endsWith('integrity.json') ? JSON.stringify(nativeManifest) : file);

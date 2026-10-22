@@ -215,7 +215,8 @@ func TestDarwinProvisionPinParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := files["provision.mjs"]
-	native := `(?m)^    if \(process.platform === 'darwin'\) \{\n      const manifest = '([^'\n]+)';\n      if \(binary.length !== ([0-9]+) \|\| digest\(binary\) !== '([a-f0-9]{64})' \|\| !read\(path.join\(version, 'integrity.json'\)\).equals\(Buffer.from\(manifest\)\)\) reject\('native independent readback'\);\n      return;\n    \}$`
+	native := `(?m)^    if \(entries.length !== 1 \|\| !versionPattern.test\(entries\[0\].slice\(1\)\) \|\| !entries\[0\].startsWith\('v'\)\) reject\('foreign native recovery state'\);$`
+	nativeDigest := `(?m)^    if \(digest\(binary\) !== manifest.binarySha256\) reject\('native independent readback'\);$`
 	platform := `(?m)^  const platform = process.platform === '(darwin)' \? \{ os: '(darwin)', cpu: '(arm64)', libc: (null) \} : \{ os: 'linux', cpu: 'x64', libc: 'glibc' \};$`
 	equal := func(source []byte, pattern string, want ...string) bool {
 		matches := regexp.MustCompile(pattern).FindAllSubmatch(source, 2)
@@ -233,8 +234,9 @@ func TestDarwinProvisionPinParity(t *testing.T) {
 		pattern string
 		want    []string
 	}{
-		"native":   {native, []string{strings.ReplaceAll(userNativeManifest, "\n", `\n`), strconv.FormatInt(userBinarySize, 10), userBinarySHA}},
-		"platform": {platform, []string{"darwin", "darwin", "arm64", "null"}},
+		"native":       {native, nil},
+		"nativeDigest": {nativeDigest, nil},
+		"platform":     {platform, []string{"darwin", "darwin", "arm64", "null"}},
 	} {
 		if !equal(source, role.pattern, role.want...) {
 			t.Fatalf("%s: live darwin provision role differs from compiled Go authority (or is missing/ambiguous)", name)

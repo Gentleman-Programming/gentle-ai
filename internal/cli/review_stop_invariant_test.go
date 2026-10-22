@@ -82,6 +82,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Justification: "the frozen reviewer evidence cannot fit without truncation, so no in-lineage reviewer action exists; a smaller candidate starts a new review",
 		ToolFault:     reviewStopToolFault(false),
 	},
+	"acknowledged_boundary_reaches_head": {
+		Terminal:      false,
+		Justification: "caller-continuable: the reviewed boundary advances on acknowledgement and reaches HEAD, so nothing unreviewed remains between the boundary and the live candidate; any NEW commit re-derives a fresh candidate and STATUS offers it, and the docs row agrees",
+	},
 	"correction_context_budget_exceeded": {
 		Terminal:      false,
 		Justification: "caller-continuable: unlike its lens sibling this stop arrives with review authority in place and lens results already admitted, so `review invalidate` refuses and `review abandon` is the one exit that still accepts the state; a caller holding --cwd access can run it without a maintainer, and the docs row names that concrete command rather than opening with \"Terminal\"",
