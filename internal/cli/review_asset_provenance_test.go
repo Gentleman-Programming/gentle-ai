@@ -97,6 +97,57 @@ func TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew(t *testing.T) {
 	})
 }
 
+// TestPlainReviewVerbsRenderManagedAssetsContinuation pins the plain CLI
+// boundary of the verbs with no negotiated failure envelope (bundle import,
+// abandon): the refusal text itself must carry the executable-anchored sync
+// command while keeping both digests and the typed preflight refusal.
+func TestPlainReviewVerbsRenderManagedAssetsContinuation(t *testing.T) {
+	for name, run := range map[string]func(string, *bytes.Buffer) error{
+		"bundle import": func(repo string, output *bytes.Buffer) error {
+			return RunReviewBundleImport([]string{"--cwd", repo, "--bundle", filepath.Join(t.TempDir(), "bundle.json")}, output)
+		},
+		"abandon": func(repo string, output *bytes.Buffer) error {
+			return RunReviewAbandon([]string{"--cwd", repo, "--lineage", "lineage", "--expected-revision", "revision", "--reason", "reason", "--actor", "actor", "--maintainer-authorization", "authorization"}, output)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+			staleManagedReviewerAssets(t, home)
+
+			var output bytes.Buffer
+			err := run(repo, &output)
+			if err == nil {
+				t.Fatalf("stale managed assets %s succeeded: %s", name, output.String())
+			}
+			command := managedAssetsContinuation("", nil).Command
+			for _, want := range []string{managedAssetProvenanceRefusal, "recorded digest sha256:stale", "this binary embeds ", "continue with: " + command} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("%s refusal = %q, want it to contain %q", name, err.Error(), want)
+				}
+			}
+			var preflight *reviewIntegrationPreflightError
+			if !errors.As(err, &preflight) || preflight.continuation == nil || preflight.continuation.Command != command {
+				t.Fatalf("%s refusal lost the typed continuation: %#v", name, err)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("refused %s wrote output: %s", name, output.String())
+			}
+		})
+	}
+}
+
+// TestPlainReviewContinuationLeavesOtherErrorsUnchanged pins that only a typed
+// refusal carrying a continuation gains the rendered command.
+func TestPlainReviewContinuationLeavesOtherErrorsUnchanged(t *testing.T) {
+	plain := errors.New("plain failure")
+	typed := reviewPreflightRefusal(reviewPreflightManagedAssetsReason, errors.New("typed without continuation"))
+	for _, err := range []error{nil, plain, typed} {
+		if got := withPlainReviewContinuation(err); got != err {
+			t.Fatalf("withPlainReviewContinuation(%v) = %v, want the same error", err, got)
+		}
+	}
+}
+
 func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *testing.T) {
 	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/stale-assets.md", "# Candidate\n", 0o644)

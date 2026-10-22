@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
@@ -117,4 +118,16 @@ func authorizeManagedReviewerAssets() error {
 		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, provenance.refusal(), continuation)
 	}
 	return nil
+}
+
+// withPlainReviewContinuation renders a typed refusal's continuation command
+// for a verb with no negotiated failure envelope (review-bundle-import), where
+// the caller only ever sees Error(). The refusal text and digests stay intact
+// and the typed error stays reachable through errors.As.
+func withPlainReviewContinuation(err error) error {
+	var preflight *reviewIntegrationPreflightError
+	if !errors.As(err, &preflight) || preflight.continuation == nil || preflight.continuation.Command == "" {
+		return err
+	}
+	return fmt.Errorf("%w; continue with: %s", err, preflight.continuation.Command)
 }
