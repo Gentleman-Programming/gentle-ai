@@ -10,6 +10,11 @@ const [root, prefix, agent, finalPrefix, finalRoot, mode, requestedAction = 'ins
 const preparing = requestedAction === 'prepare-prior';
 const action = preparing ? 'install' : requestedAction;
 const uid = process.getuid();
+// npm materializes the acquired tree under the inherited login umask, which is
+// group-writable (0002) on common distros, and the audit below rejects every
+// group-writable object. Pin a deterministic 022 so acquisition is independent
+// of the invoking shell; the script's own explicit 0700/0600 modes are unaffected.
+process.umask(0o022);
 const reject = message => { throw Error(`global provision refused: ${message}`); };
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
