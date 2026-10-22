@@ -54,6 +54,24 @@ func TestWelcomeOptions_NoEngines_ShowsDisabledLabel(t *testing.T) {
 	}
 }
 
+// TestWelcomeOptions_EngineAvailability_DistinguishesDetectingAndNone verifies
+// that explicit EngineAvailability distinguishes detecting, none, and available states.
+func TestWelcomeOptions_EngineAvailability_DistinguishesDetectingAndNone(t *testing.T) {
+	for _, tc := range []struct {
+		state screens.EngineAvailability
+		want  string
+	}{
+		{screens.EngineAvailabilityDetecting, "Create your own Agent (detecting...)"},
+		{screens.EngineAvailabilityNone, "Create your own Agent (no agents)"},
+		{screens.EngineAvailabilityAvailable, "Create your own Agent"},
+	} {
+		opts := screens.WelcomeOptions(nil, true, false, tc.state)
+		if opts[5] != tc.want {
+			t.Errorf("option 5 for %v = %q, want %q", tc.state, opts[5], tc.want)
+		}
+	}
+}
+
 // TestWelcomeOptions_AgentBuilderBeforeManageBackups verifies the retained shortcuts stay adjacent.
 func TestWelcomeOptions_AgentBuilderBeforeManageBackups(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true)

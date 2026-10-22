@@ -864,6 +864,13 @@ type Model struct {
 	CommunityToolStatusErr      error
 	CommunityToolResults        []communitytool.Result
 	CommunityToolErr            error
+
+	// agentBuilderEngines is the cached availability list of supported AI agent binaries.
+	agentBuilderEngines []model.AgentID
+	// agentBuilderDetecting indicates whether an engine availability scan is currently in progress.
+	agentBuilderDetecting bool
+	// agentBuilderDetectionDone indicates whether at least one engine availability scan has completed.
+	agentBuilderDetectionDone bool
 }
 
 // NewModel constructs the initial TUI model for the given detection result.
@@ -914,6 +921,9 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 			"Configure selected agents",
 			"Inject ecosystem components",
 		}),
+		agentBuilderEngines:       nil,
+		agentBuilderDetecting:     true,
+		agentBuilderDetectionDone: false,
 	}
 }
 
@@ -1019,7 +1029,7 @@ func (m Model) Init() tea.Cmd {
 		return AdvisoryMsg{Advisory: a}
 	}
 
-	return tea.Batch(updateCmd, advisoryCmd, openCodePresentationCommand())
+	return tea.Batch(updateCmd, advisoryCmd, openCodePresentationCommand(), m.detectAgentBuilderEnginesCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1057,6 +1067,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.AgentBuilder.Generating || m.AgentBuilder.Installing {
 			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
 			return m, tickCmd()
+		}
+		return m, nil
+	case AgentBuilderEnginesMsg:
+		m.agentBuilderDetecting, m.agentBuilderDetectionDone = false, true
+		m.agentBuilderEngines = append([]model.AgentID(nil), msg.Engines...)
+		if m.Screen == ScreenAgentBuilderEngine {
+			m.AgentBuilder.AvailableEngines = append([]model.AgentID(nil), m.agentBuilderEngines...)
+			if m.Cursor > len(m.AgentBuilder.AvailableEngines) {
+				m.Cursor = len(m.AgentBuilder.AvailableEngines)
+			}
 		}
 		return m, nil
 	case AgentBuilderGeneratedMsg:
@@ -1463,6 +1483,7 @@ func (m Model) View() string {
 			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone && m.UpdateCheckState == update.CheckCompleted, m.hasAgentBuilderEngines(),
 			m.Width, m.Height,
 			screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll},
+			m.agentBuilderEngineAvailability(),
 		)
 	case ScreenUpgrade:
 		return screens.RenderUpgradeWithWidth(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame, m.Width)
@@ -1582,7 +1603,7 @@ func (m Model) View() string {
 	case ScreenRenameBackup:
 		return screens.RenderRenameBackup(m.SelectedBackup, m.BackupRenameText, m.BackupRenamePos)
 	case ScreenAgentBuilderEngine:
-		return screens.RenderABEngine(m.AgentBuilder.AvailableEngines, m.Cursor)
+		return screens.RenderABEngine(m.AgentBuilder.AvailableEngines, m.Cursor, m.agentBuilderDetecting)
 	case ScreenAgentBuilderPrompt:
 		return screens.RenderABPrompt(m.AgentBuilder.Textarea)
 	case ScreenAgentBuilderGenerating:
@@ -2015,12 +2036,8 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 4:
 			m.setScreen(ScreenModelConfig)
 		case 5:
-			// "Create your own Agent" — blocked when no engines are available.
-			if !m.hasAgentBuilderEngines() {
-				return m, nil
-			}
 			m.AgentBuilder = AgentBuilderState{}
-			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
+			m.AgentBuilder.AvailableEngines = append([]model.AgentID(nil), m.agentBuilderEngines...)
 			ta := textarea.New()
 			ta.Placeholder = "Describe what you want your agent to do..."
 			ta.Focus()
@@ -2028,6 +2045,13 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			ta.SetHeight(5)
 			m.AgentBuilder.Textarea = ta
 			m.setScreen(ScreenAgentBuilderEngine)
+
+			var cmd tea.Cmd
+			if !m.agentBuilderDetecting {
+				m.agentBuilderDetecting = true
+				cmd = m.detectAgentBuilderEnginesCmd()
+			}
+			return m, cmd
 		default:
 			next := 6
 
@@ -3774,7 +3798,7 @@ func (m Model) optionCount() int {
 	}
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines()))
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.agentBuilderEngineAvailability()))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 0
@@ -4467,9 +4491,33 @@ func (m Model) isScrollableScreen() bool {
 	return m.Screen == ScreenBackups
 }
 
+// detectAgentBuilderEnginesFn is the injectable detector used for engine availability scans.
+var detectAgentBuilderEnginesFn = detectAgentBuilderEngines
+
+// AgentBuilderEnginesMsg conveys the result of an asynchronous engine availability scan.
+type AgentBuilderEnginesMsg struct {
+	Engines []model.AgentID
+}
+
+// detectAgentBuilderEnginesCmd returns a tea.Cmd that scans for available AI agent builder engines.
+func (m Model) detectAgentBuilderEnginesCmd() tea.Cmd {
+	return func() tea.Msg { return AgentBuilderEnginesMsg{Engines: detectAgentBuilderEnginesFn()} }
+}
+
+// agentBuilderEngineAvailability returns the current EngineAvailability state for the welcome menu.
+func (m Model) agentBuilderEngineAvailability() screens.EngineAvailability {
+	if !m.agentBuilderDetectionDone {
+		return screens.EngineAvailabilityDetecting
+	}
+	if len(m.agentBuilderEngines) == 0 {
+		return screens.EngineAvailabilityNone
+	}
+	return screens.EngineAvailabilityAvailable
+}
+
 // detectAgentBuilderEngines scans for supported AI agent binaries on PATH and
 // returns the list of available AgentIDs.
-func (m Model) detectAgentBuilderEngines() []model.AgentID {
+func detectAgentBuilderEngines() []model.AgentID {
 	candidateIDs := []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
@@ -4486,9 +4534,10 @@ func (m Model) detectAgentBuilderEngines() []model.AgentID {
 	return available
 }
 
-// hasAgentBuilderEngines reports whether any supported AI agent binary is installed.
+// hasAgentBuilderEngines reports whether the model's availability snapshot has
+// at least one supported AI agent binary.
 func (m Model) hasAgentBuilderEngines() bool {
-	return len(m.detectAgentBuilderEngines()) > 0
+	return len(m.agentBuilderEngines) > 0
 }
 
 // agentBuilderInstallTargets returns the list of install target paths for the preview screen.

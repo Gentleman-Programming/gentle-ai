@@ -22,10 +22,23 @@ type WelcomeAdvisory struct {
 	Scroll  int
 }
 
+// EngineAvailability represents the current detection state of AI agent builder engines.
+type EngineAvailability int
+
+const (
+	// EngineAvailabilityDetecting indicates that engine detection is currently in progress.
+	EngineAvailabilityDetecting EngineAvailability = iota
+	// EngineAvailabilityNone indicates that detection finished and no supported engines were found.
+	EngineAvailabilityNone
+	// EngineAvailabilityAvailable indicates that at least one supported engine was found.
+	EngineAvailabilityAvailable
+)
+
 // WelcomeOptions returns the welcome menu options.
-// When hasEngines is false, "Create your own Agent" is shown as disabled
-// (labelled "(no agents)") to signal that no supported AI engine is installed.
-func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool) []string {
+// When hasEngines is false (or engineAvailability is EngineAvailabilityNone),
+// "Create your own Agent" is shown as disabled (labelled "(no agents)").
+// When engineAvailability is EngineAvailabilityDetecting, it is labelled "(detecting...)".
+func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, engineAvailability ...EngineAvailability) []string {
 	upgradeLabel := "Upgrade tools"
 	if updateCheckDone && update.HasUpdates(updateResults) {
 		upgradeLabel = "Upgrade tools ★"
@@ -34,7 +47,9 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, h
 	}
 
 	agentLabel := "Create your own Agent"
-	if !hasEngines {
+	if len(engineAvailability) > 0 && engineAvailability[0] == EngineAvailabilityDetecting {
+		agentLabel = "Create your own Agent (detecting...)"
+	} else if (len(engineAvailability) > 0 && engineAvailability[0] == EngineAvailabilityNone) || (len(engineAvailability) == 0 && !hasEngines) {
 		agentLabel = "Create your own Agent (no agents)"
 	}
 
@@ -57,15 +72,15 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, h
 	return opts
 }
 
-func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool) string {
-	return RenderWelcomeWithWidth(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, 0)
+func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, engineAvailability ...EngineAvailability) string {
+	return RenderWelcomeWithWidth(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, 0, engineAvailability...)
 }
 
-func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int) string {
-	return RenderWelcomeWithAdvisory(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, 0, WelcomeAdvisory{})
+func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, engineAvailability ...EngineAvailability) string {
+	return RenderWelcomeWithAdvisory(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, 0, WelcomeAdvisory{}, engineAvailability...)
 }
 
-func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
+func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory, engineAvailability ...EngineAvailability) string {
 	render := func(includeLogo, includeOptional, compact bool) string {
 		var b strings.Builder
 
@@ -102,7 +117,7 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 		} else {
 			b.WriteString("\n\n")
 		}
-		options := WelcomeOptions(updateResults, updateCheckDone, hasEngines)
+		options := WelcomeOptions(updateResults, updateCheckDone, hasEngines, engineAvailability...)
 		if compact {
 			b.WriteString(renderWelcomeOptions(options, cursor, width))
 		} else {

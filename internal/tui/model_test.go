@@ -2158,6 +2158,251 @@ func TestWelcomeMenu_UninstallNavigation_WithOpenCodeDetected(t *testing.T) {
 	}
 }
 
+// stubAgentBuilderDetector replaces detectAgentBuilderEnginesFn for the duration of a test.
+func stubAgentBuilderDetector(t testing.TB, detector func() []model.AgentID) {
+	orig := detectAgentBuilderEnginesFn
+	detectAgentBuilderEnginesFn = detector
+	t.Cleanup(func() { detectAgentBuilderEnginesFn = orig })
+}
+
+// stubUpdateAndAdvisory mocks out background network checks for deterministic tests.
+func stubUpdateAndAdvisory(t testing.TB) {
+	oldUpdate, oldAdvisory := updateCheckFn, advisoryFetchFn
+	updateCheckFn = func(context.Context, string, system.PlatformProfile) []update.UpdateResult { return nil }
+	advisoryFetchFn = func(context.Context) (update.Advisory, bool) { return update.Advisory{}, false }
+	t.Cleanup(func() { updateCheckFn, advisoryFetchFn = oldUpdate, oldAdvisory })
+}
+
+// TestAgentBuilder_SlowInitialDetection verifies that startup engine detection
+// runs asynchronously without blocking model construction, keeps Welcome navigation
+// responsive, and distinguishes "detecting" from "no engines available".
+func TestAgentBuilder_SlowInitialDetection(t *testing.T) {
+	stubUpdateAndAdvisory(t)
+	checks := 0
+	stubAgentBuilderDetector(t, func() []model.AgentID {
+		checks++
+		return []model.AgentID{model.AgentClaudeCode}
+	})
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	if checks != 0 {
+		t.Fatalf("checks after construction = %d, want 0 (must be non-blocking)", checks)
+	}
+
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.agentBuilderEngineAvailability())
+	if !strings.Contains(opts[5], "detecting") || !strings.Contains(m.View(), "detecting") {
+		t.Errorf("expected detecting state during initial detection, got option: %q", opts[5])
+	}
+
+	for range 5 {
+		m = updateModel(m, tea.KeyMsg{Type: tea.KeyDown})
+		_ = m.View()
+	}
+	if checks != 0 {
+		t.Errorf("checks during Welcome navigation before completion = %d, want 0", checks)
+	}
+
+	var engineMsg tea.Msg
+	for _, cmd := range m.Init()().(tea.BatchMsg) {
+		if cmd != nil {
+			if em, ok := cmd().(AgentBuilderEnginesMsg); ok {
+				engineMsg = em
+			}
+		}
+	}
+	if engineMsg == nil || checks != 1 {
+		t.Fatalf("Init() engine scan failed: msg=%v, checks=%d", engineMsg, checks)
+	}
+
+	m = updateModel(m, engineMsg)
+	if !m.agentBuilderDetectionDone || m.agentBuilderDetecting {
+		t.Errorf("detection state = done:%v, detecting:%v", m.agentBuilderDetectionDone, m.agentBuilderDetecting)
+	}
+	resolvedOpts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.agentBuilderEngineAvailability())
+	if resolvedOpts[5] != "Create your own Agent" {
+		t.Errorf("resolved option 5 = %q, want 'Create your own Agent'", resolvedOpts[5])
+	}
+}
+
+// TestAgentBuilder_NavigationWithoutRescans verifies that navigating and rendering
+// the Welcome menu does not trigger repeated PATH lookups.
+func TestAgentBuilder_NavigationWithoutRescans(t *testing.T) {
+	checks := 0
+	stubAgentBuilderDetector(t, func() []model.AgentID {
+		checks++
+		return []model.AgentID{model.AgentClaudeCode}
+	})
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m = updateModel(m, AgentBuilderEnginesMsg{Engines: detectAgentBuilderEnginesFn()})
+	if checks != 1 {
+		t.Fatalf("checks after startup = %d, want 1", checks)
+	}
+
+	for range 20 {
+		m = updateModel(m, tea.KeyMsg{Type: tea.KeyDown})
+		_ = m.View()
+		m = updateModel(m, tea.KeyMsg{Type: tea.KeyUp})
+		_ = m.View()
+	}
+	if checks != 1 {
+		t.Errorf("checks after navigation = %d, want 1 (zero rescans)", checks)
+	}
+}
+
+// enterCreateAgent selects the "Create your own Agent" option on Welcome and returns the updated model and command.
+func enterCreateAgent(m Model) (Model, tea.Cmd) {
+	m.Cursor = 5
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	return updated.(Model), cmd
+}
+
+// TestAgentBuilder_NoEngines verifies behavior when no engines are installed on PATH.
+func TestAgentBuilder_NoEngines(t *testing.T) {
+	stubAgentBuilderDetector(t, func() []model.AgentID { return nil })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m = updateModel(m, AgentBuilderEnginesMsg{Engines: nil})
+
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.agentBuilderEngineAvailability())
+	if opts[5] != "Create your own Agent (no agents)" {
+		t.Errorf("option 5 for no engines = %q, want 'Create your own Agent (no agents)'", opts[5])
+	}
+
+	m, cmd := enterCreateAgent(m)
+	if m.Screen != ScreenAgentBuilderEngine || len(m.AgentBuilder.AvailableEngines) != 0 {
+		t.Fatalf("screen = %v, engines = %v", m.Screen, m.AgentBuilder.AvailableEngines)
+	}
+	if cmd != nil {
+		m = updateModel(m, cmd())
+	}
+
+	m.Cursor = 0 // "Back"
+	if m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter}); m.Screen != ScreenWelcome {
+		t.Fatalf("screen after Back = %v, want ScreenWelcome", m.Screen)
+	}
+}
+
+// TestAgentBuilder_AvailabilityChangesBetweenEntries verifies that entering Create Agent
+// refreshes availability asynchronously, recognizing newly installed or removed engines without TUI restart.
+func TestAgentBuilder_AvailabilityChangesBetweenEntries(t *testing.T) {
+	var currentEngines []model.AgentID
+	stubAgentBuilderDetector(t, func() []model.AgentID {
+		return append([]model.AgentID(nil), currentEngines...)
+	})
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m = updateModel(m, AgentBuilderEnginesMsg{Engines: nil})
+
+	// First entry: no engines.
+	m, cmd := enterCreateAgent(m)
+	if cmd != nil {
+		m = updateModel(m, cmd())
+	}
+	if len(m.AgentBuilder.AvailableEngines) != 0 {
+		t.Fatalf("first entry engines = %v, want empty", m.AgentBuilder.AvailableEngines)
+	}
+
+	// Exit to Welcome, simulate installing Claude Code, enter again.
+	m.setScreen(ScreenWelcome)
+	currentEngines = []model.AgentID{model.AgentClaudeCode}
+
+	m, cmd = enterCreateAgent(m)
+	if cmd == nil {
+		t.Fatal("expected refresh cmd on second entry")
+	}
+	m = updateModel(m, cmd())
+	if !slices.Equal(m.AgentBuilder.AvailableEngines, []model.AgentID{model.AgentClaudeCode}) {
+		t.Errorf("available engines after dynamic install = %v, want [%s]", m.AgentBuilder.AvailableEngines, model.AgentClaudeCode)
+	}
+
+	// Exit to Welcome, simulate uninstalling Claude Code, enter again.
+	m.setScreen(ScreenWelcome)
+	currentEngines = nil
+
+	m, cmd = enterCreateAgent(m)
+	if cmd != nil {
+		m = updateModel(m, cmd())
+	}
+	if len(m.AgentBuilder.AvailableEngines) != 0 {
+		t.Errorf("available engines after dynamic uninstall = %v, want empty", m.AgentBuilder.AvailableEngines)
+	}
+}
+
+// TestAgentBuilder_RepeatedEntryWhileDetectionRunning verifies that only one detection
+// scan is allowed in flight at any time.
+func TestAgentBuilder_RepeatedEntryWhileDetectionRunning(t *testing.T) {
+	stubAgentBuilderDetector(t, func() []model.AgentID {
+		return []model.AgentID{model.AgentClaudeCode}
+	})
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.agentBuilderDetecting = false
+	m.agentBuilderDetectionDone = true
+
+	// First entry kicks off detection.
+	m, cmd1 := enterCreateAgent(m)
+	if cmd1 == nil || !m.agentBuilderDetecting {
+		t.Fatal("cmd1 missing or detecting flag not set")
+	}
+
+	// User exits and immediately re-enters while detection is in-flight.
+	m.Screen = ScreenWelcome
+	m, cmd2 := enterCreateAgent(m)
+	if cmd2 != nil {
+		t.Errorf("cmd2 = %v, want nil (must not duplicate detection in flight)", cmd2)
+	}
+
+	// Complete single in-flight scan.
+	m = updateModel(m, cmd1())
+	if m.agentBuilderDetecting || !slices.Equal(m.AgentBuilder.AvailableEngines, []model.AgentID{model.AgentClaudeCode}) {
+		t.Errorf("state after completion: detecting=%v, engines=%v", m.agentBuilderDetecting, m.AgentBuilder.AvailableEngines)
+	}
+}
+
+// TestAgentBuilder_CompletionSafeWhenUserLeavesFlow verifies that when detection
+// finishes after the user navigates away, state is updated safely without corrupting screens.
+func TestAgentBuilder_CompletionSafeWhenUserLeavesFlow(t *testing.T) {
+	stubAgentBuilderDetector(t, func() []model.AgentID {
+		return []model.AgentID{model.AgentClaudeCode}
+	})
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.agentBuilderDetecting = false
+	m.agentBuilderDetectionDone = true
+
+	m, cmd := enterCreateAgent(m)
+	if cmd == nil {
+		t.Fatal("expected refresh cmd")
+	}
+
+	// User leaves to ScreenWelcome before detection completes.
+	m.setScreen(ScreenWelcome)
+
+	// Async detection finishes while on Welcome.
+	m = updateModel(m, cmd())
+	if m.Screen != ScreenWelcome || !slices.Equal(m.agentBuilderEngines, []model.AgentID{model.AgentClaudeCode}) || m.agentBuilderDetecting {
+		t.Errorf("unexpected state after completion: screen=%v, engines=%v, detecting=%v", m.Screen, m.agentBuilderEngines, m.agentBuilderDetecting)
+	}
+}
+
+// BenchmarkWelcomeKeyUpdateWithSlowEngineAvailability measures key update latency
+// during Welcome navigation when engine availability detection is slow.
+func BenchmarkWelcomeKeyUpdateWithSlowEngineAvailability(b *testing.B) {
+	stubAgentBuilderDetector(b, func() []model.AgentID {
+		time.Sleep(10 * time.Millisecond)
+		return []model.AgentID{model.AgentClaudeCode}
+	})
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	keyDown := tea.KeyMsg{Type: tea.KeyDown}
+	b.ResetTimer()
+	for b.Loop() {
+		updated, _ := m.Update(keyDown)
+		m = updated.(Model)
+	}
+}
+
 // TestWelcomeMenu_OptionCount verifies the 12 retained welcome options.
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
