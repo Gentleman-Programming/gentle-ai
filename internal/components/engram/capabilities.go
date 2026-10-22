@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 var osGetenv = os.Getenv
@@ -98,7 +98,7 @@ const EngramUpgradeRecoveryCommand = "gentle-ai upgrade engram"
 
 // Capability identifiers and requirement descriptions.
 const (
-	CapabilityInstanceID                = "instance-id"
+	CapabilityInstanceID               = "instance-id"
 	DefaultInstanceIdentityRequirement = "Pi and OpenCode require engram core with instance-identity capability (minimum v2.0.0-rc.11)"
 )
 
@@ -332,9 +332,9 @@ type InstanceIdentityOutcome string
 const (
 	OutcomeExternalServer InstanceIdentityOutcome = "external-server"
 	OutcomeNotRequired    InstanceIdentityOutcome = "not-required"
-	OutcomeMissingBinary   InstanceIdentityOutcome = "missing-binary"
-	OutcomeCompatible      InstanceIdentityOutcome = "compatible"
-	OutcomeIncompatible    InstanceIdentityOutcome = "incompatible"
+	OutcomeMissingBinary  InstanceIdentityOutcome = "missing-binary"
+	OutcomeCompatible     InstanceIdentityOutcome = "compatible"
+	OutcomeIncompatible   InstanceIdentityOutcome = "incompatible"
 )
 
 // InstanceIdentityJudgment is the unified result of evaluating engram compatibility
