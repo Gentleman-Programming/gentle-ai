@@ -987,7 +987,7 @@ func isHostPortLiteral(token artifactReferenceToken) bool {
 		value = strings.TrimLeft(value, "([{<")
 		value = strings.TrimRight(value, ")]}>.,;!?")
 	}
-	// Check for IPv4:port pattern (e.g., 127.0.0.1:8000)
+	// Check for host:port pattern (IPv4:port or [IPv6]:port)
 	separator := strings.LastIndexByte(value, ':')
 	if separator <= 0 || separator == len(value)-1 {
 		return false
@@ -999,6 +999,10 @@ func isHostPortLiteral(token artifactReferenceToken) bool {
 		if port[i] < '0' || port[i] > '9' {
 			return false
 		}
+	}
+	// Handle bracketed IPv6 addresses (e.g., [::1])
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
 	}
 	// Host must be a valid IP address (IPv4 or IPv6)
 	if net.ParseIP(host) == nil {
