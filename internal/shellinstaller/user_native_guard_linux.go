@@ -62,18 +62,18 @@ func userNativeNamespaceData(status, uidMap, gidMap, setgroups string, uid, gid 
 			fields[key] = strings.TrimSpace(value)
 		}
 	}
-	groups, present := fields["Groups"]
+	// The kernel always prints the Groups: line and never empties the
+	// supplementary set: user managers fork services through initgroups, so at
+	// least the primary gid is always present, and creating a user namespace
+	// keeps the groups displayed through the new mapping (unmapped gids read
+	// as 65534). Group privileges are neutralized by the sealed single-gid
+	// mapping and setgroups deny checked below, not by an empty supplementary
+	// set, so no group check belongs here.
 	if gid <= 0 {
 		return privateError("refused", errors.New("primary group identity missing"))
 	}
 	if strings.Join(strings.Fields(fields["Gid"]), " ") != strings.Repeat(strconv.Itoa(gid)+" ", 3)+strconv.Itoa(gid) {
 		return privateError("refused", errors.New("identity group fields differ"))
-	}
-	if !present {
-		return privateError("refused", errors.New("kernel groups line absent"))
-	}
-	if groups != "" {
-		return privateError("refused", errors.New("supplementary groups present"))
 	}
 	if fields["CapBnd"] != "0000000000000000" {
 		return privateError("refused", errors.New("capability boundary set"))

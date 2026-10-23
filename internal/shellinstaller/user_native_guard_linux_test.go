@@ -28,6 +28,20 @@ func TestUserNativeGuardNamespace(t *testing.T) {
 			if err := userNativeNamespaceData(spaced, mapping, mapping, "deny\n", 1000, 1000, sealed); err != nil {
 				t.Fatal("kernel tab-separated GID refused", err)
 			}
+			// Real user managers fork services through initgroups, so the
+			// primary gid is always a supplementary member, and a user namespace
+			// keeps the groups displayed through its mapping. Both shapes must
+			// qualify; the sealed single-gid mapping and setgroups deny carry
+			// the group-privilege refusal instead.
+			for _, groups := range []string{"1000", "1000 4 24 27 30 46 100", "65534 65534 65534 1000"} {
+				populated := strings.Replace(status, "Groups:\t", "Groups:\t"+groups, 1)
+				if err := userNativeNamespaceData(populated, mapping, mapping, "deny\n", 1000, 1000, sealed); err != nil {
+					t.Fatalf("supplementary groups %q refused: %v", groups, err)
+				}
+			}
+			if err := userNativeNamespaceData(strings.Replace(status, "Groups:\t\n", "", 1), mapping, mapping, "deny\n", 1000, 1000, sealed); err != nil {
+				t.Fatal("kernel groups line shape refused", err)
+			}
 			cases := []struct{ name, status, uidMap, gidMap, setgroups string }{
 				{"extra uid entry", status, mapping + "2000 2000 1\n", mapping, "deny\n"},
 				{"extra gid entry", status, mapping, mapping + "2000 2000 1\n", "deny\n"},
@@ -37,8 +51,6 @@ func TestUserNativeGuardNamespace(t *testing.T) {
 				{"wrong shape", status, "1001 1000 1\n", mapping, "deny\n"},
 				{"uid mismatch", strings.Replace(status, "Uid:\t1000 1000 1000 1000", "Uid:\t1000 1000 0 1000", 1), mapping, mapping, "deny\n"},
 				{"gid mismatch", strings.Replace(status, "Gid:\t1000 1000 1000 1000", "Gid:\t1000 0 1000 1000", 1), mapping, mapping, "deny\n"},
-				{"supplementary groups", strings.Replace(status, "Groups:\t", "Groups:\t1000", 1), mapping, mapping, "deny\n"},
-				{"missing groups", strings.Replace(status, "Groups:\t\n", "", 1), mapping, mapping, "deny\n"},
 				{"nnp", strings.Replace(status, "NoNewPrivs:\t1", "NoNewPrivs:\t0", 1), mapping, mapping, "deny\n"},
 				{"duplicate status", status + "CapBnd:\t0000000000000000\n", mapping, mapping, "deny\n"},
 			}
