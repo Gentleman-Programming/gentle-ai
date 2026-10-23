@@ -107,6 +107,39 @@ var osGetwdFn = os.Getwd
 var osExecutableFn = os.Executable
 var osRemoveFn = os.Remove
 var execCommandFn = exec.Command
+
+// gitRepositoryLocationEnvironment lists inherited variables that can make
+// Git resolve a repository other than the command's working directory.
+var gitRepositoryLocationEnvironment = map[string]struct{}{
+	"GIT_CEILING_DIRECTORIES":         {},
+	"GIT_COMMON_DIR":                  {},
+	"GIT_DIR":                         {},
+	"GIT_DISCOVERY_ACROSS_FILESYSTEM": {},
+	"GIT_IMPLICIT_WORK_TREE":          {},
+	"GIT_OBJECT_DIRECTORY":            {},
+	"GIT_PREFIX":                      {},
+	"GIT_WORK_TREE":                   {},
+}
+
+func gitRepoProbeEnvironment(environment []string) []string {
+	result := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, overridden := gitRepositoryLocationEnvironment[strings.ToUpper(name)]; !overridden {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+var gitRepoProbeFn = func(cwd string) bool {
+	cmd := execCommandFn("git", "rev-parse", "--is-inside-work-tree")
+	cmd.Dir = cwd
+	cmd.Env = gitRepoProbeEnvironment(os.Environ())
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
 var communityToolInstallFn = communitytool.Install
 var communityToolStatusFn = communitytool.DetectStatus
 
@@ -861,6 +894,8 @@ type Model struct {
 	ReviewStoreResetSurveyErr error
 	// ReviewStoreResetErr records the outcome of an applied reset.
 	ReviewStoreResetErr error
+	// InGitRepository records the startup cwd's Git worktree precondition.
+	InGitRepository bool
 	// ReviewModeCwdFn, ReviewModeStatusFn, and ReviewModeSetGlobalFn are injected
 	// so the screen can be tested without filesystem state or CLI process calls.
 	ReviewModeCwdFn       func() (string, error)
@@ -917,11 +952,17 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		CodexManagedServiceTier: validCodexServiceTier(s.CodexServiceTier),
 	}
 
+	inGitRepo := false
+	if cwd, err := osGetwdFn(); err == nil {
+		inGitRepo = gitRepoProbeFn(cwd)
+	}
+
 	return Model{
 		Screen:                ScreenWelcome,
 		Version:               version,
 		Selection:             selection,
 		Detection:             detection,
+		InGitRepository:       inGitRepo,
 		BackgroundIntent:      s.BackgroundIntent,
 		PiBackgroundIntent:    s.PiBackgroundIntent,
 		UninstallAgents:       agents,
@@ -1491,14 +1532,16 @@ func (m Model) View() string {
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
-		render := screens.RenderWelcomeWithAdvisory
+		advisory := screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll}
 		if m.shellInstallEnabled {
-			render = screens.RenderShellWelcomeWithAdvisory
+			return screens.RenderShellWelcomeWithGit(
+				m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone && m.UpdateCheckState == update.CheckCompleted, m.hasAgentBuilderEngines(), m.InGitRepository,
+				m.Width, m.Height, advisory,
+			)
 		}
-		return render(
-			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone && m.UpdateCheckState == update.CheckCompleted, m.hasAgentBuilderEngines(),
-			m.Width, m.Height,
-			screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll},
+		return screens.RenderWelcomeWithGit(
+			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone && m.UpdateCheckState == update.CheckCompleted, m.hasAgentBuilderEngines(), m.InGitRepository,
+			m.Width, m.Height, advisory,
 		)
 	case ScreenShellInstall:
 		return m.shellInstallView()
@@ -2021,8 +2064,11 @@ func (m Model) isModelPickerSeparatorCursor() bool {
 func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	switch m.Screen {
 	case ScreenWelcome:
-		options := screens.WelcomeOptionsWithShellInstaller(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.shellInstallEnabled)
+		options := screens.WelcomeOptionsWithShellInstallerAndGit(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.shellInstallEnabled, m.InGitRepository)
 		if m.Cursor >= 0 && m.Cursor < len(options) {
+			if !m.InGitRepository && strings.HasPrefix(options[m.Cursor], "Reset review store (") {
+				return m, nil
+			}
 			switch options[m.Cursor] {
 			case screens.ShellInstallWelcomeOption:
 				m.shellInstallSelection = cli.ShellInstallSelection{}
@@ -3831,7 +3877,7 @@ func (m Model) optionCount() int {
 	}
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptionsWithShellInstaller(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.shellInstallEnabled))
+		return len(screens.WelcomeOptionsWithShellInstallerAndGit(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.shellInstallEnabled, m.InGitRepository))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 0

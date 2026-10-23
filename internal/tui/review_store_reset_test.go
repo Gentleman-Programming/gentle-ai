@@ -2,6 +2,9 @@ package tui
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -31,6 +34,79 @@ func settledStoreResetReport() reviewtransaction.StoreResetReport {
 			{Name: "review-mode", Reason: "the kill switch", Present: true, Files: 1, Bytes: 64},
 		},
 		Settled: 12, Complete: true,
+	}
+}
+
+func TestWelcomeResetEntryDisabledOutsideGit(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.InGitRepository = false
+	surveyed := false
+	m.ReviewStoreResetSurveyFn = func() (reviewtransaction.StoreResetReport, error) {
+		surveyed = true
+		return settledStoreResetReport(), nil
+	}
+	options := screens.WelcomeOptionsWithGit(m.UpdateResults, m.UpdateCheckDone, true, false)
+	reset := -1
+	for i, option := range options {
+		if strings.Contains(option, "Reset review store") {
+			reset = i
+			if option != "Reset review store (requires a Git repository)" {
+				t.Fatalf("disabled entry label = %q", option)
+			}
+		}
+	}
+	if reset < 0 {
+		t.Fatalf("reset entry missing: %v", options)
+	}
+	m.Cursor = reset
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if surveyed || cmd != nil || state.Screen != ScreenWelcome {
+		t.Fatalf("disabled selection changed state: screen=%v surveyed=%v cmd=%v", state.Screen, surveyed, cmd)
+	}
+}
+
+func TestGitRepoProbeIgnoresInheritedRepositoryLocation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires a real git executable")
+	}
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git executable is unavailable")
+	}
+	repo := t.TempDir()
+	cmd := exec.Command(git, "init", "--quiet", repo)
+	cmd.Env = gitRepoProbeEnvironment(os.Environ())
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\\n%s", err, output)
+	}
+	outside := t.TempDir()
+	t.Setenv("GIT_DIR", filepath.Join(repo, ".git"))
+	t.Setenv("GIT_WORK_TREE", repo)
+	t.Setenv("GIT_COMMON_DIR", filepath.Join(repo, ".git"))
+	t.Setenv("GIT_OBJECT_DIRECTORY", filepath.Join(repo, ".git", "objects"))
+	if gitRepoProbeFn(outside) {
+		t.Fatalf("probe treated unrelated cwd %q as a worktree via inherited overrides", outside)
+	}
+}
+
+func TestNewModelProbesGitRepositoryOnce(t *testing.T) {
+	restoreGetwd := setOSGetwdForTest("/repo/gentle-ai", nil)
+	defer restoreGetwd()
+	original := gitRepoProbeFn
+	defer func() { gitRepoProbeFn = original }()
+	calls := 0
+	gitRepoProbeFn = func(cwd string) bool {
+		calls++
+		if cwd != "/repo/gentle-ai" {
+			t.Fatalf("probe cwd = %q", cwd)
+		}
+		return true
+	}
+	m := NewModel(system.DetectionResult{}, "dev")
+	if calls != 1 || !m.InGitRepository {
+		t.Fatalf("probe calls=%d inGit=%v", calls, m.InGitRepository)
 	}
 }
 
