@@ -151,12 +151,13 @@ func userNativeMountsData(mounts string, roots []string) error {
 		parent   int
 		point    string
 		readonly bool
+		raw      string
 	}
 	nodes := map[int]mount{}
 	for _, line := range strings.Split(strings.TrimSuffix(mounts, "\n"), "\n") {
 		sides := strings.Split(line, " - ")
 		if len(sides) != 2 {
-			return privateError("refused", nil)
+			return privateError("refused", fmt.Errorf("mountinfo separator differs: %s", line))
 		}
 		fields, right := strings.Fields(sides[0]), strings.Fields(sides[1])
 		if len(fields) < 6 || len(right) != 3 {
@@ -172,7 +173,7 @@ func userNativeMountsData(mounts string, roots []string) error {
 		if _, duplicate := nodes[id]; duplicate {
 			return privateError("refused", errors.New("duplicate mountinfo entry"))
 		}
-		nodes[id] = mount{parent, point, strings.Contains(","+fields[5]+",", ",ro,")}
+		nodes[id] = mount{parent, point, strings.Contains(","+fields[5]+",", ",ro,"), line}
 	}
 	// An immediate same-point child covers its parent, independently of line order.
 	covers := map[int]int{}
@@ -224,11 +225,11 @@ func userNativeMountsData(mounts string, roots []string) error {
 		for _, root := range roots {
 			if node.point == root {
 				if seen[root] || !node.readonly {
-					return privateError("refused", fmt.Errorf("protected mount %s is not read-only", node.point))
+					return privateError("refused", fmt.Errorf("protected mount %s is not read-only: %s", node.point, node.raw))
 				}
 				seen[root] = true
 			} else if strings.HasPrefix(node.point, root+"/") && !node.readonly {
-				return privateError("refused", fmt.Errorf("protected subtree mount %s is not read-only", node.point))
+				return privateError("refused", fmt.Errorf("protected subtree mount %s is not read-only: %s", node.point, node.raw))
 			}
 		}
 	}
