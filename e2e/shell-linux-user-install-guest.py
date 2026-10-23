@@ -384,6 +384,15 @@ def acquisition_fault(target, cleanup=False):
                 out, error = child.communicate(timeout=3)
             raw = out + error
             node_path = '/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz'
+            # The manager journal names the transient unit's own failure lines
+            # (Failed at step ... / unit stderr as logged); bounded and
+            # optional, so an unreadable journal only removes this field.
+            try:
+                journal = subprocess.run(['/usr/bin/journalctl', '--user', '-n', '40', '--no-pager', '-o', 'cat'],
+                                         env=env, capture_output=True, timeout=min(15, remaining()))
+                journal_tail = journal.stdout[-2048:]
+            except Exception:
+                journal_tail = b''
             COMMAND_FAILURE = {'kind': 'supervisor', 'operation': 'install', 'inspect': False, 'force': False, 'lockOnly': False,
                                'exit': child.returncode, 'expectedSuccess': False,
                                'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(),
@@ -391,6 +400,7 @@ def acquisition_fault(target, cleanup=False):
                                'stderrBytes': len(error), 'stderrSHA256': hashlib.sha256(error).hexdigest(),
                                'stdoutTailBase64': base64.b64encode(out[-600:]).decode('ascii'),
                                'stderrTailBase64': base64.b64encode(error[-600:]).decode('ascii'),
+                               'journalTailBase64': base64.b64encode(journal_tail).decode('ascii'),
                                'mirrorRequests': len(REQUESTS),
                                'nodeRequestReachedMirror': ('nodejs.org', hashlib.sha256(node_path.encode()).hexdigest()) in REQUESTS}
             raise RuntimeError('actual cold acquisition not observed; bounded installer refusal evidence')

@@ -63,15 +63,27 @@ func userNativeNamespaceData(status, uidMap, gidMap, setgroups string, uid, gid 
 		}
 	}
 	groups, present := fields["Groups"]
-	if gid <= 0 || strings.Join(strings.Fields(fields["Gid"]), " ") != strings.Repeat(strconv.Itoa(gid)+" ", 3)+strconv.Itoa(gid) || !present || groups != "" || fields["CapBnd"] != "0000000000000000" {
-		return privateError("refused", nil)
+	if gid <= 0 {
+		return privateError("refused", errors.New("primary group identity missing"))
+	}
+	if strings.Join(strings.Fields(fields["Gid"]), " ") != strings.Repeat(strconv.Itoa(gid)+" ", 3)+strconv.Itoa(gid) {
+		return privateError("refused", errors.New("identity group fields differ"))
+	}
+	if !present {
+		return privateError("refused", errors.New("kernel groups line absent"))
+	}
+	if groups != "" {
+		return privateError("refused", errors.New("supplementary groups present"))
+	}
+	if fields["CapBnd"] != "0000000000000000" {
+		return privateError("refused", errors.New("capability boundary set"))
 	}
 	expectedUID, expectedGID := "0 0 4294967295", "0 0 4294967295"
 	if sealed {
 		expectedUID = strconv.Itoa(uid) + " " + strconv.Itoa(uid) + " 1"
 		expectedGID = strconv.Itoa(gid) + " " + strconv.Itoa(gid) + " 1"
 		if setgroups != "deny\n" {
-			return privateError("refused", nil)
+			return privateError("refused", errors.New("setgroups state differs"))
 		}
 	}
 	for i, mapping := range []string{uidMap, gidMap} {
@@ -81,7 +93,7 @@ func userNativeNamespaceData(status, uidMap, gidMap, setgroups string, uid, gid 
 			expected = expectedGID
 		}
 		if len(lines) != 1 || strings.Join(strings.Fields(lines[0]), " ") != expected {
-			return privateError("refused", nil)
+			return privateError("refused", errors.New("identity mapping shape differs"))
 		}
 	}
 	return nil
