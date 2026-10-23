@@ -126,6 +126,14 @@ func userWindowsEnvironment(root string) ([]string, error) {
 		return nil, err
 	}
 	env := []string{"SystemRoot=" + system, "WINDIR=" + system, "SystemDrive=" + filepath.VolumeName(system)}
+	// The host announces a managed reconfigure (and its registry home) through
+	// these variables; the sanitized worker environment is built from scratch,
+	// so they must be forwarded explicitly or the managed-update intent is lost.
+	for _, name := range []string{"GENTLE_AI_RECONFIGURE_TARGET", "GENTLE_AI_SHELL_REGISTRY_HOME"} {
+		if value := os.Getenv(name); value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
 	if root == "" {
 		return append(env, "PATH="+filepath.Join(system, "System32")), nil
 	}

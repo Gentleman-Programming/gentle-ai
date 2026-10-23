@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -313,13 +314,74 @@ func TestUserSupervisorPreimages(t *testing.T) {
 	if err := os.Chmod(path, 0700); err != nil {
 		t.Fatal(err)
 	}
+	// The ancestor walk accepts a group-writable directory only when its group
+	// is a non-root user's own private group (Debian/Ubuntu UPG, #5696). Under
+	// any other group, 0770 keeps the refusal.
 	if err := os.Chmod(filepath.Dir(path), 0770); err != nil {
 		t.Fatal(err)
 	}
 	_, err = userSupervisorSHA(context.Background(), path)
+	if os.Getuid() != 0 && os.Getgid() == os.Getuid() {
+		if err != nil {
+			t.Fatalf("private-group 0770 ancestor refused: %v", err)
+		}
+		userSupervisorAncestorForeignGroup(t, filepath.Dir(path), path)
+		return
+	}
 	var failure *PrivateRuntimeError
 	if !errors.As(err, &failure) || failure.Kind != "source" || failure.Cause == nil || !strings.Contains(failure.Cause.Error(), "supervisor ancestor refused") {
 		t.Fatalf("unsafe controller ancestor lost refusal cause: %v", err)
+	}
+}
+
+func TestUserSupervisorAncestorPrivateGroupLayout(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "go", "bin")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "supervisor")
+	if err := os.WriteFile(path, []byte("trusted-build DATA preimage"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0775); err != nil {
+		t.Fatal(err)
+	}
+	_, err := userSupervisorSHA(context.Background(), path)
+	if os.Getuid() != 0 && os.Getgid() == os.Getuid() {
+		// Standard GOPATH under the User Private Group scheme (0775 ~/go/bin).
+		if err != nil {
+			t.Fatalf("private-group 0775 GOPATH ancestor refused: %v", err)
+		}
+		return
+	}
+	var failure *PrivateRuntimeError
+	if !errors.As(err, &failure) || failure.Kind != "source" || failure.Cause == nil || !strings.Contains(failure.Cause.Error(), "supervisor ancestor refused") {
+		t.Fatalf("foreign-group 0775 ancestor lost refusal cause: %v", err)
+	}
+}
+
+// userSupervisorAncestorForeignGroup re-owns dir to a foreign gid and requires
+// the ancestor walk to refuse it. Chown needs root, so it skips elsewhere.
+func userSupervisorAncestorForeignGroup(t *testing.T, dir, path string) {
+	t.Helper()
+	foreign := os.Getgid() + 1
+	if foreign == os.Getuid() {
+		foreign++
+	}
+	if err := os.Chown(dir, -1, foreign); err != nil {
+		if errors.Is(err, syscall.EPERM) {
+			t.Skip("foreign-group ancestor refusal requires root to chown")
+		}
+		t.Fatal(err)
+	}
+	_, err := userSupervisorSHA(context.Background(), path)
+	var failure *PrivateRuntimeError
+	if !errors.As(err, &failure) || failure.Kind != "source" || failure.Cause == nil || !strings.Contains(failure.Cause.Error(), "supervisor ancestor refused") {
+		t.Fatalf("foreign-group ancestor accepted: %v", err)
 	}
 }
 

@@ -242,8 +242,16 @@ func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 			return "", err
 		}
 		owner := st.Sys().(*syscall.Stat_t).Uid
+		group := st.Sys().(*syscall.Stat_t).Gid
 		trustedTmp := current == userTrustedTmp && owner == 0 && st.Mode()&os.ModeSticky != 0
-		if (owner != 0 && owner != uint32(os.Getuid())) || (st.Mode().Perm()&0022 != 0 && !trustedTmp) {
+		// Debian/Ubuntu ship the User Private Group scheme: a group-writable
+		// ancestor whose group is the user's own private group (gid == uid) has
+		// no other members and is as trusted as 0755, so the standard GOPATH
+		// layout (0775 ~/go/bin) must not be refused (#5696). World-writable
+		// ancestors, foreign groups, and root's shared gid keep the refusal.
+		privateGroup := os.Getuid() != 0 && group == uint32(os.Getuid())
+		writable := st.Mode().Perm()&0002 != 0 || (st.Mode().Perm()&0020 != 0 && !privateGroup)
+		if (owner != 0 && owner != uint32(os.Getuid())) || (writable && !trustedTmp) {
 			return "", privateError("source", fmt.Errorf("supervisor ancestor refused: path=%q owner=%d mode=%#o", current, owner, st.Mode().Perm()))
 		}
 		if current == "/" {
