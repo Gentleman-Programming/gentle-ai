@@ -5,6 +5,7 @@ package shellinstaller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 )
@@ -25,7 +26,7 @@ type NativeInstallationLocation struct {
 // before invoking the runner; the result and installation locator remain separate.
 func (w *NativeInstallerRuntime) RunWithLocation(ctx context.Context, plan NativeInstallerPlan, consent bool) (NativeInstallerResult, *NativeInstallationLocation, error) {
 	if plan.owner != w || len(plan.data) == 0 || (len(plan.bootstrapEnv) != 0 && !consent) {
-		return NativeInstallerResult{}, nil, privateError("refused", nil)
+		return NativeInstallerResult{}, nil, privateError("refused", errors.New("native runtime plan ownership differs"))
 	}
 	data, err := w.invokeWithEnvironment(ctx, "run-with-location", plan.JSON(), consent, plan.bootstrapEnv)
 	if err != nil {

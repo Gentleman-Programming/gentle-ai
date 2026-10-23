@@ -168,6 +168,15 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
     if (child.returncode == 0) != good:
         COMMAND_FAILURE = {**evidence, 'stdoutBase64': base64.b64encode(out).decode('ascii'),
                            'stderrBase64': base64.b64encode(error).decode('ascii')}
+        if identity['kind'] == 'supervisor':
+            # The manager journal names the transient unit's own failure lines
+            # for the owned runtime; bounded and optional.
+            try:
+                journal = subprocess.run(['/usr/bin/journalctl', '--user', '-n', '40', '--no-pager', '-o', 'cat'],
+                                         env=env, capture_output=True, timeout=min(15, remaining()))
+                COMMAND_FAILURE['journalTailBase64'] = base64.b64encode(journal.stdout[-1024:]).decode('ascii')
+            except Exception:
+                pass
         raise RuntimeError('command outcome differs; bounded complete failure evidence')
     return out.decode('utf-8', 'strict') if stdout_only else text
 

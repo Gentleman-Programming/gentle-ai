@@ -5,6 +5,7 @@ package shellinstaller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,7 +21,7 @@ func (w *NativeInstallerRuntime) Prepare(ctx context.Context, consent bool) (Nat
 		return NativeInstallerPlan{}, err
 	}
 	if !consent {
-		return NativeInstallerPlan{}, privateError("refused", nil)
+		return NativeInstallerPlan{}, privateError("refused", errors.New("native runtime consent missing"))
 	}
 	if err := w.nativeSourceCheck(ctx); err != nil {
 		return NativeInstallerPlan{}, err

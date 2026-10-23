@@ -4,6 +4,7 @@ package shellinstaller
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -109,7 +110,7 @@ func userNativeExecutionCheck(root, managerRuntime string) error {
 		return err
 	}
 	if !userSelectionPath(root) || managerRuntime != "/run/user/"+strconv.Itoa(os.Getuid()) || userPathsOverlap(root, managerRuntime) {
-		return privateError("refused", nil)
+		return privateError("refused", errors.New("installation root path shape differs"))
 	}
 	for _, path := range []string{root, filepath.Join(root, "runtime")} {
 		if _, err := privateDirectory(path); err != nil {
@@ -123,7 +124,7 @@ func userNativeExecutionCheck(root, managerRuntime string) error {
 		}
 		var filesystem unix.Statfs_t
 		if err := unix.Statfs(path, &filesystem); err != nil || filesystem.Flags&unix.ST_RDONLY == 0 {
-			return privateError("refused", err)
+			return privateError("refused", fmt.Errorf("protected runtime path is not read-only: %s", path))
 		}
 	}
 	if _, err := privatePhysical(filepath.Join(protected[0], "main.zip")); err != nil {
@@ -131,11 +132,11 @@ func userNativeExecutionCheck(root, managerRuntime string) error {
 	}
 	entries, err := os.ReadDir(managerRuntime)
 	if err != nil || len(entries) != 0 {
-		return privateError("refused", err)
+		return privateError("refused", errors.New("masked manager runtime is not empty"))
 	}
 	for _, endpoint := range []string{"bus", "systemd/private"} {
 		if _, err := os.Lstat(filepath.Join(managerRuntime, endpoint)); !os.IsNotExist(err) {
-			return privateError("refused", err)
+			return privateError("refused", fmt.Errorf("masked manager runtime endpoint still exists: %s", endpoint))
 		}
 	}
 	mounts, err := userNativeProc("mountinfo")
@@ -159,17 +160,17 @@ func userNativeMountsData(mounts string, roots []string) error {
 		}
 		fields, right := strings.Fields(sides[0]), strings.Fields(sides[1])
 		if len(fields) < 6 || len(right) != 3 {
-			return privateError("refused", nil)
+			return privateError("refused", errors.New("mountinfo line shape differs"))
 		}
 		id, idErr := strconv.Atoi(fields[0])
 		parent, parentErr := strconv.Atoi(fields[1])
 		_, rootOK := privateMountPath(fields[3])
 		point, pointOK := privateMountPath(fields[4])
 		if idErr != nil || parentErr != nil || id <= 0 || parent <= 0 || !rootOK || !pointOK || len(nodes) >= 16384 {
-			return privateError("refused", nil)
+			return privateError("refused", errors.New("mountinfo fields differ"))
 		}
 		if _, duplicate := nodes[id]; duplicate {
-			return privateError("refused", nil)
+			return privateError("refused", errors.New("duplicate mountinfo entry"))
 		}
 		nodes[id] = mount{parent, point, strings.Contains(","+fields[5]+",", ",ro,")}
 	}
@@ -178,7 +179,7 @@ func userNativeMountsData(mounts string, roots []string) error {
 	for id, node := range nodes {
 		if parent, exists := nodes[node.parent]; exists && parent.point == node.point {
 			if covers[node.parent] != 0 {
-				return privateError("refused", nil)
+				return privateError("refused", errors.New("same-point mount branch covers twice"))
 			}
 			covers[node.parent] = id
 		}
@@ -188,7 +189,7 @@ func userNativeMountsData(mounts string, roots []string) error {
 	var branch func(int) (bool, error)
 	branch = func(id int) (bool, error) {
 		if state[id] == 1 {
-			return false, privateError("refused", nil)
+			return false, privateError("refused", errors.New("mount branch cycle"))
 		}
 		if state[id] > 1 {
 			return state[id] == 2, nil
@@ -223,17 +224,17 @@ func userNativeMountsData(mounts string, roots []string) error {
 		for _, root := range roots {
 			if node.point == root {
 				if seen[root] || !node.readonly {
-					return privateError("refused", nil)
+					return privateError("refused", fmt.Errorf("protected mount %s is not read-only", node.point))
 				}
 				seen[root] = true
 			} else if strings.HasPrefix(node.point, root+"/") && !node.readonly {
-				return privateError("refused", nil)
+				return privateError("refused", fmt.Errorf("protected subtree mount %s is not read-only", node.point))
 			}
 		}
 	}
 	for _, root := range roots {
 		if !seen[root] {
-			return privateError("refused", nil)
+			return privateError("refused", fmt.Errorf("protected mount %s is not visible", root))
 		}
 	}
 	return nil

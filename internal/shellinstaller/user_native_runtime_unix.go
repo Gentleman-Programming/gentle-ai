@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,7 +50,7 @@ func NewNativeInstallerRuntime(ctx context.Context, root, source string) (*Nativ
 		return nil, err
 	}
 	if !privateHierarchyPath(root) || !privateHierarchyPath(source) {
-		return nil, privateError("refused", nil)
+		return nil, privateError("refused", errors.New("native runtime hierarchy path differs"))
 	}
 	if err := nativeRuntimePaths(root); err != nil {
 		return nil, err
@@ -175,7 +176,7 @@ func nativeRuntimePaths(root string) error {
 		}
 		st := info.Sys().(*syscall.Stat_t)
 		if info.Mode() != 0600 || st.Uid != uint32(os.Getuid()) || st.Nlink != 1 {
-			return privateError("refused", nil)
+			return privateError("refused", fmt.Errorf("native runtime config file %s identity differs", name))
 		}
 	}
 	return nil

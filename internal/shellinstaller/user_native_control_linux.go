@@ -33,7 +33,7 @@ func userNativeControlCheck() error {
 		return err
 	}
 	if filesystem.Type != unix.CGROUP2_SUPER_MAGIC || filesystem.Flags&unix.ST_RDONLY == 0 {
-		return privateError("refused", nil)
+		return privateError("refused", errors.New("cgroup root is not a read-only cgroup2 mount"))
 	}
 	after, err := userNativeProc("mountinfo")
 	if err != nil || before != after {
