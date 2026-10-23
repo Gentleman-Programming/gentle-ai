@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 	"unicode"
@@ -978,7 +979,43 @@ func outOfScopeCitationCause(safeToken string) error {
 	return fmt.Errorf("reviewer citation %q names an unknown or malformed repository path", safeToken) // refusal:by-design world-action: the reviewer's free text cited a path the frozen repository does not contain; only a re-run lens with corrected citations can continue
 }
 
+// isHostPortLiteral returns true if the token is a host:port literal like 127.0.0.1:8000.
+// These are common in config files and should not be treated as repository path citations.
+func isHostPortLiteral(token artifactReferenceToken) bool {
+	value := token.value
+	if !token.quoted {
+		value = strings.TrimLeft(value, "([{<")
+		value = strings.TrimRight(value, ")]}>.,;!?")
+	}
+	// Check for host:port pattern (IPv4:port or [IPv6]:port)
+	separator := strings.LastIndexByte(value, ':')
+	if separator <= 0 || separator == len(value)-1 {
+		return false
+	}
+	host := value[:separator]
+	port := value[separator+1:]
+	// Port must be all digits
+	for i := range port {
+		if port[i] < '0' || port[i] > '9' {
+			return false
+		}
+	}
+	// Handle bracketed IPv6 addresses (e.g., [::1])
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	// Host must be a valid IP address (IPv4 or IPv6)
+	if net.ParseIP(host) == nil {
+		return false
+	}
+	return true
+}
+
 func artifactRepositoryPathReference(token artifactReferenceToken) (string, bool) {
+	// Skip host:port literals - they are not repository paths
+	if isHostPortLiteral(token) {
+		return "", false
+	}
 	value := token.value
 	if !token.quoted {
 		value = strings.TrimLeft(value, "([{<")
