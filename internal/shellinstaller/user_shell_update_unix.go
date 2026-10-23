@@ -5,7 +5,6 @@ package shellinstaller
 import (
 	"context"
 	"errors"
-	"os"
 )
 
 // UserShellUpdate is channel-scoped update availability. The check follows
@@ -54,7 +53,9 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 		}
 		return update, nil
 	}
-	self, err := os.Executable()
+	// userExecutable names the physical executable spelling on darwin; the
+	// supervisor provenance guard requires the canonical path.
+	self, err := userExecutable()
 	if err != nil {
 		return update, err
 	}

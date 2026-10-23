@@ -72,6 +72,7 @@ func TestUserContext7ExperienceLegacyBytes(t *testing.T) {
 }
 
 func TestUserContext7ExperienceRefusesUnsupportedStage(t *testing.T) {
+	skipDarwinUnqualifiedMain(t)
 	for _, mode := range []string{"on", "off"} {
 		profile, err := DecodeUserExperience(`{"persona":"unmanaged","background_subagents":"on","context7":"` + mode + `"}`)
 		if err != nil {

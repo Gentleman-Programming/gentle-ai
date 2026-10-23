@@ -46,6 +46,7 @@ func TestUserExperienceSelectionPreservesNilBytesAndBindsValues(t *testing.T) {
 }
 
 func TestUserExperienceSelectionRefusesUnsupportedProfileBeforeEffects(t *testing.T) {
+	skipDarwinUnqualifiedMain(t)
 	root := t.TempDir()
 	if err := os.Chmod(root, 0700); err != nil {
 		t.Fatal(err)

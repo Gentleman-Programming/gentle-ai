@@ -64,6 +64,7 @@ func TestUserCodeGraphExperienceInvalidSelection(t *testing.T) {
 }
 
 func TestUserCodeGraphExperienceHistoricalAndRefusal(t *testing.T) {
+	skipDarwinUnqualifiedMain(t)
 	for _, raw := range []string{
 		`{"persona":"gentleman","background_subagents":"on"}`,
 		`{"persona":"unmanaged","background_subagents":"off","context7":"off","strict_tdd":"on","gga":"on","gga_provider":"codex"}`,

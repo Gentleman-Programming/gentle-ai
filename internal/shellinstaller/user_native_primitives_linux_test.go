@@ -17,7 +17,7 @@ import (
 func TestPrivateNativeControls(t *testing.T) {
 	privateGuest(t)
 	// These literals are independent of production constants and local inventories.
-	if privateNativeNodeSHA != "41a74efb34cbde5c7632cdac0cf8bd1a14d0b8d73dc1e82755014d9a9ce70f5c" || privateNativeNodeSize != 123655872 || privateNativeResolverSHA != "cbdf5deac8b7a85ab1253dbd049953aeb192a7d1f7987f9206916ab449c10a92" {
+	if privateNativeNodeSHA != "41a74efb34cbde5c7632cdac0cf8bd1a14d0b8d73dc1e82755014d9a9ce70f5c" || privateNativeNodeSize != 123655872 || privateNativeResolverSHA != "61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80" {
 		t.Fatal("independent native/Node/source pins differ")
 	}
 	workspace := t.TempDir()

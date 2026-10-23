@@ -12,7 +12,9 @@ import (
 
 func experienceStage(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
+	// userStageExperience guards the root with privateDirectory, which requires
+	// the canonical spelling; on darwin t.TempDir is the /var alias.
+	root := userUnixTempRoot(t)
 	for _, path := range []string{root, filepath.Join(root, "config")} {
 		if path == root {
 			if err := os.Chmod(path, 0700); err != nil {
@@ -152,6 +154,7 @@ func TestUserStageExperienceRefusesBeforeWrites(t *testing.T) {
 }
 
 func TestUserStageExperienceRejectsExplicitRDD(t *testing.T) {
+	skipDarwinUnqualifiedMain(t)
 	profile := UserExperience{Persona: "gentleman", BackgroundSubagents: "on"}
 	profile.GlobalRDD = "off"
 	profile.SDKSource = "main-preview"

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const scripts = fileURLToPath(new URL('../scripts/', import.meta.url));
-function fixture(t, profile = 'modern', change) {
+function fixture(t, profile = 'modern', change, npmTraceExtra = '') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'frozen-user-lock-'));
   fs.chmodSync(root, 0o700);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -19,7 +19,7 @@ function fixture(t, profile = 'modern', change) {
   const trace = path.join(root, 'npm-trace.json');
   // Stop at the real child-process boundary: this is not npm-install qualification.
   fs.writeFileSync(path.join(root, 'runtime/node/lib/node_modules/npm/bin/npm-cli.js'),
-    `require('node:fs').writeFileSync(${JSON.stringify(trace)}, JSON.stringify(process.argv.slice(2))); process.exit(73);`, { mode: 0o600 });
+    `require('node:fs').writeFileSync(${JSON.stringify(trace)}, JSON.stringify(process.argv.slice(2)));${npmTraceExtra} process.exit(73);`, { mode: 0o600 });
   const original = fs.readFileSync(path.join(scripts, `user-locks/${profile}/package-lock.json`));
   const lock = JSON.parse(original);
   if (change) change(lock);
@@ -55,6 +55,18 @@ for (const profile of ['modern', 'prior']) {
     assert.deepEqual(fs.readdirSync(path.join(f.root, 'agent')), []);
   });
 }
+
+test('acquisition pins umask 022 over a group-writable login umask', t => {
+  const observed = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'provision-umask-')), 'umask.json');
+  t.after(() => fs.rmSync(path.dirname(observed), { recursive: true, force: true }));
+  const extra = `require('node:fs').writeFileSync(${JSON.stringify(observed)}, JSON.stringify(process.umask()));`;
+  // Simulate the Ubuntu/WSL default login umask that npm would otherwise inherit.
+  const previous = process.umask(0o002);
+  let f;
+  try { f = fixture(t, 'modern', undefined, extra); } finally { process.umask(previous); }
+  assert.notEqual(f.result.status, 0, 'the npm fixture deliberately stops acquisition');
+  assert.equal(JSON.parse(fs.readFileSync(observed)), 0o22, 'npm must observe the pinned 022 umask');
+});
 
 function changeVersion(entry, version) {
   entry.resolved = entry.resolved.replace(`-${entry.version}.tgz`, `-${version}.tgz`);

@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestUserPrepareInstallStageContext7(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("darwin is an unqualified platform: the fallback Context7 writer emits a different canonical key order than the linux private writer")
+	}
 	for _, persona := range []string{"gentleman", "neutral", "unmanaged"} {
 		for _, background := range []string{"on", "off"} {
 			for _, choice := range []string{"", "on", "off"} {

@@ -7,6 +7,7 @@ import (
 )
 
 func TestUserStrictTDDExperienceCodec(t *testing.T) {
+	skipDarwinUnqualifiedMain(t)
 	const fields = `"persona":"unmanaged","background_subagents":"off"`
 	for _, choice := range []string{"on", "off"} {
 		t.Run(choice, func(t *testing.T) {

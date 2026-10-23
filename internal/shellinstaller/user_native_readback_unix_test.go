@@ -24,7 +24,7 @@ func TestUserNativeReadbackAdmitsCurrentStockBundle(t *testing.T) {
 	manifest := fmt.Sprintf(`{"version":%q,"asset":"gentle-ai_%s_%s.tar.gz","assetSha256":"%s","binarySha256":"%s"}`+"\n",
 		version, version, release, strings.Repeat("a", 64), fmt.Sprintf("%x", sha256.Sum256(binary)))
 	ctx := context.Background()
-	root := t.TempDir()
+	root := userUnixTempRoot(t)
 	if err := os.Chmod(root, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestUserNativeReadbackAdmitsCurrentStockBundle(t *testing.T) {
 		{"foreign-directory", "not-a-version", manifest, binary, 0700, 0600},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			fixture := t.TempDir()
+			fixture := userUnixTempRoot(t)
 			if err := os.Chmod(fixture, 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -80,7 +80,7 @@ func TestUserNativeReadbackAdmitsCurrentStockBundle(t *testing.T) {
 	}
 	for _, name := range []string{"missing-integrity", "extra-member"} {
 		t.Run(name, func(t *testing.T) {
-			fixture := t.TempDir()
+			fixture := userUnixTempRoot(t)
 			if err := os.Chmod(fixture, 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -104,7 +104,7 @@ func TestUserNativeReadbackAdmitsCurrentStockBundle(t *testing.T) {
 			}
 		})
 	}
-	duplicate := t.TempDir()
+	duplicate := userUnixTempRoot(t)
 	if err := os.Chmod(duplicate, 0700); err != nil {
 		t.Fatal(err)
 	}

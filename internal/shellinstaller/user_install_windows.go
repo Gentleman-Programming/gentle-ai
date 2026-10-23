@@ -93,8 +93,9 @@ func InspectUserInstall(req UserInstallRequest) (string, error) {
 		return "", errors.Join(err, errors.New("select an owned canonical Windows installation path"))
 	}
 	identity := "absent"
+	reconfigure := req.Experience != nil && userWindowsReconfigureTarget() == req.Destination
 	if _, err := os.Lstat(req.Destination); err == nil {
-		if req.Experience != nil {
+		if req.Experience != nil && !reconfigure {
 			return "", experienceError("explicit experience requires a new empty target; existing preferences are preserved")
 		}
 		selected, err := userWindowsIdentity(req.Destination, true)
@@ -164,6 +165,16 @@ func userWindowsSelection(data []byte, root string) (UserInstallRequest, error) 
 		return UserInstallRequest{}, errors.New("Windows retained selection fields/root differ")
 	}
 	return req, nil
+}
+
+// userWindowsReconfigureTarget reports the exact reconfigure target the host
+// selected for a managed update. Empty when this is a fresh install.
+func userWindowsReconfigureTarget() string {
+	value := os.Getenv("GENTLE_AI_RECONFIGURE_TARGET")
+	if value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
+		return ""
+	}
+	return value
 }
 
 func userWindowsManifestRead(root string) (userWindowsManifest, error) {
@@ -357,23 +368,41 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, errors.Join(err, errors.New("physical Windows selection confirmation differs"))
 	}
 	if _, err := os.Lstat(req.Destination); err == nil {
-		if err := userWindowsVerify(ctx, req.Destination, io.Discard, io.Discard); err != nil {
+		// A reconfigure/replace of the managed target (channel switch or
+		// component update) is a fresh install over a retired backup, so the
+		// idempotent already-installed branch must not consume it.
+		if userWindowsReconfigureTarget() != req.Destination {
+			if err := userWindowsVerify(ctx, req.Destination, io.Discard, io.Discard); err != nil {
+				return result, err
+			}
+			selection, err := userWindowsRead(filepath.Join(req.Destination, "selection.json"), 4096)
+			selected, selectionErr := userWindowsSelection(selection, req.Destination)
+			if err != nil || selectionErr != nil || selected.Channel != channel {
+				return result, errors.Join(err, selectionErr, errors.New("existing installation channel differs; no replacement"))
+			}
+			// A previous attempt can publish and verify the target before the
+			// launcher is registered. Repair that tail on an idempotent run.
+			if err := userWindowsPublishLauncher(req.Destination); err != nil {
+				return result, errors.Join(err, errors.New("existing Windows installation could not publish the gentle-shell command"))
+			}
+			if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
+				fmt.Fprintf(os.Stderr, "Windows installation is verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
+			}
+			return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed"}, nil
+		}
+		// Reconfigure: retire the previous tree to its .replaced- backup so the
+		// fresh install below can publish into the confirmed destination.
+		backup := req.Destination + ".replaced-" + time.Now().UTC().Format("20060102T150405Z")
+		if _, err := os.Lstat(backup); !os.IsNotExist(err) {
+			return result, errors.Join(err, errors.New("Windows replacement backup path is already occupied"))
+		}
+		if _, err := userWindowsIdentity(req.Destination, true); err != nil {
 			return result, err
 		}
-		selection, err := userWindowsRead(filepath.Join(req.Destination, "selection.json"), 4096)
-		selected, selectionErr := userWindowsSelection(selection, req.Destination)
-		if err != nil || selectionErr != nil || selected.Channel != channel {
-			return result, errors.Join(err, selectionErr, errors.New("existing installation channel differs; no replacement"))
+		if err := os.Rename(req.Destination, backup); err != nil {
+			return result, err
 		}
-		// A previous attempt can publish and verify the target before the
-		// launcher is registered. Repair that tail on an idempotent run.
-		if err := userWindowsPublishLauncher(req.Destination); err != nil {
-			return result, errors.Join(err, errors.New("existing Windows installation could not publish the gentle-shell command"))
-		}
-		if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
-			fmt.Fprintf(os.Stderr, "Windows installation is verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
-		}
-		return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed"}, nil
+		fmt.Fprintf(os.Stderr, "Windows install phase: replaced previous installation %s -> %s\n", req.Destination, backup)
 	}
 	var mainArtifact userWindowsArtifact
 	var mainData []byte

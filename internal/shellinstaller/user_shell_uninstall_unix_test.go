@@ -12,12 +12,8 @@ import (
 )
 
 func TestUninstallAgentRestoresUnchangedPreimages(t *testing.T) {
-	home := t.TempDir()
-	target, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = os.Chmod(target, 0700)
+	home := userUnixTempRoot(t)
+	target := userUnixTempRoot(t)
 	agent := filepath.Join(home, "agent")
 	if err := os.Mkdir(agent, 0700); err != nil {
 		t.Fatal(err)
@@ -97,12 +93,8 @@ func TestUninstallAgentRestoresUnchangedPreimages(t *testing.T) {
 }
 
 func TestUninstallSeparateLeavesMinimalBackup(t *testing.T) {
-	home := t.TempDir()
-	target, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = os.Chmod(target, 0700)
+	home := userUnixTempRoot(t)
+	target := userUnixTempRoot(t)
 	for _, relative := range []string{
 		"config", "agent", "agent/bin", "home", "home/.gentle-ai", "home/go", "home/go/pkg/mod", "prefix", "prefix/lib", "runtime/node", "runtime/node/bin", "runtime/cache",
 		"runtime/tools", "state", "tmp", "bin", "pnpm", "source",

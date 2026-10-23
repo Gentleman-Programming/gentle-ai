@@ -11,7 +11,9 @@ import (
 
 func detectPiFixture(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
+	// DetectUserPi guards candidate prefixes with privateDirectory, which
+	// requires the canonical spelling; on darwin t.TempDir is the /var alias.
+	home := userUnixTempRoot(t)
 	if err := os.MkdirAll(filepath.Join(home, ".pi", "agent"), 0700); err != nil {
 		t.Fatal(err)
 	}

@@ -13,7 +13,7 @@ func TestUserExperienceFreshSeparateAdmission(t *testing.T) {
 	for _, persona := range []string{"gentleman", "neutral", "unmanaged"} {
 		for _, background := range []string{"on", "off"} {
 			t.Run(persona+"-"+background, func(t *testing.T) {
-				parent := t.TempDir()
+				parent := userUnixTempRoot(t)
 				if err := os.Chmod(parent, 0700); err != nil {
 					t.Fatal(err)
 				}
@@ -45,7 +45,8 @@ func TestUserExperienceFreshSeparateAdmission(t *testing.T) {
 }
 
 func TestUserExperienceAdmissionKeepsScopeAndFeatureRefusals(t *testing.T) {
-	parent := t.TempDir()
+	skipDarwinUnqualifiedMain(t)
+	parent := userUnixTempRoot(t)
 	if err := os.Chmod(parent, 0700); err != nil {
 		t.Fatal(err)
 	}

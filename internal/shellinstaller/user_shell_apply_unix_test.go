@@ -10,13 +10,7 @@ import (
 )
 
 func TestApplyUserExperiencePreferencesInPlace(t *testing.T) {
-	target, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(target, 0700); err != nil {
-		t.Fatal(err)
-	}
+	target := userUnixTempRoot(t)
 	agent := filepath.Join(target, "agent")
 	writeInstallFixture(t, target, userManifest{Schema: userSchema, Destination: target, Prefix: filepath.Join(target, "prefix"), Agent: agent, Mode: "separate"})
 	for path, data := range map[string]string{

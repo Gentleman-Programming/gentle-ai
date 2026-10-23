@@ -9,7 +9,7 @@ import (
 )
 
 func TestCheckStableUserShellUpdate(t *testing.T) {
-	target := t.TempDir()
+	target := userUnixTempRoot(t)
 	writeInstallFixture(t, target, userManifest{Schema: userSchema, Destination: target, Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"), Mode: "separate"})
 	update, err := CheckUserShellUpdate(context.Background(), UserShellInstall{Target: target, Mode: "separate"})
 	if err != nil {

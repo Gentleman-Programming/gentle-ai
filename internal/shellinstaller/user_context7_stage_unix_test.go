@@ -12,7 +12,7 @@ import (
 
 func context7Stage(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
+	root := userUnixTempRoot(t)
 	if err := os.Chmod(root, 0700); err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,9 @@ import (
 
 func installStagePath(t *testing.T) string {
 	t.Helper()
-	parent := t.TempDir()
+	// The stage parent feeds privateDestination's privateDirectory guard, which
+	// requires the canonical spelling; on darwin t.TempDir is the /var alias.
+	parent := userUnixTempRoot(t)
 	if err := os.Chmod(parent, 0700); err != nil {
 		t.Fatal(err)
 	}
