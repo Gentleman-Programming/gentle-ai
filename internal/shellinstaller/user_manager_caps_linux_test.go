@@ -43,7 +43,7 @@ func TestUserManagerCapabilityHelperUsesExecutableCustody(t *testing.T) {
 	if _, err := userSupervisorSHA(ctx, path); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []os.FileMode{0600, 0770, 0777} {
+	for _, mode := range []os.FileMode{0600, 0707, 0777} {
 		if err := os.Chmod(path, mode); err != nil {
 			t.Fatal(err)
 		}

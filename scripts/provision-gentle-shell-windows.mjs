@@ -138,15 +138,22 @@ function materializeGlobal() {
   fs.renameSync(acquired, modules);
   materialized = true;
 }
-function npmCommand(args) {
-  const child = spawnSync(node, [npm, ...args], { cwd: source, env: process.env, shell: false, timeout: 180000, maxBuffer: 8388608 });
+const NPM_NETWORK_TIMEOUT = 1200000; // Network-bound npm runs must not depend on connection speed.
+function npmCommand(args, timeout = NPM_NETWORK_TIMEOUT) {
+  const started = Date.now();
+  let child = spawnSync(node, [npm, ...args], { cwd: source, env: process.env, shell: false, timeout, maxBuffer: 8388608 });
+  if (child.error) {
+    // Transport-class failure (spawn error or the spawn timeout): one bounded
+    // retry with a fresh window separates a slow connection from a dead one.
+    child = spawnSync(node, [npm, ...args], { cwd: source, env: process.env, shell: false, timeout, maxBuffer: 8388608 });
+  }
   if (child.error || child.status !== 0 || child.signal) {
     const bytes = Buffer.concat([child.stdout ?? Buffer.alloc(0), child.stderr ?? Buffer.alloc(0)]);
     const text = bytes.toString('utf8');
     const detail = bytes.length <= 8192 && Buffer.from(text, 'utf8').equals(bytes) && !text.includes('\0')
       ? JSON.stringify(text).replace(/[\u007f-\u009f]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
       : 'whole npm diagnostic withheld (size/encoding guard)';
-    reject(`npm ${args[0]} failed; status=${child.status}; error=${child.error?.code ?? 'none'}; bytes=${bytes.length}; sha256=${digest(bytes)}; diagnostic=${detail}`);
+    reject(`npm ${args[0]} failed; status=${child.status}; error=${child.error?.code ?? 'none'}; elapsedMs=${Date.now() - started}; bytes=${bytes.length}; sha256=${digest(bytes)}; diagnostic=${detail}`);
   }
 }
 const lockPath = path.join(source, 'package-lock.json');
@@ -172,7 +179,7 @@ if (action === 'install') {
   console.error('Windows install phase: provision-copy');
   materializeGlobal();
   console.error('Windows install phase: provision-rebuild');
-  npmCommand(['rebuild', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--bin-links=true', '--engine-strict', '--no-audit', '--no-fund']);
+  npmCommand(['rebuild', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--bin-links=true', '--engine-strict', '--no-audit', '--no-fund'], 180000);
 }
 const authority = new Map();
 // An install promotes source/node_modules into prefix/node_modules. A later
