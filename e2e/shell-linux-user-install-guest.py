@@ -119,7 +119,14 @@ def kernel():
 def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
     global COMMAND_FAILURE
     env = {'PATH': '/usr/local/bin:/usr/bin:/bin:/work/personal/prefix/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'),
-           'PYTHONDONTWRITEBYTECODE': '1', 'TERM': 'xterm-256color'}
+           'PYTHONDONTWRITEBYTECODE': '1', 'TERM': 'xterm-256color',
+           # The standard delegated user-session environment the worker itself
+           # runs under: the installer's native fresh-separate flow reaches the
+           # user manager (slice + transient unit) BEFORE its cold Node
+           # acquisition, so without it every install refuses early and the
+           # fault probes never observe the pinned Node request.
+           'XDG_RUNTIME_DIR': '/run/user/' + str(FIXTURE_UID),
+           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' + str(FIXTURE_UID) + '/bus'}
     env.update(extra or {})
     names = {pathlib.Path(arg).name for arg in args[:2]}
     stock = next((name for name in ['pnpm', 'pnpm.mjs', 'npm-cli.js', 'pi', 'cli.js', 'provision.mjs', 'git'] if name in names), 'stock')
@@ -353,14 +360,19 @@ def acquisition_fault(target, cleanup=False):
     FAULT_SEEN.clear()
     FAULT_RELEASE.clear()
     FAULT = 'node-cleanup' if cleanup else 'node-cancel'
-    env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp')}
+    env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'),
+           'XDG_RUNTIME_DIR': '/run/user/' + str(FIXTURE_UID),
+           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' + str(FIXTURE_UID) + '/bus'}
+    # Earlier fault stages legitimately retain their own native workspaces as
+    # uncertain evidence; attribute the new stage to this acquisition by diff.
+    before_stages = set(target.parent.glob('.gentle-native-*'))
     child = subprocess.Popen(args + ['--confirm', token], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     stage = None
     try:
         require(FAULT_SEEN.wait(timeout=min(20, remaining())), 'actual cold acquisition not observed')
-        stages = list(target.parent.glob('.gentle-user-*'))
-        require(len(stages) == 1 and stages[0].is_dir() and stages[0].lstat().st_uid == 1002, 'owned acquisition stage differs')
-        stage = stages[0]
+        fresh = set(target.parent.glob('.gentle-native-*')) - before_stages
+        require(len(fresh) == 1 and next(iter(fresh)).is_dir() and next(iter(fresh)).lstat().st_uid == 1002, 'owned acquisition stage differs')
+        stage = next(iter(fresh))
         if cleanup:
             os.chmod(stage, 0o500)  # Real owned-filesystem cleanup refusal, not a mocked return.
         else:
@@ -375,8 +387,13 @@ def acquisition_fault(target, cleanup=False):
             require(stage.exists() and str(stage) in text and 'uncertain' in text, 'cleanup denial lost owned evidence locator')
             REPORT['cleanupDenial'] = 'actual changed stage permissions; uncertain evidence retained'
         else:
-            require(not stage.exists(), 'canceled acquisition stage not cleaned after worker reap')
-            REPORT['acquisitionCancel'] = 'actual in-flight request interrupted, worker waited and unpublished stage removed'
+            # The native flow never deletes state behind a stopped operation:
+            # cancellation is uncertain, so the owned workspace is retained as
+            # evidence with its publication locator, and the target stays
+            # unpublished. Silently removing it would be the failure, not the
+            # expectation.
+            require(stage.exists() and str(stage) in text and 'uncertain' in text, 'cancellation lost owned uncertain evidence locator')
+            REPORT['acquisitionCancel'] = 'actual in-flight request interrupted; owned stage retained as uncertain evidence, target unpublished'
     finally:
         FAULT_RELEASE.set()
         FAULT = ''
