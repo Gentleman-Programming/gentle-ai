@@ -282,8 +282,10 @@ For `SubagentStop`, the documented `agent_type` names the subagent frontmatter.
 Names in Gentle AI's runtime agent-class registry become `built_in` observations.
 Claude Code's own built-in subagents map by exact, case-sensitive name:
 `general-purpose` to the built-in `worker` class and `Explore` to the built-in
-`explore` class. All other names become `custom`/`unknown` without transmitting
-the name.
+`explore` class. The ODD agents Gentle AI installs map the same way:
+`gentle-ai-explore` to `explore`, `gentle-ai-worker` to `worker`, and
+`gentle-ai-verify` to `verify`. All other names become `custom`/`unknown`
+without transmitting the name.
 
 For `SubagentStop`, the adapter reads at most the last 512 KiB of the matching
 agent transcript, from inside the user's home only. It scans backward for the
@@ -316,7 +318,7 @@ was not flushed in time for one `Stop` is picked up and counted at the next
 is available, the observation falls back to a fresh delivery id, exactly like
 `SubagentStop`.
 
-For a known named subagent, at most 64 KiB of
+For a known named subagent or a managed ODD agent, at most 64 KiB of
 `~/.claude/agents/<agent_type>.md` supplies selected model and selected effort.
 The selected model is used only when no response model exists. On `Stop`, the
 hook's common `effort.level` field (`low`, `medium`, `high`, `xhigh`, `max`) is

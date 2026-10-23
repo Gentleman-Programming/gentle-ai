@@ -308,6 +308,9 @@ func TestClaudeRuntimeBuiltInSubagentsMapToAggregateClasses(t *testing.T) {
 		{name: "literal worker stays a custom name", agentType: "worker", wantKind: "custom", wantClass: "unknown"},
 		{name: "OpenCode general name stays custom", agentType: "general", wantKind: "custom", wantClass: "unknown"},
 		{name: "case variant of general-purpose stays custom", agentType: "General-Purpose", wantKind: "custom", wantClass: "unknown"},
+		{name: "managed ODD explorer is explore", agentType: "gentle-ai-explore", wantKind: "built_in", wantClass: "explore"},
+		{name: "managed ODD worker is a worker", agentType: "gentle-ai-worker", wantKind: "built_in", wantClass: "worker"},
+		{name: "managed ODD verifier is verify", agentType: "gentle-ai-verify", wantKind: "built_in", wantClass: "verify"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -444,5 +447,32 @@ func TestClaudeFrontmatterFallbackAndInvalidValues(t *testing.T) {
 	o = NormalizeClaude(hook, ClaudeUsage{Evidence: true, Input: json.RawMessage("1")}, []byte("---\nmodel: claude-haiku-4-5\neffort: low\n---\n"))
 	if o.Row.Model.ID != "claude-haiku-4-5" || o.Row.ModelEvidence != "selected" || string(o.Row.Responses) != "1" {
 		t.Fatalf("model fallback with usage: %+v", o.Row)
+	}
+}
+
+// #5610: a managed ODD agent's own definition supplies the model and effort the
+// user picked for its row, like the other managed agents.
+func TestClaudeRuntimeManagedODDAgentReadsSelectedModel(t *testing.T) {
+	for _, name := range []string{"gentle-ai-explore", "gentle-ai-worker", "gentle-ai-verify"} {
+		if !ClaudeAgentHasDefinition(name) {
+			t.Fatalf("%s definition is not read", name)
+		}
+		input := strings.Replace(claudeSubagentHook, `"agent_type":"sdd-apply"`, `"agent_type":"`+name+`"`, 1)
+		hook, err := ParseClaudeHook(strings.NewReader(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := NormalizeClaude(hook, ClaudeUsage{}, []byte("---\nname: "+name+"\nmodel: sonnet\neffort: medium\n---\nbody\n"))
+		if o.Row.SelectedEffort != "medium" || o.Row.ModelEvidence != "selected" {
+			t.Fatalf("%s: selected effort %q, model evidence %q", name, o.Row.SelectedEffort, o.Row.ModelEvidence)
+		}
+	}
+	for _, name := range []string{"general-purpose", "Explore", "worker", "unknown"} {
+		if ClaudeAgentHasDefinition(name) {
+			t.Fatalf("%s must not read an agent definition", name)
+		}
+	}
+	if !ClaudeAgentHasDefinition("jd-judge-a") {
+		t.Fatal("named agent definition is no longer read")
 	}
 }

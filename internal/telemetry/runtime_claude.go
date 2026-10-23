@@ -156,7 +156,28 @@ func claudeBuiltInAgentClass(agentType string) string {
 	case "Explore":
 		return "explore"
 	}
+	return claudeManagedODDAgentClass(agentType)
+}
+
+// claudeManagedODDAgentClass maps the ODD agents Gentle AI installs for Claude
+// Code, which ODD delegation uses instead of the built-ins (#5610).
+func claudeManagedODDAgentClass(agentType string) string {
+	switch agentType {
+	case "gentle-ai-explore":
+		return "explore"
+	case "gentle-ai-worker":
+		return "worker"
+	case "gentle-ai-verify":
+		return "verify"
+	}
 	return ""
+}
+
+// ClaudeAgentHasDefinition reports whether an agent type has an installed
+// ~/.claude/agents/<agent_type>.md whose frontmatter supplies its selected
+// model and effort: a named agent or a managed ODD agent.
+func ClaudeAgentHasDefinition(agentType string) bool {
+	return ClaudeNamedAgent(agentType) || claudeManagedODDAgentClass(agentType) != ""
 }
 
 // ParseClaudeTranscriptTail returns the last valid assistant usage record in a
