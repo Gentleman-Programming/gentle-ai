@@ -24,8 +24,6 @@ type WelcomeAdvisory struct {
 }
 
 // WelcomeOptions returns the welcome menu options.
-// When hasEngines is false, "Create your own Agent" is shown as disabled
-// (labelled "(no agents)") to signal that no supported AI engine is installed.
 func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool) []string {
 	return WelcomeOptionsWithShellInstaller(updateResults, updateCheckDone, hasEngines, false)
 }
@@ -38,10 +36,7 @@ func WelcomeOptionsWithShellInstaller(updateResults []update.UpdateResult, updat
 		upgradeLabel = "Upgrade tools (up to date)"
 	}
 
-	agentLabel := "Create your own Agent"
-	if !hasEngines {
-		agentLabel = "Create your own Agent (no agents)"
-	}
+	_ = hasEngines
 
 	opts := []string{
 		"Start installation",
@@ -49,7 +44,7 @@ func WelcomeOptionsWithShellInstaller(updateResults []update.UpdateResult, updat
 		"Sync configs",
 		"Upgrade + Sync",
 		"Configure models",
-		agentLabel,
+		"Manage Custom Agents",
 	}
 
 	opts = append(opts, "Manage backups")
