@@ -173,6 +173,12 @@ func (m Model) beginComponentUpdate(update *shellUpdateState) (tea.Model, error)
 	if err != nil {
 		return m, err
 	}
+	return m.beginShellUpdateInstall(install, profile)
+}
+
+// beginShellUpdateInstall prepares the shared plan/confirmation flow for a
+// component update of the given profile.
+func (m Model) beginShellUpdateInstall(install shellinstaller.UserShellInstall, profile shellinstaller.UserExperience) (tea.Model, error) {
 	if home, homeErr := os.UserHomeDir(); homeErr == nil {
 		_ = os.Setenv("GENTLE_AI_SHELL_REGISTRY_HOME", home)
 	}
@@ -192,6 +198,43 @@ func (m Model) beginComponentUpdate(update *shellUpdateState) (tea.Model, error)
 	m.shellInstallModel = cli.NewShellInstallModelWithExperience(nil, profile)
 	m.shellUpdate = nil
 	return m, nil
+}
+
+// shellChannelOnlyDelta reports whether the selected profile differs from the
+// installed profile only in the SDK update channel. Only such deltas route
+// Update-now to the in-place channel overlay; any preference or component
+// change keeps the full reconfigure.
+func shellChannelOnlyDelta(current, selected shellinstaller.UserExperience) bool {
+	if selected.SDKSource != "stable" && selected.SDKSource != "main-preview" {
+		return false
+	}
+	if current.SDKSource == "" {
+		current.SDKSource = "stable" // A missing preference is the stable channel.
+	}
+	if current.SDKSource == selected.SDKSource {
+		return false
+	}
+	// GGA is retired and inert; it never counts as a delta.
+	current.GGA, selected.GGA = "off", "off"
+	current.GGAProvider, selected.GGAProvider = "", ""
+	current.SDKSource, selected.SDKSource = "", ""
+	return current == selected
+}
+
+// beginChannelOverlayUpdate routes a channel-only change to the in-place
+// overlay: it persists the channel preference first (the overlay never
+// touches configuration), then prepares the shared update flow. The request's
+// experience carries the target channel, which the inspection derives and the
+// Windows worker recognizes as the channel-only reconfigure.
+func (m Model) beginChannelOverlayUpdate(update *shellUpdateState) (tea.Model, error) {
+	if err := shellinstaller.ApplyUserExperiencePreferences(update.install, update.config.profile); err != nil {
+		return m, err
+	}
+	profile, err := shellinstaller.LoadUserShellExperience(update.install)
+	if err != nil {
+		return m, err
+	}
+	return m.beginShellUpdateInstall(update.install, profile)
 }
 
 func (m Model) updateShellUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -229,6 +272,16 @@ func (m Model) updateShellUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.restoreUpdateConfig(update), nil
 	case "enter":
 		if update.info.Available && update.cursor == 0 {
+			// A channel-only delta routes Update-now to the in-place overlay;
+			// every other change keeps the full component reconfigure.
+			if loaded, loadErr := shellinstaller.LoadUserShellExperience(update.install); loadErr == nil && shellChannelOnlyDelta(loaded, update.config.profile) {
+				next, err := m.beginChannelOverlayUpdate(update)
+				if err != nil {
+					update.err = err
+					return m, nil
+				}
+				return next, nil
+			}
 			next, err := m.beginComponentUpdate(update)
 			if err != nil {
 				update.err = err

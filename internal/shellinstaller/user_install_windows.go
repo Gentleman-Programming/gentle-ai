@@ -363,6 +363,13 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	req.Channel = channel
+	// The experience carries the channel authority: an explicit Main-preview
+	// SDK source always means the Main channel, exactly as the confirmation
+	// inspection derives it. Without this mirror a reconfigure of a Main
+	// installation would retire into a Stable reinstall.
+	if req.Experience != nil && req.Experience.SDKSource == "main-preview" {
+		req.Channel = userChannelMain
+	}
 	// GGA is retired from the shell installer. Force it inert before any
 	// inspection, staging or recording so an old profile or a crafted transport
 	// cannot silently enable it; such a request then fails its confirmation
@@ -397,6 +404,21 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 				fmt.Fprintf(os.Stderr, "Windows installation is verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
 			}
 			return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed"}, nil
+		}
+		// A reconfigure that only changes the SDK update channel swaps the
+		// installed SDK in place; components, preferences, runtimes and the
+		// supervisor stay untouched. Any other reconfigure keeps the full
+		// retire-and-reinstall below.
+		if result, applied, err := userWindowsChannelOverlay(ctx, req); err != nil {
+			return result, err
+		} else if applied {
+			if err := userWindowsPublishLauncher(req.Destination); err != nil {
+				return result, errors.Join(err, errors.New("channel overlay could not confirm the gentle-shell command"))
+			}
+			if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
+				fmt.Fprintf(os.Stderr, "Windows channel overlay is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
+			}
+			return result, nil
 		}
 		// Reconfigure: retire the previous tree to its .replaced- backup so the
 		// fresh install below can publish into the confirmed destination.
