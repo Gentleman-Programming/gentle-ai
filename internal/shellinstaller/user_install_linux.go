@@ -225,6 +225,14 @@ func userServiceWithPlan(ctx context.Context, self string, args []string, stdin 
 	return userServiceResult(runErr, readbackErr)
 }
 
+// systemd reports a failed namespace setup with its canonical exit status 226
+// (EXIT_NAMESPACE) before any unit payload runs: the unit's exec child could
+// not create its user namespace. Ubuntu 23.10 and later restrict unprivileged
+// user namespaces through AppArmor by default, which every real user session
+// hits; name the restriction and the remediation instead of a bare uncertain
+// exit status.
+const userNamespaceSetupGuidance = "the owned runtime unit could not set up its user namespace (systemd exit status 226); Ubuntu 23.10 and later restrict unprivileged user namespaces by default: set kernel.apparmor_restrict_unprivileged_userns=0 or grant the unit an AppArmor profile that allows them, then install again"
+
 func userServiceResult(runErr, readbackErr error) error {
 	if readbackErr != nil {
 		return privateError("uncertain", errors.Join(runErr, readbackErr))
@@ -234,6 +242,9 @@ func userServiceResult(runErr, readbackErr error) error {
 	}
 	var child *exec.ExitError
 	if errors.As(runErr, &child) && child.ProcessState != nil && !errors.Is(runErr, exec.ErrWaitDelay) {
+		if child.ProcessState.ExitCode() == 226 {
+			return privateError("refused", errors.Join(runErr, errors.New(userNamespaceSetupGuidance)))
+		}
 		return runErr // Known child status after physical termination readback.
 	}
 	return privateError("uncertain", runErr)

@@ -1087,6 +1087,16 @@ except Exception as error:
                'elapsedSeconds': round(time.monotonic() - START), 'reached': sorted(key for key in REPORT if not key.startswith('pty'))}
     if 'pnpmLayout' in REPORT:
         message['pnpmLayout'] = REPORT['pnpmLayout']
+    # Platform facts the sealed install depends on: Ubuntu 23.10+ restricts
+    # unprivileged user namespaces by default (PrivateUsers exits 226).
+    platform_facts = {}
+    for name in ('apparmor_restrict_unprivileged_userns', 'unprivileged_userns_clone'):
+        try:
+            platform_facts[name] = open('/proc/sys/kernel/' + name).read().strip()
+        except OSError:
+            pass
+    if platform_facts:
+        message['platform'] = platform_facts
     if 'ptyFailure' in REPORT:
         message['ptyFailure'] = REPORT['ptyFailure']
     if 'projectMutation' in REPORT:
