@@ -66,6 +66,74 @@ func TestRenderUninstallConfirmIncludesEngramProjectScopeDetails(t *testing.T) {
 	}
 }
 
+func TestRenderUninstallConfirmNoCleanupEngramScope(t *testing.T) {
+	out := RenderUninstallConfirm(
+		model.UninstallModePartial,
+		[]model.AgentID{model.AgentOpenCode},
+		[]model.ComponentID{model.ComponentEngram},
+		model.EngramUninstallScopeNone,
+		true,
+		0,
+		false,
+		0,
+	)
+
+	if !strings.Contains(out, "Engram cleanup scope") {
+		t.Fatalf("RenderUninstallConfirm() should include Engram cleanup scope heading; got:\n%s", out)
+	}
+	if !strings.Contains(out, "No cleanup") {
+		t.Fatalf("RenderUninstallConfirm() should include No cleanup scope label; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Keeps all Engram data") {
+		t.Fatalf("RenderUninstallConfirm() should describe keeping all Engram data; got:\n%s", out)
+	}
+	if strings.Contains(out, "Workspace Assets Warning") {
+		t.Fatalf("RenderUninstallConfirm() should not warn about workspace assets when No cleanup is selected; got:\n%s", out)
+	}
+}
+
+func TestRenderUninstallConfirmEngramOnlyProjectWarning(t *testing.T) {
+	out := RenderUninstallConfirm(
+		model.UninstallModePartial,
+		[]model.AgentID{model.AgentOpenCode},
+		[]model.ComponentID{model.ComponentEngram},
+		model.EngramUninstallScopeProject,
+		true,
+		0,
+		false,
+		0,
+	)
+
+	if !strings.Contains(out, "Workspace Assets Warning") {
+		t.Fatalf("RenderUninstallConfirm() should warn about workspace assets for project-scoped Engram cleanup; got:\n%s", out)
+	}
+	if !strings.Contains(out, ".engram/ (persistent memory context)") {
+		t.Fatalf("RenderUninstallConfirm() should list .engram in workspace warning; got:\n%s", out)
+	}
+	if strings.Contains(out, "Skills directories") {
+		t.Fatalf("RenderUninstallConfirm() should not mention Skills directories when Skills is not selected; got:\n%s", out)
+	}
+}
+
+func TestRenderUninstallEngramScopeRendersOptions(t *testing.T) {
+	outProjectAvail := RenderUninstallEngramScope(true, model.EngramUninstallScopeNone, 0)
+	for _, want := range []string{"No cleanup", "Project-only cleanup", "Global cleanup"} {
+		if !strings.Contains(outProjectAvail, want) {
+			t.Fatalf("RenderUninstallEngramScope(true) missing %q:\n%s", want, outProjectAvail)
+		}
+	}
+
+	outProjectUnavail := RenderUninstallEngramScope(false, model.EngramUninstallScopeNone, 0)
+	for _, want := range []string{"No cleanup", "Global cleanup"} {
+		if !strings.Contains(outProjectUnavail, want) {
+			t.Fatalf("RenderUninstallEngramScope(false) missing %q:\n%s", want, outProjectUnavail)
+		}
+	}
+	if strings.Contains(outProjectUnavail, "Project-only cleanup") {
+		t.Fatalf("RenderUninstallEngramScope(false) should not show Project-only cleanup:\n%s", outProjectUnavail)
+	}
+}
+
 func TestRenderUninstallResultPiAdviceStatus(t *testing.T) {
 	for _, retained := range []bool{false, true} {
 		for _, failed := range []bool{false, true} {

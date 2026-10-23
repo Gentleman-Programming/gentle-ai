@@ -2521,7 +2521,7 @@ func TestUninstallComponents_ContinueWithoutEngramSkipsScopeSelection(t *testing
 func TestUninstallEngramScope_ContinueNavigatesToConfirm(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallEngramScope
-	m.Cursor = 0
+	m.Cursor = len(m.uninstallEngramScopeOptions())
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
@@ -2755,6 +2755,48 @@ func TestStartUninstall_UsesEngramScopeUninstallWhenSelected(t *testing.T) {
 	}
 }
 
+func TestStartUninstall_UsesEngramScopeNoneWhenSelected(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.UninstallMode = model.UninstallModePartial
+	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallEngramScopeSelected = true
+	m.UninstallEngramScope = model.EngramUninstallScopeNone
+
+	called := false
+	m.UninstallWithEngramScopeFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+		called = true
+		if engramScope != model.EngramUninstallScopeNone {
+			t.Fatalf("engramScope = %q, want %q", engramScope, model.EngramUninstallScopeNone)
+		}
+		return componentuninstall.Result{}, nil
+	}
+
+	msg := m.startUninstall()().(UninstallDoneMsg)
+	if msg.Err != nil {
+		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
+	}
+	if !called {
+		t.Fatal("UninstallWithEngramScopeFn was not called")
+	}
+}
+
+func TestUninstallEngramScope_TogglingScopes(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUninstallEngramScope
+	m.UninstallEngramProjectScopeAvailable = true
+	options := m.uninstallEngramScopeOptions()
+
+	for idx, opt := range options {
+		m.Cursor = idx
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = updated.(Model)
+		if m.UninstallEngramScope != opt.Scope {
+			t.Fatalf("toggled cursor %d, got scope %q, want %q", idx, m.UninstallEngramScope, opt.Scope)
+		}
+	}
+}
+
 func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelection(t *testing.T) {
 	tempWorkspace := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tempWorkspace, ".engram"), 0o755); err != nil {
@@ -2779,8 +2821,8 @@ func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelecti
 	if !state.UninstallEngramProjectScopeAvailable {
 		t.Fatal("UninstallEngramProjectScopeAvailable = false, want true")
 	}
-	if state.UninstallEngramScope != model.EngramUninstallScopeGlobal {
-		t.Fatalf("UninstallEngramScope = %q, want %q", state.UninstallEngramScope, model.EngramUninstallScopeGlobal)
+	if state.UninstallEngramScope != model.EngramUninstallScopeNone {
+		t.Fatalf("UninstallEngramScope = %q, want %q", state.UninstallEngramScope, model.EngramUninstallScopeNone)
 	}
 }
 

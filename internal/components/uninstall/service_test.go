@@ -1798,6 +1798,94 @@ func TestComponentOperationsEngram_GlobalScopeKeepsWorkspaceProjectData(t *testi
 	}
 }
 
+func TestComponentOperationsEngram_NoneScopePreservesAllData(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentOpenCode)
+	if !ok {
+		t.Fatal("openCode adapter not found in registry")
+	}
+
+	svc.SetEngramUninstallScope(model.EngramUninstallScopeNone)
+
+	ops, targets, err := svc.componentOperations(adapter, model.ComponentEngram)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	if len(ops) != 0 || len(targets) != 0 {
+		t.Fatalf("expected 0 ops and 0 targets for none scope, got ops=%d targets=%d", len(ops), len(targets))
+	}
+}
+
+func TestPartialUninstallWithEngramScope(t *testing.T) {
+	tests := []struct {
+		name               string
+		scope              model.EngramUninstallScope
+		wantProjectRemoved bool
+		wantEngramConfig   bool
+	}{
+		{name: "no cleanup preserves all Engram data", scope: model.EngramUninstallScopeNone, wantEngramConfig: true},
+		{name: "project cleanup removes only workspace data", scope: model.EngramUninstallScopeProject, wantProjectRemoved: true, wantEngramConfig: true},
+		{name: "global cleanup removes integration", scope: model.EngramUninstallScopeGlobal},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			workspaceDir := t.TempDir()
+			svc, err := NewService(homeDir, workspaceDir, "dev")
+			if err != nil {
+				t.Fatalf("NewService() error = %v", err)
+			}
+			svc.snapshotter = stubSnapshotter{}
+			svc.now = func() time.Time { return time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC) }
+
+			adapter, ok := svc.registry.Get(model.AgentOpenCode)
+			if !ok {
+				t.Fatal("OpenCode adapter not found")
+			}
+			settingsPath := adapter.SettingsPath(homeDir)
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(`{"mcp":{"engram":{"command":["engram"]}}}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			projectData := filepath.Join(workspaceDir, ".engram", "memory.db")
+			if err := os.MkdirAll(filepath.Dir(projectData), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(projectData, []byte("memory"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := svc.PartialUninstallWithEngramScope(
+				[]model.AgentID{model.AgentOpenCode},
+				[]model.ComponentID{model.ComponentEngram},
+				tt.scope,
+			); err != nil {
+				t.Fatalf("PartialUninstallWithEngramScope() error = %v", err)
+			}
+
+			raw, err := os.ReadFile(settingsPath)
+			hasEngramConfig := err == nil && strings.Contains(string(raw), `"engram"`)
+			if hasEngramConfig != tt.wantEngramConfig {
+				t.Fatalf("Engram config present = %t, want %t", hasEngramConfig, tt.wantEngramConfig)
+			}
+			_, projectErr := os.Stat(projectData)
+			if gotRemoved := os.IsNotExist(projectErr); gotRemoved != tt.wantProjectRemoved {
+				t.Fatalf("project data removed = %t, want %t (err = %v)", gotRemoved, tt.wantProjectRemoved, projectErr)
+			}
+		})
+	}
+}
+
 // TestComponentOperationsEngram_CodexRemovesConsolidatedProtocolAssetsWithNoOrphans
 // is the task 2.9 regression assertion: the canonical-asset consolidation
 // (design.md Decision 3) renamed/removed the SOURCE assets
