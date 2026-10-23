@@ -41,6 +41,31 @@ var RetiredNativeAgentManifest = map[model.AgentID][]string{
 	model.AgentKimi:    {"review-readability.md", "review-readability.yaml", "review-refuter.md", "review-refuter.yaml", "review-reliability.md", "review-reliability.yaml", "review-resilience.md", "review-resilience.yaml", "review-risk.md", "review-risk.yaml"},
 }
 
+// OptionalNativeAgent is an agent installed only while the user has picked a
+// model for its assignment row.
+type OptionalNativeAgent struct {
+	Name       string
+	Assignment string
+}
+
+// OptionalNativeAgentManifest lists agents that override a runtime's built-in
+// agent of the same name. Without a pick the runtime keeps its own agent, so
+// the installer writes the override only for a picked row and removes the one
+// it owns once the pick is cleared (#5611).
+var OptionalNativeAgentManifest = map[model.AgentID][]OptionalNativeAgent{
+	model.AgentClaudeCode: {
+		{Name: "Explore.md", Assignment: model.ClaudeBuiltInExploreRole},
+		{Name: "general-purpose.md", Assignment: model.ClaudeBuiltInGeneralPurposeRole},
+	},
+}
+
+// claudeAssignmentRoles maps a Claude agent to the assignment row that picks
+// its model when the row name differs from the agent name.
+var claudeAssignmentRoles = map[string]string{
+	"Explore":         model.ClaudeBuiltInExploreRole,
+	"general-purpose": model.ClaudeBuiltInGeneralPurposeRole,
+}
+
 // NativeAgentsSupported reports whether the native agent installer handles a
 // runtime: it installs agents there, or removes retired ones.
 func NativeAgentsSupported(agent model.AgentID) bool {
@@ -53,7 +78,23 @@ func NativeAgentsSupported(agent model.AgentID) bool {
 // remove for a runtime, so a caller can snapshot all of them before it runs.
 func NativeAgentFileNames(agent model.AgentID) []string {
 	names := append([]string(nil), NativeAgentManifest[agent]...)
+	for _, optional := range OptionalNativeAgentManifest[agent] {
+		names = append(names, optional.Name)
+	}
 	return append(names, RetiredNativeAgentManifest[agent]...)
+}
+
+// optionalNativeAgents splits a runtime's optional agents into the picked ones
+// to install and the unpicked ones to remove when Gentle AI owns them.
+func optionalNativeAgents(agent model.AgentID, opts InstallOptions) (picked, unpicked []string) {
+	for _, optional := range OptionalNativeAgentManifest[agent] {
+		if opts.ClaudePhaseAssignments[optional.Assignment].Valid() || opts.ClaudeModelAssignments[optional.Assignment].Valid() {
+			picked = append(picked, optional.Name)
+		} else {
+			unpicked = append(unpicked, optional.Name)
+		}
+	}
+	return picked, unpicked
 }
 
 type InstallOptions struct {
@@ -85,7 +126,8 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 	if !NativeAgentsSupported(adapter.Agent()) {
 		return InstallResult{}, fmt.Errorf("unsupported native agent runtime: %s", adapter.Agent())
 	}
-	names := NativeAgentManifest[adapter.Agent()]
+	picked, unpicked := optionalNativeAgents(adapter.Agent(), opts)
+	names := append(append([]string(nil), NativeAgentManifest[adapter.Agent()]...), picked...)
 	retired := RetiredNativeAgentManifest[adapter.Agent()]
 	dir := adapter.SubAgentsDir(home)
 	if dir == "" {
@@ -123,7 +165,7 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 	if err := journal.Capture(ledgerFile); err != nil {
 		return InstallResult{}, fmt.Errorf("capture ownership ledger: %w", err)
 	}
-	ledger, ledgerExists, err := readOwnership(ledgerFile, append(append([]string(nil), names...), retired...))
+	ledger, ledgerExists, err := readOwnership(ledgerFile, NativeAgentFileNames(adapter.Agent()))
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -164,6 +206,19 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 	ledgerChanged := false
 	for _, name := range retired {
 		removed, dropped, err := removeRetiredNativeAgent(journal, dir, name, ledger, retiredRendered[name])
+		if err != nil {
+			return rollback(err)
+		}
+		if removed != "" {
+			result.Changed = true
+			result.Files = append(result.Files, removed)
+		}
+		ledgerChanged = ledgerChanged || dropped
+	}
+	for _, name := range unpicked {
+		// An unpicked override is owned only by its ledger hash: with no pick
+		// there is no managed render to compare a file against.
+		removed, dropped, err := removeRetiredNativeAgent(journal, dir, name, ledger, "")
 		if err != nil {
 			return rollback(err)
 		}
@@ -253,7 +308,11 @@ func renderNativeAgent(adapter agents.Adapter, name string, opts InstallOptions)
 		content = strings.ReplaceAll(content, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
 	}
 	if cmr, ok := adapter.(claudeModelResolver); ok {
-		assignment := resolveClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, phase)
+		role := phase
+		if mapped, ok := claudeAssignmentRoles[phase]; ok {
+			role = mapped
+		}
+		assignment := resolveClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, role)
 		content = strings.ReplaceAll(content, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(assignment.Model))
 		effort := ""
 		if assignment.Effort != model.ClaudeEffortDefault && model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
@@ -303,7 +362,7 @@ func removeRetiredNativeAgent(journal *mutationjournal.Journal, dir, name string
 	if err != nil {
 		return "", known, fmt.Errorf("read retired native agent %s: %w", path, err)
 	}
-	owned := (known && installedHash(data) == recorded) || string(data) == managed
+	owned := (known && installedHash(data) == recorded) || (managed != "" && string(data) == managed)
 	if !owned {
 		return "", known, nil
 	}
