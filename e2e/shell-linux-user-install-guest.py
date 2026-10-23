@@ -357,7 +357,7 @@ def install(target, shared=None):
 
 
 def acquisition_fault(target, cleanup=False):
-    global FAULT
+    global FAULT, COMMAND_FAILURE
     args, token = inspect(target)
     FAULT_SEEN.clear()
     FAULT_RELEASE.clear()
@@ -371,7 +371,29 @@ def acquisition_fault(target, cleanup=False):
     child = subprocess.Popen(args + ['--confirm', token], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     stage = None
     try:
-        require(FAULT_SEEN.wait(timeout=min(20, remaining())), 'actual cold acquisition not observed')
+        if not FAULT_SEEN.wait(timeout=min(20, remaining())):
+            # The installer refused before its pinned Node request ever reached
+            # the fixture mirror. Keep the control fail-closed, but never lose
+            # the refusal behind the observation bound: disclose the owned
+            # child's bounded output with the run() evidence shape.
+            child.send_signal(signal.SIGINT)
+            try:
+                out, error = child.communicate(timeout=min(15, remaining()))
+            except subprocess.TimeoutExpired:
+                os.killpg(child.pid, signal.SIGKILL)
+                out, error = child.communicate(timeout=3)
+            raw = out + error
+            node_path = '/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz'
+            COMMAND_FAILURE = {'kind': 'supervisor', 'operation': 'install', 'inspect': False, 'force': False, 'lockOnly': False,
+                               'exit': child.returncode, 'expectedSuccess': False,
+                               'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(),
+                               'stdoutBytes': len(out), 'stdoutSHA256': hashlib.sha256(out).hexdigest(),
+                               'stderrBytes': len(error), 'stderrSHA256': hashlib.sha256(error).hexdigest(),
+                               'stdoutTailBase64': base64.b64encode(out[-600:]).decode('ascii'),
+                               'stderrTailBase64': base64.b64encode(error[-600:]).decode('ascii'),
+                               'mirrorRequests': len(REQUESTS),
+                               'nodeRequestReachedMirror': ('nodejs.org', hashlib.sha256(node_path.encode()).hexdigest()) in REQUESTS}
+            raise RuntimeError('actual cold acquisition not observed; bounded installer refusal evidence')
         fresh = set(target.parent.glob('.gentle-native-*')) - before_stages
         require(len(fresh) == 1 and next(iter(fresh)).is_dir() and next(iter(fresh)).lstat().st_uid == 1002, 'owned acquisition stage differs')
         stage = next(iter(fresh))
