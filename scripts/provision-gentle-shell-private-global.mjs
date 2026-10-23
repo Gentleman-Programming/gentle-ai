@@ -87,16 +87,26 @@ const env = {
   NPM_CONFIG_IGNORE_SCRIPTS: 'true', npm_config_ignore_scripts: 'true',
   NPM_CONFIG_PREFIX: prefix, npm_config_prefix: prefix, NPM_CONFIG_CACHE: cache,
 };
-function stockNpm(args, cwd = source) {
-  const child = spawnSync(node, [npm, ...args], {
-    cwd, env, shell: false, timeout: 180000, killSignal: 'SIGKILL',
+const NPM_NETWORK_TIMEOUT = 1200000; // Network-bound npm runs must not depend on connection speed.
+function stockNpm(args, cwd = source, timeout = NPM_NETWORK_TIMEOUT) {
+  const started = Date.now();
+  let child = spawnSync(node, [npm, ...args], {
+    cwd, env, shell: false, timeout, killSignal: 'SIGKILL',
     maxBuffer: 8388608, encoding: 'utf8',
   });
+  if (child.error) {
+    // Transport-class failure (spawn error or the spawn timeout): one bounded
+    // retry with a fresh window separates a slow connection from a dead one.
+    child = spawnSync(node, [npm, ...args], {
+      cwd, env, shell: false, timeout, killSignal: 'SIGKILL',
+      maxBuffer: 8388608, encoding: 'utf8',
+    });
+  }
   if (child.error || child.signal || child.status !== 0) {
     const output = (child.stdout ?? '') + (child.stderr ?? '');
     const detail = Buffer.byteLength(output) < 1024 && !output.includes('\0') && !output.includes('\ufffd')
       ? output : `entire npm output withheld; bytes=${Buffer.byteLength(output)}; sha256=${digest(Buffer.from(output))}`;
-    reject(`stock npm ${args[0]} failed; status=${child.status}; signal=${child.signal}; error=${child.error?.code ?? ''}; ${detail}`);
+    reject(`stock npm ${args[0]} failed; status=${child.status}; signal=${child.signal}; error=${child.error?.code ?? ''}; elapsedMs=${Date.now() - started}; ${detail}`);
   }
   return child.stdout;
 }
@@ -470,7 +480,7 @@ if (action === 'restore') {
     }
     fs.renameSync(staged, modules);
     sync(parent);
-    stockNpm(['rebuild', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--bin-links=true', '--engine-strict', '--no-audit', '--no-fund']);
+    stockNpm(['rebuild', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--bin-links=true', '--engine-strict', '--no-audit', '--no-fund'], source, 180000);
   }
   if (action === 'install') {
     nativeState();

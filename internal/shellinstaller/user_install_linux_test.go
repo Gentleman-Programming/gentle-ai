@@ -305,11 +305,11 @@ func TestUserSupervisorPreimages(t *testing.T) {
 	if err != nil || len(before) != 64 {
 		t.Fatalf("owned physical preimage: %v", err)
 	}
-	if err := os.Chmod(path, 0770); err != nil {
+	if err := os.Chmod(path, 0777); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := userSupervisorSHA(context.Background(), path); err == nil {
-		t.Fatal("group-writable controller accepted")
+		t.Fatal("world-writable controller accepted")
 	}
 	if err := os.Chmod(path, 0700); err != nil {
 		t.Fatal(err)
@@ -345,7 +345,6 @@ func TestUserSupervisorFileRefusalCauses(t *testing.T) {
 		mode os.FileMode
 		want string
 	}{
-		{"group-writable", 0775, "reason=group-or-world-writable"},
 		{"world-writable", 0707, "reason=group-or-world-writable"},
 		{"not-executable", 0600, "reason=not-executable"},
 	} {
@@ -362,6 +361,33 @@ func TestUserSupervisorFileRefusalCauses(t *testing.T) {
 				t.Fatalf("file refusal lost cause %q: %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestUserSupervisorFilePrivateGroupLayout(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "supervisor")
+	if err := os.WriteFile(path, []byte("trusted-build DATA preimage"), 0775); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0775); err != nil {
+		t.Fatal(err)
+	}
+	_, err := userSupervisorSHA(context.Background(), path)
+	if os.Getuid() != 0 && os.Getgid() == os.Getuid() {
+		// Default `go install` output under the Debian/Ubuntu UPG scheme:
+		// 0775 binary owned by the user's own private group (#5705).
+		if err != nil {
+			t.Fatalf("private-group 0775 supervisor file refused: %v", err)
+		}
+		return
+	}
+	var failure *PrivateRuntimeError
+	if !errors.As(err, &failure) || failure.Kind != "source" || failure.Cause == nil || !strings.Contains(failure.Cause.Error(), "reason=group-or-world-writable") {
+		t.Fatalf("foreign-group 0775 supervisor file lost refusal cause: %v", err)
 	}
 }
 

@@ -239,7 +239,12 @@ func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 	if info.Size() > 268435456 {
 		return "", privateError("source", fmt.Errorf("supervisor file refused: reason=oversize path=%q size=%d limit=268435456", source, info.Size()))
 	}
-	if info.Mode().Perm()&0022 != 0 {
+	// Debian/Ubuntu ship the User Private Group scheme: a group-writable
+	// supervisor file whose group is the user's own private group (gid == uid)
+	// has no other members, so the default `go install` output (0775 under
+	// umask 0002) must not be refused (#5705). World-writable files and
+	// foreign groups keep the refusal.
+	if info.Mode().Perm()&0002 != 0 || (info.Mode().Perm()&0020 != 0 && !(os.Getuid() != 0 && info.Sys().(*syscall.Stat_t).Gid == uint32(os.Getuid()))) {
 		return "", privateError("source", fmt.Errorf("supervisor file refused: reason=group-or-world-writable path=%q mode=%#o", source, info.Mode().Perm()))
 	}
 	if info.Mode().Perm()&0111 == 0 {
