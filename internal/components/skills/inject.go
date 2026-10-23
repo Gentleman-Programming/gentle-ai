@@ -148,6 +148,51 @@ func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeF
 	return result, nil
 }
 
+// backupExisting copies dest into the timestamped backup dir before the
+// injection overwrites it. The directory is private (the backups contain the
+// user's prompt content), the file keeps the source's mode, and the creation
+// is exclusive: two runs within the same second never truncate each other's
+// backups — a collision gets a numeric suffix. Best-effort: failures log and
+// let the injection proceed.
+func backupExisting(homeDir, skillDir, dest, timestamp string) {
+	rel, err := filepath.Rel(skillDir, dest)
+	if err != nil {
+		rel = dest
+	}
+	backupPath := filepath.Join(homeDir, ".gentle-ai", "backups", timestamp, rel)
+	if err := os.MkdirAll(filepath.Dir(backupPath), 0o700); err != nil {
+		log.Printf("skills: failed to create backup dir for %s: %v", dest, err)
+		return
+	}
+	srcFile, err := os.Open(dest)
+	if err != nil {
+		log.Printf("skills: failed to open existing file %s for backup: %v", dest, err)
+		return
+	}
+	defer srcFile.Close()
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		log.Printf("skills: failed to stat %s for backup: %v", dest, err)
+		return
+	}
+	if !srcInfo.Mode().IsRegular() {
+		log.Printf("skills: %s is not a regular file; skipping backup", dest)
+		return
+	}
+	dstFile, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, srcInfo.Mode())
+	for suffix := 1; err != nil && os.IsExist(err) && suffix <= 9; suffix++ {
+		dstFile, err = os.OpenFile(fmt.Sprintf("%s.%d", backupPath, suffix), os.O_WRONLY|os.O_CREATE|os.O_EXCL, srcInfo.Mode())
+	}
+	if err != nil {
+		log.Printf("skills: failed to create backup file %s: %v", backupPath, err)
+		return
+	}
+	defer dstFile.Close()
+	if _, copyErr := io.Copy(dstFile, srcFile); copyErr != nil {
+		log.Printf("skills: failed to backup %s to %s: %v", dest, backupPath, copyErr)
+	}
+}
+
 // InjectDirectoryWithCapabilityWithWriter writes skills with a caller-selected writer.
 func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.SkillID, capability string, homeDir string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
 	entries, skipped, err := directoryAssets(skillDir, skillIDs, capability)
@@ -174,33 +219,7 @@ func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.S
 		// Backup existing file if present
 		if homeDir != "" {
 			if _, err := os.Stat(dest); err == nil {
-				// Determine relative path from skillDir to dest for backup structure
-				rel, err := filepath.Rel(skillDir, dest)
-				if err != nil {
-					rel = dest // fallback: use full path
-				}
-				backupDir := filepath.Join(homeDir, ".gentle-ai", "backups", timestamp)
-				backupPath := filepath.Join(backupDir, rel)
-				if err := os.MkdirAll(filepath.Dir(backupPath), 0o755); err != nil {
-					log.Printf("skills: failed to create backup dir for %s: %v", dest, err)
-				} else {
-					srcFile, err := os.Open(dest)
-					if err == nil {
-						dstFile, err := os.Create(backupPath)
-						if err == nil {
-							_, copyErr := io.Copy(dstFile, srcFile)
-							srcFile.Close()
-							dstFile.Close()
-							if copyErr != nil {
-								log.Printf("skills: failed to backup %s to %s: %v", dest, backupPath, copyErr)
-							}
-						} else {
-							log.Printf("skills: failed to create backup file %s: %v", backupPath, err)
-						}
-					} else {
-						log.Printf("skills: failed to open existing file %s for backup: %v", dest, err)
-					}
-				}
+				backupExisting(homeDir, skillDir, dest, timestamp)
 			}
 		}
 		writeResult, err := writeFile(dest, []byte(content), 0o644)
