@@ -124,9 +124,11 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
            # runs under: the installer's native fresh-separate flow reaches the
            # user manager (slice + transient unit) BEFORE its cold Node
            # acquisition, so without it every install refuses early and the
-           # fault probes never observe the pinned Node request.
-           'XDG_RUNTIME_DIR': '/run/user/' + str(FIXTURE_UID),
-           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' + str(FIXTURE_UID) + '/bus'}
+           # fault probes never observe the pinned Node request. Literal uid:
+           # this function is extracted by the preservation contract tests in a
+           # namespace that provides no guest constants.
+           'XDG_RUNTIME_DIR': '/run/user/1002',
+           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1002/bus'}
     env.update(extra or {})
     names = {pathlib.Path(arg).name for arg in args[:2]}
     stock = next((name for name in ['pnpm', 'pnpm.mjs', 'npm-cli.js', 'pi', 'cli.js', 'provision.mjs', 'git'] if name in names), 'stock')
@@ -361,8 +363,8 @@ def acquisition_fault(target, cleanup=False):
     FAULT_RELEASE.clear()
     FAULT = 'node-cleanup' if cleanup else 'node-cancel'
     env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'),
-           'XDG_RUNTIME_DIR': '/run/user/' + str(FIXTURE_UID),
-           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' + str(FIXTURE_UID) + '/bus'}
+           'XDG_RUNTIME_DIR': '/run/user/1002',
+           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1002/bus'}
     # Earlier fault stages legitimately retain their own native workspaces as
     # uncertain evidence; attribute the new stage to this acquisition by diff.
     before_stages = set(target.parent.glob('.gentle-native-*'))
