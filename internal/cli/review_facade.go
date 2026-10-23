@@ -685,11 +685,7 @@ func runReviewCollectCaptureCommand(operation string, args []string, stdout io.W
 		_, err := io.Copy(stdout, &output)
 		return err
 	}
-	failure := newReviewIntegrationFailure(operation, args[1:], runErr)
-	// The capture verbs exist only in the v2.1 negotiated lifecycle and the
-	// published v1 failure schema does not admit their operation names, so
-	// the envelope publishes under the v2 identity unconditionally.
-	failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+	failure := reviewCollectCaptureFailureIdentity(newReviewIntegrationFailure(operation, args[1:], runErr))
 	// Generate the defect report before emitting the envelope so a stdout
 	// write failure cannot suppress the artifact, exactly as the negotiated
 	// route does.
@@ -708,6 +704,18 @@ func runReviewCollectCaptureCommand(operation string, args []string, stdout io.W
 		return errors.Join(typedFailure, emitErr)
 	}
 	return typedFailure
+}
+
+// reviewCollectCaptureFailureIdentity publishes a classified capture failure
+// under the v2 identity. The capture verbs exist only in the v2.1 negotiated
+// lifecycle and the published v1 failure schema does not admit their operation
+// names, so the envelope publishes under v2 unconditionally. Order matters:
+// the classifier sees no --contract flag on a capture and returns a v1
+// envelope that may already carry a managed_assets_outdated continuation
+// (#4379), which Validate rejects until this identity is applied.
+func reviewCollectCaptureFailureIdentity(failure ReviewIntegrationFailure) ReviewIntegrationFailure {
+	failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+	return failure
 }
 
 func runReviewCommandContext(ctx context.Context, args []string, stdout io.Writer) error {
