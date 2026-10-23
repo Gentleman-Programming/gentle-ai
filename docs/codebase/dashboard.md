@@ -24,7 +24,7 @@ Gentle-AI does not currently contain dashboard source code. This page exists to 
 | Interactive terminal UI | `internal/tui/` |
 | CLI commands | `internal/app/`, `internal/cli/` |
 | Engram memory browser command mention | `docs/engram.md` documents `engram tui`; implementation is external. |
-| OpenCode Gentle Logo registration and legacy plugin uninstall | `internal/components/opencodeplugin/` updates `~/.config/opencode/tui.json`. |
+| OpenCode Gentle Logo registration and legacy plugin uninstall | `internal/components/opencodeplugin/` registers Gentle Logo per OpenCode generation: V1 in `~/.config/opencode/tui.json` or `tui.jsonc`; V2 in `cli.json` (`plugins[]`) and the `opencode.jsonc` plugin union, never `tui.json`. |
 
 ## HTMX/server-rendered flow boundary
 
