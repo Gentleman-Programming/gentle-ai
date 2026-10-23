@@ -181,7 +181,7 @@ jobs:
           /usr/bin/python3 - "$RUNNER_TEMP/user-guest.raw" "$status" <<'PY'
           import pathlib,sys,base64
           raw=pathlib.Path(sys.argv[1]).read_bytes()
-          if len(raw)>=4096 or b'\0' in raw:
+          if len(raw)>=16384 or b'\0' in raw:
               raise SystemExit('STOP: entire Guest output withheld at byte/NUL bound')
           raw.decode('utf-8','strict')
           print('GUEST-RAW-BASE64:'+base64.b64encode(raw).decode('ascii'))

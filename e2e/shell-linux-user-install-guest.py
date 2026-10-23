@@ -29,6 +29,10 @@ import termios
 import yaml
 
 START = time.monotonic()
+# The guest report is bounded structured evidence; the raised bound keeps the
+# full journey record (report + refusal tails + manager journal tail) printable
+# by the qualification runner while every field stays harness-constructed.
+REPORT_BOUND = 16384
 CEILING = 1300
 WORK = pathlib.Path('/work')
 SUPERVISOR = '/fixture/supervisor'
@@ -390,7 +394,7 @@ def acquisition_fault(target, cleanup=False):
             try:
                 journal = subprocess.run(['/usr/bin/journalctl', '--user', '-n', '40', '--no-pager', '-o', 'cat'],
                                          env=env, capture_output=True, timeout=min(15, remaining()))
-                journal_tail = journal.stdout[-2048:]
+                journal_tail = journal.stdout[-1024:]
             except Exception:
                 journal_tail = b''
             COMMAND_FAILURE = {'kind': 'supervisor', 'operation': 'install', 'inspect': False, 'force': False, 'lockOnly': False,
@@ -1068,7 +1072,7 @@ def main():
         server.shutdown()
         server.server_close()
     output = (json.dumps(REPORT, sort_keys=True, separators=(',', ':')) + '\n').encode()
-    require(len(output) < 4096, 'entire raw Guest report withheld above bound')
+    require(len(output) < REPORT_BOUND, 'entire raw Guest report withheld above bound')
     sys.stdout.buffer.write(output)
 
 
@@ -1076,7 +1080,7 @@ try:
     main()
     if MODE == 'smoke':
         output = (json.dumps(REPORT, sort_keys=True, separators=(',', ':')) + '\n').encode()
-        require(len(output) < 4096, 'entire raw Guest report withheld above bound')
+        require(len(output) < REPORT_BOUND, 'entire raw Guest report withheld above bound')
         sys.stdout.buffer.write(output)
 except Exception as error:
     message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld',
@@ -1101,12 +1105,18 @@ except Exception as error:
         if len((json.dumps(candidate, sort_keys=True) + '\n').encode()) < 4096:
             message = candidate
     output = (json.dumps(message, sort_keys=True) + '\n').encode()
-    if len(output) >= 4096 and 'stdoutTailBase64' in message.get('commandFailure', {}):
-        message['commandFailure'] = {k: v for k, v in message['commandFailure'].items() if not k.endswith('TailBase64')}
+    # Retain the decisive tails under the report bound in priority order: the
+    # manager journal goes first, the installer's own stderr tail last, so the
+    # coordinator's refusal reason always survives the shrink.
+    for tail_key in ('journalTailBase64', 'stdoutTailBase64', 'stderrTailBase64'):
+        if len(output) < REPORT_BOUND:
+            break
+        command_failure = message.get('commandFailure')
+        if command_failure is not None and command_failure.pop(tail_key, None) is not None:
+            output = (json.dumps(message, sort_keys=True) + '\n').encode()
+    if len(output) >= REPORT_BOUND:
+        message = {'functionalReady': False, 'reason': 'entire command failure output withheld at Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
         output = (json.dumps(message, sort_keys=True) + '\n').encode()
-    if len(output) >= 4096:
-        message = {'functionalReady': False, 'reason': 'entire command failure output withheld at original Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
-        output = (json.dumps(message, sort_keys=True) + '\n').encode()
-    if len(output) < 4096:
+    if len(output) < REPORT_BOUND:
         sys.stdout.buffer.write(output)
     sys.exit(1)
