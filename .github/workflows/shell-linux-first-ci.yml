@@ -58,6 +58,13 @@ jobs:
           # OS SDK dependency for strict receipt parsing inside the bounded Guest.
           sudo -n apt-get update -qq
           sudo -n apt-get install -y -qq python3-yaml
+          # The owned-runtime unit is sealed with PrivateUsers=yes, which needs
+          # unprivileged user namespaces. Stock ubuntu-24.04 runners ship with
+          # AppArmor's userns restriction on (this is a controlled CI VM, the
+          # same privileged class as the gentle-lab user setup below). Keep the
+          # restriction in place for everything else; the installer itself
+          # still refuses with named guidance on real restricted hosts.
+          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           test ! -e /work
           test ! -e /fixture
           if systemctl is-active --quiet user@1002.service; then exit 1; fi
