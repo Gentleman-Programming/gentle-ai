@@ -29,6 +29,10 @@ import termios
 import yaml
 
 START = time.monotonic()
+# The guest report is bounded structured evidence; the raised bound keeps the
+# full journey record (report + refusal tails + manager journal tail) printable
+# by the qualification runner while every field stays harness-constructed.
+REPORT_BOUND = 16384
 CEILING = 1300
 WORK = pathlib.Path('/work')
 SUPERVISOR = '/fixture/supervisor'
@@ -119,7 +123,16 @@ def kernel():
 def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
     global COMMAND_FAILURE
     env = {'PATH': '/usr/local/bin:/usr/bin:/bin:/work/personal/prefix/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'),
-           'PYTHONDONTWRITEBYTECODE': '1', 'TERM': 'xterm-256color'}
+           'PYTHONDONTWRITEBYTECODE': '1', 'TERM': 'xterm-256color',
+           # The standard delegated user-session environment the worker itself
+           # runs under: the installer's native fresh-separate flow reaches the
+           # user manager (slice + transient unit) BEFORE its cold Node
+           # acquisition, so without it every install refuses early and the
+           # fault probes never observe the pinned Node request. Literal uid:
+           # this function is extracted by the preservation contract tests in a
+           # namespace that provides no guest constants.
+           'XDG_RUNTIME_DIR': '/run/user/1002',
+           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1002/bus'}
     env.update(extra or {})
     names = {pathlib.Path(arg).name for arg in args[:2]}
     stock = next((name for name in ['pnpm', 'pnpm.mjs', 'npm-cli.js', 'pi', 'cli.js', 'provision.mjs', 'git'] if name in names), 'stock')
@@ -155,6 +168,15 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
     if (child.returncode == 0) != good:
         COMMAND_FAILURE = {**evidence, 'stdoutBase64': base64.b64encode(out).decode('ascii'),
                            'stderrBase64': base64.b64encode(error).decode('ascii')}
+        if identity['kind'] == 'supervisor':
+            # The manager journal names the transient unit's own failure lines
+            # for the owned runtime; bounded and optional.
+            try:
+                journal = subprocess.run(['/usr/bin/journalctl', '--user', '-n', '40', '--no-pager', '-o', 'cat'],
+                                         env=env, capture_output=True, timeout=min(15, remaining()))
+                COMMAND_FAILURE['journalTailBase64'] = base64.b64encode(journal.stdout[-1024:]).decode('ascii')
+            except Exception:
+                pass
         raise RuntimeError('command outcome differs; bounded complete failure evidence')
     return out.decode('utf-8', 'strict') if stdout_only else text
 
@@ -279,7 +301,12 @@ class Mirror(http.server.BaseHTTPRequestHandler):
                 FAULT_SEEN.set()
                 status, headers, raw = 404, {}, b''
             elif host == 'pi.dev' and self.path == '/api/latest-version':
-                status, headers, raw = 200, {'content-type': 'application/json'}, b'{"version":"1.0.0"}'
+                # The guest's frozen updater authority: pi update --self installs
+                # exactly the version served here. Keep it identical to the
+                # post-update pin below ('stockUpgrade': '0.99.2 to 1.3.0'); a
+                # drifted literal makes the journey fail at 'pnpm root
+                # identity/integrity differs' instead of qualifying the release.
+                status, headers, raw = 200, {'content-type': 'application/json'}, b'{"version":"1.3.0"}'
             else:
                 status, headers, raw = public_bytes(host, self.path)
             self.send_response(status)
@@ -343,19 +370,56 @@ def install(target, shared=None):
 
 
 def acquisition_fault(target, cleanup=False):
-    global FAULT
+    global FAULT, COMMAND_FAILURE
     args, token = inspect(target)
     FAULT_SEEN.clear()
     FAULT_RELEASE.clear()
     FAULT = 'node-cleanup' if cleanup else 'node-cancel'
-    env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp')}
+    env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'),
+           'XDG_RUNTIME_DIR': '/run/user/1002',
+           'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1002/bus'}
+    # Earlier fault stages legitimately retain their own native workspaces as
+    # uncertain evidence; attribute the new stage to this acquisition by diff.
+    before_stages = set(target.parent.glob('.gentle-native-*'))
     child = subprocess.Popen(args + ['--confirm', token], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     stage = None
     try:
-        require(FAULT_SEEN.wait(timeout=min(20, remaining())), 'actual cold acquisition not observed')
-        stages = list(target.parent.glob('.gentle-user-*'))
-        require(len(stages) == 1 and stages[0].is_dir() and stages[0].lstat().st_uid == 1002, 'owned acquisition stage differs')
-        stage = stages[0]
+        if not FAULT_SEEN.wait(timeout=min(20, remaining())):
+            # The installer refused before its pinned Node request ever reached
+            # the fixture mirror. Keep the control fail-closed, but never lose
+            # the refusal behind the observation bound: disclose the owned
+            # child's bounded output with the run() evidence shape.
+            child.send_signal(signal.SIGINT)
+            try:
+                out, error = child.communicate(timeout=min(15, remaining()))
+            except subprocess.TimeoutExpired:
+                os.killpg(child.pid, signal.SIGKILL)
+                out, error = child.communicate(timeout=3)
+            raw = out + error
+            node_path = '/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz'
+            # The manager journal names the transient unit's own failure lines
+            # (Failed at step ... / unit stderr as logged); bounded and
+            # optional, so an unreadable journal only removes this field.
+            try:
+                journal = subprocess.run(['/usr/bin/journalctl', '--user', '-n', '40', '--no-pager', '-o', 'cat'],
+                                         env=env, capture_output=True, timeout=min(15, remaining()))
+                journal_tail = journal.stdout[-1024:]
+            except Exception:
+                journal_tail = b''
+            COMMAND_FAILURE = {'kind': 'supervisor', 'operation': 'install', 'inspect': False, 'force': False, 'lockOnly': False,
+                               'exit': child.returncode, 'expectedSuccess': False,
+                               'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(),
+                               'stdoutBytes': len(out), 'stdoutSHA256': hashlib.sha256(out).hexdigest(),
+                               'stderrBytes': len(error), 'stderrSHA256': hashlib.sha256(error).hexdigest(),
+                               'stdoutTailBase64': base64.b64encode(out[-600:]).decode('ascii'),
+                               'stderrTailBase64': base64.b64encode(error[-600:]).decode('ascii'),
+                               'journalTailBase64': base64.b64encode(journal_tail).decode('ascii'),
+                               'mirrorRequests': len(REQUESTS),
+                               'nodeRequestReachedMirror': ('nodejs.org', hashlib.sha256(node_path.encode()).hexdigest()) in REQUESTS}
+            raise RuntimeError('actual cold acquisition not observed; bounded installer refusal evidence')
+        fresh = set(target.parent.glob('.gentle-native-*')) - before_stages
+        require(len(fresh) == 1 and next(iter(fresh)).is_dir() and next(iter(fresh)).lstat().st_uid == 1002, 'owned acquisition stage differs')
+        stage = next(iter(fresh))
         if cleanup:
             os.chmod(stage, 0o500)  # Real owned-filesystem cleanup refusal, not a mocked return.
         else:
@@ -370,8 +434,13 @@ def acquisition_fault(target, cleanup=False):
             require(stage.exists() and str(stage) in text and 'uncertain' in text, 'cleanup denial lost owned evidence locator')
             REPORT['cleanupDenial'] = 'actual changed stage permissions; uncertain evidence retained'
         else:
-            require(not stage.exists(), 'canceled acquisition stage not cleaned after worker reap')
-            REPORT['acquisitionCancel'] = 'actual in-flight request interrupted, worker waited and unpublished stage removed'
+            # The native flow never deletes state behind a stopped operation:
+            # cancellation is uncertain, so the owned workspace is retained as
+            # evidence with its publication locator, and the target stays
+            # unpublished. Silently removing it would be the failure, not the
+            # expectation.
+            require(stage.exists() and str(stage) in text and 'uncertain' in text, 'cancellation lost owned uncertain evidence locator')
+            REPORT['acquisitionCancel'] = 'actual in-flight request interrupted; owned stage retained as uncertain evidence, target unpublished'
     finally:
         FAULT_RELEASE.set()
         FAULT = ''
@@ -1012,7 +1081,7 @@ def main():
         server.shutdown()
         server.server_close()
     output = (json.dumps(REPORT, sort_keys=True, separators=(',', ':')) + '\n').encode()
-    require(len(output) < 4096, 'entire raw Guest report withheld above bound')
+    require(len(output) < REPORT_BOUND, 'entire raw Guest report withheld above bound')
     sys.stdout.buffer.write(output)
 
 
@@ -1020,13 +1089,23 @@ try:
     main()
     if MODE == 'smoke':
         output = (json.dumps(REPORT, sort_keys=True, separators=(',', ':')) + '\n').encode()
-        require(len(output) < 4096, 'entire raw Guest report withheld above bound')
+        require(len(output) < REPORT_BOUND, 'entire raw Guest report withheld above bound')
         sys.stdout.buffer.write(output)
 except Exception as error:
     message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld',
                'elapsedSeconds': round(time.monotonic() - START), 'reached': sorted(key for key in REPORT if not key.startswith('pty'))}
     if 'pnpmLayout' in REPORT:
         message['pnpmLayout'] = REPORT['pnpmLayout']
+    # Platform facts the sealed install depends on: Ubuntu 23.10+ restricts
+    # unprivileged user namespaces by default (PrivateUsers exits 226).
+    platform_facts = {}
+    for name in ('apparmor_restrict_unprivileged_userns', 'unprivileged_userns_clone'):
+        try:
+            platform_facts[name] = open('/proc/sys/kernel/' + name).read().strip()
+        except OSError:
+            pass
+    if platform_facts:
+        message['platform'] = platform_facts
     if 'ptyFailure' in REPORT:
         message['ptyFailure'] = REPORT['ptyFailure']
     if 'projectMutation' in REPORT:
@@ -1045,12 +1124,18 @@ except Exception as error:
         if len((json.dumps(candidate, sort_keys=True) + '\n').encode()) < 4096:
             message = candidate
     output = (json.dumps(message, sort_keys=True) + '\n').encode()
-    if len(output) >= 4096 and 'stdoutTailBase64' in message.get('commandFailure', {}):
-        message['commandFailure'] = {k: v for k, v in message['commandFailure'].items() if not k.endswith('TailBase64')}
+    # Retain the decisive tails under the report bound in priority order: the
+    # manager journal goes first, the installer's own stderr tail last, so the
+    # coordinator's refusal reason always survives the shrink.
+    for tail_key in ('journalTailBase64', 'stdoutTailBase64', 'stderrTailBase64'):
+        if len(output) < REPORT_BOUND:
+            break
+        command_failure = message.get('commandFailure')
+        if command_failure is not None and command_failure.pop(tail_key, None) is not None:
+            output = (json.dumps(message, sort_keys=True) + '\n').encode()
+    if len(output) >= REPORT_BOUND:
+        message = {'functionalReady': False, 'reason': 'entire command failure output withheld at Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
         output = (json.dumps(message, sort_keys=True) + '\n').encode()
-    if len(output) >= 4096:
-        message = {'functionalReady': False, 'reason': 'entire command failure output withheld at original Guest bound', 'rawStockOutput': 'withheld', 'bytes': len(output), 'sha256': hashlib.sha256(output).hexdigest()}
-        output = (json.dumps(message, sort_keys=True) + '\n').encode()
-    if len(output) < 4096:
+    if len(output) < REPORT_BOUND:
         sys.stdout.buffer.write(output)
     sys.exit(1)

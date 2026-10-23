@@ -96,7 +96,7 @@ func TestIndependentNativePlanPrivate(t *testing.T) {
 		t.Fatal("sealed arguments differ", args)
 	}
 	joined := strings.Join(args, "\n")
-	for _, expected := range []string{"--property=PrivateUsers=yes", "--property=ReadOnlyPaths=" + root + "/runtime/main " + root + "/runtime/main-source /sys/fs/cgroup", "--property=BindReadOnlyPaths=/fixture/empty-runtime:/run/user/1000"} {
+	for _, expected := range []string{"--property=PrivateUsers=yes", "--property=ReadOnlyPaths=" + root + "/runtime/main " + root + "/runtime/main-source /sys/fs/cgroup", "--property=BindReadOnlyPaths=/fixture/empty-runtime:/run/user/1000", "--property=TemporaryFileSystem=/run/user/1000:ro,mode=0700"} {
 		if !strings.Contains(joined, expected+"\n") {
 			t.Fatal("missing sealed property", expected)
 		}

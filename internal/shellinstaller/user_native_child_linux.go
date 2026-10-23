@@ -44,7 +44,7 @@ func userNativeOperation(ctx context.Context) (*userNativeSlice, error) {
 	}
 	parent := filepath.Dir(leaf)
 	if !userNativeSliceName(filepath.Base(parent)) {
-		return nil, privateError("refused", nil)
+		return nil, privateError("refused", errors.New("coordinator cgroup parent is not an owned operation slice"))
 	}
 	if err := privateCgroupPhysical(parent, true); err != nil {
 		return nil, err

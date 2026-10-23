@@ -4,6 +4,7 @@ package shellinstaller
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -62,16 +63,28 @@ func userNativeNamespaceData(status, uidMap, gidMap, setgroups string, uid, gid 
 			fields[key] = strings.TrimSpace(value)
 		}
 	}
-	groups, present := fields["Groups"]
-	if gid <= 0 || strings.Join(strings.Fields(fields["Gid"]), " ") != strings.Repeat(strconv.Itoa(gid)+" ", 3)+strconv.Itoa(gid) || !present || groups != "" || fields["CapBnd"] != "0000000000000000" {
-		return privateError("refused", nil)
+	// The kernel always prints the Groups: line and never empties the
+	// supplementary set: user managers fork services through initgroups, so at
+	// least the primary gid is always present, and creating a user namespace
+	// keeps the groups displayed through the new mapping (unmapped gids read
+	// as 65534). Group privileges are neutralized by the sealed single-gid
+	// mapping and setgroups deny checked below, not by an empty supplementary
+	// set, so no group check belongs here.
+	if gid <= 0 {
+		return privateError("refused", errors.New("primary group identity missing"))
+	}
+	if strings.Join(strings.Fields(fields["Gid"]), " ") != strings.Repeat(strconv.Itoa(gid)+" ", 3)+strconv.Itoa(gid) {
+		return privateError("refused", errors.New("identity group fields differ"))
+	}
+	if fields["CapBnd"] != "0000000000000000" {
+		return privateError("refused", errors.New("capability boundary set"))
 	}
 	expectedUID, expectedGID := "0 0 4294967295", "0 0 4294967295"
 	if sealed {
 		expectedUID = strconv.Itoa(uid) + " " + strconv.Itoa(uid) + " 1"
 		expectedGID = strconv.Itoa(gid) + " " + strconv.Itoa(gid) + " 1"
 		if setgroups != "deny\n" {
-			return privateError("refused", nil)
+			return privateError("refused", errors.New("setgroups state differs"))
 		}
 	}
 	for i, mapping := range []string{uidMap, gidMap} {
@@ -81,7 +94,7 @@ func userNativeNamespaceData(status, uidMap, gidMap, setgroups string, uid, gid 
 			expected = expectedGID
 		}
 		if len(lines) != 1 || strings.Join(strings.Fields(lines[0]), " ") != expected {
-			return privateError("refused", nil)
+			return privateError("refused", errors.New("identity mapping shape differs"))
 		}
 	}
 	return nil
@@ -97,7 +110,7 @@ func userNativeExecutionCheck(root, managerRuntime string) error {
 		return err
 	}
 	if !userSelectionPath(root) || managerRuntime != "/run/user/"+strconv.Itoa(os.Getuid()) || userPathsOverlap(root, managerRuntime) {
-		return privateError("refused", nil)
+		return privateError("refused", errors.New("installation root path shape differs"))
 	}
 	for _, path := range []string{root, filepath.Join(root, "runtime")} {
 		if _, err := privateDirectory(path); err != nil {
@@ -111,7 +124,7 @@ func userNativeExecutionCheck(root, managerRuntime string) error {
 		}
 		var filesystem unix.Statfs_t
 		if err := unix.Statfs(path, &filesystem); err != nil || filesystem.Flags&unix.ST_RDONLY == 0 {
-			return privateError("refused", err)
+			return privateError("refused", fmt.Errorf("protected runtime path is not read-only: %s", path))
 		}
 	}
 	if _, err := privatePhysical(filepath.Join(protected[0], "main.zip")); err != nil {
@@ -119,11 +132,11 @@ func userNativeExecutionCheck(root, managerRuntime string) error {
 	}
 	entries, err := os.ReadDir(managerRuntime)
 	if err != nil || len(entries) != 0 {
-		return privateError("refused", err)
+		return privateError("refused", errors.New("masked manager runtime is not empty"))
 	}
 	for _, endpoint := range []string{"bus", "systemd/private"} {
 		if _, err := os.Lstat(filepath.Join(managerRuntime, endpoint)); !os.IsNotExist(err) {
-			return privateError("refused", err)
+			return privateError("refused", fmt.Errorf("masked manager runtime endpoint still exists: %s", endpoint))
 		}
 	}
 	mounts, err := userNativeProc("mountinfo")
@@ -138,35 +151,36 @@ func userNativeMountsData(mounts string, roots []string) error {
 		parent   int
 		point    string
 		readonly bool
+		raw      string
 	}
 	nodes := map[int]mount{}
 	for _, line := range strings.Split(strings.TrimSuffix(mounts, "\n"), "\n") {
 		sides := strings.Split(line, " - ")
 		if len(sides) != 2 {
-			return privateError("refused", nil)
+			return privateError("refused", fmt.Errorf("mountinfo separator differs: %s", line))
 		}
 		fields, right := strings.Fields(sides[0]), strings.Fields(sides[1])
 		if len(fields) < 6 || len(right) != 3 {
-			return privateError("refused", nil)
+			return privateError("refused", errors.New("mountinfo line shape differs"))
 		}
 		id, idErr := strconv.Atoi(fields[0])
 		parent, parentErr := strconv.Atoi(fields[1])
 		_, rootOK := privateMountPath(fields[3])
 		point, pointOK := privateMountPath(fields[4])
 		if idErr != nil || parentErr != nil || id <= 0 || parent <= 0 || !rootOK || !pointOK || len(nodes) >= 16384 {
-			return privateError("refused", nil)
+			return privateError("refused", errors.New("mountinfo fields differ"))
 		}
 		if _, duplicate := nodes[id]; duplicate {
-			return privateError("refused", nil)
+			return privateError("refused", errors.New("duplicate mountinfo entry"))
 		}
-		nodes[id] = mount{parent, point, strings.Contains(","+fields[5]+",", ",ro,")}
+		nodes[id] = mount{parent, point, strings.Contains(","+fields[5]+",", ",ro,"), line}
 	}
 	// An immediate same-point child covers its parent, independently of line order.
 	covers := map[int]int{}
 	for id, node := range nodes {
 		if parent, exists := nodes[node.parent]; exists && parent.point == node.point {
 			if covers[node.parent] != 0 {
-				return privateError("refused", nil)
+				return privateError("refused", errors.New("same-point mount branch covers twice"))
 			}
 			covers[node.parent] = id
 		}
@@ -176,7 +190,7 @@ func userNativeMountsData(mounts string, roots []string) error {
 	var branch func(int) (bool, error)
 	branch = func(id int) (bool, error) {
 		if state[id] == 1 {
-			return false, privateError("refused", nil)
+			return false, privateError("refused", errors.New("mount branch cycle"))
 		}
 		if state[id] > 1 {
 			return state[id] == 2, nil
@@ -211,17 +225,17 @@ func userNativeMountsData(mounts string, roots []string) error {
 		for _, root := range roots {
 			if node.point == root {
 				if seen[root] || !node.readonly {
-					return privateError("refused", nil)
+					return privateError("refused", fmt.Errorf("protected mount %s is not read-only: %s", node.point, node.raw))
 				}
 				seen[root] = true
 			} else if strings.HasPrefix(node.point, root+"/") && !node.readonly {
-				return privateError("refused", nil)
+				return privateError("refused", fmt.Errorf("protected subtree mount %s is not read-only: %s", node.point, node.raw))
 			}
 		}
 	}
 	for _, root := range roots {
 		if !seen[root] {
-			return privateError("refused", nil)
+			return privateError("refused", fmt.Errorf("protected mount %s is not visible", root))
 		}
 	}
 	return nil

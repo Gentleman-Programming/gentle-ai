@@ -70,7 +70,17 @@ func TestUserNativeReadbackAdmitsCurrentStockBundle(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(nested, "gentle-ai"), tt.binaryData, tt.binaryMode); err != nil {
 				t.Fatal(err)
 			}
+			// os.WriteFile applies the process umask, so an explicit chmod keeps
+			// the requested fixture mode real under restrictive umasks; the guest
+			// qualification worker runs with UMask=0077, which would otherwise
+			// silently downgrade the loose-mode fixtures into admitted bundles.
+			if err := os.Chmod(filepath.Join(nested, "gentle-ai"), tt.binaryMode); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(filepath.Join(nested, "integrity.json"), []byte(tt.manifestText), tt.manifestMode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(filepath.Join(nested, "integrity.json"), tt.manifestMode); err != nil {
 				t.Fatal(err)
 			}
 			if err := userNativeReadback(ctx, filepath.Join(fixture, ".gentle-ai")); err == nil {
