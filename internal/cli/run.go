@@ -1214,6 +1214,7 @@ func retiredSDDAgentBackupPaths(homeDir string, scope InstallScope, adapters []a
 // retiredOpenCodeSDDTarget is one OpenCode-family settings file that may hold
 // retired SDD agents, with the shared prompt directory retired beside it.
 type retiredOpenCodeSDDTarget struct {
+	homeDir  string
 	agent    model.AgentID
 	settings string
 	prompts  string
@@ -1235,7 +1236,7 @@ func retiredOpenCodeSDDTargets(homeDir, workspaceDir string, scope InstallScope,
 			// the global markdown agents beside it.
 			config := opencodeagent.ConfigPath(homeDir)
 			target := retiredOpenCodeSDDTarget{
-				agent: agent, settings: syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter()),
+				homeDir: homeDir, agent: agent, settings: syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter()),
 				agentDirs: []string{filepath.Join(config, "agent"), filepath.Join(config, "agents")},
 			}
 			if scope != ScopeWorkspace {
@@ -1247,6 +1248,17 @@ func retiredOpenCodeSDDTargets(homeDir, workspaceDir string, scope InstallScope,
 		}
 	}
 	return targets
+}
+
+// settingsPaths includes both global spellings, whose surviving entries may
+// still reference shared prompts even when project settings are selected.
+func (t retiredOpenCodeSDDTarget) settingsPaths() []string {
+	paths := []string{t.settings}
+	if t.prompts != "" {
+		config := filepath.Dir(filepath.Dir(t.prompts))
+		paths = append(paths, filepath.Join(config, "opencode.json"), filepath.Join(config, "opencode.jsonc"))
+	}
+	return dedupPaths(paths)
 }
 
 // retiredOpenCodeSDDSettingsSteps schedules the settings retirement for every
@@ -1305,7 +1317,15 @@ func (s retiredOpenCodeSDDSettingsStep) Run() error {
 	}
 	actions := settings.ManualActions()
 	if s.target.prompts != "" {
-		prompts, err := legacyassets.RetireOpenCodeSDDPrompts(s.target.prompts)
+		var references []string
+		for _, path := range s.target.settingsPaths() {
+			refs, err := opencodeactivation.SettingsFileReferences(path, s.target.homeDir)
+			if err != nil {
+				return err
+			}
+			references = append(references, refs...)
+		}
+		prompts, err := legacyassets.RetireOpenCodeSDDPrompts(s.target.prompts, references...)
 		if s.changedFiles != nil {
 			*s.changedFiles = append(*s.changedFiles, prompts.Removed...)
 		}

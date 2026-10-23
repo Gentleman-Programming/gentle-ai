@@ -259,6 +259,11 @@ FLAGS
                                      auto inherits managed on/off and never enables by itself; only managed policy files are ever overwritten
   --dry-run                          Preview plan without executing
   --help, -h                         Show this help
+
+OPENCODE REFERENCES
+  Prompt files still referenced by remaining settings entries are kept.
+  Missing {file:...} targets fail sync and roll back managed changes.
+  Restore the named file or correct its reference, then rerun sync.
 `)
 }
 
@@ -2141,7 +2146,21 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 
 	// Post-apply verification reuses the same component paths as install.
 	result.Verify = runPostSyncVerificationWithState(homeDir, rt.workspaceDir, scope, selection, rt.state)
-	configChecks := verify.RunChecks(context.Background(), openCodeConfigChecks(homeDir, rt.workspaceDir, agentIDs))
+	configCheckList := openCodeConfigChecks(homeDir, rt.workspaceDir, agentIDs)
+	for _, target := range retiredOpenCodeSDDTargets(homeDir, rt.workspaceDir, scope, agentIDs) {
+		if target.agent != model.AgentOpenCode {
+			continue
+		}
+		for _, settingsPath := range target.settingsPaths() {
+			configCheckList = append(configCheckList, verify.Check{
+				ID: "verify:opencode:file-references:" + settingsPath, Description: "OpenCode file references exist",
+				Run: func(context.Context) error {
+					return opencodeactivation.ValidateSettingsFileReferences(settingsPath, homeDir)
+				},
+			})
+		}
+	}
+	configChecks := verify.RunChecks(context.Background(), configCheckList)
 	result.Verify = verify.BuildReport(append(result.Verify.Checks, configChecks...))
 	result.Verify = withFailedSyncVerificationNote(result.Verify)
 	result.BackgroundPolicyEnabled = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn

@@ -465,15 +465,17 @@ type PromptRetireResult struct {
 	Dir            string
 	Removed        []string
 	Preserved      []string
+	Referenced     []string
 	UnsupportedDir bool
 }
 
 // RetireOpenCodeSDDPrompts removes the shared SDD prompt files in dir whose
 // normalized bytes some release rendered, then the directory once empty.
+// referencedPaths protects files still used by settings retirement preserved.
 // Symlinks, non-regular files, and edited files are preserved and reported.
 // A dir that is itself a symlink (or not a directory) is the user's: nothing
 // in or through it is touched, as with a symlinked plugins directory.
-func RetireOpenCodeSDDPrompts(dir string) (PromptRetireResult, error) {
+func RetireOpenCodeSDDPrompts(dir string, referencedPaths ...string) (PromptRetireResult, error) {
 	result := PromptRetireResult{Dir: dir}
 	info, err := os.Lstat(dir)
 	if os.IsNotExist(err) {
@@ -494,6 +496,14 @@ func RetireOpenCodeSDDPrompts(dir string) (PromptRetireResult, error) {
 		}
 		if err != nil {
 			return result, fmt.Errorf("inspect retired SDD prompt %s: %w", file, err)
+		}
+		referenced := slices.ContainsFunc(referencedPaths, func(ref string) bool {
+			other, err := os.Stat(ref)
+			return err == nil && os.SameFile(info, other)
+		})
+		if referenced {
+			result.Referenced = append(result.Referenced, file)
+			continue
 		}
 		owned := false
 		if info.Mode().IsRegular() {
@@ -524,6 +534,9 @@ func (r PromptRetireResult) ManualActions() []string {
 	actions := make([]string, 0, len(r.Preserved)+1)
 	if r.UnsupportedDir {
 		actions = append(actions, fmt.Sprintf("%s is not a real directory (for example a symlink), so Gentle AI did not inspect or remove the retired SDD prompts in it. SDD was retired in v4.0.0 and no agent loads them anymore; if you no longer need them, move or delete them yourself.", r.Dir))
+	}
+	for _, file := range r.Referenced {
+		actions = append(actions, fmt.Sprintf("Retired SDD prompt %s was preserved because it is still referenced by a remaining settings entry. Keep it while that entry is in use; remove or update the entry before retiring this file.", file))
 	}
 	for _, file := range r.Preserved {
 		actions = append(actions, fmt.Sprintf("Retired SDD prompt %s was preserved: Gentle AI cannot prove it wrote this file (its content differs from every released version, or it is not a regular file), so it may contain your changes. SDD was retired in v4.0.0 and no agent loads it anymore; if you no longer need it, move or delete it.", file))
