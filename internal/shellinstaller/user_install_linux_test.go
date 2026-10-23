@@ -334,6 +334,37 @@ func TestUserSupervisorPreimages(t *testing.T) {
 	}
 }
 
+func TestUserSupervisorFileRefusalCauses(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "supervisor")
+	for _, tc := range []struct {
+		name string
+		mode os.FileMode
+		want string
+	}{
+		{"group-writable", 0775, "reason=group-or-world-writable"},
+		{"world-writable", 0707, "reason=group-or-world-writable"},
+		{"not-executable", 0600, "reason=not-executable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte("trusted-build DATA preimage"), tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := userSupervisorSHA(context.Background(), path)
+			var failure *PrivateRuntimeError
+			if !errors.As(err, &failure) || failure.Kind != "source" || failure.Cause == nil || !strings.Contains(failure.Cause.Error(), tc.want) || !strings.Contains(failure.Cause.Error(), path) {
+				t.Fatalf("file refusal lost cause %q: %v", tc.want, err)
+			}
+		})
+	}
+}
+
 func TestUserSupervisorAncestorPrivateGroupLayout(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Chmod(root, 0700); err != nil {

@@ -233,8 +233,17 @@ func userSourceFile(ctx context.Context, path string, size int64, pin string) (s
 // this mutable checksum. It witnesses cooperative preimages, not loaded bytes.
 func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 	info, err := privateForeignPhysical(source)
-	if err != nil || ctx.Err() != nil || info.Size() > 268435456 || info.Mode().Perm()&0022 != 0 || info.Mode().Perm()&0111 == 0 {
+	if err != nil || ctx.Err() != nil {
 		return "", privateError("source", errors.Join(err, ctx.Err()))
+	}
+	if info.Size() > 268435456 {
+		return "", privateError("source", fmt.Errorf("supervisor file refused: reason=oversize path=%q size=%d limit=268435456", source, info.Size()))
+	}
+	if info.Mode().Perm()&0022 != 0 {
+		return "", privateError("source", fmt.Errorf("supervisor file refused: reason=group-or-world-writable path=%q mode=%#o", source, info.Mode().Perm()))
+	}
+	if info.Mode().Perm()&0111 == 0 {
+		return "", privateError("source", fmt.Errorf("supervisor file refused: reason=not-executable path=%q mode=%#o", source, info.Mode().Perm()))
 	}
 	for current := source; ; current = filepath.Dir(current) {
 		st, err := os.Lstat(current)
@@ -260,8 +269,11 @@ func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 	}
 	data, err := os.ReadFile(source)
 	fresh, freshErr := privateForeignPhysical(source)
-	if err != nil || freshErr != nil || privateStamp(info) != privateStamp(fresh) || ctx.Err() != nil {
+	if err != nil || freshErr != nil || ctx.Err() != nil {
 		return "", privateError("preimage", errors.Join(err, freshErr, ctx.Err()))
+	}
+	if privateStamp(info) != privateStamp(fresh) {
+		return "", privateError("preimage", fmt.Errorf("supervisor file mutated during readback: path=%q", source))
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
 }
