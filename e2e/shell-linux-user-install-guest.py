@@ -279,7 +279,12 @@ class Mirror(http.server.BaseHTTPRequestHandler):
                 FAULT_SEEN.set()
                 status, headers, raw = 404, {}, b''
             elif host == 'pi.dev' and self.path == '/api/latest-version':
-                status, headers, raw = 200, {'content-type': 'application/json'}, b'{"version":"1.0.0"}'
+                # The guest's frozen updater authority: pi update --self installs
+                # exactly the version served here. Keep it identical to the
+                # post-update pin below ('stockUpgrade': '0.99.2 to 1.3.0'); a
+                # drifted literal makes the journey fail at 'pnpm root
+                # identity/integrity differs' instead of qualifying the release.
+                status, headers, raw = 200, {'content-type': 'application/json'}, b'{"version":"1.3.0"}'
             else:
                 status, headers, raw = public_bytes(host, self.path)
             self.send_response(status)
