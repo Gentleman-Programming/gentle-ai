@@ -181,7 +181,8 @@ func TestUserNativeService(t *testing.T) {
 					"--property=CapabilityBoundingSet=": false,
 					"--property=RuntimeMaxSec=300s":     false,
 					"--property=ReadOnlyPaths=" + filepath.Join(root, "runtime/main") + " " + filepath.Join(root, "runtime/main-source") + " /sys/fs/cgroup": false,
-					"--property=BindReadOnlyPaths=" + mask + ":" + runtime: false,
+					"--property=BindReadOnlyPaths=" + mask + ":" + runtime:        false,
+					"--property=TemporaryFileSystem=" + runtime + ":ro,mode=0700": false,
 				}
 				for _, arg := range got {
 					if _, ok := additions[arg]; ok {

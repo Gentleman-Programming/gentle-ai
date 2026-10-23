@@ -168,6 +168,11 @@ func (c *userNativeServiceCustody) argsForIdentities(identities map[string]strin
 		"--property=CapabilityBoundingSet=",
 		"--property=RuntimeMaxSec=300s",
 		"--property=ReadOnlyPaths=" + filepath.Join(c.root, "runtime/main") + " " + filepath.Join(c.root, "runtime/main-source") + " /sys/fs/cgroup",
+		// The empty read-only tmpfs hides the manager's runtime directory even
+		// where a cross-filesystem bind over the delegated runtime mount point
+		// is not honored (older systemd releases); the mask bind stays as
+		// defense in depth beneath or above it.
+		"--property=TemporaryFileSystem=" + c.managerRuntime + ":ro,mode=0700",
 		"--property=BindReadOnlyPaths=" + c.mask + ":" + c.managerRuntime,
 	}
 	result := append([]string(nil), base[:command]...)
