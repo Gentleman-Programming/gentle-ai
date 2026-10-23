@@ -3500,8 +3500,8 @@ func TestModelConfig_KiroPickerTriggersSyncScreen(t *testing.T) {
 	if got := state.PendingSyncOverrides.KiroModelAssignments["default"]; got != model.KiroModelAuto {
 		t.Errorf("step2: default = %q, want %q", got, model.KiroModelAuto)
 	}
-	if got := state.PendingSyncOverrides.KiroModelAssignments["odd-explorer"]; got != model.KiroModelAuto {
-		t.Errorf("step2: odd-explorer = %q, want %q", got, model.KiroModelAuto)
+	if got := state.PendingSyncOverrides.KiroModelAssignments["odd-explorer"]; got != model.KiroModelLuna {
+		t.Errorf("step2: odd-explorer = %q, want %q", got, model.KiroModelLuna)
 	}
 	if _, ok := state.PendingSyncOverrides.KiroModelAssignments["sdd-design"]; ok {
 		t.Error("step2: new preset must not introduce SDD assignments")

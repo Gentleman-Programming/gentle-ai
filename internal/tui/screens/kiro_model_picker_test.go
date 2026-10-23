@@ -22,8 +22,10 @@ func TestRenderKiroModelPicker_ShowsRequestedCopy(t *testing.T) {
 			t.Fatalf("expected preset %q in output, got:\n%s", want, out)
 		}
 	}
-	if !strings.Contains(out, "Kiro Auto") {
-		t.Fatalf("expected Kiro-native Auto copy in output, got:\n%s", out)
+	for _, want := range []string{"Sonnet 5.5 and GPT-5.6 Luna", "Opus 5.5", "GPT-5.6 Luna for most roles"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected preset description %q in output, got:\n%s", want, out)
+		}
 	}
 }
 
@@ -46,8 +48,11 @@ func TestHandleKiroModelPickerNav_SelectsKiroNativePreset(t *testing.T) {
 			t.Fatalf("preset exposes retired role %q", key)
 		}
 	}
-	if got := assignments["odd-explorer"]; got != model.KiroModelAuto {
-		t.Fatalf("odd-explorer assignment = %q, want auto", got)
+	if got := assignments["odd-explorer"]; got != model.KiroModelLuna {
+		t.Fatalf("odd-explorer assignment = %q, want luna", got)
+	}
+	if got := assignments["jd-judge-a"]; got != model.KiroModelSonnet {
+		t.Fatalf("jd-judge-a assignment = %q, want sonnet", got)
 	}
 }
 
@@ -72,6 +77,7 @@ func TestHandleKiroModelPickerNav_CustomCyclesAcrossKiroOptions(t *testing.T) {
 	if !handled || assignments != nil || !state.InCustomMode {
 		t.Fatalf("expected custom preset to enter custom mode, handled=%v assignments=%v inCustom=%v", handled, assignments, state.InCustomMode)
 	}
+	state.CustomAssignments["odd-explorer"] = model.KiroModelAuto
 
 	handled, assignments = HandleKiroModelPickerNav("enter", &state, 0)
 	if !handled || assignments != nil {
@@ -84,6 +90,9 @@ func TestHandleKiroModelPickerNav_CustomCyclesAcrossKiroOptions(t *testing.T) {
 	for _, want := range []model.KiroModelAlias{
 		model.KiroModelSonnet,
 		model.KiroModelHaiku,
+		model.KiroModelLuna,
+		model.KiroModelTerra,
+		model.KiroModelSol,
 		model.KiroModelMiniMax,
 		model.KiroModelGLM,
 		model.KiroModelDeepSeek,
@@ -96,6 +105,22 @@ func TestHandleKiroModelPickerNav_CustomCyclesAcrossKiroOptions(t *testing.T) {
 		}
 		if got := state.CustomAssignments["odd-explorer"]; got != want {
 			t.Fatalf("cycled assignment = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestRenderKiroCustomPicker_ShowsKiroModelIDs(t *testing.T) {
+	state := NewKiroModelPickerState()
+	HandleKiroModelPickerNav("enter", &state, 4)
+	state.CustomAssignments["odd-explorer"] = model.KiroModelTerra
+	out := RenderKiroModelPicker(state, 0)
+
+	if !strings.Contains(out, "auto → opus → sonnet → haiku → luna → terra → sol → minimax → glm → deepseek → qwen") {
+		t.Fatalf("expected full Kiro cycle in help text, got:\n%s", out)
+	}
+	for _, want := range []string{"[gpt-5.6-luna]", "[claude-sonnet-5.5]", "[gpt-5.6-terra]"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected model tag %q in output, got:\n%s", want, out)
 		}
 	}
 }
