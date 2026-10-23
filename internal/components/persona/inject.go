@@ -997,11 +997,13 @@ func legacyVSCodePersonaPaths(homeDir string) []string {
 	}
 }
 
+var osRemove = os.Remove
+
 // removeFileAtomic removes path if it exists. Returns true when the file was
 // present and successfully deleted, false when it did not exist. Any other
 // OS-level error is returned as-is.
 func removeFileAtomic(path string) (bool, error) {
-	err := os.Remove(path)
+	err := osRemove(path)
 	if err == nil {
 		return true, nil
 	}
