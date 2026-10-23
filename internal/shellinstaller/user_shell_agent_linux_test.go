@@ -20,6 +20,12 @@ func agentModeFixture(t *testing.T) (target, agent string) {
 	if err := os.Mkdir(agent, 0755); err != nil {
 		t.Fatal(err)
 	}
+	// os.Mkdir applies the process umask; keep the declared 0755 agent mode
+	// real under restrictive umasks (the guest worker runs UMask=0077) so the
+	// owned-0755 fixtures stay deterministic.
+	if err := os.Chmod(agent, 0755); err != nil {
+		t.Fatal(err)
+	}
 	target = filepath.Join(parent, "installed")
 	return target, agent
 }
