@@ -24,6 +24,7 @@ var retiredDocTerms = []struct {
 	{"OpenSpec", regexp.MustCompile(regexp.QuoteMeta("OpenSpec"))},
 	{"--strict-tdd", regexp.MustCompile(regexp.QuoteMeta("--strict-tdd"))},
 	{"SDD", regexp.MustCompile(`\bSDD\b`)},
+	{"GENTLE_AI_RDD_SHADOW", regexp.MustCompile(regexp.QuoteMeta("GENTLE_AI_RDD_SHADOW"))},
 }
 
 // retirementNote is the whole allowlist: a line may name a retired term only
@@ -98,4 +99,23 @@ func isHistoricalDoc(lines []string) bool {
 		}
 	}
 	return false
+}
+
+// TestNoLivingDocsReferenceRetiredShadowSwitch verifies that living documentation
+// does not reference the retired GENTLE_AI_RDD_SHADOW switch and that the
+// retired operator guide remains deleted.
+func TestNoLivingDocsReferenceRetiredShadowSwitch(t *testing.T) {
+	root := filepath.Join("..", "..")
+	for _, name := range livingDocs(t, root) {
+		content, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(content), "GENTLE_AI_RDD_SHADOW") {
+			t.Errorf("%s references retired switch GENTLE_AI_RDD_SHADOW", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs", "architecture", "rdd-shadow-evaluation.md")); !os.IsNotExist(err) {
+		t.Errorf("docs/architecture/rdd-shadow-evaluation.md still exists; operator guide for retired switch should be removed")
+	}
 }
