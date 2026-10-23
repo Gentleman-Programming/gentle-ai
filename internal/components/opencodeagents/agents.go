@@ -19,6 +19,7 @@ type Spec struct {
 
 var parity = []Spec{
 	{"gentle-ai-explore", "Read-only exploration and mapping for generic ODD work.", map[string]any{"write": "deny", "edit": "deny", "bash": "deny", "task": "deny"}},
+	{"gentle-ai-security", "Security and Sec-TDD subagent — threat modeling, negative regression tests for attack surfaces, and defensive guards.", map[string]any{"task": "deny"}},
 	{"gentle-ai-verify", "Read-only technical verification for generic ODD work.", map[string]any{"write": "deny", "edit": "deny", "task": "deny"}},
 	{"gentle-ai-worker", "Scoped package-owned implementation writer for bounded ODD work. Edits code, runs focused tests, and returns review-ready evidence without committing.", map[string]any{"task": "deny"}},
 	{"jd-judge-a", "Judgment Day blind adversarial reviewer A. Read-only; reports findings and does not fix code.", map[string]any{"write": "deny", "edit": "deny", "task": "deny"}},
