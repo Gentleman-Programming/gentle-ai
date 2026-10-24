@@ -158,11 +158,38 @@ func TestSyncRollsBackOutputStyleSwitchWhenRetiredStyleRemovalFails(t *testing.T
 	if _, err := os.Stat(f.neutral); err != nil {
 		t.Fatalf("recovery sync did not publish neutral output style: %v", err)
 	}
+	settled := map[string][]byte{}
+	for path := range f.before {
+		if path == f.gentleman {
+			continue
+		}
+		settled[path] = nil
+	}
+	settled[f.neutral] = nil
+	for path := range settled {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("after recovery: read %s: %v", path, err)
+		}
+		settled[path] = content
+	}
 	second, err := RunSyncWithSelection(f.home, selection)
 	if err != nil {
 		t.Fatalf("second RunSyncWithSelection() error = %v", err)
 	}
 	if second.FilesChanged != 0 || !second.NoOp {
 		t.Fatalf("second sync files changed = %d, no-op = %t; want idempotent no-op", second.FilesChanged, second.NoOp)
+	}
+	if _, err := os.Stat(f.gentleman); !os.IsNotExist(err) {
+		t.Fatalf("second sync restored retired gentleman output style, stat err=%v", err)
+	}
+	for path, want := range settled {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("after second sync: read %s: %v", path, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("second sync changed %s = %q, want %q", path, got, want)
+		}
 	}
 }
