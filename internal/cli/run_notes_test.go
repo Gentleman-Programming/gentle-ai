@@ -13,12 +13,22 @@ func TestWithPostInstallNotesAddsGGANextSteps(t *testing.T) {
 	report := verify.Report{Ready: true, FinalNote: "You're ready."}
 	resolved := planner.ResolvedPlan{OrderedComponents: []model.ComponentID{model.ComponentGGA}}
 
-	updated := withPostInstallNotes(report, resolved)
+	updated := withPostInstallNotes(report, resolved, false)
 	if !strings.Contains(updated.FinalNote, "GGA is now installed globally") {
 		t.Fatalf("FinalNote missing GGA global install note: %q", updated.FinalNote)
 	}
 	if !strings.Contains(updated.FinalNote, "gga init") || !strings.Contains(updated.FinalNote, "gga install") {
 		t.Fatalf("FinalNote missing GGA repo setup steps: %q", updated.FinalNote)
+	}
+}
+
+func TestWithPostInstallNotesOmitsGGANextStepsWhenInstallDeferred(t *testing.T) {
+	report := verify.Report{Ready: true, FinalNote: "You're ready."}
+	resolved := planner.ResolvedPlan{OrderedComponents: []model.ComponentID{model.ComponentGGA}}
+
+	updated := withPostInstallNotes(report, resolved, true)
+	if strings.Contains(updated.FinalNote, "GGA is now installed globally") {
+		t.Fatalf("FinalNote claims GGA was installed although its install was deferred: %q", updated.FinalNote)
 	}
 }
 
@@ -32,7 +42,7 @@ func TestWithPostInstallNotesDoesNotChangeNonGGA(t *testing.T) {
 	report := verify.Report{Ready: true, FinalNote: "You're ready."}
 	resolved := planner.ResolvedPlan{OrderedComponents: []model.ComponentID{model.ComponentEngram}}
 
-	updated := withPostInstallNotes(report, resolved)
+	updated := withPostInstallNotes(report, resolved, false)
 	if updated.FinalNote != report.FinalNote {
 		t.Fatalf("FinalNote changed unexpectedly: %q", updated.FinalNote)
 	}
