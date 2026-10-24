@@ -1,6 +1,10 @@
 package model
 
-import "maps"
+import (
+	"maps"
+	"slices"
+	"strings"
+)
 
 // ClaudeModelAlias represents one of the Claude model tiers used for
 // per-phase model assignments in the SDD orchestrator.
@@ -206,4 +210,67 @@ func ClaudeModelPresetDiversity() map[string]ClaudeModelAlias {
 	base["jd-judge-b"] = ClaudeModelHaiku
 	base["jd-fix-agent"] = ClaudeModelSonnet
 	return base
+}
+
+// ClaudeModelInherit is the Claude Code agent frontmatter model that runs the
+// agent on the session model.
+const ClaudeModelInherit = "inherit"
+
+// ClaudeODDRoles are the assignment rows of the ODD delegation agents. No
+// preset sets them: without a pick their agent inherits the session model.
+var ClaudeODDRoles = []string{"odd-explorer", "odd-worker", "odd-verify"}
+
+// IsClaudeODDRole reports whether role is one of ClaudeODDRoles.
+func IsClaudeODDRole(role string) bool {
+	return slices.Contains(ClaudeODDRoles, role)
+}
+
+// WithoutLegacyClaudeODDSeeds drops the ODD rows from a map that an older
+// picker saved for a preset, when it seeded every ODD row with Sonnet. Those
+// seeds were never picks, so the ODD agents inherit the session model. Matching
+// ignores the retired sdd-* rows the picker preserved and the orchestrator row
+// sync drops. Any other map, including Custom picks equal to the old seed, is
+// returned unchanged.
+func WithoutLegacyClaudeODDSeeds(assignments map[string]ClaudePhaseAssignment) map[string]ClaudePhaseAssignment {
+	for _, preset := range []map[string]ClaudeModelAlias{
+		ClaudeModelPresetBalanced(),
+		ClaudeModelPresetPerformance(),
+		ClaudeModelPresetEconomy(),
+		ClaudeModelPresetDiversity(),
+	} {
+		seeded := ClaudePhaseAssignmentsFromModelPreset(preset)
+		for _, role := range ClaudeODDRoles {
+			seeded[role] = ClaudePhaseAssignment{Model: ClaudeModelSonnet}
+		}
+		if claudeAgentAssignmentsEqual(seeded, assignments) {
+			out := maps.Clone(assignments)
+			for _, role := range ClaudeODDRoles {
+				delete(out, role)
+			}
+			return out
+		}
+	}
+	return assignments
+}
+
+// claudeAgentAssignmentsEqual compares the rows that pick a subagent model,
+// ignoring retired sdd-* rows and the orchestrator row.
+func claudeAgentAssignmentsEqual(a, b map[string]ClaudePhaseAssignment) bool {
+	ignored := func(key string) bool { return key == "orchestrator" || strings.HasPrefix(key, "sdd-") }
+	count := 0
+	for key, value := range a {
+		if ignored(key) {
+			continue
+		}
+		if got, ok := b[key]; !ok || got != value {
+			return false
+		}
+		count++
+	}
+	for key := range b {
+		if !ignored(key) {
+			count--
+		}
+	}
+	return count == 0
 }

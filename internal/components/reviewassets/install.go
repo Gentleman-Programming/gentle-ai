@@ -24,7 +24,7 @@ import (
 // development and ship only to runtimes in model.SupportsReceiptDrivenDevelopment.
 // Judgment Day and Kimi's main agent are not RDD and stay where they are.
 var NativeAgentManifest = map[model.AgentID][]string{
-	model.AgentClaudeCode: {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md", "review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
+	model.AgentClaudeCode: {"gentle-ai-explore.md", "gentle-ai-verify.md", "gentle-ai-worker.md", "jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md", "review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
 	model.AgentKiroIDE:    {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
 	model.AgentCursor:     {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
 	model.AgentKimi:       {"gentleman.yaml"},
@@ -39,6 +39,14 @@ var RetiredNativeAgentManifest = map[model.AgentID][]string{
 	model.AgentCursor:  {"review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
 	model.AgentKiroIDE: {"review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
 	model.AgentKimi:    {"review-readability.md", "review-readability.yaml", "review-refuter.md", "review-refuter.yaml", "review-reliability.md", "review-reliability.yaml", "review-resilience.md", "review-resilience.yaml", "review-risk.md", "review-risk.yaml"},
+}
+
+// claudeAssignmentRoles maps a Claude agent to the assignment row that picks
+// its model when the row name differs from the agent name.
+var claudeAssignmentRoles = map[string]string{
+	"gentle-ai-explore": "odd-explorer",
+	"gentle-ai-worker":  "odd-worker",
+	"gentle-ai-verify":  "odd-verify",
 }
 
 // NativeAgentsSupported reports whether the native agent installer handles a
@@ -237,6 +245,14 @@ func renderNativeAgent(adapter agents.Adapter, name string, opts InstallOptions)
 		content = replaceJudgmentSection(content, JudgmentDayReviewerContract())
 	}
 	phase := strings.TrimSuffix(name, ".md")
+	if strings.Contains(content, "{{GENTLE_AI_ODD_AGENT_PROMPT}}") {
+		// The ODD roles share one prompt across runtimes; only the frontmatter differs.
+		prompt, err := assets.Read("opencode/agents/" + phase + ".md")
+		if err != nil {
+			return "", fmt.Errorf("read ODD agent prompt %s: %w", phase, err)
+		}
+		content = strings.ReplaceAll(content, "{{GENTLE_AI_ODD_AGENT_PROMPT}}", strings.TrimSpace(prompt))
+	}
 	if kmr, ok := adapter.(kiroModelResolver); ok {
 		alias := model.KiroModelAuto
 		if selected, found := opts.KiroModelAssignments[phase]; found {
@@ -253,8 +269,23 @@ func renderNativeAgent(adapter agents.Adapter, name string, opts InstallOptions)
 		content = strings.ReplaceAll(content, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
 	}
 	if cmr, ok := adapter.(claudeModelResolver); ok {
-		assignment := resolveClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, phase)
-		content = strings.ReplaceAll(content, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(assignment.Model))
+		role := phase
+		if mapped, ok := claudeAssignmentRoles[phase]; ok {
+			role = mapped
+		}
+		var assignment model.ClaudePhaseAssignment
+		modelID := model.ClaudeModelInherit
+		if model.IsClaudeODDRole(role) {
+			// An ODD row has no preset and no fallback: without a pick its
+			// agent inherits the session model.
+			if picked, ok := explicitClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, role); ok {
+				assignment, modelID = picked, cmr.ClaudeModelID(picked.Model)
+			}
+		} else {
+			assignment = resolveClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, role)
+			modelID = cmr.ClaudeModelID(assignment.Model)
+		}
+		content = strings.ReplaceAll(content, "{{CLAUDE_MODEL}}", modelID)
 		effort := ""
 		if assignment.Effort != model.ClaudeEffortDefault && model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
 			effort = "effort: " + string(assignment.Effort)
@@ -315,6 +346,22 @@ func removeRetiredNativeAgent(journal *mutationjournal.Journal, dir, name string
 		return "", known, nil
 	}
 	return path, known, nil
+}
+
+// explicitClaudeAssignment returns the user's own pick for role, ignoring
+// presets, the general delegation row, and legacy ODD seeds.
+func explicitClaudeAssignment(legacy map[string]model.ClaudeModelAlias, phases map[string]model.ClaudePhaseAssignment, role string) (model.ClaudePhaseAssignment, bool) {
+	merged := model.ClaudePhaseAssignmentsFromLegacy(legacy)
+	if merged == nil {
+		merged = map[string]model.ClaudePhaseAssignment{}
+	}
+	for key, value := range phases {
+		if value.Valid() {
+			merged[key] = value
+		}
+	}
+	value, ok := model.WithoutLegacyClaudeODDSeeds(merged)[role]
+	return value, ok && value.Valid()
 }
 
 func resolveClaudeAssignment(legacy map[string]model.ClaudeModelAlias, phases map[string]model.ClaudePhaseAssignment, phase string) model.ClaudePhaseAssignment {
