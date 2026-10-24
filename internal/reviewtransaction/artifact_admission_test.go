@@ -730,6 +730,9 @@ func TestReferenceOutsideRepositoryRecognizesOnlyCanonicalRepositoryPaths(t *tes
 		{name: "non-canonical path", value: "./secret.go:42", outside: true},
 		{name: "https URL", value: "https://example.test/internal/secret.go:42"},
 		{name: "URL port", value: "http://127.0.0.1:8080/path"},
+		{name: "host:port literal (IPv4)", value: "127.0.0.1:8000", outside: false},
+		{name: "host:port literal (IPv6)", value: "[::1]:8000", outside: false},
+		{name: "host:port in quoted text", value: "bind to \"127.0.0.1:8000\"", outside: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -900,6 +903,30 @@ func TestExtractBoundedSingleJSONObjectReportsStructuralCensus(t *testing.T) {
 }
 
 // TestEvidenceReportsUnavailableInspectionPhrases is #1867: the phrases a
+// TestAdmitArtifactAllowsHostPortLiteralsInEvidence verifies that
+// host:port literals (e.g., 127.0.0.1:8000) in free-form evidence are
+// admitted and not treated as out-of-scope path citations (issue #5624).
+func TestAdmitArtifactAllowsHostPortLiteralsInEvidence(t *testing.T) {
+	_, _, request := admittedArtifactFixture(t)
+	// Add evidence that quotes a host:port literal from the candidate config
+	request.Result.Evidence = append(request.Result.Evidence,
+		"No BLOCKER or CRITICAL finding: the new gunicorn.conf.py binds to 127.0.0.1:8000 only, pins forwarded_allow_ips to 127.0.0.1")
+	canonical, admission, err := AdmitArtifact(t.Context(), request)
+	if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+		t.Fatalf("AdmitArtifact() = %q, %v; want completed", admission.Decision, err)
+	}
+	// Verify the host:port literal is preserved in the admitted evidence
+	found := false
+	for _, ev := range canonical.Evidence {
+		if strings.Contains(ev, "127.0.0.1:8000") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("host:port literal was not preserved in admitted evidence: %#v", canonical.Evidence)
+	}
+}
 // reviewer writes when the immutable candidate could not be read must be
 // classified as an unavailable inspection, while a completed inspection that
 // merely mentions reading stays a genuine result.
