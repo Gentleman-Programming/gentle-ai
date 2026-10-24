@@ -7735,3 +7735,22 @@ func TestMarkPendingSyncUnderLockReReadsLatestStateAfterLockContention(t *testin
 		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
 	}
 }
+
+func TestCompletionViewOmitsGGAInstalledWhenInstallDeferred(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenComplete
+	m.Selection.Components = []model.ComponentID{model.ComponentGGA}
+
+	if view := m.View(); !strings.Contains(view, "GGA was installed globally") {
+		t.Fatalf("view without a deferred install should report GGA as installed:\n%s", view)
+	}
+
+	m.Execution.ManualActions = []string{cli.GGAHomebrewDeferredAction}
+	view := m.View()
+	if strings.Contains(view, "GGA was installed globally") {
+		t.Fatalf("view reports GGA as installed although its install was deferred:\n%s", view)
+	}
+	if !strings.Contains(view, "Install Homebrew") {
+		t.Fatalf("view is missing the Homebrew manual action:\n%s", view)
+	}
+}
