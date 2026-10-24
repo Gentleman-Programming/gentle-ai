@@ -39,6 +39,15 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
 )
 
+func GetTurnTimeout() time.Duration {
+	if v := os.Getenv("GENTLE_AI_TURN_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return 10 * time.Minute
+}
+
 // tuiNowFn returns the current time for the update-check cooldown gate.
 // Package-level var so tests can inject a deterministic clock.
 var tuiNowFn = time.Now
@@ -4666,7 +4675,8 @@ func (m Model) startGeneration() (tea.Model, tea.Cmd) {
 
 	adapters := m.buildAgentBuilderAdapters()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	turnTimeout := GetTurnTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 	m.AgentBuilder.GenerationCancel = cancel
 
 	return m, tea.Batch(tickCmd(), func() tea.Msg {
@@ -4716,7 +4726,8 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 			}
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		turnTimeout := GetTurnTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
 		defer cancel()
 		_ = ctx // timeout enforced; Install itself is synchronous
 
