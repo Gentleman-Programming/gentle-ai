@@ -1104,6 +1104,25 @@ except Exception as error:
             platform_facts[name] = open('/proc/sys/kernel/' + name).read().strip()
         except OSError:
             pass
+    # One bounded diagnostic transient unit reproduces the sealed-runtime
+    # context (the producer unit's userns and manager-runtime seal) so the
+    # runner's systemd behavior around the seal is observable in the report:
+    # whether the read-only tmpfs is applied, covered, or silently dropped.
+    try:
+        diag = subprocess.run(['/usr/bin/systemd-run', '--user', '--quiet', '--wait', '--pipe', '--collect',
+                               '--service-type=exec', '--unit=gentle-seal-diag-' + os.urandom(4).hex(),
+                               '--property=NoNewPrivileges=yes', '--property=PrivateUsers=yes',
+                               '--property=CapabilityBoundingSet=',
+                               '--property=TemporaryFileSystem=/run/user/' + str(FIXTURE_UID) + ':ro,mode=0700',
+                               '/bin/sh', '-c', 'cat /proc/self/mountinfo'],
+                              env={**os.environ, 'XDG_RUNTIME_DIR': '/run/user/' + str(FIXTURE_UID)},
+                              capture_output=True, timeout=min(20, remaining()))
+        platform_facts['sealUnitExit'] = diag.returncode
+        platform_facts['sealUnitMountinfo'] = diag.stdout.decode('utf-8', 'replace')[-1600:]
+        if diag.stderr:
+            platform_facts['sealUnitStderr'] = diag.stderr.decode('utf-8', 'replace')[-400:]
+    except Exception:
+        pass
     if platform_facts:
         message['platform'] = platform_facts
     if 'ptyFailure' in REPORT:
