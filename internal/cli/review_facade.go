@@ -1624,7 +1624,6 @@ func reviewFreshAtomicTargetStatus(target reviewtransaction.Target, snapshot rev
 // The result is the effective STATUS candidate, not a second transition-only
 // identity. Ambiguous or empty ranges retain the existing base-selection fallback.
 func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target) (reviewtransaction.Snapshot, reviewtransaction.Target, bool) {
-	defer reviewtransaction.StartStatusPhase(ctx, reviewtransaction.StatusPhaseImplicitBaseRangeDerivation)()
 	if live.Kind != reviewtransaction.TargetCurrentChanges || len(live.Paths) != 0 {
 		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
 	}

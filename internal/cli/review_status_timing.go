@@ -15,19 +15,21 @@ var reviewStatusPhaseTimingsWriter io.Writer = os.Stderr
 const reviewStatusPhaseTimingsEnvVar = "GENTLE_AI_STATUS_PHASE_TIMINGS"
 
 func reviewStatusPhaseTimingsEnabled(args []string) bool {
-	if reviewStatusPhaseTimingsEnvEnabled() {
-		return true
-	}
+	enabled := reviewStatusPhaseTimingsEnvEnabled()
 	for _, arg := range args {
-		if arg == "--phase-timings" || strings.HasPrefix(arg, "--phase-timings=") {
-			if strings.HasPrefix(arg, "--phase-timings=") {
-				enabled, err := strconv.ParseBool(strings.TrimPrefix(arg, "--phase-timings="))
-				return err == nil && enabled
+		if arg == "--" {
+			break
+		}
+		if arg == "--phase-timings" {
+			enabled = true
+		} else if strings.HasPrefix(arg, "--phase-timings=") {
+			parsed, err := strconv.ParseBool(strings.TrimPrefix(arg, "--phase-timings="))
+			if err == nil {
+				enabled = parsed
 			}
-			return true
 		}
 	}
-	return false
+	return enabled
 }
 
 func reviewStatusPhaseTimingsEnvEnabled() bool {

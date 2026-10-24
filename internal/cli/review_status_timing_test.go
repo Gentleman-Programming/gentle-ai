@@ -24,6 +24,13 @@ func TestReviewStatusPhaseTimingsEnabledDetection(t *testing.T) {
 		{nil, "1", true},
 		{nil, "true", true},
 		{nil, "0", false},
+		{[]string{"--phase-timings=false", "--phase-timings"}, "", true},
+		{[]string{"--phase-timings", "--phase-timings=false"}, "", false},
+		{[]string{"--phase-timings=false", "--phase-timings=true"}, "", true},
+		{[]string{"--phase-timings=true", "--phase-timings=false"}, "", false},
+		{[]string{"--phase-timings=false"}, "true", false},
+		{[]string{"--phase-timings", "--", "--phase-timings=false"}, "", true},
+		{[]string{"--phase-timings=false", "--", "--phase-timings"}, "", false},
 	} {
 		t.Setenv(reviewStatusPhaseTimingsEnvVar, tc.env)
 		if got := reviewStatusPhaseTimingsEnabled(tc.args); got != tc.want {
@@ -49,10 +56,31 @@ func TestRunReviewStatusPhaseTimingsOptInAndSilence(t *testing.T) {
 
 	stderrBuffer.Reset()
 	stdout.Reset()
-	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--phase-timings"}, &stdout); err != nil {
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--phase-timings", "--phase-timings=false"}, &stdout); err != nil {
+		t.Fatalf("RunReview status: %v", err)
+	}
+	if stderrBuffer.Len() != 0 {
+		t.Fatalf("expected silent stderr with trailing --phase-timings=false, got: %q", stderrBuffer.String())
+	}
+
+	stderrBuffer.Reset()
+	stdout.Reset()
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--phase-timings=false", "--phase-timings"}, &stdout); err != nil {
 		t.Fatalf("RunReview status: %v", err)
 	}
 	out := stderrBuffer.String()
+	for _, phase := range []string{"repository_identity_resolution=", "snapshot_construction=", "implicit_base_range_derivation=", "predecessor_consumption_ancestry="} {
+		if !strings.Contains(out, phase) {
+			t.Errorf("missing phase %q in %s", phase, out)
+		}
+	}
+
+	stderrBuffer.Reset()
+	stdout.Reset()
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--phase-timings"}, &stdout); err != nil {
+		t.Fatalf("RunReview status: %v", err)
+	}
+	out = stderrBuffer.String()
 	for _, phase := range []string{"repository_identity_resolution=", "snapshot_construction=", "implicit_base_range_derivation=", "predecessor_consumption_ancestry="} {
 		if !strings.Contains(out, phase) {
 			t.Errorf("missing phase %q in %s", phase, out)
