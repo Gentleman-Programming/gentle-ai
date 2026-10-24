@@ -23,6 +23,7 @@ import (
 var (
 	shellInstallInspect = shellinstaller.InspectUserInstall
 	shellInstallEntry   = shellinstaller.RunUserEntry
+	shellLaunchProbe    = shellinstaller.RunUserLaunchProbe
 )
 
 // Platform contracts live in shell_install_platform_{windows,other}.go:
@@ -195,8 +196,14 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 		if output := strings.TrimSpace(workerLog.String()); output != "" {
 			waitErr = fmt.Errorf("%w; worker output: %s", waitErr, output)
 		}
+		return preserveShellFailure(waitErr)
 	}
-	return preserveShellFailure(waitErr)
+	// The direct installer never exercised the delegated unit path; refuse to
+	// claim success when the unit a later launch will use cannot run (#5713).
+	if probeErr := shellLaunchProbe(ctx, self); probeErr != nil {
+		return preserveShellFailure(fmt.Errorf("published installation refused: the delegated unit launch probe failed: %w", probeErr))
+	}
+	return preserveShellFailure(nil)
 }
 
 type boundedWorkerLog struct {

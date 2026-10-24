@@ -79,3 +79,22 @@ func TestUserPublishManifestSkipsEphemeralCleanupOnUncertainPublish(t *testing.T
 		t.Fatalf("uncertain publish lost the renamed evidence tree: %v", err)
 	}
 }
+
+// The staged Unix install runs the network-bound provision at least twice
+// (global install, then the verify readback) and the main channel adds
+// further npm work, so the external install deadline must stay strictly above
+// the npm budget of every provision invocation it contains. A bound at or
+// below that product reproduces issue #5714: the deadline expires after the
+// publish step and the installation is reported unqualified.
+func TestUnixInstallBoundCoversNpmNetworkBudget(t *testing.T) {
+	npm := userScriptsNpmNetworkTimeout(t)
+	if userUnixNpmNetworkTimeout != npm {
+		t.Fatalf("userUnixNpmNetworkTimeout %s differs from the scripts' NPM_NETWORK_TIMEOUT %s", userUnixNpmNetworkTimeout, npm)
+	}
+	if userUnixProvisionBound != userUnixNpmNetworkTimeout {
+		t.Fatalf("userUnixProvisionBound %s differs from the npm budget %s", userUnixProvisionBound, userUnixNpmNetworkTimeout)
+	}
+	if userUnixInstallBound <= 3*userUnixNpmNetworkTimeout {
+		t.Fatalf("userUnixInstallBound %s does not exceed three network-bound provision invocations at the npm budget %s each", userUnixInstallBound, userUnixNpmNetworkTimeout)
+	}
+}

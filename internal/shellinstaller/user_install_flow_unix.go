@@ -193,6 +193,25 @@ func userDirectInstall(ctx context.Context) bool {
 	return direct
 }
 
+// userUnixNpmNetworkTimeout mirrors NPM_NETWORK_TIMEOUT in
+// scripts/provision-gentle-shell-private-global.mjs (1200000 ms), the helper
+// the Unix flow runs for both global provisioning and verification: the
+// budget one network-bound npm run may take. The .mjs file stays the source
+// of truth; the deadline guard test parses it to keep this mirror honest.
+const userUnixNpmNetworkTimeout = 20 * time.Minute
+
+// userUnixProvisionBound is the external budget a single network-bound
+// provision invocation (global install or verify) may consume.
+const userUnixProvisionBound = userUnixNpmNetworkTimeout
+
+// userUnixInstallBound budgets the whole staged install: global provisioning
+// and the verify readback each may run one network-bound npm composition,
+// with a further invocation of margin for the main channel, plus headroom
+// for bootstrap, extraction and publication. The former 870s bound aligned
+// with the Windows 900s bound that expired after publish in the field
+// (issue #5714).
+const userUnixInstallBound = 3*userUnixProvisionBound + 10*time.Minute
+
 func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserInstallResult, err error) {
 	if ctx == nil || ctx.Err() != nil {
 		return result, privateError("canceled", context.Canceled)
@@ -236,8 +255,19 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 		return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled"}, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 870*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, userUnixInstallBound)
 	defer cancel()
+	if _, statErr := os.Lstat(req.Destination); statErr == nil && userReconfigureTarget() == req.Destination {
+		// A reconfigure that only changes the SDK update channel swaps the
+		// installed SDK declaration in place; components, preferences,
+		// runtimes and the supervisor stay untouched. Any other reconfigure
+		// keeps the full retire-and-reinstall below.
+		if result, applied, err := userUnixChannelOverlay(ctx, req); err != nil {
+			return result, err
+		} else if applied {
+			return result, nil
+		}
+	}
 	userShellStepBegin(ctx, 2, 5, "Prepare the private stage and preferences")
 	userShellDetail(ctx, 2, 5, "Creating the private staging workspace")
 	workspace, err := os.MkdirTemp(filepath.Dir(req.Destination), ".gentle-user-")

@@ -414,6 +414,16 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 	if err != nil {
 		return update, err
 	}
+	// A Main composition with a Stable preference is itself the channel
+	// delta: Update-now routes it to the in-place overlay, which restores the
+	// retained stock package without reinstalling any component. This check
+	// mirrors the Unix check so both platforms offer the same switch back.
+	if manifest.MainCommit != "" {
+		update.Available = true
+		update.Components = []string{"SDK Main snapshot"}
+		update.Detail = "Main SDK is installed; the stable channel preference wants the stock composition"
+		return update, nil
+	}
 	if userWindowsSHA(image) != manifest.SupervisorSHA {
 		update.Available = true
 		update.Components = append(update.Components, "Gentle Shell supervisor")

@@ -73,6 +73,16 @@ func TestUserNativeReadbackAdmitsCurrentStockBundle(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(nested, "integrity.json"), []byte(tt.manifestText), tt.manifestMode); err != nil {
 				t.Fatal(err)
 			}
+			// The guest runs with umask 0055, which strips group/other bits
+			// from WriteFile modes (0755 -> 0700, 0644 -> 0600). Chmod makes
+			// the requested mode real regardless of umask so the loose-mode
+			// refusals exercise the actual guard, not the environment.
+			if err := os.Chmod(filepath.Join(nested, "gentle-ai"), tt.binaryMode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(filepath.Join(nested, "integrity.json"), tt.manifestMode); err != nil {
+				t.Fatal(err)
+			}
 			if err := userNativeReadback(ctx, filepath.Join(fixture, ".gentle-ai")); err == nil {
 				t.Fatal("foreign or mutated native state accepted")
 			}

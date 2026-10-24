@@ -25,3 +25,7 @@ func RunUserInstall(context.Context, UserInstallRequest) (UserInstallResult, err
 func RunUserEntry(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
 	return UserKernelCheck()
 }
+
+// RunUserLaunchProbe refuses on unsupported platforms, matching this file's
+// contract: no native backend exists here.
+func RunUserLaunchProbe(context.Context, string) error { return UserKernelCheck() }

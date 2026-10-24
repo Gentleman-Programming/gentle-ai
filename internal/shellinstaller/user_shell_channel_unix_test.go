@@ -144,8 +144,9 @@ func TestCheckUserShellUpdateFollowsPersistedChannel(t *testing.T) {
 		t.Fatalf("Main routing differs: %+v", update)
 	}
 
-	// A Main installation routed to Stable by the persisted preference checks
-	// the stable components against this build.
+	// A Main installation routed to Stable by the persisted preference is
+	// itself the channel delta: the update names the installed Main SDK, not
+	// any component drift, so Update-now reaches the in-place overlay.
 	mainTarget := filepath.Join(home, ".local", "share", "gentle-shell", "main")
 	writeChannelManifest(t, mainTarget, &userSnapshotArtifact{SHA: strings.Repeat("a", 64)})
 	writeChannelPreference(t, mainTarget, userChannelStable)
@@ -153,7 +154,7 @@ func TestCheckUserShellUpdateFollowsPersistedChannel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if update.Channel != "stable" || !update.Available || len(update.Components) == 0 {
+	if update.Channel != "stable" || !update.Available || len(update.Components) != 1 || update.Components[0] != "SDK Main snapshot" || !strings.Contains(update.Detail, "stock composition") {
 		t.Fatalf("Stable routing differs: %+v", update)
 	}
 

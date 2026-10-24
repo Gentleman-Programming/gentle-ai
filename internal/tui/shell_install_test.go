@@ -11,6 +11,7 @@ import (
 )
 
 func TestShellInstallerWelcomeOptIn(t *testing.T) {
+	stubShellKernelGate(t)
 	t.Setenv("HOME", t.TempDir())
 	ordinary := NewModel(system.DetectionResult{}, "dev")
 	ordinary.Width, ordinary.Height = 80, 30

@@ -17,6 +17,17 @@ func experienceKey(m Model, key tea.KeyMsg) Model {
 	return model.(Model)
 }
 
+// stubShellKernelGate bypasses the platform kernel qualification so the flows
+// below exercise TUI logic on hosts the real guard refuses (Windows Server
+// runners); inspection, staging and refusal semantics stay real. The previous
+// gate is restored after each test.
+func stubShellKernelGate(t *testing.T) {
+	t.Helper()
+	previous := shellinstaller.UserKernelGate
+	t.Cleanup(func() { shellinstaller.UserKernelGate = previous })
+	shellinstaller.UserKernelGate = func() error { return nil }
+}
+
 func experienceFocus(t *testing.T, m Model, control screens.ShellExperienceControl, choice string) Model {
 	t.Helper()
 	if m.shellExperience == nil {
@@ -56,6 +67,7 @@ func experienceStart(t *testing.T) Model {
 // experiencePlan ends configuration and returns the installation plan request.
 func experiencePlan(t *testing.T, m Model) (Model, shellinstaller.UserInstallRequest) {
 	t.Helper()
+	stubShellKernelGate(t)
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnd})
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.shellPlan == nil || m.shellExperience != nil {

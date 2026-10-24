@@ -136,7 +136,7 @@ func TestUserWindowsStageExperienceRefusesBeforeWrites(t *testing.T) {
 		profile UserExperience
 	}{
 		{"invalid", context.Background(), UserExperience{}},
-		{"explicit CodeGraph", context.Background(), UserExperience{Persona: "neutral", BackgroundSubagents: "on", CodeGraph: "on"}},
+		{"explicit RDD on Main", context.Background(), UserExperience{Persona: "neutral", BackgroundSubagents: "on", GlobalRDD: "on", SDKSource: "main-preview"}},
 		{"explicit GGA", context.Background(), UserExperience{Persona: "neutral", BackgroundSubagents: "on", GGA: "on"}},
 		{"canceled", canceled, DefaultUserExperience()},
 		{"nil context", nil, DefaultUserExperience()},
@@ -154,5 +154,23 @@ func TestUserWindowsStageExperienceRefusesBeforeWrites(t *testing.T) {
 	}
 	if err := userStageExperience(nil, "not-a-private-path", nil); err != nil {
 		t.Fatalf("nil legacy profile performed a lookup: %v", err)
+	}
+}
+
+// CodeGraph is a supported Windows combination (the runtime stage was built
+// for Windows deliberately): the experience stage admits the selection and
+// writes the base preferences, while the CodeGraph runtime itself is staged
+// by the install flow's own provision step after this writer returns.
+func TestUserWindowsStageExperienceAdmitsCodeGraphSelection(t *testing.T) {
+	root := windowsExperienceStage(t)
+	profile := UserExperience{Persona: "neutral", BackgroundSubagents: "on", CodeGraph: "on"}
+	if err := userStageExperience(context.Background(), root, &profile); err != nil {
+		t.Fatalf("CodeGraph selection refused at the experience stage: %v", err)
+	}
+	config := filepath.Join(root, "config")
+	for _, name := range []string{"background-subagents.json", "persona.json"} {
+		if _, err := os.Lstat(filepath.Join(config, name)); err != nil {
+			t.Fatalf("CodeGraph admission skipped a base preference: %v", err)
+		}
 	}
 }

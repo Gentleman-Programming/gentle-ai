@@ -126,6 +126,81 @@ func TestPrivateKernel(t *testing.T) {
 	}
 }
 
+// Every unavailable refusal must name its clause and the observed values; a
+// nil cause reports the refusal without any physical observation (#5713).
+func TestPrivateKernelRefusalCauses(t *testing.T) {
+	parent := t.TempDir()
+	mount := "1 0 0:1 / /sys/fs/cgroup ro - cgroup2 cgroup rw\n"
+	file := filepath.Join(parent, "limit")
+	privateMust(t, os.WriteFile(file, nil, 0600))
+	link := filepath.Join(parent, "link")
+	privateMust(t, os.Symlink(parent, link))
+	cases := []struct {
+		name string
+		run  func() error
+		want string
+	}{
+		{"membership clause", func() error { _, err := privateCgroupPath("1:cpu:/\n", mount); return err },
+			`membership "1:cpu:/" is not one canonical 0:: hierarchy entry`},
+		{"repeated separator", func() error {
+			_, err := privateCgroupPath("0::/\n", "1 0 0:1 / /sys/fs/cgroup ro - cgroup2 - cgroup rw\n")
+			return err
+		},
+			`mountinfo line "1 0 0:1 / /sys/fs/cgroup ro - cgroup2 - cgroup rw" repeats the '-' separator`},
+		{"mountinfo shape", func() error {
+			_, err := privateCgroupPath("0::/\n", "1 0 0:1 / /sys/fs/cgroup ro cgroup2 cgroup rw\n")
+			return err
+		},
+			`mountinfo line "1 0 0:1 / /sys/fs/cgroup ro cgroup2 cgroup rw" has 9 fields with the '-' separator at -1, want one '-' and four trailing fields`},
+		{"noncanonical mount paths", func() error {
+			_, err := privateCgroupPath("0::/\n", strings.Replace(mount, `0:1 / `, `0:1 /tenant\040/../ `, 1))
+			return err
+		},
+			`mountinfo root "/tenant /../" or mountpoint "/sys/fs/cgroup" is not canonical`},
+		{"shadowed mountpoint", func() error {
+			_, err := privateCgroupPath("0::/\n", mount+"2 1 0:2 / /sys/fs/cgroup/child ro - tmpfs tmpfs rw\n")
+			return err
+		},
+			`mountpoint "/sys/fs/cgroup/child" is underneath the trusted cgroup2 mountpoint`},
+		{"trusted fstype", func() error {
+			_, err := privateCgroupPath("0::/\n", strings.Replace(mount, "cgroup2 cgroup rw", "tmpfs tmpfs rw", 1))
+			return err
+		},
+			`trusted cgroup2 mount has fstype "tmpfs", want cgroup2`},
+		{"membership outside mount root", func() error { _, err := privateCgroupPath("0::/\n", "1 0 0:1 / /mnt ro - ext4 ext4 rw\n"); return err },
+			`membership "0::/" does not resolve inside the observed cgroup2 mount root ""`},
+		{"differing leaf limits", func() error { return privateKernelData("0::/\n", mount, []string{"max", "0", "100000 100000", "64"}) },
+			`leaf limits differ: memory.max="max" memory.swap.max="0" cpu.max="100000 100000" pids.max="64" want 3221225472/0/"100000 100000"/64`},
+		{"absent leaf limits", func() error { return privateKernelData("0::/\n", mount, nil) },
+			`leaf limits differ: memory.max="" memory.swap.max="" cpu.max="" pids.max="" want 3221225472/0/"100000 100000"/64`},
+		{"missing physical path", func() error { return privateCgroupPhysical(filepath.Join(parent, "missing"), true) },
+			`physical cgroup path "` + filepath.Join(parent, "missing") + `" is not inspectable: lstat `},
+		{"symlinked physical path", func() error { return privateCgroupPhysical(link, true) },
+			`physical cgroup path "` + link + `" is not canonical: symlink resolves to`},
+		{"directory instead of a regular file", func() error { return privateCgroupPhysical(parent, false) },
+			`physical cgroup path "` + parent + `" is not the required regular file: mode `},
+		{"regular file instead of directory", func() error { return privateCgroupPhysical(file, true) },
+			`physical cgroup path "` + file + `" is not the required directory: mode `},
+		{"directory with foreign filesystem", func() error { return privateCgroupPhysical(parent, true) },
+			`physical cgroup path "` + parent + `" has fstype 0x`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var failure *PrivateRuntimeError
+			err := tc.run()
+			if !errors.As(err, &failure) || failure.Kind != "unavailable" || !strings.Contains(failure.Error(), tc.want) {
+				t.Fatalf("refusal without the named clause or observed values: %v", err)
+			}
+		})
+	}
+	// Clause causes never emit raw control characters, even for hostile input.
+	_, err := privateCgroupPath("0::/child\v\n", mount)
+	var failure *PrivateRuntimeError
+	if !errors.As(err, &failure) || strings.Contains(failure.Error(), "\v") {
+		t.Fatalf("control characters reached the refusal cause: %v", err)
+	}
+}
+
 func TestPrivateCgroupMapping(t *testing.T) {
 	privateGuest(t)
 	mount := "1 0 0:1 / /sys/fs/cgroup ro - cgroup2 cgroup rw\n"

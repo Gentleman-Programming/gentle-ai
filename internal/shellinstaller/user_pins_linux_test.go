@@ -135,9 +135,10 @@ func TestUserFrozenRootPinParity(t *testing.T) {
 				if profile == "modern" {
 					source = modern[1]
 				}
-				if profile == "modern" && name == "@earendil-works/pi-coding-agent" {
-					source, pattern = python, `(?m)^    pins\['@earendil-works/pi-coding-agent'\] = \('([^']+)', '([^']+)'\)$`
-				}
+				// The modern cohort acquires pi-coding-agent explicitly, so it
+				// is checked against the modern map like every other root.
+				// The prior-to-next transition tuple (1.0.0) sits between the
+				// two frozen locks and is verified at guest runtime instead.
 				if entry.Version != version || entry.Integrity == "" || !userPinEqual(source, pattern, version, entry.Integrity) {
 					t.Errorf("%s live root tuple/declaration differs from compiled %s lock", name, profile)
 				}

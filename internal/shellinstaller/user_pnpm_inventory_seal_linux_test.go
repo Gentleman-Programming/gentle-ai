@@ -4,6 +4,7 @@ package shellinstaller
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -41,6 +42,13 @@ func TestUserPNPMCodeSealPreservation(t *testing.T) {
 				err = syscall.Mkfifo(filepath.Join(dir, "pipe"), 0600)
 			case "oversize":
 				err = os.Truncate(file, 268435457)
+				if errors.Is(err, syscall.EFBIG) {
+					// Guest runners enforce RLIMIT_FSIZE below the 256 MiB
+					// oversize threshold, so even a sparse extension is
+					// rejected with EFBIG. The refusal itself is exercised
+					// on hosts without that limit.
+					t.Skipf("oversize fixture blocked by RLIMIT_FSIZE: %v", err)
+				}
 			case "canceled":
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithCancel(ctx)

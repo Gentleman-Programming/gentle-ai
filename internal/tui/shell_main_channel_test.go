@@ -41,6 +41,7 @@ func openAgreedConfiguration(t *testing.T) Model {
 // The channel radio is a channel, not a preference consumer: explicit ON/OFF
 // values must not lock it. Unsupported pairings are named when continuing.
 func TestShellMainChannelIsSelectable(t *testing.T) {
+	stubShellKernelGate(t)
 	m := openAgreedConfiguration(t)
 	m, _ = focusMainPreview(t, m)
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -69,6 +70,7 @@ func TestShellMainChannelIsSelectable(t *testing.T) {
 }
 
 func TestShellMainAcceptsQualifiedSelections(t *testing.T) {
+	stubShellKernelGate(t)
 	m := openAgreedConfiguration(t)
 	m, _ = focusMainPreview(t, m)
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})

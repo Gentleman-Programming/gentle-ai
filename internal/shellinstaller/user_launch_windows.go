@@ -231,11 +231,31 @@ func userWindowsConsoleSave() func() error {
 	}
 }
 
+// userWindowsNpmNetworkTimeout mirrors NPM_NETWORK_TIMEOUT in
+// scripts/provision-gentle-shell-windows.mjs and
+// scripts/provision-gentle-shell-private-global.mjs (1200000 ms): the budget
+// one network-bound npm run inside provision may take. The .mjs files stay
+// the source of truth; the deadline guard test parses them to keep this
+// mirror honest.
+const userWindowsNpmNetworkTimeout = 20 * time.Minute
+
+// userWindowsProvisionBound is the external budget a single provision
+// invocation (install, main-channel overlay or verify) may consume.
+const userWindowsProvisionBound = userWindowsNpmNetworkTimeout
+
+// userWindowsInstallBound budgets the whole install entry: provision runs the
+// network-bound npm composition three times (install, main-channel overlay
+// and the post-publish verify), plus headroom for archive extraction,
+// inventory walks and publication. The former 900s bound expired after the
+// publish step in the field (issue #5714), reporting a healthy installation
+// as unqualified.
+const userWindowsInstallBound = 3*userWindowsProvisionBound + 10*time.Minute
+
 func userWindowsEntryContext(ctx context.Context, action string) (context.Context, context.CancelFunc) {
 	if action == "launch" {
 		return context.WithCancel(ctx)
 	}
-	return context.WithTimeout(ctx, 900*time.Second)
+	return context.WithTimeout(ctx, userWindowsInstallBound)
 }
 
 func userWindowsLaunchCLI(root, product string) string {

@@ -15,6 +15,14 @@ func userValidateStageExperience(profile *UserExperience) error {
 	if profile != nil && profile.SDKSource == "main-preview" && runtime.GOOS != "windows" {
 		return experienceError("Main SDK requires its authenticated runtime producer")
 	}
+	// The Windows Main channel stages base preferences natively, but an
+	// explicit global RDD needs the qualified stock distribution. Refuse the
+	// pairing here so the Windows stage writer never produces or writes
+	// config/persona/background bytes for it, matching the unix guard order
+	// where the Main channel check precedes every write.
+	if profile != nil && profile.SDKSource == "main-preview" && runtime.GOOS == "windows" && profile.GlobalRDD != "" {
+		return experienceError("Main preview does not stage an explicit global RDD; choose stock for an explicit RDD preference")
+	}
 	if profile != nil && profile.CodeGraph != "" && runtime.GOOS != "windows" {
 		return experienceError("explicit CodeGraph requires a qualified private library/runtime stage")
 	}
@@ -102,3 +110,11 @@ func userExperienceConfigFiles(profile *UserExperience) ([]userExperienceStageFi
 	}
 	return files, nil
 }
+
+// UserKernelGate is the kernel-qualification seam for the shell installer
+// entry points, mirroring the darwin userKernelGate pattern: tests stub it to
+// exercise flow logic on hosts the real guard refuses (Windows Server
+// runners) and must restore the previous value. It is nil in production, so
+// the Windows check in UserKernelCheck always runs its real guard; the Linux
+// and darwin checks keep their own platforms' guards.
+var UserKernelGate func() error

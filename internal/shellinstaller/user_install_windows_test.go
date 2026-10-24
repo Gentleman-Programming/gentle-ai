@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUserWindowsMainDescriptorReadback(t *testing.T) {
@@ -299,5 +300,49 @@ func TestUserWindowsMainExactSourceSet(t *testing.T) {
 				t.Fatalf("Main exact-set %s: %v", mutation, err)
 			}
 		})
+	}
+}
+
+// The post-publish verification must run on its own budget: the install
+// deadline is already spent when the stage is published, and an inherited
+// deadline would kill the verify and leave the installation "published ...
+// remains unqualified" (issue #5714).
+func TestUserWindowsVerifyContextSurvivesInheritedDeadline(t *testing.T) {
+	parent, cancelParent := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelParent()
+	verifyCtx, cancelVerify := userWindowsVerifyContext(parent)
+	defer cancelVerify()
+	deadline, ok := verifyCtx.Deadline()
+	if !ok {
+		t.Fatal("verify context carries no own deadline")
+	}
+	if remaining := time.Until(deadline); remaining > userWindowsVerifyBound {
+		t.Fatalf("verify budget %s exceeds its own bound %s", remaining, userWindowsVerifyBound)
+	}
+	time.Sleep(60 * time.Millisecond) // Let the inherited install deadline expire.
+	if err := parent.Err(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("parent deadline did not expire: %v", err)
+	}
+	if err := verifyCtx.Err(); err != nil {
+		t.Fatalf("post-publish verify was killed by the inherited deadline: %v", err)
+	}
+}
+
+// Dropping the inherited deadline must not drop the cooperative cancellation
+// channel: userWindowsCancelWatch cancels the worker context when the
+// supervisor signals GENTLE_SHELL_WINDOWS_CANCEL, and that stop request has
+// to reach the verify context as well.
+func TestUserWindowsVerifyContextRespectsCooperativeCancel(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	verifyCtx, cancelVerify := userWindowsVerifyContext(parent)
+	defer cancelVerify()
+	cancelParent() // What userWindowsCancelWatch does on the cooperative event.
+	select {
+	case <-verifyCtx.Done():
+		if cause := context.Cause(verifyCtx); !errors.Is(cause, context.Canceled) {
+			t.Fatalf("verify cancel cause: %v", cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cooperative cancellation did not reach the post-publish verify context")
 	}
 }

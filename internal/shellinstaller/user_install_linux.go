@@ -282,10 +282,76 @@ func userRecordUnit() error {
 	return errors.Join(writeErr, file.Close())
 }
 
+// userKernelMarker is the failure marker written in the unit receipt directory
+// when the inner kernel check fails: no receipt can exist in that case, so the
+// waiting outer process reads this marker to replace the generic uncertain
+// readback with the actual cause (#5713).
+const userKernelMarker = "kernel-check-failed"
+
+// userWriteKernelMarker records one kernel check failure for the outer
+// process. It stays inert without a delegated receipt selection and reports
+// write failures to the caller; the entry never upgrades them to refusals.
+func userWriteKernelMarker(cause error) error {
+	receipt := os.Getenv("GENTLE_SHELL_UNIT_RECEIPT")
+	if receipt == "" || filepath.Base(receipt) != "kernel.json" || cause == nil {
+		return nil
+	}
+	dir := filepath.Dir(receipt)
+	if _, err := privateDirectory(dir); err != nil {
+		return nil
+	}
+	text := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, strings.TrimSpace(cause.Error()))
+	if text == "" || len(text) > 4096 {
+		return nil
+	}
+	file, err := os.OpenFile(filepath.Join(dir, userKernelMarker), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write([]byte(text))
+	return errors.Join(writeErr, file.Close())
+}
+
+// userKernelMarkerCause reads the inner unit's kernel check failure marker;
+// an absent, oversized or non-printable marker keeps the generic message.
+func userKernelMarkerCause(receipt string) string {
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(receipt), userKernelMarker))
+	if err != nil || len(data) > 4096 {
+		return ""
+	}
+	cause := strings.TrimSpace(string(data))
+	for _, r := range cause {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return cause
+}
+
+// RunUserLaunchProbe exercises the delegated unit path exactly as a later
+// launch would: one short-lived unit that must pass the kernel check and
+// terminate with a physical receipt. It reuses the ordinary unit argument
+// builder and, since #5713, reports the inner check failure cause.
+func RunUserLaunchProbe(ctx context.Context, self string) error {
+	return userService(ctx, self, userLaunchProbeArgs(), nil, io.Discard, io.Discard)
+}
+
+func userLaunchProbeArgs() []string {
+	return []string{"internal-check"}
+}
+
 func userUnitReadback(receipt string) error {
 	var evidence userUnitEvidence
 	data, err := os.ReadFile(receipt)
 	if err != nil || len(data) > 4096 || json.Unmarshal(data, &evidence) != nil || !strings.HasPrefix(evidence.Path, "/sys/fs/cgroup/") || filepath.Clean(evidence.Path) != evidence.Path {
+		if cause := userKernelMarkerCause(receipt); cause != "" {
+			return fmt.Errorf("unit kernel check failed: %s", cause)
+		}
 		return errors.New("missing physical unit receipt; termination uncertain")
 	}
 	info, err := os.Stat(evidence.Path)
@@ -339,6 +405,9 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 	inner := strings.HasPrefix(args[0], "internal-")
 	if err := UserKernelCheck(); err != nil {
 		if inner {
+			// The unit cannot return a receipt without the kernel check passing;
+			// record the cause for the waiting outer process before returning.
+			_ = userWriteKernelMarker(err)
 			return err
 		}
 		forward := append([]string{"internal-" + args[0]}, args[1:]...)

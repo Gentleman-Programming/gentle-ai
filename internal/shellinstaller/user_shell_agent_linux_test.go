@@ -20,6 +20,12 @@ func agentModeFixture(t *testing.T) (target, agent string) {
 	if err := os.Mkdir(agent, 0755); err != nil {
 		t.Fatal(err)
 	}
+	// The guest umask (0055) strips the group/other bits from Mkdir's
+	// argument (0755 -> 0700); make the intended owned 0755 mode real
+	// regardless of umask.
+	if err := os.Chmod(agent, 0755); err != nil {
+		t.Fatal(err)
+	}
 	target = filepath.Join(parent, "installed")
 	return target, agent
 }

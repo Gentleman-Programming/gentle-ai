@@ -720,3 +720,56 @@ func TestUserToolExclusivePhysicalReadback(t *testing.T) {
 		t.Fatal("helper alias admitted")
 	}
 }
+
+func TestUserKernelMarker(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	receipt := filepath.Join(dir, "kernel.json")
+	t.Setenv("GENTLE_SHELL_UNIT_RECEIPT", receipt)
+	cause := errors.New(`leaf limits differ: memory.max="max"`)
+	privateMust(t, userWriteKernelMarker(cause))
+	data, err := os.ReadFile(filepath.Join(dir, userKernelMarker))
+	if err != nil || string(data) != cause.Error() {
+		t.Fatalf("kernel check marker lost the observed cause: %v %q", err, data)
+	}
+	if second := userWriteKernelMarker(cause); second == nil || !os.IsExist(second) {
+		t.Fatalf("kernel check marker replaced: %v", second)
+	}
+	if got := userKernelMarkerCause(receipt); got != cause.Error() {
+		t.Fatalf("kernel check marker cause readback differs: %q", got)
+	}
+	t.Setenv("GENTLE_SHELL_UNIT_RECEIPT", "")
+	if err := userWriteKernelMarker(cause); err != nil {
+		t.Fatalf("marker written without a delegated receipt: %v", err)
+	}
+	wrong := t.TempDir()
+	if err := os.Chmod(wrong, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GENTLE_SHELL_UNIT_RECEIPT", filepath.Join(wrong, "other.json"))
+	if err := userWriteKernelMarker(cause); err != nil {
+		t.Fatalf("marker written with an invalid receipt name: %v", err)
+	}
+}
+
+func TestUserUnitReadbackKernelMarkerCause(t *testing.T) {
+	dir := t.TempDir()
+	cause := `leaf limits differ: memory.max="max" want 3221225472/0/"100000 100000"/64`
+	privateMust(t, os.WriteFile(filepath.Join(dir, userKernelMarker), []byte(cause), 0600))
+	err := userUnitReadback(filepath.Join(dir, "kernel.json"))
+	if err == nil || !strings.Contains(err.Error(), `memory.max="max"`) || !strings.Contains(err.Error(), "unit kernel check failed") {
+		t.Fatalf("marker cause not attached to the uncertain failure: %v", err)
+	}
+	err = userUnitReadback(filepath.Join(t.TempDir(), "kernel.json"))
+	if err == nil || !strings.Contains(err.Error(), "missing physical unit receipt; termination uncertain") {
+		t.Fatalf("generic readback wording changed: %v", err)
+	}
+}
+
+func TestUserLaunchProbeUnitCheckArgs(t *testing.T) {
+	if args := userLaunchProbeArgs(); !reflect.DeepEqual(args, []string{"internal-check"}) {
+		t.Fatalf("launch probe does not recheck the kernel inside a unit: %v", args)
+	}
+}

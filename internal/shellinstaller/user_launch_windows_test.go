@@ -215,3 +215,25 @@ func TestUserWindowsLaunchUsesFastBoundary(t *testing.T) {
 		t.Fatalf("fast boundary received root %q; want %q", observedRoot, root)
 	}
 }
+
+// The Windows install entry runs the network-bound provision three times
+// (install, main-channel overlay, post-publish verify), so the external
+// install deadline must stay strictly above the npm budget of every provision
+// invocation it contains. A bound at or below that product reproduces issue
+// #5714: the deadline expires after the publish step and the installation is
+// reported unqualified.
+func TestUserWindowsInstallBoundCoversNpmNetworkBudget(t *testing.T) {
+	npm := userScriptsNpmNetworkTimeout(t)
+	if userWindowsNpmNetworkTimeout != npm {
+		t.Fatalf("userWindowsNpmNetworkTimeout %s differs from the scripts' NPM_NETWORK_TIMEOUT %s", userWindowsNpmNetworkTimeout, npm)
+	}
+	if userWindowsProvisionBound != userWindowsNpmNetworkTimeout {
+		t.Fatalf("userWindowsProvisionBound %s differs from the npm budget %s", userWindowsProvisionBound, userWindowsNpmNetworkTimeout)
+	}
+	if userWindowsInstallBound <= 3*userWindowsNpmNetworkTimeout {
+		t.Fatalf("userWindowsInstallBound %s does not exceed three network-bound provision invocations at the npm budget %s each", userWindowsInstallBound, userWindowsNpmNetworkTimeout)
+	}
+	if userWindowsVerifyBound < userWindowsNpmNetworkTimeout {
+		t.Fatalf("userWindowsVerifyBound %s does not cover one network-bound provision verify at the npm budget %s", userWindowsVerifyBound, userWindowsNpmNetworkTimeout)
+	}
+}

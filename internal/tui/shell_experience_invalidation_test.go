@@ -49,6 +49,7 @@ func TestShellExperienceEditingImmediatelyInvalidatesInspection(t *testing.T) {
 }
 
 func TestShellExperienceNonPrivateParentRefusesBeforeConsent(t *testing.T) {
+	stubShellKernelGate(t) // The real inspection (not the OS guard) must refuse the non-private parent.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	base := filepath.Join(home, ".local", "share", "gentle-shell")

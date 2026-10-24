@@ -119,6 +119,7 @@ func TestShellManageNoChangesIdentifiesInstallKind(t *testing.T) {
 }
 
 func TestShellManageChecksChannelUpdates(t *testing.T) {
+	stubShellKernelGate(t) // beginComponentUpdate inspects; the OS guard must not decide this flow.
 	_, target := managedInstallFixture(t)
 	m := NewModel(system.DetectionResult{}, "detected").WithShellInstaller()
 	m.Width, m.Height = 120, 35

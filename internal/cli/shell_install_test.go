@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -126,6 +127,15 @@ func TestShellInstallInternalCommandsRetainKernelChecks(t *testing.T) {
 				t.Fatalf("internal route bypassed or blocked kernel checks: got %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestShellInstallLaunchProbeIsWired(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the inline launch probe is Linux-only")
+	}
+	if reflect.ValueOf(shellLaunchProbe).Pointer() != reflect.ValueOf(shellinstaller.RunUserLaunchProbe).Pointer() {
+		t.Fatal("inline install does not probe the delegated unit path before claiming success")
 	}
 }
 

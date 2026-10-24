@@ -33,6 +33,12 @@ type userWindowsManifest struct {
 }
 
 func UserKernelCheck() error {
+	// UserKernelGate (user_experience_files.go) is the test seam mirroring the
+	// darwin userKernelGate pattern. It is unset in production, so the real
+	// qualification below always runs.
+	if UserKernelGate != nil {
+		return UserKernelGate()
+	}
 	version := windows.RtlGetVersion()
 	var processMachine, nativeMachine uint16
 	if err := windows.IsWow64Process2(windows.CurrentProcess(), &processMachine, &nativeMachine); err != nil {
@@ -227,6 +233,34 @@ func userWindowsManifestRead(root string) (userWindowsManifest, error) {
 type userWindowsProvisionDiagnostic struct {
 	data     []byte
 	withheld bool
+}
+
+// userWindowsVerifyBound budgets the complete post-publish verification: one
+// network-bound provision verify run plus headroom for the full archive
+// read-back and inventory walk.
+const userWindowsVerifyBound = 2 * userWindowsProvisionBound
+
+// userWindowsVerifyContext gives the post-publish verification its own budget,
+// decoupled from any inherited install deadline: by the time the stage is
+// published the install budget is spent, and killing the verification would
+// leave the installation "published ... remains unqualified" (issue #5714).
+// Dropping the inherited deadline must not drop the cooperative cancellation
+// channel, so a Done on the parent context is forwarded unless its cause is
+// the parent's own deadline; the worker context carries the cooperative
+// cancel channel (userWindowsCancelWatch) and console interrupts, never a
+// deadline of its own.
+func userWindowsVerifyContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	verifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), userWindowsVerifyBound)
+	go func() {
+		select {
+		case <-ctx.Done():
+			if context.Cause(ctx) != context.DeadlineExceeded {
+				cancel()
+			}
+		case <-verifyCtx.Done():
+		}
+	}()
+	return verifyCtx, cancel
 }
 
 func (d *userWindowsProvisionDiagnostic) Write(p []byte) (int, error) {
@@ -680,7 +714,12 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	} // No replace-existing flag.
 	published = true
 	fmt.Fprintln(os.Stderr, "Windows install phase: verify")
-	if err := userWindowsVerify(ctx, req.Destination, io.Discard, io.Discard); err != nil {
+	// The verification runs on its own budget: the install deadline is spent,
+	// and an inherited deadline here would leave the published installation
+	// unqualified (issue #5714). Cooperative cancellation still applies.
+	verifyCtx, cancelVerify := userWindowsVerifyContext(ctx)
+	defer cancelVerify()
+	if err := userWindowsVerify(verifyCtx, req.Destination, io.Discard, io.Discard); err != nil {
 		return result, errors.Join(err, errors.New("published Windows installation remains unqualified; preserved, no success reported"))
 	}
 	if err := userWindowsPublishLauncher(req.Destination); err != nil {
@@ -742,3 +781,8 @@ func userWindowsPublishLauncher(destination string) error {
 	closeErr := file.Close()
 	return errors.Join(writeErr, syncErr, closeErr)
 }
+
+// RunUserLaunchProbe is the Windows stub of the Linux delegated-unit launch
+// probe (#5713): Windows supervises the runtime through its own cooperative
+// worker, so there is no transient-unit precondition to prove here.
+func RunUserLaunchProbe(context.Context, string) error { return nil }
