@@ -304,6 +304,17 @@ type OpenCodeSettingsResult struct {
 // remains: in the settings, or as a markdown agent in agentDirs or in the
 // agent directories beside the settings file (agent/, agents/, and their
 // .opencode/ project spelling), all of which the runtime loads.
+
+// isDanglingSDDPromptRef reports whether prompt is a {file:...} reference
+// pointing into the retired prompts/sdd/ directory.
+func isDanglingSDDPromptRef(prompt string) bool {
+	match := promptFileRef.FindStringSubmatch(prompt)
+	if match == nil {
+		return false
+	}
+	cleaned := path.Clean(strings.ReplaceAll(match[1], "\\", "/"))
+	return cleaned == "prompts/sdd/" || strings.HasPrefix(cleaned, "prompts/sdd/")
+}
 func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCodeSettingsResult, error) {
 	result := OpenCodeSettingsResult{Path: settingsPath}
 	info, err := os.Lstat(settingsPath)
@@ -327,6 +338,8 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 	}
 	updated := raw
 	remaining := map[string]bool{}
+	// Track preserved entries with dangling prompt refs for later cleanup
+	danglingPrompts := map[string]string{} // section.name -> prompt value
 	for _, section := range []string{"agent", "agents"} {
 		agents, _ := root[section].(map[string]any)
 		var owned []string
@@ -342,6 +355,11 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 			case retired:
 				result.Preserved = append(result.Preserved, section+"."+name)
 				remaining[name] = true
+				// If the preserved entry has a dangling SDD prompt reference,
+				// track it for removal after the first pass.
+				if promptVal, ok := entry["prompt"].(string); ok && isDanglingSDDPromptRef(promptVal) {
+				danglingPrompts[section+"."+name] = promptVal
+				}
 			default:
 				remaining[name] = true
 			}
@@ -389,6 +407,18 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 	if err != nil {
 		return result, fmt.Errorf("retire SDD task permissions in %s: %w", settingsPath, err)
 	}
+	// If any preserved entries had dangling SDD prompt references, remove them now
+	// using RemoveJSONCMembers which preserves comments.
+	if len(danglingPrompts) > 0 {
+		for key := range danglingPrompts {
+			section, name, _ := strings.Cut(key, ".")
+			updated, _, err = filemerge.RemoveJSONCMembers(updated, []string{section, name}, []string{"prompt"}, false)
+			if err != nil {
+				return result, fmt.Errorf("remove dangling prompt from %s.%s: %w", section, name, err)
+			}
+		}
+	}
+
 	if string(updated) == string(raw) {
 		return result, nil
 	}
