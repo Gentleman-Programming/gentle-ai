@@ -31,7 +31,7 @@ func TestWithPostInstallNotesNamesOnlyTheInstalledRunnableAgents(t *testing.T) {
 			report := verify.Report{Ready: true, FinalNote: verify.ReadyMessage}
 			resolved := planner.ResolvedPlan{Agents: tt.agents}
 
-			updated := withPostInstallNotes(report, resolved)
+			updated := withPostInstallNotes(report, resolved, false)
 			hasClaude := strings.Contains(updated.FinalNote, "`claude`")
 			hasOpenCode := strings.Contains(updated.FinalNote, "`opencode`")
 			if hasClaude != tt.wantClaude {
@@ -54,7 +54,7 @@ func TestWithPostInstallNotesFallsBackWhenNoRunnableAgentSelected(t *testing.T) 
 	report := verify.Report{Ready: true, FinalNote: verify.ReadyMessage}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentAntigravity}}
 
-	updated := withPostInstallNotes(report, resolved)
+	updated := withPostInstallNotes(report, resolved, false)
 	if strings.Contains(updated.FinalNote, "claude") || strings.Contains(updated.FinalNote, "opencode") {
 		t.Fatalf("FinalNote names an agent that was never installed: %q", updated.FinalNote)
 	}
@@ -71,7 +71,7 @@ func TestWithPostInstallNotesDoesNotOverrideAnAlreadyCustomizedFinalNote(t *test
 	report := verify.Report{Ready: true, FinalNote: "You're ready."}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentClaudeCode}}
 
-	updated := withPostInstallNotes(report, resolved)
+	updated := withPostInstallNotes(report, resolved, false)
 	if updated.FinalNote != "You're ready." {
 		t.Fatalf("FinalNote changed unexpectedly: %q", updated.FinalNote)
 	}

@@ -7735,3 +7735,34 @@ func TestMarkPendingSyncUnderLockReReadsLatestStateAfterLockContention(t *testin
 		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
 	}
 }
+
+func TestCompletionViewOmitsGGAInstalledWhenInstallDeferred(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenComplete
+	m.Selection.Components = []model.ComponentID{model.ComponentGGA}
+
+	if view := m.View(); !strings.Contains(view, "GGA was installed globally") {
+		t.Fatalf("view without a deferred install should report GGA as installed:\n%s", view)
+	}
+
+	m.Execution.DeferredComponents = []model.ComponentID{model.ComponentGGA}
+	m.Execution.ManualActions = []string{cli.GGAHomebrewDeferredAction}
+	view := m.View()
+	if strings.Contains(view, "GGA was installed globally") {
+		t.Fatalf("view reports GGA as installed although its install was deferred:\n%s", view)
+	}
+	if !strings.Contains(view, "Install Homebrew") {
+		t.Fatalf("view is missing the Homebrew manual action:\n%s", view)
+	}
+}
+
+func TestInstalledComponentCountExcludesDeferredComponents(t *testing.T) {
+	selected := []model.ComponentID{model.ComponentPersona, model.ComponentGGA}
+
+	if got := installedComponentCount(selected, nil); got != 2 {
+		t.Fatalf("installedComponentCount() without deferrals = %d, want 2", got)
+	}
+	if got := installedComponentCount(selected, []model.ComponentID{model.ComponentGGA}); got != 1 {
+		t.Fatalf("installedComponentCount() with GGA deferred = %d, want 1", got)
+	}
+}
