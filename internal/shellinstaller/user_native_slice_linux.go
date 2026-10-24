@@ -40,8 +40,14 @@ func userNativeSliceCreateArgs(name string) []string {
 }
 
 func newUserNativeSlice(ctx context.Context) (*userNativeSlice, error) {
-	if ctx == nil || os.Getuid() == 0 {
+	if ctx == nil {
 		return nil, privateError("refused", nil)
+	}
+	if os.Getuid() == 0 {
+		if !RootRiskAccepted() {
+			return nil, &RootRiskRequiredError{}
+		}
+		return nil, privateError("refused", errors.New("root installation has no delegated user manager for the fresh native slice; create a regular user or track the system-slice root path"))
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

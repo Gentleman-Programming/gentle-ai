@@ -6,7 +6,8 @@ Other platforms: [macOS](gentle-shell-macos-install.md) and [Windows](gentle-she
 
 ## Requirements
 
-- Non-root Linux amd64; an already-qualified execution boundary or an existing delegated **systemd user manager >=254**. No sudo, system-manager, new-delegation or container fallback.
+- Non-root Linux amd64; an already-qualified execution boundary or an existing delegated **systemd user manager >=254**. No sudo, new-delegation or container fallback.
+- **Root opt-in**: root installs refuse by default with a full explanation. A root operator may accept the risk explicitly — `--accept-root-risk` on the CLI, or typing `I accept the risk` on the installer TUI warning screen — and every accepted root run then uses the same sandbox properties through a transient **system** unit, records `rootRisk` in the manifest, and prints a sandbox-disabled warning on every launch. Delegated operations refuse with named causes where root has no support (for example the fresh native slice); the private-sandbox guarantees never silently pretend to hold for root.
 - Physical execution checks: cgroup2, capabilities **0**, NoNewPrivs **1**, memory **3 GiB**, swap **0**, CPU **1**, tasks **64**. Missing prerequisites refuse before package JavaScript runs.
 - The manager route requires a physically trusted stock `/usr/bin/setpriv` (util-linux). It clears inherited/ambient capabilities and sets NoNewPrivs before the supervisor starts; the supervisor still verifies all four active capability sets, UID and exact cgroup limits. The manager and its bounding set are not reconfigured; this is not full Guest qualification.
 - Selected roots and target parent: owned, private and on one filesystem. Use absolute paths containing only ASCII letters, digits, `/`, `_`, `.` and `-`, including parents; aliases/collisions refuse. TARGET, selected prefix and agent must be mutually disjoint (none contains another).

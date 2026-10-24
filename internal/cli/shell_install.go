@@ -39,6 +39,7 @@ func parseShellInstall(args []string, stdout io.Writer) (shellinstaller.UserInst
 	flags.StringVar(&req.SharedPrefix, "prefix", "", "selected existing global Pi prefix")
 	flags.StringVar(&req.SharedAgent, "agent", "", "selected existing Pi configuration")
 	flags.StringVar(&req.Confirmation, "confirm", "", "physical selection SHA256")
+	acceptRootRisk := flags.Bool("accept-root-risk", false, "accept installing as root with the private sandbox disabled (Linux)")
 	inspect := flags.Bool("inspect", false, "inspect without installation")
 	finish := shellInstallPlatformFlags(flags, &req)
 	flags.Usage = func() { _, _ = io.WriteString(stdout, shellInstallHelp) }
@@ -50,6 +51,13 @@ func parseShellInstall(args []string, stdout io.Writer) (shellinstaller.UserInst
 	}
 	if err := finish(); err != nil {
 		return shellinstaller.UserInstallRequest{}, false, err
+	}
+	if *acceptRootRisk {
+		// The binding is the recorded operator consent; the kernel checks and
+		// the delegated system unit still enforce every physical requirement.
+		if err := os.Setenv(shellinstaller.RootRiskEnv, shellinstaller.RootRiskBinding); err != nil {
+			return shellinstaller.UserInstallRequest{}, false, err
+		}
 	}
 	return req, *inspect, nil
 }
@@ -102,6 +110,9 @@ func runShellInstallRequestWithEntry(ctx context.Context, self string, req shell
 }
 
 func runShellInstallRequestWithStreams(ctx context.Context, self string, req shellinstaller.UserInstallRequest, inspect bool, stdin io.Reader, stdout, stderr io.Writer, entry shellEntryRunner) error {
+	if err := shellinstaller.RootRiskGate(); err != nil {
+		return err
+	}
 	token, err := shellInstallInspect(req)
 	if err != nil {
 		return err
@@ -126,6 +137,9 @@ func runShellInstallRequestWithStreams(ctx context.Context, self string, req she
 func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection, report func(shellinstaller.UserInstallProgress), _ io.Writer) error {
 	if !selection.Confirmed {
 		return nil
+	}
+	if err := shellinstaller.RootRiskGate(); err != nil {
+		return err
 	}
 	if ctx == nil {
 		ctx = context.Background()

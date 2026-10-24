@@ -392,6 +392,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	userShellDetail(ctx, 4, 5, "Preparing the installation manifest")
 	manifest := userManifest{Schema: userSchema, Destination: req.Destination, Prefix: finalPrefix, Agent: finalAgent, Mode: req.Mode, SupervisorSHA: selfSHA, NodeSHA: privateNativeNodeSHA}
+	manifest.RootRisk = os.Getuid() == 0
 	manifest.MainSDK = mainSDK
 	// Shell installs never provision or record GGA; the bit stays false.
 	manifest.GGA = false
@@ -959,7 +960,21 @@ func userLaunchCommand(ctx context.Context, root string, manifest userManifest, 
 	return cmd // Empty Dir inherits the caller's project, not the installer stage.
 }
 
+// userRootRiskBanner warns on every launch of an installation running as
+// root: the delegated sandbox guarantees are disabled for that identity.
+func userRootRiskBanner(stderr io.Writer) {
+	userRootRiskBannerUID(stderr, os.Getuid())
+}
+
+func userRootRiskBannerUID(stderr io.Writer, uid int) {
+	if uid != 0 || stderr == nil {
+		return
+	}
+	_, _ = fmt.Fprintln(stderr, "WARNING: running as root; the private installation sandbox (capability drop, NoNewPrivileges, delegated unit limits) is disabled for this root-risk installation")
+}
+
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
+	userRootRiskBanner(stderr)
 	manifest, err := userReadManifest(ctx, root)
 	if err != nil {
 		return err

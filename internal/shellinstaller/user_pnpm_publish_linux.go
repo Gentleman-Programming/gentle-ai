@@ -72,7 +72,8 @@ func userPublishNativePNPMPrepared(ctx context.Context, source, stage, destinati
 	manifest := userManifest{
 		Schema: userSchema, Destination: destination, Mode: mode,
 		Prefix: filepath.Join(destination, "pnpm"), Agent: filepath.Join(destination, "agent"), SupervisorSHA: supervisorSHA, CodeGraph: codegraph,
-		PNPM: &userPNPMManifest{PackageRoot: strings.TrimSuffix(staged.Installation.ShellCLI, "/bin/gentle-shell.mjs"), ShellVersion: location.ShellVersion, PeerVersion: location.PiVersion, CodeSeal: staged.CodeSeal},
+		RootRisk: os.Getuid() == 0,
+		PNPM:     &userPNPMManifest{PackageRoot: strings.TrimSuffix(staged.Installation.ShellCLI, "/bin/gentle-shell.mjs"), ShellVersion: location.ShellVersion, PeerVersion: location.PiVersion, CodeSeal: staged.CodeSeal},
 	}
 	if mode == "agent" {
 		manifest.Agent = agent

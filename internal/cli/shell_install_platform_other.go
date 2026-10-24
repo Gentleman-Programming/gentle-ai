@@ -55,6 +55,9 @@ func runShellInstallTUI(ctx context.Context, cancel context.CancelFunc, self str
 	if err != nil || !selection.Confirmed {
 		return err
 	}
+	if err := shellinstaller.RootRiskGate(); err != nil {
+		return err
+	}
 	// Run only after Bubble Tea has restored the terminal and released stdin.
 	return shellinstaller.RunUserEntry(ctx, self, ShellInstallArguments(selection), os.Stdin, stdout, os.Stderr)
 }

@@ -9,6 +9,8 @@ gentle-ai shell install --target /owned/private-parent/shell --mode separate
   --mode shared --prefix /owned/selected-prefix --agent /owned/selected-agent
   --inspect                 print physical-selection confirmation without effects
   --confirm SHA256          approve that exact inspected selection
+  --accept-root-risk        root opt-in: accepts the disabled private sandbox,
+                            shows the same warning as the TUI acceptance screen
 No flags: dedicated installer TUI. Commands live in TARGET/bin, outside npm's bin.
 Installation also writes pinned fd and rg helpers to AGENT/bin, which stock Pi
 prefers over PATH: the private agent (Separate) or the selected --agent (Shared).
@@ -21,6 +23,8 @@ gentle-ai shell recover ROOT inspect
   Replace inspect with its printed confirmation to restore shared preimages.
 Requires Linux amd64 and qualified cgroup limits or an existing delegated
 systemd user manager >=254. No sudo, delegation creation or container fallback.
+Root is refused by default: --accept-root-risk or the TUI acceptance screen
+records the explicit warning consent; the sandbox stays disabled for root.
 No --channel: channel selection is Windows-only.
 `
 const shellInstallTitle = "Gentle Shell Linux user installer"

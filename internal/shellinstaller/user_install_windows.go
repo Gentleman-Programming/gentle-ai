@@ -112,7 +112,15 @@ func InspectUserInstall(req UserInstallRequest) (string, error) {
 		if err != nil || manifest.Identity != selected {
 			return "", errors.Join(err, errors.New("destination is not a completed owned Windows installation; no overwrite or recovery attempted"))
 		}
-		identity = selected
+		// A confirmed reconfigure retires the existing tree to its .replaced-
+		// backup before staging and publishes into the now-absent destination,
+		// so the confirmation binds to the publication-time state instead of
+		// the identity of the tree being replaced; the manifest check above
+		// still gates the retire. Without this, the mandatory pre-publication
+		// re-inspection can never match the wizard-approved token.
+		if !reconfigure {
+			identity = selected
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
