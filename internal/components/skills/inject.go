@@ -2,10 +2,13 @@ package skills
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
@@ -35,7 +38,7 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 	if skillDir == "" {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
-	result, err := InjectDirectoryWithCapability(skillDir, skillIDs, capability)
+	result, err := InjectDirectoryWithCapability(skillDir, skillIDs, capability, homeDir)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -107,8 +110,8 @@ func directoryAssets(skillDir string, skillIDs []model.SkillID, capability strin
 // InjectDirectoryWithCapability writes skills directly to an already-selected
 // skills directory. Operation-level compatibility refreshes use this to avoid
 // routing the shared directory through every selected agent adapter.
-func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
-	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, capability, filemerge.WriteFileAtomic)
+func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, capability string, homeDir string) (InjectionResult, error) {
+	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, capability, homeDir, filemerge.WriteFileAtomic)
 }
 
 // InjectDirectoryWithWriter refreshes the shared ~/.agents/skills
@@ -121,7 +124,9 @@ func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, ca
 // whether a file was removed and is responsible for only removing a regular
 // file.
 func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeFile func(string) (bool, error)) (InjectionResult, error) {
-	result, err := InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, "", writeFile)
+	// For backward compatibility, use os.UserHomeDir as fallback
+	homeDir, _ := os.UserHomeDir()
+	result, err := InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, "", homeDir, writeFile)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -143,13 +148,62 @@ func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeF
 	return result, nil
 }
 
+// backupExisting copies dest into the timestamped backup dir before the
+// injection overwrites it. The directory is private (the backups contain the
+// user's prompt content), the file keeps the source's mode, and the creation
+// is exclusive: two runs within the same second never truncate each other's
+// backups — a collision gets a numeric suffix. Best-effort: failures log and
+// let the injection proceed.
+func backupExisting(homeDir, skillDir, dest, timestamp string) {
+	rel, err := filepath.Rel(skillDir, dest)
+	if err != nil {
+		rel = dest
+	}
+	backupPath := filepath.Join(homeDir, ".gentle-ai", "backups", timestamp, rel)
+	if err := os.MkdirAll(filepath.Dir(backupPath), 0o700); err != nil {
+		log.Printf("skills: failed to create backup dir for %s: %v", dest, err)
+		return
+	}
+	srcFile, err := os.Open(dest)
+	if err != nil {
+		log.Printf("skills: failed to open existing file %s for backup: %v", dest, err)
+		return
+	}
+	defer srcFile.Close()
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		log.Printf("skills: failed to stat %s for backup: %v", dest, err)
+		return
+	}
+	if !srcInfo.Mode().IsRegular() {
+		log.Printf("skills: %s is not a regular file; skipping backup", dest)
+		return
+	}
+	dstFile, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, srcInfo.Mode())
+	for suffix := 1; err != nil && os.IsExist(err) && suffix <= 9; suffix++ {
+		dstFile, err = os.OpenFile(fmt.Sprintf("%s.%d", backupPath, suffix), os.O_WRONLY|os.O_CREATE|os.O_EXCL, srcInfo.Mode())
+	}
+	if err != nil {
+		log.Printf("skills: failed to create backup file %s: %v", backupPath, err)
+		return
+	}
+	defer dstFile.Close()
+	if _, copyErr := io.Copy(dstFile, srcFile); copyErr != nil {
+		log.Printf("skills: failed to backup %s to %s: %v", dest, backupPath, copyErr)
+	}
+}
+
 // InjectDirectoryWithCapabilityWithWriter writes skills with a caller-selected writer.
-func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.SkillID, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
+func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.SkillID, capability string, homeDir string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
 	entries, skipped, err := directoryAssets(skillDir, skillIDs, capability)
 	if err != nil {
 		return InjectionResult{}, err
 	}
 	result := InjectionResult{Files: make([]string, 0, len(entries)), Skipped: skipped}
+	if homeDir == "" {
+		homeDir, _ = os.UserHomeDir()
+	}
+	timestamp := time.Now().Format("20060102150405")
 	for _, entry := range entries {
 		content, err := assets.Read(entry.source)
 		if err != nil {
@@ -161,26 +215,23 @@ func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.S
 		if capability != "" {
 			content = extractModelSection(content, capability)
 		}
-		writeResult, err := writeFile(entry.destination, []byte(content), 0o644)
+		dest := entry.destination
+		// Backup existing file if present
+		if homeDir != "" {
+			if _, err := os.Stat(dest); err == nil {
+				backupExisting(homeDir, skillDir, dest, timestamp)
+			}
+		}
+		writeResult, err := writeFile(dest, []byte(content), 0o644)
 		if err != nil {
-			return InjectionResult{}, fmt.Errorf("write %q: %w", entry.destination, err)
+			return InjectionResult{}, fmt.Errorf("write %q: %w", dest, err)
 		}
 		result.Changed = result.Changed || writeResult.Changed
-		result.Files = append(result.Files, entry.destination)
+		result.Files = append(result.Files, dest)
 	}
 	return result, nil
 }
 
-// Inject writes the embedded SKILL.md files for each requested skill
-// to the correct directory for the given agent adapter.
-//
-// The skills directory is determined by adapter.SkillsDir(), removing
-// the need for any agent-specific switch statements.
-//
-// Retired SDD skill IDs are skipped; they cannot be restored by explicit selection.
-//
-// Individual skill failures (e.g., missing embedded asset) are logged
-// and skipped rather than aborting the entire operation.
 func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (InjectionResult, error) {
 	return InjectWithCapability(homeDir, adapter, skillIDs, "")
 }

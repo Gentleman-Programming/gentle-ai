@@ -588,7 +588,7 @@ func TestAdapterSkillBackupRollbackRemovesNewFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := componentskills.InjectDirectoryWithCapability(skillDir, selection.Skills, ""); err != nil {
+	if _, err := componentskills.InjectDirectoryWithCapability(skillDir, selection.Skills, "", home); err != nil {
 		t.Fatal(err)
 	}
 	created := filepath.Join(skillDir, "go-testing", "references", "examples.md")
