@@ -162,12 +162,26 @@
       "type": "object",
       "additionalProperties": false,
       "oneOf": [
-        {"required": ["scope_change"], "not": {"required": ["target_drift"]}},
-        {"required": ["target_drift"], "not": {"required": ["scope_change"]}}
+        {"required": ["scope_change"], "not": {"anyOf": [{"required": ["target_drift"]}, {"required": ["lens_budget"]}]}},
+        {"required": ["target_drift"], "not": {"anyOf": [{"required": ["scope_change"]}, {"required": ["lens_budget"]}]}},
+        {"required": ["lens_budget"], "not": {"anyOf": [{"required": ["scope_change"]}, {"required": ["target_drift"]}]}}
       ],
       "properties": {
         "scope_change": {"$ref": "#/$defs/scope_change"},
-        "target_drift": {"$ref": "#/$defs/target_drift"}
+        "target_drift": {"$ref": "#/$defs/target_drift"},
+        "lens_budget": {"$ref": "#/$defs/lens_budget"}
+      }
+    },
+    "lens_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime", "budget_bytes", "block_bytes"],
+      "properties": {
+        "runtime": {"type": "string"},
+        "budget_bytes": {"type": "integer", "minimum": 0},
+        "block_bytes": {"type": "integer", "minimum": 0},
+        "top_section": {"type": "string"},
+        "top_section_bytes": {"type": "integer", "minimum": 0}
       }
     }
   }
