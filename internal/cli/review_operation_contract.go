@@ -1520,7 +1520,7 @@ func (failure ReviewIntegrationFailure) Validate() error {
 			if failure.Code != "lens_context_budget_exceeded" ||
 				lensBudget.BudgetBytes <= 0 || lensBudget.BlockBytes <= lensBudget.BudgetBytes ||
 				lensBudget.TopSectionBytes < 0 || (lensBudget.TopSection == "") != (lensBudget.TopSectionBytes == 0) {
-				return errors.New("negotiated review lens-budget context does not measure an over-budget block")
+				return errors.New("negotiated review lens-budget context does not measure an over-budget block") // refusal:by-design world-action: a lens-budget context whose numbers do not describe an over-budget block was built wrong; only corrected producer code can emit a valid one
 			}
 		}
 	}
