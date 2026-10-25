@@ -9,20 +9,51 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mutationjournal"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mutationjournal"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // NativeAgentManifest is an explicit allowlist: never enumerate the embedded agents directory.
+//
+// Review agents (review-* lenses and the refuter) belong to receipt-driven
+// development and ship only to runtimes in model.SupportsReceiptDrivenDevelopment.
+// Judgment Day and Kimi's main agent are not RDD and stay where they are.
 var NativeAgentManifest = map[model.AgentID][]string{
 	model.AgentClaudeCode: {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md", "review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
-	model.AgentCursor:     {"review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
-	model.AgentKiroIDE:    {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md", "review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
-	model.AgentKimi:       {"gentleman.yaml", "review-readability.md", "review-readability.yaml", "review-refuter.md", "review-refuter.yaml", "review-reliability.md", "review-reliability.yaml", "review-resilience.md", "review-resilience.yaml", "review-risk.md", "review-risk.yaml"},
+	model.AgentKiroIDE:    {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
+	model.AgentCursor:     {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
+	model.AgentKimi:       {"gentleman.yaml"},
+}
+
+// RetiredNativeAgentManifest lists the review agents earlier releases installed
+// on runtimes without receipt-driven development. The installer removes a
+// retired file only when Gentle AI owns it: the ownership ledger records its
+// exact bytes, or the bytes equal the managed render. Anything else, including
+// a user's own agent under the same name, is preserved.
+var RetiredNativeAgentManifest = map[model.AgentID][]string{
+	model.AgentCursor:  {"review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
+	model.AgentKiroIDE: {"review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
+	model.AgentKimi:    {"review-readability.md", "review-readability.yaml", "review-refuter.md", "review-refuter.yaml", "review-reliability.md", "review-reliability.yaml", "review-resilience.md", "review-resilience.yaml", "review-risk.md", "review-risk.yaml"},
+}
+
+// NativeAgentsSupported reports whether the native agent installer handles a
+// runtime: it installs agents there, or removes retired ones.
+func NativeAgentsSupported(agent model.AgentID) bool {
+	_, installs := NativeAgentManifest[agent]
+	_, retires := RetiredNativeAgentManifest[agent]
+	return installs || retires
+}
+
+// NativeAgentFileNames lists every agent file the installer may write or
+// remove for a runtime, so a caller can snapshot all of them before it runs.
+func NativeAgentFileNames(agent model.AgentID) []string {
+	names := append([]string(nil), NativeAgentManifest[agent]...)
+	return append(names, RetiredNativeAgentManifest[agent]...)
 }
 
 type InstallOptions struct {
@@ -47,12 +78,15 @@ type claudeModelResolver interface {
 }
 
 // InstallNativeAgents installs only retained review, Judgment Day, and Kimi native agents.
-// It never removes existing files, including legacy SDD files or user-owned agents.
+// It never removes legacy SDD files or user-owned agents; it removes only the
+// retired review agents Gentle AI owns (see RetiredNativeAgentManifest).
+// legacyassets.RetireSDDAgents retires SDD agents after this runs.
 func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOptions) (InstallResult, error) {
-	names, supported := NativeAgentManifest[adapter.Agent()]
-	if !supported {
+	if !NativeAgentsSupported(adapter.Agent()) {
 		return InstallResult{}, fmt.Errorf("unsupported native agent runtime: %s", adapter.Agent())
 	}
+	names := NativeAgentManifest[adapter.Agent()]
+	retired := RetiredNativeAgentManifest[adapter.Agent()]
 	dir := adapter.SubAgentsDir(home)
 	if dir == "" {
 		return InstallResult{}, fmt.Errorf("empty native agents directory")
@@ -60,59 +94,27 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 	// Render all inputs before touching the target so missing embedded assets do not partially install.
 	rendered := make(map[string]string, len(names))
 	for _, name := range names {
-		path := adapter.EmbeddedSubAgentsDir() + "/" + name
-		source, err := assets.Read(path)
+		content, err := renderNativeAgent(adapter, name, opts)
 		if err != nil {
-			return InstallResult{}, fmt.Errorf("read native agent %s: %w", path, err)
-		}
-		content := source
-		if prompt, reviewer := RenderReviewerAsset(path, content); reviewer {
-			content = prompt
-		}
-		if strings.HasPrefix(name, "jd-judge-") {
-			content = replaceJudgmentSection(content, JudgmentDayReviewerContract())
-		}
-		phase := strings.TrimSuffix(name, ".md")
-		if kmr, ok := adapter.(kiroModelResolver); ok {
-			alias := model.KiroModelAuto
-			if selected, found := opts.KiroModelAssignments[phase]; found {
-				alias = selected
-			} else if selected, found := opts.KiroModelAssignments["default"]; found {
-				alias = selected
-			} else if opts.KiroModelAssignments == nil {
-				if selected, found := opts.ClaudeModelAssignments[phase]; found {
-					alias = model.KiroModelAlias(selected)
-				} else if selected, found := opts.ClaudeModelAssignments["default"]; found {
-					alias = model.KiroModelAlias(selected)
-				}
-			}
-			content = strings.ReplaceAll(content, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
-		}
-		if cmr, ok := adapter.(claudeModelResolver); ok {
-			assignment := resolveClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, phase)
-			content = strings.ReplaceAll(content, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(assignment.Model))
-			effort := ""
-			if assignment.Effort != model.ClaudeEffortDefault && model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
-				effort = "effort: " + string(assignment.Effort)
-			}
-			if effort == "" {
-				content = strings.ReplaceAll(content, "{{CLAUDE_EFFORT_FRONTMATTER}}\r\n", "")
-				content = strings.ReplaceAll(content, "{{CLAUDE_EFFORT_FRONTMATTER}}\n", "")
-			}
-			content = strings.ReplaceAll(content, "{{CLAUDE_EFFORT_FRONTMATTER}}", effort)
-		}
-		content = engramToolPlaceholder.ReplaceAllString(content, "mcp__engram__$1, mcp__plugin_engram_engram__$1")
-		if filepath.Ext(name) == ".md" {
-			content = InjectCodeGraphToolGrant(content, adapter.Agent(), opts.CodeGraphGuidanceMarkdown)
-			if strings.TrimSpace(opts.CodeGraphGuidanceMarkdown) != "" {
-				content = filemerge.InjectMarkdownSection(content, "codegraph-guidance", opts.CodeGraphGuidanceMarkdown)
-			}
-			content = filemerge.InjectMarkdownSection(content, "agent-language-contract", strings.TrimSpace(assets.MustRead("generic/agent-language-contract.md")))
-			content = agentguidance.InjectRemoteAuthorization(content)
+			return InstallResult{}, err
 		}
 		rendered[name] = content
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	retiredRendered := make(map[string]string, len(retired))
+	for _, name := range retired {
+		content, err := renderNativeAgent(adapter, name, opts)
+		if err != nil {
+			return InstallResult{}, err
+		}
+		retiredRendered[name] = content
+	}
+	if len(names) == 0 {
+		// A cleanup-only runtime never creates its agents directory: with no
+		// directory there is nothing earlier releases left behind to remove.
+		if _, err := os.Lstat(dir); os.IsNotExist(err) {
+			return InstallResult{}, nil
+		}
+	} else if err := os.MkdirAll(dir, 0o755); err != nil {
 		return InstallResult{}, fmt.Errorf("create native agents directory: %w", err)
 	}
 	ledgerFile := ledgerPath(dir)
@@ -121,7 +123,7 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 	if err := journal.Capture(ledgerFile); err != nil {
 		return InstallResult{}, fmt.Errorf("capture ownership ledger: %w", err)
 	}
-	ledger, _, err := readOwnership(ledgerFile, names)
+	ledger, ledgerExists, err := readOwnership(ledgerFile, append(append([]string(nil), names...), retired...))
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -145,7 +147,10 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 			return result, err
 		}
 		expected, known := ledger.Files[name]
-		owned := exists && known && installedHash(data) == expected
+		// A file a release shipped before the ledger existed (v3 Kimi
+		// gentleman.yaml, which declares every SDD subagent) is owned by
+		// those exact bytes, so retiring SDD can rewrite it (#5253).
+		owned := exists && ((known && installedHash(data) == expected) || legacyassets.OwnsPreLedgerNativeAgent(adapter.Agent(), name, data))
 		if exists && !owned {
 			result.Skipped = append(result.Skipped, path)
 		}
@@ -157,6 +162,17 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 	// A legacy installation with every candidate skipped has no owned bytes
 	// to record. Do not create a ledger merely because it was absent.
 	ledgerChanged := false
+	for _, name := range retired {
+		removed, dropped, err := removeRetiredNativeAgent(journal, dir, name, ledger, retiredRendered[name])
+		if err != nil {
+			return rollback(err)
+		}
+		if removed != "" {
+			result.Changed = true
+			result.Files = append(result.Files, removed)
+		}
+		ledgerChanged = ledgerChanged || dropped
+	}
 	for _, c := range candidates {
 		if c.exists && !c.owned {
 			continue
@@ -183,7 +199,14 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 			ledgerChanged = true
 		}
 	}
-	if ledgerChanged {
+	if ledgerChanged && len(ledger.Files) == 0 && ledgerExists {
+		// Every entry belonged to a retired agent: an empty ledger owns nothing.
+		if _, err := journal.Remove(ledgerFile); err != nil {
+			return rollback(fmt.Errorf("remove ownership ledger: %w", err))
+		}
+		result.Changed = true
+		result.Files = append(result.Files, ledgerFile)
+	} else if ledgerChanged {
 		encoded, err := json.MarshalIndent(ledger, "", "  ")
 		if err != nil {
 			return rollback(fmt.Errorf("encode ownership ledger: %w", err))
@@ -196,6 +219,102 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 		result.Files = append(result.Files, ledgerFile)
 	}
 	return result, nil
+}
+
+// renderNativeAgent renders one embedded native agent for adapter exactly as
+// the installer writes it.
+func renderNativeAgent(adapter agents.Adapter, name string, opts InstallOptions) (string, error) {
+	path := adapter.EmbeddedSubAgentsDir() + "/" + name
+	source, err := assets.Read(path)
+	if err != nil {
+		return "", fmt.Errorf("read native agent %s: %w", path, err)
+	}
+	content := source
+	if prompt, reviewer := RenderReviewerAsset(path, content); reviewer {
+		content = prompt
+	}
+	if strings.HasPrefix(name, "jd-judge-") {
+		content = replaceJudgmentSection(content, JudgmentDayReviewerContract())
+	}
+	phase := strings.TrimSuffix(name, ".md")
+	if kmr, ok := adapter.(kiroModelResolver); ok {
+		alias := model.KiroModelAuto
+		if selected, found := opts.KiroModelAssignments[phase]; found {
+			alias = selected
+		} else if selected, found := opts.KiroModelAssignments["default"]; found {
+			alias = selected
+		} else if opts.KiroModelAssignments == nil {
+			if selected, found := opts.ClaudeModelAssignments[phase]; found {
+				alias = model.KiroModelAlias(selected)
+			} else if selected, found := opts.ClaudeModelAssignments["default"]; found {
+				alias = model.KiroModelAlias(selected)
+			}
+		}
+		content = strings.ReplaceAll(content, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
+	}
+	if cmr, ok := adapter.(claudeModelResolver); ok {
+		assignment := resolveClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, phase)
+		content = strings.ReplaceAll(content, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(assignment.Model))
+		effort := ""
+		if assignment.Effort != model.ClaudeEffortDefault && model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
+			effort = "effort: " + string(assignment.Effort)
+		}
+		if effort == "" {
+			content = strings.ReplaceAll(content, "{{CLAUDE_EFFORT_FRONTMATTER}}\r\n", "")
+			content = strings.ReplaceAll(content, "{{CLAUDE_EFFORT_FRONTMATTER}}\n", "")
+		}
+		content = strings.ReplaceAll(content, "{{CLAUDE_EFFORT_FRONTMATTER}}", effort)
+	}
+	content = engramToolPlaceholder.ReplaceAllString(content, "mcp__engram__$1, mcp__plugin_engram_engram__$1")
+	if filepath.Ext(name) == ".md" {
+		content = InjectCodeGraphToolGrant(content, adapter.Agent(), opts.CodeGraphGuidanceMarkdown)
+		if strings.TrimSpace(opts.CodeGraphGuidanceMarkdown) != "" {
+			content = filemerge.InjectMarkdownSection(content, "codegraph-guidance", opts.CodeGraphGuidanceMarkdown)
+		}
+		content = filemerge.InjectMarkdownSection(content, "agent-language-contract", strings.TrimSpace(assets.MustRead("generic/agent-language-contract.md")))
+		content = agentguidance.InjectRemoteAuthorization(content)
+	}
+	return content, nil
+}
+
+// removeRetiredNativeAgent removes one retired agent file when Gentle AI owns
+// it and drops its ledger entry either way, since the runtime no longer
+// manages that name. It returns the removed path and whether the ledger
+// changed. A symlink or other non-regular file is never ours to delete.
+func removeRetiredNativeAgent(journal *mutationjournal.Journal, dir, name string, ledger ownershipLedger, managed string) (string, bool, error) {
+	path := filepath.Join(dir, name)
+	recorded, known := ledger.Files[name]
+	delete(ledger.Files, name)
+
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return "", known, nil
+	}
+	if err != nil {
+		return "", known, fmt.Errorf("stat retired native agent %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", known, nil
+	}
+	if err := journal.Validate(path); err != nil {
+		return "", known, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", known, fmt.Errorf("read retired native agent %s: %w", path, err)
+	}
+	owned := (known && installedHash(data) == recorded) || string(data) == managed
+	if !owned {
+		return "", known, nil
+	}
+	removed, err := journal.Remove(path)
+	if err != nil {
+		return "", known, fmt.Errorf("remove retired native agent %s: %w", path, err)
+	}
+	if !removed {
+		return "", known, nil
+	}
+	return path, known, nil
 }
 
 func resolveClaudeAssignment(legacy map[string]model.ClaudeModelAlias, phases map[string]model.ClaudePhaseAssignment, phase string) model.ClaudePhaseAssignment {

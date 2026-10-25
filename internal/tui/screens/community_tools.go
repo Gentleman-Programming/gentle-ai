@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 func RenderCommunityTools(selected []model.CommunityToolID, cursor int, statuses []communitytool.Status, loading bool, statusErr error) string {
 	var b strings.Builder
-	b.WriteString(styles.TitleStyle.Render("Community Tools/Plugins"))
+	b.WriteString(styles.TitleStyle.Render("Community Tools"))
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Optional cross-agent tools Gentle AI can install and wire for you."))
 	b.WriteString("\n\n")
@@ -76,7 +76,7 @@ func CommunityToolsOptionCount() int {
 
 func RenderCommunityToolInstalling(selected []model.CommunityToolID, spinner string, statuses []communitytool.Status) string {
 	var b strings.Builder
-	b.WriteString(styles.TitleStyle.Render("Community Tools/Plugins"))
+	b.WriteString(styles.TitleStyle.Render("Community Tools"))
 	b.WriteString("\n\n")
 	b.WriteString(styles.SelectedStyle.Render(fmt.Sprintf("%s Installing community tools…", spinner)))
 	b.WriteString("\n")
@@ -90,8 +90,12 @@ func RenderCommunityToolInstalling(selected []model.CommunityToolID, spinner str
 	}
 	if len(statuses) > 0 {
 		for _, status := range statuses {
-			_, configured, missing := status.DetectedConfiguredMissingCounts()
-			b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("Current %s state: %d configured, %d missing detected agent wiring", statusName(status.Tool), configured, missing)))
+			detected, configured, missing := status.DetectedConfiguredMissingCounts()
+			line := fmt.Sprintf("Current %s state: %d configured, %d missing detected agent wiring", statusName(status.Tool), configured, missing)
+			if pending := detected - configured - missing; pending > 0 {
+				line += fmt.Sprintf(", %d pending", pending)
+			}
+			b.WriteString(styles.SubtextStyle.Render(line))
 			b.WriteString("\n")
 		}
 	}
@@ -112,7 +116,11 @@ func renderCommunityToolStatus(b *strings.Builder, status communitytool.Status) 
 	b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("%s CLI: %s", statusName(status.Tool), cli)))
 	b.WriteString("\n")
 	detected, configured, missing := status.DetectedConfiguredMissingCounts()
-	b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("Agent wiring: %d detected • %d configured • %d missing", detected, configured, missing)))
+	summary := fmt.Sprintf("Agent wiring: %d detected • %d configured • %d missing", detected, configured, missing)
+	if pending := detected - configured - missing; pending > 0 {
+		summary += fmt.Sprintf(" • %d pending", pending)
+	}
+	b.WriteString(styles.SubtextStyle.Render(summary))
 	b.WriteString("\n")
 	for _, agent := range status.Agents {
 		if !agent.Detected {
@@ -121,6 +129,8 @@ func renderCommunityToolStatus(b *strings.Builder, status communitytool.Status) 
 		marker := "missing"
 		if agent.Configured {
 			marker = "configured"
+		} else if agent.Status == communitytool.AgentStatusPending {
+			marker = "pending"
 		}
 		line := fmt.Sprintf("  - %s: %s", agent.Name, marker)
 		if agent.Path != "" {

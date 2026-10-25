@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // claudeCommandSkillCollisions lists command names shadowed by skill directories.

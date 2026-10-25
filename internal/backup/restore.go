@@ -1,12 +1,14 @@
 package backup
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 )
 
 // UserHomeDirFn is the function used to resolve the user's home directory.
@@ -316,8 +318,9 @@ func (s RestoreService) restoreCompressed(manifest Manifest) error {
 		case PathKindRegularFile:
 			// PathKindRegularFile explicitly opts into deletion semantics:
 			// the install may have created this file and the manifest
-			// records it as absent, so it is safe to delete.
-			if err := os.Remove(entry.OriginalPath); err != nil && !os.IsNotExist(err) {
+			// records it as absent, so it is safe to delete. ENOTDIR means a
+			// regular file ancestor already proves it absent; keep that file.
+			if err := os.Remove(entry.OriginalPath); err != nil && !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR) {
 				return fmt.Errorf("remove path %q: %w", entry.OriginalPath, err)
 			}
 		default:
@@ -374,8 +377,9 @@ func (s RestoreService) restorePlain(manifest Manifest) error {
 		// !Existed branch: what to do depends on Kind.
 		switch entry.Kind {
 		case PathKindRegularFile:
-			// PathKindRegularFile explicitly opts into deletion semantics.
-			if err := os.Remove(entry.OriginalPath); err != nil && !os.IsNotExist(err) {
+			// PathKindRegularFile explicitly opts into deletion semantics;
+			// ENOTDIR is absence below a regular file, as in restoreCompressed.
+			if err := os.Remove(entry.OriginalPath); err != nil && !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTDIR) {
 				return fmt.Errorf("remove path %q: %w", entry.OriginalPath, err)
 			}
 		default:
@@ -417,7 +421,7 @@ func restoreEntry(entry ManifestEntry, trustedSnapshot bool, roots []string) err
 		return fmt.Errorf("create restore directory for %q: %w", entry.OriginalPath, err)
 	}
 
-	if _, err := filemerge.WriteFileAtomic(entry.OriginalPath, content, os.FileMode(entry.Mode)); err != nil {
+	if _, err := filemerge.WriteFileAtomicMode(entry.OriginalPath, content, os.FileMode(entry.Mode)); err != nil {
 		return fmt.Errorf("restore path %q: %w", entry.OriginalPath, err)
 	}
 

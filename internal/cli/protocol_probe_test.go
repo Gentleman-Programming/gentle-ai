@@ -5,16 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/qwen"
-	runtimeopencode "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/qwen"
+	runtimeopencode "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
 )
 
 // telemetryTestSpawnRecorder is the RecordingSpawner installed as
@@ -56,6 +58,25 @@ var telemetryTestSpawnRecorder *telemetry.RecordingSpawner
 // TestRunInstallRefusesMissingKimiRegardlessOfUVPresence for that opposite,
 // deliberately-kept case.
 func TestMain(m *testing.M) {
+	if os.Getenv("GENTLE_AI_TEST_BREW_FIXTURE") == "1" {
+		os.Exit(runPortableBrewFixture())
+	}
+	// Neutralize ambient agent runtime-dir overrides (PI_CODING_AGENT_DIR,
+	// OPENCODE_CONFIG_DIR) before anything else, including before the
+	// stand-in re-exec branch below: this package's catalog.AllAgents() loops
+	// and RunInstall/RunSync calls resolve Pi's config path directly from the
+	// environment, and a developer shell exporting PI_CODING_AGENT_DIR
+	// (Gentle Shell does) would otherwise redirect these tests into the real
+	// ~/.pi regardless of the sandboxed HOME set up below.
+	testenv.Isolate()
+	// The default fake is V1; an inherited host declaration must not override
+	// it, including in stand-in subprocesses. V2 tests set their own declaration.
+	// The un-stubbed real-host E2E keeps both for its relay stand-in (below).
+	inheritedRelayDeclaration, relayDeclared := os.LookupEnv(openCodeRelayContractEnvironment)
+	realVersionRunner := runtimeopencode.VersionRunnerOverride
+	if err := os.Unsetenv(openCodeRelayContractEnvironment); err != nil {
+		panic(err)
+	}
 	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
 		return runtimeopencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
 	}
@@ -82,11 +103,33 @@ func TestMain(m *testing.M) {
 		// here without an import cycle): strip the verb, reject anything else,
 		// and run the real flag parsing and sync execution.
 		args := os.Args[1:]
-		if len(args) == 0 || args[0] != "sync" {
+		var err error
+		switch {
+		case len(args) > 0 && args[0] == "sync":
+			_, err = RunSync(args[1:])
+		case len(args) == 2 && args[0] == "review" && args[1] == "opencode-transport":
+			// The real OpenCode V2 host E2E (review_opencode_v2_host_e2e_test.go)
+			// reaches the real Go relay through this stand-in. By default it is a
+			// TEST-ONLY STUB: the declaration the managed plugin sets is unset and
+			// the version runner reports V1 (both above), so the capability gate
+			// is stubbed open as V1 and the gate itself is not proven. With
+			// GENTLE_AI_TEST_STANDIN_REAL_CAPABILITY_GATE=1 the stand-in restores
+			// the plugin's inherited declaration and the production version
+			// runner, so the real gate decides against the real V2 host binary.
+			if os.Getenv(openCodeV2StandInRealGateEnvironment) == "1" {
+				if relayDeclared {
+					if err := os.Setenv(openCodeRelayContractEnvironment, inheritedRelayDeclaration); err != nil {
+						panic(err)
+					}
+				}
+				runtimeopencode.VersionRunnerOverride = realVersionRunner
+			}
+			err = RunReview(args[1:], os.Stdout)
+		default:
 			fmt.Fprintf(os.Stderr, "stand-in: unsupported CLI arguments %q\n", args)
 			os.Exit(1)
 		}
-		if _, err := RunSync(args[1:]); err != nil {
+		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -95,6 +138,10 @@ func TestMain(m *testing.M) {
 	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
 		panic(err)
 	}
+	// Go derives its module and build caches from HOME. Pin them to the
+	// developer's existing caches before HOME moves, so tests that build the
+	// real CLI (TestCursorJudgmentDayCLISmoke) never need the network.
+	pinGoCachesBeforeHomeIsolation()
 	testHome, err := os.MkdirTemp("", "gentle-ai-cli-test-home-*")
 	if err != nil {
 		panic(err)
@@ -143,4 +190,22 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(testHome)
 	os.Exit(code)
+}
+
+// pinGoCachesBeforeHomeIsolation keeps explicit GOPATH/GOMODCACHE/GOCACHE
+// values and otherwise records Go's HOME-derived defaults as explicit values,
+// so swapping HOME for a temporary directory does not empty the caches.
+func pinGoCachesBeforeHomeIsolation() {
+	if home, err := os.UserHomeDir(); err == nil && os.Getenv("GOPATH") == "" {
+		if err := os.Setenv("GOPATH", filepath.Join(home, "go")); err != nil {
+			panic(err)
+		}
+	}
+	if os.Getenv("GOCACHE") == "" {
+		if cache, err := os.UserCacheDir(); err == nil {
+			if err := os.Setenv("GOCACHE", filepath.Join(cache, "go-build")); err != nil {
+				panic(err)
+			}
+		}
+	}
 }

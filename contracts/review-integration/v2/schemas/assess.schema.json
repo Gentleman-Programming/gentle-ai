@@ -38,11 +38,11 @@
     },
     "review_due": {
       "type": "boolean",
-      "description": "Whether an orchestrator should run the review preflight now. False when the candidate is consumed or passive, or when it is medium risk under the changed_lines slice budget; true for high risk, or for medium risk at or over reviewtransaction.LargeChangeLines (400) changed_lines. changed_lines is whatever range the caller assessed: run with --base-ref <last reviewed boundary> --committed-only to make it the accumulated ODD slice."
+      "description": "Whether an orchestrator should run the review preflight now. False when the candidate is consumed, passive, or medium risk; true for high risk. slice_budget_reached is no longer emitted and remains in the reason enum only so earlier results stay valid. changed_lines is whatever range the caller assessed: run with --base-ref <last reviewed boundary> --committed-only to make it the accumulated ODD slice."
     },
     "review_due_reason": {
       "enum": ["high_risk", "slice_budget_reached", "passive", "under_budget", "already_reviewed"],
-      "description": "The exact rule that produced review_due, in evaluation order: already_reviewed (candidate consumed) beats high_risk, which beats slice_budget_reached, which beats under_budget and passive."
+      "description": "The exact rule that produced review_due, in evaluation order: already_reviewed (candidate consumed) beats high_risk, which beats under_budget (medium) and passive."
     },
     "next_transition": {
       "type": "object",

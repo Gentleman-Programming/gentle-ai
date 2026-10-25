@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // IsSDDSkill identifies retired SDD skill IDs retained for compatibility.
@@ -35,7 +35,17 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 	if skillDir == "" {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
-	return InjectDirectoryWithCapability(skillDir, skillIDs, capability)
+	result, err := InjectDirectoryWithCapability(skillDir, skillIDs, capability)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	support, err := injectSupportFiles(homeDir, adapter, skillDir, skillIDs)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	result.Changed = result.Changed || support.Changed
+	result.Files = append(result.Files, support.Files...)
+	return result, nil
 }
 
 type directoryAsset struct {
@@ -101,10 +111,36 @@ func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, ca
 	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, capability, filemerge.WriteFileAtomic)
 }
 
-// InjectDirectoryWithWriter writes ordinary skills with a caller-selected writer.
-// Compatibility refreshes use this to keep their physical-directory contract.
-func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
-	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, "", writeFile)
+// InjectDirectoryWithWriter refreshes the shared ~/.agents/skills
+// compatibility root with a caller-selected writer, keeping its
+// physical-directory contract. Besides the selected skills it writes the
+// skills/_shared references bound to the generic runtime slot, because every
+// runtime reads this root (v3.7.0 behavior, #4471). It then removes the
+// obsolete LegacySharedMarkerPath through removeFile, so every transaction
+// implementation converges on the same on-disk result. removeFile reports
+// whether a file was removed and is responsible for only removing a regular
+// file.
+func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error), removeFile func(string) (bool, error)) (InjectionResult, error) {
+	result, err := InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, "", writeFile)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	shared, err := injectSharedReferences(skillDir, compatibilityRuntimeSlot, writeFile)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	result.Changed = result.Changed || shared.Changed
+	result.Files = append(result.Files, shared.Files...)
+	marker := LegacySharedMarkerPath(skillDir)
+	removed, err := removeFile(marker)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("remove legacy compatibility shared marker: %w", err)
+	}
+	if removed {
+		result.Changed = true
+		result.Files = append(result.Files, marker)
+	}
+	return result, nil
 }
 
 // InjectDirectoryWithCapabilityWithWriter writes skills with a caller-selected writer.

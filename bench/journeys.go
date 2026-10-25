@@ -897,6 +897,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue3043Journeys()...)
 	journeys = append(journeys, issue3557Journeys()...)
 	journeys = append(journeys, issue3561Journeys()...)
+	journeys = append(journeys, issue3565Journeys()...)
 	journeys = append(journeys, repositoryContextJourneys()...)
 	journeys = append(journeys, providerCaptureRetryJourneys()...)
 	journeys = append(journeys, capturedProviderValidatorJourneys()...)
@@ -910,6 +911,8 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue4395Journeys()...)
 	journeys = append(journeys, issue3813Journeys()...)
 	journeys = append(journeys, stopHookJourneys()...)
+	journeys = append(journeys, issue2995Journeys()...)
+	journeys = append(journeys, issue4772Journeys()...)
 	journeys = removeRetiredAtomicJourneys(journeys)
 	return declareCoreJourneyReviewModes(journeys)
 }

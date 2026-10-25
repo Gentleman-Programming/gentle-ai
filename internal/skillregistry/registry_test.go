@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/trae"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/trae"
 )
 
 func TestRegenerateWritesRegistryAndCacheThenHitsCache(t *testing.T) {
@@ -443,6 +443,7 @@ func TestUserSkillDirsIncludesSupportedAgentSkillLocations(t *testing.T) {
 		filepath.Join(home, ".codex", "skills"),
 		filepath.Join(home, ".codeium", "windsurf", "skills"),
 		filepath.Join(home, ".config", "agents", "skills"),
+		filepath.Join(home, ".kimi-code", "skills"),
 		filepath.Join(home, ".kimi", "skills"),
 		filepath.Join(home, ".qwen", "skills"),
 		filepath.Join(home, ".kiro", "skills"),
@@ -751,6 +752,37 @@ func TestListReturnsDedupedEntriesWithoutWriting(t *testing.T) {
 	// List is read-only: it must not write the registry or cache.
 	if _, err := os.Stat(filepath.Join(cwd, RegistryRelPath)); !os.IsNotExist(err) {
 		t.Fatalf("List wrote registry (stat err = %v), want it absent", err)
+	}
+}
+
+// TestListKeepsSharedUserSkillBeforeKimiCodeNativeSkills verifies that a
+// skill name present in both the shared user skills root and the current
+// kimi-code native skills root resolves to the shared user copy: the
+// .config/agents/skills source precedes .kimi-code/skills in UserSkillDirs,
+// so dedupeBySkillName keeps the earlier entry while project skills still
+// beat both (issue #782 review).
+func TestListKeepsSharedUserSkillBeforeKimiCodeNativeSkills(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	writeSkill(t, filepath.Join(home, ".config", "agents", "skills", "shared", "SKILL.md"),
+		"---\nname: shared\ndescription: shared user copy\n---\n")
+	writeSkill(t, filepath.Join(home, ".kimi-code", "skills", "shared", "SKILL.md"),
+		"---\nname: shared\ndescription: kimi-code native copy\n---\n")
+
+	entries := List(cwd, home)
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	if want := filepath.Join(home, ".config", "agents", "skills", "shared", "SKILL.md"); entries[0].Path != want {
+		t.Fatalf("entries[0].Path = %q, want the shared user copy %q", entries[0].Path, want)
+	}
+
+	// Project-local skills must still outrank both user-level roots.
+	writeSkill(t, filepath.Join(cwd, "skills", "shared", "SKILL.md"),
+		"---\nname: shared\ndescription: project copy\n---\n")
+	entries = List(cwd, home)
+	if len(entries) != 1 || entries[0].Description != "project copy" {
+		t.Fatalf("entries = %#v, want the project copy to win", entries)
 	}
 }
 

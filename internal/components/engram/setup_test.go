@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestParseSetupModeDefaultsToSupported(t *testing.T) {
@@ -62,6 +62,7 @@ func TestSetupAgentSlug(t *testing.T) {
 		{model.AgentQwenCode, "", false},
 		{model.AgentCursor, "", false},
 		{model.AgentVSCodeCopilot, "", false},
+		{model.AgentGitHubCopilotCLI, "", false},
 		// Hermes MCP is injected directly via YAML helpers — no engram setup slug.
 		{model.AgentHermes, "", false},
 	}

@@ -14,9 +14,11 @@ import (
 	"unicode/utf8"
 )
 
-// LargeChangeLines is a review-composition boundary, not a tier input. Volume
-// deliberately no longer selects a review tier: a five-line authorization edit
-// outranks a five-thousand-line mechanical rename, so only evidence escalates.
+// LargeChangeLines is a review-composition boundary, not a general tier input.
+// Volume deliberately no longer selects a review tier: a five-line
+// authorization edit outranks a five-thousand-line mechanical rename, so only
+// evidence escalates. The single exception is the RDD authority files, whose
+// own changed lines reaching this boundary select focused 4R by size.
 const LargeChangeLines = 400
 const MaxCorrectionChangedLines = 200
 
@@ -42,7 +44,9 @@ const (
 type RiskSignal string
 
 const (
-	SignalAuth          RiskSignal = "auth"
+	SignalAuth RiskSignal = "auth"
+	// SignalUpdate is no longer derived from the update path token. It stays
+	// declared so frozen authorities and their published reasons still read back.
 	SignalUpdate        RiskSignal = "update"
 	SignalSecurity      RiskSignal = "security"
 	SignalPayments      RiskSignal = "payments"
@@ -51,6 +55,9 @@ const (
 	SignalPermissions   RiskSignal = "permissions"
 	SignalShellProcess  RiskSignal = "shell_process"
 	SignalDangerousSink RiskSignal = "dangerous_sink"
+	// SignalAgentEscalation is never derived from the snapshot: it marks the
+	// agent that made the change raising its review to high (S14).
+	SignalAgentEscalation RiskSignal = "agent_escalation"
 )
 
 type DiffStat struct {
@@ -87,6 +94,10 @@ const (
 	// it is a separate code because the two state different facts. Reporting an
 	// empty file as an executable change describes content that is not there.
 	RiskReasonEmptyContent RiskReasonCode = "empty_content"
+	// RiskReasonAgentEscalation reports an agent escalation frozen at START
+	// (CompactAgentEscalation), not snapshot evidence; the classifier never
+	// emits it.
+	RiskReasonAgentEscalation RiskReasonCode = "agent_escalation"
 )
 
 // RiskReason records only evidence derivable from the immutable snapshot.
@@ -146,6 +157,51 @@ func SelectReviewLenses(assessment RiskAssessment, focus string) ([]string, erro
 	default:
 		return nil, fmt.Errorf("unsupported review risk %q", assessment.Level)
 	}
+}
+
+// SelectAgentReviewLenses honors the agent's own lens choice for a reviewed
+// tier (verify-always-rdd-high S8): every named lens runs, in canonical order,
+// on medium and high alike. A structural-readback tier has no reviewers.
+func SelectAgentReviewLenses(assessment RiskAssessment, lenses []string) ([]string, error) {
+	if assessment.Level != RiskMedium && assessment.Level != RiskHigh {
+		return nil, fmt.Errorf("an agent lens selection needs a medium or high risk review, not %q", assessment.Level) // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+	}
+	chosen := map[string]bool{}
+	for _, lens := range lenses {
+		canonical, ok := ReviewLensFor(lens)
+		if !ok {
+			return nil, fmt.Errorf("unknown review lens %q", lens) // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+		}
+		if chosen[canonical] {
+			return nil, fmt.Errorf("repeated review lens %q", canonical) // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+		}
+		chosen[canonical] = true
+	}
+	selected := make([]string, 0, len(chosen))
+	for _, lens := range supportedLenses {
+		if chosen[lens] {
+			selected = append(selected, lens)
+		}
+	}
+	if len(selected) == 0 {
+		return nil, errors.New("an agent lens selection names no lens") // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+	}
+	return selected, nil
+}
+
+// ReviewLensFor resolves a lens in its short (risk) or canonical
+// (review-risk) form.
+func ReviewLensFor(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if lens, ok := reviewFocusLens(name); ok {
+		return lens, true
+	}
+	for _, lens := range supportedLenses {
+		if name == lens {
+			return lens, true
+		}
+	}
+	return "", false
 }
 
 func reviewFocusLens(focus string) (string, bool) {
@@ -626,11 +682,12 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 			treePaths = append(treePaths, blob.path)
 		}
 		blobOIDByTree[tree] = oids
-		if len(treePaths) == 0 {
+		// Both trees still count toward the scan budget above, but an
+		// interpreter directive is whole-file evidence only in the candidate:
+		// a shebang that exists solely on the base side no longer executes.
+		if tree != snapshot.CandidateTree || len(treePaths) == 0 {
 			continue
 		}
-		// Interpreter directives remain whole-file evidence, including on the
-		// base side, so removal of a script does not hide its process boundary.
 		fixedArgs := []string{
 			"grep", "-I", "-l", "-z", "-i", "-E",
 			`^#!`, tree, "--",
@@ -700,7 +757,7 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 				inHunk = true
 			case inHunk && len(line) > 0 && line[0] == '+':
 				added := line[1:]
-				if !processSeen && processSpawnLine.Match(added) {
+				if !processSeen && !isCommentOnlySourceLine(currentPath, string(added)) && processSpawnLine.Match(added) {
 					reasons = append(reasons, RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: currentPath})
 					processSeen = true
 				}
@@ -711,10 +768,11 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 			}
 		}
 	}
-	// The sweeps above are deliberately over-inclusive: they run without
-	// knowing which textual hits are live code and which are documentation
-	// prose. Confirmation re-reads each suspect's frozen blob and keeps only
-	// files whose bytes still contain live process evidence (#5662).
+	// The sweeps above are deliberately over-inclusive: the candidate-side
+	// shebang grep matches `^#!` on any line of any scanned file, and the diff
+	// scan judges one added line without the context above it. Confirmation
+	// re-reads each suspect's frozen blob and keeps only files whose bytes
+	// still contain live process evidence (#5662).
 	reasons, err = builder.confirmLiveProcessBoundaryReasons(ctx, repo, snapshot, blobOIDByTree, reasons)
 	if err != nil {
 		return nil, err
@@ -725,15 +783,17 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 // confirmLiveProcessBoundaryReasons keeps a process_boundary reason only when
 // the implicated file's frozen bytes still contain live process evidence: a
 // line-one interpreter directive, or a spawn construct on a line that is
-// neither a comment nor inside a triple-quoted block. Prose mentions --
-// docstring interior lines, commented-out code, shebang examples inside
-// documentation -- carry no executable boundary (#5662): flagging them forced
-// a false high tier whose lens evidence could not fit the runtime budget,
-// leaving a candidate as small as 33 changed lines permanently unreviewable.
-// The old flag-everything conservatism rested on "false positives only widen
-// review"; the lens budget falsified that premise, so precision wins for this
-// signal. A suspect with no frozen bytes to confirm against keeps its flag:
-// an unreadable file is live evidence, never proven prose.
+// neither a comment (isCommentOnlySourceLine's per-language rule, the same one
+// the dangerous-sink scan applies) nor inside a triple-quoted block. Prose
+// mentions -- docstring interior lines, commented-out code, shebang examples
+// inside documentation -- carry no executable boundary (#5662): flagging them
+// forced a false high tier whose lens evidence could not fit the runtime
+// budget, leaving a candidate as small as 33 changed lines permanently
+// unreviewable. The old flag-everything conservatism rested on "false
+// positives only widen review"; the lens budget falsified that premise, so
+// precision wins for this signal. A suspect with no frozen bytes to confirm
+// against keeps its flag: an unreadable file is live evidence, never proven
+// prose.
 func (builder SnapshotBuilder) confirmLiveProcessBoundaryReasons(ctx context.Context, repo string, snapshot Snapshot, blobOIDByTree map[string]map[string]string, reasons []RiskReason) ([]RiskReason, error) {
 	suspects := make(map[string]string)
 	for _, reason := range reasons {
@@ -743,8 +803,10 @@ func (builder SnapshotBuilder) confirmLiveProcessBoundaryReasons(ctx context.Con
 		if _, known := suspects[reason.Path]; known {
 			continue
 		}
-		// A deleted file's only remaining bytes live on the base side; an
-		// edited or added file's boundary is judged in the candidate tree.
+		// The sweeps only name paths that exist in the candidate tree: the
+		// shebang grep runs there, and the diff scan flags added lines. The
+		// base side is a defensive fallback, so a missing candidate blob keeps
+		// the flag instead of claiming prose was proven.
 		oid := blobOIDByTree[snapshot.CandidateTree][reason.Path]
 		if oid == "" {
 			oid = blobOIDByTree[snapshot.BaseTree][reason.Path]
@@ -812,7 +874,7 @@ func (builder SnapshotBuilder) readLiveProcessEvidence(ctx context.Context, repo
 			return liveByOID, nil
 		}
 		oid := fields[0]
-		liveByOID[oid] = blobHasLiveProcessBoundary(remaining[headerEnd+1 : headerEnd+1+size])
+		liveByOID[oid] = blobHasLiveProcessBoundary(fields[0], remaining[headerEnd+1:headerEnd+1+size])
 		remaining = remaining[headerEnd+1+size:]
 		if len(remaining) > 0 && remaining[0] == '\n' {
 			remaining = remaining[1:]
@@ -823,18 +885,21 @@ func (builder SnapshotBuilder) readLiveProcessEvidence(ctx context.Context, repo
 
 // blobHasLiveProcessBoundary judges one frozen blob against the live-evidence
 // rule: a line-one interpreter directive, or a spawn construct on a line that
-// is neither a comment prefix nor inside a triple-quoted block. Triple-quote
-// state advances across every line, so a docstring opened hundreds of lines
-// above a changed hunk still silences its interior (#5662), and a shebang is
-// only evidence where an interpreter would actually honor it: line one.
-func blobHasLiveProcessBoundary(blob []byte) bool {
+// is neither a comment in the file's own language nor inside a triple-quoted
+// block. Triple-quote state advances across every line, so a docstring opened
+// hundreds of lines above a changed hunk still silences its interior (#5662),
+// and a shebang is only evidence where an interpreter would actually honor
+// it: line one. The candidate-side shebang grep matches `^#!` on any line, so
+// this line-one rule is what keeps a shebang example inside documentation
+// from being live evidence.
+func blobHasLiveProcessBoundary(logicalPath string, blob []byte) bool {
 	inTriple := byte(0)
 	for index, raw := range bytes.Split(blob, []byte{'\n'}) {
 		line := string(raw)
 		if index == 0 && strings.HasPrefix(line, "#!") {
 			return true
 		}
-		prose := inTriple != 0 || prosePrefixedLine(line)
+		prose := inTriple != 0 || isCommentOnlySourceLine(logicalPath, line)
 		inTriple = advanceTripleQuoteState(line, inTriple)
 		if !prose && processSpawnLine.MatchString(line) {
 			return true
@@ -870,24 +935,15 @@ func advanceTripleQuoteState(line string, inTriple byte) byte {
 	return inTriple
 }
 
-// prosePrefixedLine reports whether a line opens as a comment in any of the
-// languages both the process-boundary and dangerous-sink scans cover. It is
-// the one shared definition of "this line is prose, not behavior", so the two
-// classifiers can never disagree about a line one of them skips.
-func prosePrefixedLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	for _, prefix := range []string{"//", "#", "--", "/*", "*", "<!--", "'''", `"""`} {
-		if strings.HasPrefix(trimmed, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
+// isTestRiskPath reports whether the file itself is a test: its name follows a
+// test naming convention, or it sits under a directory that only holds tests or
+// fixtures. Production packages also use test/ and spec/ directories, so those
+// names alone are not evidence.
 func isTestRiskPath(logicalPath string) bool {
-	for _, segment := range strings.Split(asciiLower(logicalPath), "/") {
+	segments := strings.Split(asciiLower(logicalPath), "/")
+	for _, segment := range segments[:len(segments)-1] {
 		switch segment {
-		case "test", "tests", "__tests__", "testdata", "spec":
+		case "__tests__", "testdata":
 			return true
 		}
 	}
@@ -928,9 +984,10 @@ func deriveSemanticRiskSignals(stats []DiffStat) []RiskSignal {
 // name suggested.
 func deriveSnapshotRiskReasons(stats []DiffStat, activeContent map[string]struct{}) []RiskReason {
 	candidates := make([]RiskReason, 0, len(stats)+1)
+	largeAuthorityChange := isLargeAuthorityChange(stats)
 	for _, stat := range stats {
 		if isSemanticRiskEligible(stat) {
-			if isServiceTokenReviewPath(stat.Path) {
+			if isServiceTokenReviewPath(stat.Path) && !isTestRiskPath(stat.Path) {
 				candidates = append(candidates, RiskReason{Code: RiskReasonServiceToken, Signal: SignalAuth, Path: stat.Path})
 			}
 			if isShellReviewPath(stat.Path) {
@@ -947,6 +1004,11 @@ func deriveSnapshotRiskReasons(stats []DiffStat, activeContent map[string]struct
 			for _, signal := range hotPathRiskSignals(stat.Path) {
 				candidates = append(candidates, RiskReason{Code: RiskReasonHotPath, Signal: signal, Path: stat.Path})
 			}
+		}
+		// A large authority change reuses the hot-path/auth reason consumers
+		// already accept, so negotiated START and consent need no new code.
+		if largeAuthorityChange && isCountedAuthorityStat(stat) {
+			candidates = append(candidates, RiskReason{Code: RiskReasonHotPath, Signal: SignalAuth, Path: stat.Path})
 		}
 	}
 	if len(candidates) == 0 {
@@ -1609,22 +1671,22 @@ func touchesHotPath(stats []DiffStat) bool {
 			return true
 		}
 	}
-	return false
+	return isLargeAuthorityChange(stats)
 }
 
+// hotPathRiskSignals names the sensitive areas a path token points at. Test
+// files only exercise those areas, so a token there is not evidence.
 func hotPathRiskSignals(logicalPath string) []RiskSignal {
-	signals := make([]RiskSignal, 0, 4)
-	if isNativeReviewAuthorityPath(logicalPath) {
-		signals = append(signals, SignalAuth)
+	if isTestRiskPath(logicalPath) {
+		return nil
 	}
+	signals := make([]RiskSignal, 0, 4)
 	for _, token := range strings.FieldsFunc(strings.ToLower(logicalPath), func(r rune) bool {
 		return r == '/' || r == '\\' || r == '.' || r == '-' || r == '_'
 	}) {
 		switch token {
 		case "auth":
 			signals = append(signals, SignalAuth)
-		case "update":
-			signals = append(signals, SignalUpdate)
 		case "security":
 			signals = append(signals, SignalSecurity)
 		case "webhook":
@@ -1636,6 +1698,22 @@ func hotPathRiskSignals(logicalPath string) []RiskSignal {
 		}
 	}
 	return canonicalRiskSignals(signals)
+}
+
+// isLargeAuthorityChange counts only the authored lines changed inside the RDD
+// authority files, with the same exclusions CountChangedLines applies.
+func isLargeAuthorityChange(stats []DiffStat) bool {
+	lines := 0
+	for _, stat := range stats {
+		if isCountedAuthorityStat(stat) {
+			lines += stat.Additions + stat.Deletions
+		}
+	}
+	return lines >= LargeChangeLines
+}
+
+func isCountedAuthorityStat(stat DiffStat) bool {
+	return isNativeReviewAuthorityPath(stat.Path) && !stat.Binary && !stat.ModeOnly
 }
 
 func isNativeReviewAuthorityPath(logicalPath string) bool {

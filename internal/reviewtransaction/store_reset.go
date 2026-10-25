@@ -177,7 +177,7 @@ var storeResetPreservedTargets = []storeResetTarget{
 	},
 	{
 		name: "sdd-runtime", parts: []string{"sdd-runtime"},
-		reason: "SDD attempt state keyed by change name rather than by review lineage; removing it would lose in-flight SDD work",
+		reason: "legacy attempt state keyed by change name rather than by review lineage; removing it would lose in-flight attempts",
 	},
 	{
 		name: "defect-reports", parts: []string{"defect-reports"},

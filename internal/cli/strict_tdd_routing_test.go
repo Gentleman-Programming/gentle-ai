@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestStrictTDDLegacyCarrierRetiredByInstallAndSync(t *testing.T) {

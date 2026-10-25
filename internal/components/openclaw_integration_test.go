@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestOpenClawSelectedAdapterRoutesToExpectedInjectors(t *testing.T) {

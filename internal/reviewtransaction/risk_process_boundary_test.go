@@ -326,12 +326,10 @@ func TestAssessSnapshotRiskProcessBoundaryNegativesAndDocumentedConservatism(t *
 			want:    RiskLow,
 		},
 		{
-			// Contract change for #5662: a comment-only mention is prose, not
-			// behavior. The old conservative rule flagged it because "false
-			// positives only widen review", but the lens context budget turned
-			// that false high into a preflight refusal no commit slice could
-			// escape, so a mention without live code no longer escalates.
-			name:    "comment-only mention is prose, not a live boundary",
+			// A comment-only added line describes a spawn instead of running
+			// it, the same rule the dangerous-sink scan applies. Pattern
+			// presence inside strings or after code still triggers the signal.
+			name:    "comment-only mention stays medium",
 			path:    "tools/notes.py",
 			content: "# This module will wrap subprocess.run in a follow-up.\nVALUE = 1\n",
 			want:    RiskMedium,
@@ -428,11 +426,14 @@ func TestProcessBoundaryDocstringInteriorAddedLine(t *testing.T) {
 	assertProcessBoundaryMedium(t, repo)
 }
 
-// TestProcessBoundaryDeletedShebangScriptKeepsBaseEvidence pins the base-side
-// half of the confirmation contract: a deleted interpreter script still
-// carries its boundary through the base blob, so removal cannot hide a live
-// process boundary behind the confirmation pass.
-func TestProcessBoundaryDeletedShebangScriptKeepsBaseEvidence(t *testing.T) {
+// TestProcessBoundaryDeletedInterpreterScriptHasNoLiveBoundary pins the
+// base-side half of the confirmation contract under the demoted base-only
+// shebang rule: an interpreter directive is whole-file evidence only in the
+// candidate, so a deleted script no longer executes and its base blob cannot
+// produce a live process_boundary reason (#5662). The deletion still carries
+// whatever other signal its own class selects -- a shell_source here -- but
+// that signal is not a process boundary and never was.
+func TestProcessBoundaryDeletedInterpreterScriptHasNoLiveBoundary(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tools/deploy.sh", "#!/bin/sh\nexec \"$@\"\n")
 	gitSnapshot(t, repo, "add", "--", "tools/deploy.sh")
@@ -446,15 +447,11 @@ func TestProcessBoundaryDeletedShebangScriptKeepsBaseEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if assessment.Level != RiskHigh {
-		t.Fatalf("AssessSnapshotRisk() = %q with reasons %#v, want high", assessment.Level, assessment.Reasons)
-	}
 	for _, reason := range assessment.Reasons {
 		if reason.Code == RiskReasonProcessBoundary && reason.Path == "tools/deploy.sh" {
-			return
+			t.Fatalf("AssessSnapshotRisk() reasons %#v, want no process_boundary for the deleted tools/deploy.sh", assessment.Reasons)
 		}
 	}
-	t.Fatalf("AssessSnapshotRisk() reasons %#v, want the base-side process_boundary for tools/deploy.sh", assessment.Reasons)
 }
 
 func TestAssessSnapshotRiskProcessBoundaryIsDeterministic(t *testing.T) {

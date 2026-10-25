@@ -9,9 +9,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type Adapter struct {
@@ -53,7 +53,7 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 		return false, "", extensionsDir, false, err
 	}
 	for _, entry := range entries {
-		if entry.IsDir() && (entry.Name() == "github.copilot" || strings.HasPrefix(entry.Name(), "github.copilot-")) {
+		if entry.IsDir() && system.IsCopilotExtensionDir(entry.Name()) {
 			return true, binaryPath, extensionsDir, true, nil
 		}
 	}

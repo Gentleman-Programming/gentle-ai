@@ -1,0 +1,129 @@
+//go:build darwin
+
+package shellinstaller
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+// A process group whose only member is an unreaped zombie is the window
+// between a killed member's exit and its parent's wait.
+func userZombieGroup(t *testing.T) *os.Process {
+	t.Helper()
+	process, err := os.StartProcess("/usr/bin/true", []string{"true"}, &os.ProcAttr{Sys: &syscall.SysProcAttr{Setpgid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second Wait after the test reaped the child only returns an error.
+	t.Cleanup(func() { _, _ = process.Wait() })
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		members, err := unix.SysctlKinfoProcSlice("kern.proc.pgrp", process.Pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(members) == 1 && members[0].Proc.P_pid == int32(process.Pid) && members[0].Proc.P_stat == userDarwinZombie {
+			return process
+		}
+	}
+	t.Fatal("child never became a listed zombie group member")
+	return nil
+}
+
+// The leader exits while its background subshell forks sleep, so the first
+// group SIGKILL often races that fork; a raw signal-0 probe then watched a
+// surviving sleep for its whole 2s in about one run of four on darwin. The
+// repeated SIGKILL also meets members already exiting (P_WEXIT), which the
+// kernel answers with EPERM.
+func TestDarwinReapGroupKillsMemberForkedDuringKill(t *testing.T) {
+	for iteration := 0; iteration < 25; iteration++ {
+		cmd := exec.Command("/bin/sh", "-c", "(sleep 2; :) & exit 0")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+		if err := userReapGroup(cmd.Process.Pid, nil); err != nil {
+			t.Fatalf("iteration %d: reap = %v", iteration, err)
+		}
+		if err := syscall.Kill(-cmd.Process.Pid, 0); !errors.Is(err, syscall.ESRCH) {
+			t.Fatalf("iteration %d: group after reap = %v, want ESRCH", iteration, err)
+		}
+	}
+}
+
+// privateRun must leave no member behind when its leader exits while a
+// background subshell forks: the single post-Wait group SIGKILL races that fork
+// on darwin and can also answer EPERM for members already exiting. Background
+// stdio is detached so Wait returns as soon as the leader exits.
+func TestDarwinPrivateRunReapsMemberForkedDuringKill(t *testing.T) {
+	dir := t.TempDir()
+	for iteration := 0; iteration < 25; iteration++ {
+		pidFile := filepath.Join(dir, strconv.Itoa(iteration))
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `echo $$ > "$1"; (sleep 2; :) </dev/null >/dev/null 2>&1 & exit 0`, "sh", pidFile)
+		cmd.Env = []string{"PATH=/usr/bin:/bin"}
+		output, err := privateRun(ctx, cmd, cancel)
+		cancel()
+		data, readErr := os.ReadFile(pidFile)
+		pid, atoiErr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if readErr != nil || atoiErr != nil || pid != cmd.Process.Pid {
+			t.Fatalf("iteration %d: leader pid %q, %v, %v", iteration, data, readErr, atoiErr)
+		}
+		t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+		if err != nil || output != "" {
+			t.Fatalf("iteration %d: privateRun = %q, %v; want a clean run", iteration, output, err)
+		}
+		if probe := syscall.Kill(-pid, 0); !errors.Is(probe, syscall.ESRCH) {
+			t.Fatalf("iteration %d: group after privateRun = %v, want ESRCH", iteration, probe)
+		}
+	}
+}
+
+func TestDarwinKillGroupCountsZombieMembersLikeLinux(t *testing.T) {
+	process := userZombieGroup(t)
+	// The kernel answers EPERM for a zombie-only group; Linux answers 0.
+	if err := syscall.Kill(-process.Pid, 0); !errors.Is(err, syscall.EPERM) {
+		t.Fatalf("raw zombie-only group probe = %v; the darwin EPERM quirk changed, revisit userKillGroup", err)
+	}
+	for _, sig := range []syscall.Signal{0, syscall.SIGKILL} {
+		if err := userKillGroup(process.Pid, sig); err != nil {
+			t.Fatalf("zombie-only group signal %d = %v, want the Linux answer nil", sig, err)
+		}
+	}
+	// An unreaped zombie still occupies the group: reaping must not claim it gone.
+	if err := userReapGroup(process.Pid, nil); err == nil {
+		t.Fatal("reap reported an empty group while a zombie member remained")
+	}
+	if _, err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if err := userReapGroup(process.Pid, nil); err != nil {
+		t.Fatalf("reap after the zombie was waited = %v", err)
+	}
+	if err := userKillGroup(process.Pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("emptied group = %v, want ESRCH", err)
+	}
+}
+
+// The launch group's Cancel runs while the leader may already be a zombie the
+// Wait has not reaped; it must answer as Linux does, not with darwin's EPERM.
+func TestDarwinLaunchGroupCancelSignalsZombieGroupLikeLinux(t *testing.T) {
+	cmd := exec.CommandContext(context.Background(), "/usr/bin/true")
+	if err := userLaunchGroup(cmd, nil, func(err error) error { return err }); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Process = userZombieGroup(t)
+	if err := cmd.Cancel(); err != nil {
+		t.Fatalf("cancel of a zombie-only launch group = %v, want the Linux answer nil", err)
+	}
+}

@@ -40,6 +40,11 @@ const reviewStopReasonDocsTerminalPrefix = "Terminal"
 // removed from this table entirely, not marked with either disposition — see
 // the organic-dx Phase 3 investigation note on escalated_recovery_requires_changed_target.
 var reviewStopInvariantClassification = map[string]reviewStopDisposition{
+	"acknowledged_predecessor_passive_delta": {
+		Terminal:      true,
+		Justification: "the committed range only adds passive content to an acknowledged candidate (#4739); no review continuation is required, delivery follows ordinary repository policy, and any non-passive change is offered again",
+		ToolFault:     reviewStopToolFault(false),
+	},
 	"target_already_acknowledged": {
 		Terminal:      true,
 		Justification: "the exact target was already acknowledged and its authority burned; no review continuation is required, delivery follows ordinary repository policy, and changed targets remain eligible",
@@ -76,6 +81,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      true,
 		Justification: "the frozen reviewer evidence cannot fit without truncation, so no in-lineage reviewer action exists; a smaller candidate starts a new review",
 		ToolFault:     reviewStopToolFault(false),
+	},
+	"acknowledged_boundary_reaches_head": {
+		Terminal:      false,
+		Justification: "caller-continuable: the reviewed boundary advances on acknowledgement and reaches HEAD, so nothing unreviewed remains between the boundary and the live candidate; any NEW commit re-derives a fresh candidate and STATUS offers it, and the docs row agrees",
 	},
 	"correction_context_budget_exceeded": {
 		Terminal:      false,

@@ -1,5 +1,8 @@
 # Sync and Cloud
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 [Back to Codebase Guide](../CODEBASE-GUIDE.md)
 
 Gentle-AI sync refreshes managed agent configuration. Engram sync exports/imports memory. Cloud sync is not implemented in this source tree.

@@ -1,5 +1,8 @@
 # Backup & Rollback Guide
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 The backup system automatically snapshots your configuration files before every install, sync, and upgrade. Backups are compressed, deduplicated, and automatically pruned to keep disk usage under control.
 
 ## How it works
@@ -54,10 +57,70 @@ Pinned backups are never automatically deleted, even when the retention limit is
 
 ## Restore behavior
 
+### Restore from the CLI
+
+```bash
+gentle-ai restore --list          # List available backups
+gentle-ai restore latest          # Restore after interactive confirmation
+gentle-ai restore <id> --yes      # Restore without prompting (-y also works)
+```
+
+Flags work before or after the backup target. `--list=true` and `--yes=true`
+match the bare flags; `--list=false` disables listing, and `--yes=false` requires
+confirmation. Repeated flags use the last value. With listing disabled, a target
+(`latest` or `<id>`) is required; otherwise the command returns a usage error.
+Invalid boolean values and unknown flags return an error without restoring.
+
+`--` ends flag parsing: all following arguments are backup targets, not flags.
+At most one target is accepted. For example, `restore -- latest` still requires
+confirmation, while `restore latest -- --yes=true` returns a usage error without
+restoring because it supplies two targets.
+
+### Codex configuration outside the user home
+
+For CLI restore of a backup written to an external `CODEX_HOME`, keep `CODEX_HOME` pointing to that same existing directory. CLI restore authorizes that validated directory and its current `CODEX_HOME` symlink spelling, not their parents; unrelated destinations and symlink escapes remain refused. TUI restore and automatic rollback still use their existing scopes.
+
+### Restored files
+
 - If `existed=true`: restores the file from the snapshot to its original path
 - If `existed=false`: removes the file (reverting files created during install)
-- Restore is atomic per file write — no partial restores
+- Each restored regular file is written atomically (temporary file, then rename), so its contents are never left half-written
+- A restore as a whole is not atomic: if one entry fails, files restored before it stay restored and later ones are not
 - Works with both compressed (tar.gz) and legacy (plain file) backups
+
+### Automatic rollback during install and sync
+
+When an install or sync step fails, `gentle-ai` restores the snapshot it took before the run. That restore does not check what changed in between:
+
+- an edit you make to a backed-up file while the command runs can be overwritten
+- a file created during the run at a backed-up path that did not exist before can be removed
+
+There is no locking or concurrency protection. Avoid editing agent configuration while install or sync runs.
+
+In the installation TUI, completed rollback steps appear as `↶ <step> (rolled back)`,
+not as pending steps. They count toward completed progress, so a finished pipeline
+with a completed rollback reaches 100%. The original installation error remains
+visible; press **Enter** to continue to the result screen.
+
+## Claude Code orchestrator modules (pilot)
+
+The user-global Claude Code install can split the orchestrator into an always-loaded core in `~/.claude/CLAUDE.md` and on-demand modules in `~/.claude/gentle-ai/orchestrator/`, tracked by the ownership ledger `.gentle-ai-orchestrator-module-ownership.json` in that directory. The default is still the single monolithic orchestrator. Opt in with `gentle-ai install --agent claude-code --scope global --claude-orchestrator-modules`; the flag is install-only and is rejected with `--scope workspace` or a selection without Claude Code before anything is written.
+
+| Operation | What happens |
+|-----------|--------------|
+| Install / sync, global scope | `--claude-orchestrator-modules` creates the modular layout. While the ledger exists, install and sync keep it without the flag and refresh the core, its modules and the ledger. A modified module the core references, or a malformed ledger, stops the run before any pilot file changes; earlier steps of the same run may already have written other files, which automatic rollback restores. Workspace scope and other agents keep the monolith. |
+| Uninstall, complete Claude Code removal | `CLAUDE.md` returns to the monolithic orchestrator first. Then only modules whose bytes match the ledger, and the ledger itself, are removed. Modified or unowned known files stay and are listed as manual actions. Unknown files stay without being enumerated. A component-only uninstall does not touch the pilot. |
+| Failed uninstall | Uninstall has no automatic rollback. If retirement fails after changing files, the CLI and TUI reports ask you to inspect `CLAUDE.md` and the module directory before rerunning, and Claude Code stays recorded as installed. |
+
+### Snapshots and manual restore
+
+Pre-upgrade Claude Code snapshots, and install, sync and complete-uninstall snapshots while the pilot is in use, record nine fixed paths: `CLAUDE.md`, all seven known module filenames (delegation, verification, tracking, memory, writer, prompts, skills) and the ledger, including the ones that do not exist yet. This is the snapshot scope, not a list of installed or owned files: the pilot installs only the modules it needs, and the ledger owns only what it installed.
+
+Restoring one of these snapshots with `gentle-ai restore` or the **Backups** screen puts each of the nine paths back as it was:
+
+- **A path recorded as absent is deleted, even if you created or modified that file later and Gentle AI never owned it.**
+- Other files in the module directory are kept.
+- Snapshots taken before this layout existed do not record module or ledger paths. Of the nine paths, restoring them changes only `CLAUDE.md` (other files they recorded, such as settings, are restored as usual); module files and the ledger stay, and a remaining ledger keeps the pilot on the next global sync.
 
 ## If verification fails
 
@@ -65,6 +128,28 @@ Pinned backups are never automatically deleted, even when the retention limit is
 2. Restore from latest snapshot via the TUI or `gentle-ai restore latest`
 3. Re-run install with `--dry-run` to validate plan
 4. Re-run install after fixing external dependencies
+
+### Recover a preserved native review agent
+
+**Keeping the file is valid.** A “preserved, not updated” warning means Gentle AI cannot verify ownership: the ledger entry is missing or the file differs from its recorded hash. It does not prove that you customized the file. Even bytes matching the current template do not prove continuing consent to management; a ledger-less matching file remains unmanaged.
+
+To opt back into management for one warned file:
+
+1. Back up the **exact path printed in the warning** outside the agent directory. Open the backup and compare its bytes with the original before proceeding; retain any customizations.
+2. Remove **only that warned file**, after verifying the backup. Do not delete the agent directory, other agents, or the ownership ledger. Do not hand-write ledger entries or hashes.
+3. Rerun your existing `gentle-ai install` or `gentle-ai sync` invocation with the same runtime, scope, and model choices. For an already configured runtime, sync restores persisted model assignments. Use an explicit scope; for workspace scope, run from the original project directory. Retain any other flags you previously used.
+
+Examples for already configured runtimes in **global** scope (choose only the runtime that owns the warned path):
+
+| Runtime | Recovery command |
+|---------|------------------|
+| Claude Code | `gentle-ai sync --agent claude-code --scope global` |
+| Kiro IDE | `gentle-ai sync --agent kiro-ide --scope global` |
+| Kimi | `gentle-ai sync --agent kimi --scope global` |
+
+For workspace installations, use `--scope workspace` instead, from the original project directory. If reinstalling rather than syncing, follow the [install examples](usage.md#install) and retain your original agent, component/preset, scope, and model choices; do not substitute a fresh preset blindly. Sync/install can refresh other managed assets in the selected runtime and scope, not just this file.
+
+Afterward, confirm the file was regenerated and the warning for that path is gone on the next sync. A retired agent filename may no longer be generated; removing it does not bring back a retired template. Compare any customized backup with the new file before selectively reapplying changes. **Do not blindly overwrite the regenerated file with the backup**: modified bytes will again be preserved rather than updated. Keep the verified backup until recovery is confirmed.
 
 ## What rollback does NOT cover
 

@@ -16,7 +16,10 @@ func startProbeProcessTree(command *exec.Cmd) (func() error, error) {
 		return nil, err
 	}
 	return func() error {
-		if err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		// The leader is never reaped before this kill, so its process group
+		// cannot be reused. Linux reports a group of only exited members as
+		// ESRCH; macOS reports EPERM. Both mean there is nothing left to stop.
+		if err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) && !errors.Is(err, syscall.EPERM) {
 			return err
 		}
 		return nil

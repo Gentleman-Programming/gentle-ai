@@ -67,10 +67,7 @@
           "predecessor_lineage",
           "expected_predecessor_revision",
           "successor_lineage",
-          "disposition",
-          "reason",
-          "actor",
-          "maintainer_authorization"
+          "disposition"
         ],
         "disposition": "scope_changed",
         "binding": {

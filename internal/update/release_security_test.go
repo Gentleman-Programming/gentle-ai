@@ -187,7 +187,7 @@ printf '%s\n' "$*" >>"$GH_CALL_LOG"
 tag=${RELEASE_VERIFICATION_TAG:-$GITHUB_REF_NAME}
 if [[ "$1" == api && "$2" == "repos/$GITHUB_REPOSITORY/releases/tags/$tag" ]]; then
   cat <<JSON
-{"tag_name":"$tag","draft":false,"prerelease":false,"assets":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz"},{"name":"gentle-ai-review-provider-contract-1.2.0.tar.gz"},{"name":"gentle-ai-release-provenance-v1.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}]}
+{"tag_name":"$tag","draft":false,"prerelease":false,"assets":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz"},{"name":"gentle-ai-review-provider-contract-1.4.0.tar.gz"},{"name":"gentle-ai-release-provenance-v1.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}]}
 JSON
   exit 0
 fi
@@ -205,9 +205,9 @@ if [[ "$1" == release && "$2" == download && "$3" == "$tag" ]]; then
   for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
     printf 'archive %s\n' "$platform" >"$directory/gentle-ai_1.2.3_${platform}.tar.gz"
   done
-  printf 'provider contract\n' >"$directory/gentle-ai-review-provider-contract-1.2.0.tar.gz"
+  printf 'provider contract\n' >"$directory/gentle-ai-review-provider-contract-1.4.0.tar.gz"
   printf 'release provenance\n' >"$directory/gentle-ai-release-provenance-v1.tar.gz"
-  (cd "$directory" && sha256sum gentle-ai_1.2.3_*.tar.gz gentle-ai-review-provider-contract-1.2.0.tar.gz gentle-ai-release-provenance-v1.tar.gz >checksums.txt)
+  (cd "$directory" && sha256sum gentle-ai_1.2.3_*.tar.gz gentle-ai-review-provider-contract-1.4.0.tar.gz gentle-ai-release-provenance-v1.tar.gz >checksums.txt)
   printf 'test signature\n' >"$directory/checksums.txt.minisig"
   exit 0
 fi
@@ -354,7 +354,7 @@ func TestGoReleaserSignsBoundManifestAndInjectsTrustAnchors(t *testing.T) {
 		`- "${artifact}"`,
 		`- "${signature}"`,
 		`repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}`,
-		`github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}`,
+		`github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}`,
 		"-trimpath",
 		"go run ./internal/releaseprovenancecmd --out .goreleaser-provenance/manifest.json --config .goreleaser.yaml --goreleaser-version v2.15.2",
 		"id: release-provenance",
@@ -632,7 +632,7 @@ cat "$FAKE_GH_RESPONSE"
 func TestCanonicalReleasePublicKeysControlRealLinkerBuild(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	publicKey := strings.TrimSpace(readRepositoryFile(t, "internal", "update", "upgrade", "testdata", "minisign-test.pub"))
-	const linkerTarget = "github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade.releaseMinisignPublicKeys"
+	const linkerTarget = "github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade.releaseMinisignPublicKeys"
 	const injectedOverride = "AUDIT_OVERRIDE"
 
 	build := func(t *testing.T, raw string) (string, []byte, error) {

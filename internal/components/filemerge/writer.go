@@ -72,6 +72,14 @@ type WriteResult struct {
 // WriteFileAtomic replaces path with content and reports whether the
 // replacement actually occurred.
 //
+// perm applies only when path does not yet exist. Rewriting an existing
+// regular file preserves its current permission bits instead — a private file
+// (for example a settings document holding credentials) must never be widened
+// just because it was reinstalled or resynced. Callers that must force a
+// specific mode regardless of the file's current state (an executable script,
+// a credentials file pinned to a fixed mode, a backup restore recreating a
+// recorded mode) use WriteFileAtomicMode instead.
+//
 // A nil error means the bytes reached stable storage (staged file synced,
 // parent directory synced) and were read back from path. Any other outcome is
 // an error.
@@ -82,20 +90,47 @@ type WriteResult struct {
 // rollback and journalling decisions come from the writer rather than from a
 // guess at each call site (#1676).
 func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult, error) {
+	return writeFileAtomic(path, content, perm, false)
+}
+
+// WriteFileAtomicMode replaces path with content and always applies perm,
+// widening or narrowing an existing file's mode as needed — including when
+// content is unchanged, so a caller restoring a recorded mode still lands it.
+// Such a mode-only repair reports Changed=true when it actually changed the
+// file's permission bits; same bytes and same mode report Changed=false.
+// Use WriteFileAtomic instead unless the caller owns the target mode outright.
+func WriteFileAtomicMode(path string, content []byte, perm fs.FileMode) (WriteResult, error) {
+	return writeFileAtomic(path, content, perm, true)
+}
+
+func writeFileAtomic(path string, content []byte, perm fs.FileMode, forceMode bool) (WriteResult, error) {
 	if perm == 0 {
-		perm = 0o644
+		// A forced zero mode comes from a recorded mode (restore paths); never
+		// widen it past owner-only. An omitted mode for a new file keeps 0644.
+		if forceMode {
+			perm = 0o600
+		} else {
+			perm = 0o644
+		}
 	}
 
 	created := false
 	existing, err := readComparableFile(path)
 	if err == nil {
 		if bytes.Equal(existing, content) {
+			if forceMode {
+				return enforceFileMode(path, perm)
+			}
 			return WriteResult{}, nil
 		}
 	} else if !os.IsNotExist(err) {
 		return WriteResult{}, fmt.Errorf("read existing file %q: %w", path, err)
 	} else {
 		created = true
+	}
+
+	if !forceMode && !created {
+		perm = ExistingFileMode(path, perm)
 	}
 
 	landed, _, err := replaceDurably(path, bytes.NewReader(content), perm)
@@ -106,6 +141,75 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 	return result, nil
 }
 
+// enforceFileMode applies perm to the existing file at path and reports
+// Changed when the permission bits read back from disk differ from the ones
+// read before, so a platform that ignores part of perm (Windows keeps only the
+// read-only bit) never reports a repair that did not happen.
+func enforceFileMode(path string, perm fs.FileMode) (WriteResult, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return WriteResult{}, fmt.Errorf("stat %q before setting permissions: %w", path, err)
+	}
+	// A true no-op must not touch the file: even a same-mode chmod updates
+	// its ctime.
+	if before.Mode().Perm() == perm.Perm() {
+		return WriteResult{}, nil
+	}
+	if chmodErr := os.Chmod(path, perm); chmodErr != nil {
+		return WriteResult{}, fmt.Errorf("set permissions on %q: %w", path, chmodErr)
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		// The chmod succeeded, so the mode may have changed; say so.
+		return WriteResult{Changed: true}, fmt.Errorf("read back permissions on %q: %w", path, err)
+	}
+	return WriteResult{Changed: after.Mode().Perm() != before.Mode().Perm()}, nil
+}
+
+// RefuseLockedSettingsFile rejects locked or non-regular settings before any
+// related assets are changed. ExistingFileMode's 0600 fallback is suitable for
+// other callers, but selected settings must not change a deliberate lock.
+func RefuseLockedSettingsFile(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect settings mode %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refuse to rewrite settings %q: selected path is a symlink; select a regular settings file before retrying", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("refuse to rewrite settings %q: selected path is not a regular file; select a regular settings file before retrying", path)
+	}
+	if info.Mode().Perm() == 0 {
+		return fmt.Errorf("refuse to rewrite locked settings %q (mode 0000); restore read/write permissions explicitly before retrying", path)
+	}
+	return nil
+}
+
+// ExistingFileMode returns the permission bits of the regular file at path, or
+// fallback when path is absent or is not a regular file. A regular file with no
+// permission bits yields 0600 so it is never widened. WriteFileAtomic uses this
+// internally so a private file (for example a settings document holding
+// credentials) is never widened on rewrite; forced-mode callers computing
+// their own perm from the current file may still call it directly.
+func ExistingFileMode(path string, fallback fs.FileMode) fs.FileMode {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return fallback
+	}
+	perm := info.Mode().Perm()
+	if perm == 0 {
+		// WriteFileAtomic treats perm 0 as its 0644 default, which would widen
+		// a file the user locked down entirely; owner-only is the narrowest
+		// mode that still lets the rewrite read its own result back.
+		return 0o600
+	}
+	return perm
+}
+
 // StreamResult describes the bytes that landed at the destination.
 type StreamResult struct {
 	Bytes  int64
@@ -114,6 +218,12 @@ type StreamResult struct {
 
 // WriteStreamAtomic replaces path with everything readable from src and returns
 // the size and SHA-256 of the bytes read back from path afterwards.
+//
+// WriteStreamAtomic always applies perm, the same forced-mode contract as
+// WriteFileAtomicMode, never WriteFileAtomic's preserve-by-default one: its
+// callers stream fresh downloads and extracted executables, where the
+// destination's prior mode (if it has one at all) must not survive the
+// replacement.
 //
 // The digest describes the file on disk, never the copied stream: a stream
 // digest certifies its own copy and cannot detect a destination that ends up

@@ -1,5 +1,8 @@
 # RDD Backlog Disposition — Wave 0
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 **Snapshot:** `ece470dacd0041f394e7f6f3877a6a9fcb3482af`
 **GitHub state read at:** `2026-08-02T09:43:49Z`
 

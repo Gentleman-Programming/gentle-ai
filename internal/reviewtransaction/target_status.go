@@ -238,21 +238,33 @@ func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([
 	return ancestors, nil
 }
 
-// ResolveCommittedRangeBase returns the single merge-base commit between HEAD
-// and the remote default branch, but only when that committed range is
-// unambiguous (issue #4412). STATUS derives the committed-range START a
-// selectorless empty workspace candidate needs from exactly this base, so an
-// ambiguous repository must fall back to today's base_ref collect rather than
-// silently pick a scope the caller never named.
+// ResolveCommittedRangeBase returns the single merge-base commit naming the
+// committed range the selectorless derivation reviews, preferring the branch's
+// own upstream and falling back to the remote default branch, but only when
+// that committed range is unambiguous (issue #4412). STATUS derives the
+// committed-range START a selectorless empty workspace candidate needs from
+// exactly this base, so an ambiguous repository must fall back to today's
+// base_ref collect rather than silently pick a scope the caller never named.
 //
-// The base is deliberately the remote default branch (refs/remotes/origin/HEAD)
-// and never the local branch upstream: for a fully pushed branch `@{upstream}`
-// names the last pushed commit, whose range is empty, which is precisely the
-// state that produces the zero-path candidate this derivation serves. Every
-// other outcome -- no origin/HEAD, a criss-cross history, an empty range, or any
-// Git fault -- is returned as an error so the caller keeps the truthful
-// fallback.
+// The base is deliberately the branch's upstream (issues #4639, #4628) when
+// that ref exists, resolves to exactly one merge-base with HEAD, and HEAD is
+// strictly ahead of it: for a trunk/integration split the tracking ref is the
+// branch's real integration point, while the remote default branch can lag
+// whole releases behind, making the derived candidate span unrelated merged
+// work until preflight refuses it. Every other upstream outcome -- no
+// upstream, a criss-cross history, a level branch, an empty range, or any Git
+// fault -- keeps the remote-default-branch derivation unchanged, because for
+// a fully pushed branch `@{upstream}` names the last pushed commit, whose
+// range is empty, and that derivation is what replaces the unroutable
+// zero-path candidate collect (issue #4412). The default branch derivation
+// itself only answers when refs/remotes/origin/HEAD names an unambiguous
+// nonempty range; every other outcome -- no origin/HEAD, a criss-cross
+// history, an empty range, or any Git fault -- is returned as an error so the
+// caller keeps the truthful fallback.
 func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error) {
+	if base, ok := resolveCommittedRangeBaseFromUpstream(ctx, repo); ok {
+		return base, nil
+	}
 	refOutput, err := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
 	if err != nil {
 		return "", err
@@ -286,6 +298,42 @@ func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error)
 		return "", fmt.Errorf("committed range between the merge-base and HEAD is empty") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
 	}
 	return base, nil
+}
+
+func resolveCommittedRangeBaseFromUpstream(ctx context.Context, repo string) (string, bool) {
+	refOutput, err := runGit(ctx, repo, nil, nil, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	if err != nil {
+		return "", false // no upstream configured: the default-branch derivation answers
+	}
+	upstream := strings.TrimSpace(string(refOutput))
+	if upstream == "" || upstream == "@{upstream}" {
+		return "", false
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return "", false
+	}
+	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, upstream)
+	if err != nil {
+		return "", false // criss-cross or unrelated upstream history keeps the default-branch derivation
+	}
+	merges := strings.Fields(string(bases))
+	if len(merges) != 1 {
+		return "", false
+	}
+	base := merges[0]
+	if base == head {
+		return "", false // level with upstream: the branch names no unpushed range, so keep the default-branch derivation (issue #4412)
+	}
+	countOutput, err := runGit(ctx, repo, nil, nil, "rev-list", "--count", base+".."+head)
+	if err != nil {
+		return "", false
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(countOutput)))
+	if err != nil || count <= 0 {
+		return "", false // empty committed range between the upstream merge-base and HEAD keeps the default-branch derivation
+	}
+	return base, true
 }
 
 // selectorlessCommittedBaseDiffMatchedPredecessor finds the lineage's frozen

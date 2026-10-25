@@ -1,6 +1,7 @@
 package agentguidance
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,10 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // RoutingSectionID is the managed marker section that owns routing guidance.
@@ -57,11 +58,26 @@ type templateBootstrapper interface {
 // RoutingOptions supplies a caller-resolved settings path for adapters whose
 // guidance is delivered through a managed orchestrator definition. The adapter
 // retains its normal targetDir-derived path when SettingsPath is empty.
+//
+// ReviewContract renders the native review execution contract embedded in the
+// orchestrator of a receipt-driven development runtime. It takes precedence
+// over the package-level fallback (SetReviewContractSource); installers must
+// always set it.
 type RoutingOptions struct {
+	// OrchestratorCapability selects only generic instruction text. "small"
+	// explicitly opts into the small variant; empty or unknown uses capable.
+	// Runtime-specific assets ignore this hint. It does not configure models.
+	OrchestratorCapability      string
 	SettingsPath                string
+	ReviewContract              ReviewContractSource
 	CodexPhaseModelAssignments  map[string]string
 	CodexModelAssignments       map[string]model.CodexEffort
 	CodexCarrilModelAssignments map[string]string
+	// ClaudeGlobalModules opts the user-global Claude install into a core
+	// CLAUDE.md plus on-demand modules under its config directory. Only a
+	// caller installing the global scope may set it; every other agent and
+	// the default keep the monolithic delivery.
+	ClaudeGlobalModules bool
 }
 
 // InjectRoutingWithOptions installs the organic routing guidance for one
@@ -74,9 +90,21 @@ type RoutingOptions struct {
 // land the guidance in a scope the agent never loads, or inside a template its
 // own installer rewrites from an embedded asset on the next sync.
 //
-// Only the marked section is owned by Gentle AI: everything a user wrote around
-// it is preserved verbatim, and a second identical injection is a no-op.
+// Every non-Pi runtime also receives its orchestrator instructions as a second
+// managed section placed ahead of routing (see RenderOrchestrator); a v3.7.0
+// sdd-orchestrator block is converted in place so exactly one remains.
+//
+// Only the marked sections are owned by Gentle AI: everything a user wrote
+// around them is preserved verbatim, and a second identical injection is a no-op.
 func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options RoutingOptions) (Result, error) {
+	// Conductor is detection/catalog-only: its workspaces inherit Claude Code
+	// configuration, so there is no standalone guidance target to write. Skip
+	// it cleanly instead of failing closed like an unknown delivery (see
+	// isCatalogOnlyGuidanceTarget).
+	if isCatalogOnlyGuidanceTarget(agent) {
+		return Result{}, nil
+	}
+
 	// Render before resolving the delivery so an unsupported agent is rejected
 	// without having touched the filesystem.
 	rendered, err := RenderRouting(agent)
@@ -98,18 +126,50 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 	// preserves it when other component writers retain that section.
 	rendered = InjectRemoteAuthorization(rendered)
 
+	// The orchestrator travels with routing into the same always-loaded scope
+	// and the same write, so the two can never land in different files or be
+	// half-applied. Pi is the only runtime without one: Gentle Shell owns it.
+	// With Claude global modules that scope receives the core, which keeps
+	// every critical policy, and the modules it points at.
+	var orchestrator string
+	var modules []orchestratorModule
+	switch {
+	case delivery.kind == deliveryClaudeModules:
+		// Pointers name the absolute directory of the planned module paths.
+		bundle, err := buildOrchestratorModules(agent, options.ReviewContract, filepath.Dir(delivery.paths[1]))
+		if err != nil {
+			return Result{}, err
+		}
+		orchestrator, modules = bundle.core, bundle.modules
+	case agent != model.AgentPi:
+		orchestrator, err = RenderOrchestratorWithSource(agent, options.ReviewContract, options.OrchestratorCapability)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	merge := func(existing string) string {
+		if orchestrator != "" {
+			existing = injectOrchestratorSection(existing, orchestrator)
+		}
+		return filemerge.InjectMarkdownSection(existing, RoutingSectionID, rendered)
+	}
+
 	switch delivery.kind {
 	case deliveryOrchestratorPrompt:
-		return injectOrchestratorPrompt(delivery, agent, rendered)
+		return injectOrchestratorPrompt(delivery, agent, merge)
 	case deliveryJinjaModule:
-		return injectJinjaModule(targetDir, delivery, agent, rendered)
+		return injectJinjaModule(targetDir, delivery, agent, merge)
+	case deliveryClaudeModules:
+		return commitOrchestratorCore(filepath.Dir(delivery.paths[0]), merge, modules)
 	default:
-		return injectPromptSection(delivery, rendered)
+		return injectPromptSection(delivery, merge)
 	}
 }
 
-// RoutingPaths reports the exact filesystem paths InjectRouting would write for
-// one supported agent under targetDir, without creating or touching anything.
+// RoutingPathsWithOptions reports the exact filesystem paths
+// InjectRoutingWithOptions would write for one supported agent under
+// targetDir, including any caller-resolved effective settings path, without
+// creating or touching anything.
 //
 // Install and sync must snapshot every file they are about to rewrite. Routing
 // guidance is delivered outside the component loop, so a selection whose
@@ -117,18 +177,28 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 // without a backup and could never be rolled back. Both answers come from the
 // same delivery resolution, so the backup contract cannot drift away from what
 // the injector actually writes.
-func RoutingPaths(targetDir string, agent model.AgentID) ([]string, error) {
-	return RoutingPathsWithOptions(targetDir, agent, RoutingOptions{})
-}
-
-// RoutingPathsWithOptions reports the same paths InjectRoutingWithOptions would
-// write, including any caller-resolved effective settings path.
 func RoutingPathsWithOptions(targetDir string, agent model.AgentID, options RoutingOptions) ([]string, error) {
+	if isCatalogOnlyGuidanceTarget(agent) {
+		// Same catalog-only skip as InjectRoutingWithOptions: no guidance
+		// target exists, so the backup snapshot must declare no path.
+		return nil, nil
+	}
+
 	delivery, err := resolveRoutingDelivery(targetDir, agent, options)
 	if err != nil {
 		return nil, err
 	}
 	return delivery.paths, nil
+}
+
+// isCatalogOnlyGuidanceTarget reports whether an agent is detection and
+// catalog only, with no standalone guidance target for install/sync to write.
+// Conductor inherits Claude Code configuration for the workspaces it manages,
+// and its capability manifest claims no managed system prompt; the skip must
+// track that canonical contract (guarded by
+// TestConductorIsTheOnlyCatalogOnlyGuidanceTarget).
+func isCatalogOnlyGuidanceTarget(agent model.AgentID) bool {
+	return agent == model.AgentConductor
 }
 
 // routingDeliveryKind names the three scopes an agent actually loads guidance
@@ -141,6 +211,9 @@ const (
 	deliveryPromptSection routingDeliveryKind = iota
 	deliveryJinjaModule
 	deliveryOrchestratorPrompt
+	// deliveryClaudeModules is the opt-in Claude global core plus modules;
+	// its paths are the core, every known module name and the ledger.
+	deliveryClaudeModules
 )
 
 // routingDelivery is the single resolution of how and where guidance reaches
@@ -195,8 +268,15 @@ func resolveRoutingDelivery(targetDir string, agent model.AgentID, options Routi
 			kind:         deliveryJinjaModule,
 			adapter:      adapter,
 			bootstrapper: bootstrapper,
-			paths:        []string{filepath.Join(configDir, routingModuleFile)},
+			paths:        []string{filepath.Join(configDir, routingModuleFile), adapter.SystemPromptFile(targetDir)},
 		}, nil
+
+	case agent == model.AgentClaudeCode && options.ClaudeGlobalModules:
+		configDir := adapter.GlobalConfigDir(targetDir)
+		if !filepath.IsAbs(configDir) {
+			return routingDelivery{}, fmt.Errorf("%w: Claude global modules need an absolute config dir, got %q", ErrInvalidTarget, configDir)
+		}
+		return routingDelivery{kind: deliveryClaudeModules, adapter: adapter, paths: orchestratorCorePaths(configDir)}, nil
 
 	default:
 		promptPath := adapter.SystemPromptFile(targetDir)
@@ -218,9 +298,12 @@ func DeliversThroughOrchestratorPrompt(agent model.AgentID) bool {
 	return agent == model.AgentOpenCode || agent == model.AgentKilocode
 }
 
-// injectPromptSection is the default delivery: a managed marker section inside
+// guidanceMerge folds every managed guidance section into existing content.
+type guidanceMerge func(existing string) string
+
+// injectPromptSection is the default delivery: managed marker sections inside
 // the adapter's own system prompt file.
-func injectPromptSection(delivery routingDelivery, rendered string) (Result, error) {
+func injectPromptSection(delivery routingDelivery, merge guidanceMerge) (Result, error) {
 	promptPath := delivery.paths[0]
 
 	existing, err := readFileOrEmpty(promptPath)
@@ -228,9 +311,9 @@ func injectPromptSection(delivery routingDelivery, rendered string) (Result, err
 		return Result{}, err
 	}
 
-	updated := filemerge.InjectMarkdownSection(existing, RoutingSectionID, rendered)
+	updated := merge(existing)
 
-	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), filemerge.ExistingFileMode(promptPath, 0o644))
 	if err != nil {
 		return Result{}, err
 	}
@@ -244,7 +327,13 @@ func injectPromptSection(delivery routingDelivery, rendered string) (Result, err
 // verbatim from an embedded asset on every run, so anything injected into that
 // file is destroyed by the next sync. The module survives because the router
 // only references it.
-func injectJinjaModule(targetDir string, delivery routingDelivery, agent model.AgentID, rendered string) (Result, error) {
+func injectJinjaModule(targetDir string, delivery routingDelivery, agent model.AgentID, merge guidanceMerge) (Result, error) {
+	hubPath := delivery.adapter.SystemPromptFile(targetDir)
+	hubBefore, err := readBytesOrEmpty(hubPath)
+	if err != nil {
+		return Result{}, err
+	}
+
 	// Bootstrap first: the module is only ever read through the router template,
 	// so the template must exist before the module is worth writing.
 	if err := delivery.bootstrapper.BootstrapTemplate(targetDir); err != nil {
@@ -261,14 +350,26 @@ func injectJinjaModule(targetDir string, delivery routingDelivery, agent model.A
 		return Result{}, err
 	}
 
-	updated := filemerge.InjectMarkdownSection(existing, RoutingSectionID, rendered)
+	updated := merge(existing)
 
-	writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(updated), 0o644)
+	writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(updated), filemerge.ExistingFileMode(modulePath, 0o644))
 	if err != nil {
 		return Result{}, err
 	}
 
-	return Result{Changed: writeResult.Changed, Files: []string{modulePath}}, nil
+	// Some Jinja-module adapters (current kimi-code) read a plain AGENTS.md hub
+	// rather than evaluating {% include %} at runtime. Refresh the hub after the
+	// module write so those adapters load the newly written module content while
+	// legacy Jinja runtimes retain their router template unchanged.
+	if err := delivery.bootstrapper.BootstrapTemplate(targetDir); err != nil {
+		return Result{}, fmt.Errorf("refresh routing guidance template for %q: %w", agent, err)
+	}
+	hubAfter, err := readBytesOrEmpty(hubPath)
+	if err != nil {
+		return Result{}, err
+	}
+
+	return Result{Changed: writeResult.Changed || !bytes.Equal(hubBefore, hubAfter), Files: delivery.paths}, nil
 }
 
 // requireModuleIsIncluded verifies the freshly bootstrapped router template
@@ -294,7 +395,12 @@ func requireModuleIsIncluded(adapter agents.Adapter, agent model.AgentID, target
 // injectOrchestratorPrompt delivers guidance inside the managed orchestrator
 // agent definition of the adapter's settings document — the always-loaded scope
 // for the OpenCode family. Every other key in that document is preserved.
-func injectOrchestratorPrompt(delivery routingDelivery, agent model.AgentID, rendered string) (Result, error) {
+// A JSONC settings path is rewritten with the JSONC-preserving merge, so user
+// comments and trailing commas around the touched agent value survive; a
+// document the rewrite cannot safely touch (malformed, duplicate keys, escaped
+// spellings of touched keys, comments inside the touched agent value) fails
+// closed with an error and is never written.
+func injectOrchestratorPrompt(delivery routingDelivery, agent model.AgentID, merge guidanceMerge) (Result, error) {
 	settingsPath := delivery.paths[0]
 
 	raw, err := readBytesOrEmpty(settingsPath)
@@ -315,7 +421,7 @@ func injectOrchestratorPrompt(delivery routingDelivery, agent model.AgentID, ren
 		return Result{}, err
 	}
 
-	updatedPrompt := filemerge.InjectMarkdownSection(existingPrompt, RoutingSectionID, rendered)
+	updatedPrompt := merge(existingPrompt)
 
 	overlay, err := json.Marshal(map[string]any{
 		"agent": map[string]any{
@@ -326,12 +432,12 @@ func injectOrchestratorPrompt(delivery routingDelivery, agent model.AgentID, ren
 		return Result{}, fmt.Errorf("encode routing guidance overlay for %q: %w", agent, err)
 	}
 
-	merged, err := filemerge.MergeJSONObjects(raw, overlay)
+	merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
 	if err != nil {
 		return Result{}, fmt.Errorf("merge routing guidance into %q: %w", settingsPath, err)
 	}
 
-	writeResult, err := filemerge.WriteFileAtomic(settingsPath, merged, 0o644)
+	writeResult, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
 	if err != nil {
 		return Result{}, err
 	}

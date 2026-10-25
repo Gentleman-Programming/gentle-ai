@@ -1,66 +1,30 @@
 package reviewassets
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/managedownership"
 )
 
 // OwnershipLedgerFilename identifies the native rendered-agent ownership record.
 const OwnershipLedgerFilename = ".gentle-ai-native-agent-ownership.json"
 
-const ownershipVersion = 1
+// The shared managed-ownership ledger reads and validates the native-agent
+// ledger; these wrappers keep the installer reading as it did before the move.
+const ownershipVersion = managedownership.Version
 
+// ownershipLedger stays a reviewassets type so JSON decode errors keep naming it.
 type ownershipLedger struct {
 	Version int               `json:"version"`
 	Files   map[string]string `json:"files"`
 }
 
-func installedHash(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
+func installedHash(data []byte) string { return managedownership.Hash(data) }
 
 func readOwnership(path string, names []string) (ownershipLedger, bool, error) {
-	ledger := ownershipLedger{Version: ownershipVersion, Files: make(map[string]string)}
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return ledger, false, nil
-	}
-	if err != nil {
-		return ledger, false, fmt.Errorf("stat ownership ledger: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return ledger, false, fmt.Errorf("ownership ledger is not a regular file: %s", path)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ledger, false, fmt.Errorf("read ownership ledger: %w", err)
-	}
-	parsed := ownershipLedger{}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		return ledger, false, fmt.Errorf("decode ownership ledger: %w", err)
-	}
-	if parsed.Version != ownershipVersion || parsed.Files == nil {
-		return ledger, false, fmt.Errorf("unsupported ownership ledger version or missing files")
-	}
-	allowed := make(map[string]bool, len(names))
-	for _, name := range names {
-		allowed[name] = true
-	}
-	for name, hash := range parsed.Files {
-		if !allowed[name] || len(hash) != 64 || strings.ToLower(hash) != hash {
-			return ledger, false, fmt.Errorf("invalid ownership ledger entry %q", name)
-		}
-		if _, err := hex.DecodeString(hash); err != nil {
-			return ledger, false, fmt.Errorf("invalid ownership hash for %q: %w", name, err)
-		}
-	}
-	return parsed, true, nil
+	return managedownership.Read[ownershipLedger](path, names)
 }
 
 func nativeFile(path string) ([]byte, bool, error) {

@@ -17,12 +17,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
 )
 
 const reviewTestZeroTarget = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -36,17 +35,17 @@ func reviewDefectReportDir(t *testing.T, repo string) string {
 	return filepath.Join(commonDir, "gentle-ai", reviewDefectReportDirName)
 }
 
-// injectReviewStartFault forces an unanticipated internal fault at START's
-// candidate freeze: a real choke point on the mutating path, reached before
-// any authority exists. It replaced the untracked-scope discovery seam that
-// #2394 removed from START.
+// injectReviewStartFault forces an unanticipated internal fault at the
+// negotiated command runner to test unclaimed-error residue. START's candidate
+// freeze failures now produce a typed candidate_context_unavailable refusal,
+// so they no longer exercise the defect-report path.
 func injectReviewStartFault(t *testing.T, fault error) {
 	t.Helper()
-	previous := reviewFacadeBuildStartSnapshot
-	reviewFacadeBuildStartSnapshot = func(context.Context, reviewtransaction.SnapshotBuilder, reviewtransaction.Target) (reviewtransaction.Snapshot, error) {
-		return reviewtransaction.Snapshot{}, fault
+	previous := reviewFacadeCommandRunner
+	reviewFacadeCommandRunner = func(context.Context, []string, io.Writer) error {
+		return fault
 	}
-	t.Cleanup(func() { reviewFacadeBuildStartSnapshot = previous })
+	t.Cleanup(func() { reviewFacadeCommandRunner = previous })
 }
 
 func TestNegotiatedStartUnanticipatedFaultEmitsEnvelopeAndDefectReport(t *testing.T) {

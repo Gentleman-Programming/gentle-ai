@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // TestCommittedCorrectionStatusAfterCommitAnswersTheTransitionItBinds is the
@@ -28,7 +28,7 @@ import (
 // as a scope-changed recovery while the validation request admitted it, so the
 // envelope bound its context to a validation it then did not offer. The
 // over-budget contraction is the one shape that legitimately routes to
-// recovery, and it must get that collect rather than the same refusal.
+// recovery, and it must get native RECOVER rather than the same refusal.
 func TestCommittedCorrectionStatusAfterCommitAnswersTheTransitionItBinds(t *testing.T) {
 	for _, testCase := range []struct {
 		name          string
@@ -37,23 +37,32 @@ func TestCommittedCorrectionStatusAfterCommitAnswersTheTransitionItBinds(t *test
 		pinnedBaseRef bool
 		companionTest bool
 		contraction   bool
+		dirtyTracked  bool
+		amend         bool
 	}{
 		{name: "deterministic/continuation-tokens", evidence: reviewtransaction.EvidenceDeterministic, causal: reviewtransaction.CausalIntroduced},
 		{name: "deterministic/pinned-commit-sha", evidence: reviewtransaction.EvidenceDeterministic, causal: reviewtransaction.CausalIntroduced, pinnedBaseRef: true},
 		{name: "deterministic/companion-test-added", evidence: reviewtransaction.EvidenceDeterministic, causal: reviewtransaction.CausalIntroduced, companionTest: true},
 		{name: "inferential/companion-test-added/pinned-commit-sha", evidence: reviewtransaction.EvidenceInferential, causal: reviewtransaction.CausalBehaviorActivated, pinnedBaseRef: true, companionTest: true},
 		{name: "deterministic/over-budget-contraction", evidence: reviewtransaction.EvidenceDeterministic, causal: reviewtransaction.CausalIntroduced, contraction: true},
+		{name: "dirty-tracked/commit", evidence: reviewtransaction.EvidenceDeterministic, causal: reviewtransaction.CausalIntroduced, pinnedBaseRef: true, dirtyTracked: true},
+		{name: "dirty-tracked/amend", evidence: reviewtransaction.EvidenceDeterministic, causal: reviewtransaction.CausalIntroduced, pinnedBaseRef: true, dirtyTracked: true, amend: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			committedCorrectionStatusAfterCommit(t, testCase.evidence, testCase.causal, testCase.pinnedBaseRef, testCase.companionTest, testCase.contraction)
+			committedCorrectionStatusAfterCommit(t, testCase.evidence, testCase.causal, testCase.pinnedBaseRef, testCase.companionTest, testCase.contraction, testCase.dirtyTracked, testCase.amend)
 		})
 	}
 }
 
-func committedCorrectionStatusAfterCommit(t *testing.T, evidence reviewtransaction.EvidenceClass, causal reviewtransaction.CausalDisposition, pinnedBaseRef, companionTest, contraction bool) {
+func committedCorrectionStatusAfterCommit(t *testing.T, evidence reviewtransaction.EvidenceClass, causal reviewtransaction.CausalDisposition, pinnedBaseRef, companionTest, contraction, dirtyTracked, amend bool) {
 	t.Helper()
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
+	if dirtyTracked {
+		writeReviewStartCandidate(t, repo, "unrelated.md", "base note\n", 0o644)
+		runReviewCLIGit(t, repo, "add", "unrelated.md")
+		runReviewCLIGit(t, repo, "commit", "-qm", "base note")
+	}
 	baseCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 1\n}\n", 0o644)
 	if contraction {
@@ -163,6 +172,21 @@ func committedCorrectionStatusAfterCommit(t *testing.T, evidence reviewtransacti
 		t.Fatalf("capture correction plan: %v\n%s", err, planOutput.String())
 	}
 
+	if dirtyTracked {
+		unchanged := boundStatus("after the accepted forecast without a correction")
+		if unchanged.NextTransition == nil || unchanged.NextTransition.Kind != reviewNextTransitionStop ||
+			unchanged.NextTransition.ReasonCode != "corrected_candidate_unavailable" || unchanged.NextTransition.Collect != nil {
+			t.Fatalf("unchanged correction must not reoffer its accepted forecast: %#v", unchanged.NextTransition)
+		}
+		var rejected bytes.Buffer
+		if err := RunReviewCaptureCorrectionPlan(planArgs, &rejected); err == nil {
+			t.Fatal("the already accepted forecast was captured again")
+		}
+		afterRejected := boundStatus("after rejected forecast replay")
+		if afterRejected.Authority.Revision != unchanged.Authority.Revision {
+			t.Fatal("rejected forecast replay changed authority")
+		}
+	}
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\nfunc value() int {\n\treturn 2\n}\n", 0o644)
 	uncommitted := boundStatus("with the uncommitted correction")
 	if uncommitted.NextTransition == nil || uncommitted.NextTransition.Kind != reviewNextTransitionStop ||
@@ -178,19 +202,33 @@ func committedCorrectionStatusAfterCommit(t *testing.T, evidence reviewtransacti
 	if contraction {
 		// Dropping a reviewed path entirely contracts the genesis scope, and
 		// the deleted lines exceed the two-line budget: native routes this
-		// lineage to recovery, so STATUS must answer with that collect
+		// lineage to recovery, so STATUS must answer with native RECOVER
 		// instead of binding a validation it does not offer.
 		runReviewCLIGit(t, repo, "rm", "-q", "helper.go")
 	}
 	runReviewCLIGit(t, repo, "add", ".")
-	runReviewCLIGit(t, repo, "commit", "-qm", "correct candidate")
+	if amend {
+		runReviewCLIGit(t, repo, "commit", "--amend", "--no-edit", "-q")
+	} else {
+		runReviewCLIGit(t, repo, "commit", "-qm", "correct candidate")
+	}
+	if dirtyTracked {
+		writeReviewStartCandidate(t, repo, "unrelated.md", "dirty note outside review scope\n", 0o644)
+	}
 	committed := boundStatus("after the committed correction")
 	transition := committed.NextTransition
 	if contraction {
 		if committed.Action != reviewtransaction.TargetStatusActionRecover || committed.ValidationRequest != nil || committed.RepositoryContext == nil ||
 			committed.RepositoryContext.TargetIdentity != reviewAuthorityTargetIdentity(committed) ||
-			transition == nil || transition.Kind != reviewNextTransitionCollect || !strings.HasPrefix(transition.ReasonCode, "recovery_") {
-			t.Fatalf("bound STATUS after the over-budget contraction = action=%q validation=%#v context=%#v transition=%#v, want the recovery collect bound to the authority target", committed.Action, committed.ValidationRequest, committed.RepositoryContext, transition)
+			transition == nil || transition.Kind != reviewNextTransitionExecute || transition.Execute == nil || transition.Execute.Operation != "review.recover" ||
+			transition.Execute.Binding.LineageID != lineage || transition.Execute.Binding.TargetIdentity != committed.TargetIdentity {
+			t.Fatalf("bound STATUS after the over-budget contraction = action=%q validation=%#v context=%#v transition=%#v, want native recovery with the selected target and unchanged authority context", committed.Action, committed.ValidationRequest, committed.RepositoryContext, transition)
+		}
+		var recovered ReviewRecoverResult
+		decodeStrictReviewJSON(t, executeSelectorTransition(t, repo, committed), &recovered)
+		after, err := store.Load()
+		if err != nil || after.Revision != committed.Authority.Revision || recovered.TargetIdentity != committed.TargetIdentity || recovered.LineageID != selectorTransitionArguments(t, committed)["successor-lineage"] {
+			t.Fatalf("printed contraction recovery lost its binding or changed predecessor: %#v, %v", recovered, err)
 		}
 		return
 	}
@@ -205,5 +243,27 @@ func committedCorrectionStatusAfterCommit(t *testing.T, evidence reviewtransacti
 	}
 	if arguments["agent"] != string(model.AgentClaudeCode) || arguments["target"] != committed.ValidationRequest.CorrectionTargetIdentity {
 		t.Fatalf("targeted validation input = %#v, want bound to %s and the corrected candidate", transition.Collect.Inputs[0], model.AgentClaudeCode)
+	}
+	if dirtyTracked {
+		repeated := boundStatus("with the same committed correction and unrelated dirt")
+		if repeated.ValidationRequest.RequestHash != committed.ValidationRequest.RequestHash ||
+			repeated.ValidationRequest.CorrectionCandidateTree != committed.ValidationRequest.CorrectionCandidateTree ||
+			strings.Join(repeated.ValidationRequest.CorrectionPaths, ",") != "candidate.go" {
+			t.Fatal("repeated STATUS changed the committed correction subject or admitted unrelated dirt")
+		}
+		payload = providerTargetedValidationPayload(t, *committed.ValidationRequest)
+		var validationOutput bytes.Buffer
+		if err := RunReviewCaptureValidation(reviewTransitionInputTokens(t, repo, transition.Collect.Inputs[0]), &validationOutput); err != nil {
+			t.Fatalf("exact offered validator: %v\n%s", err, validationOutput.String())
+		}
+		var terminal reviewLastEventClosureResult
+		decodeStrictReviewJSON(t, validationOutput.Bytes(), &terminal)
+		if terminal.State != reviewtransaction.StateApproved {
+			t.Fatalf("validator state = %q, want approved", terminal.State)
+		}
+		assertApprovedCompactAuthorityBurned(t, store, lineage)
+		if got := runReviewCLIGit(t, repo, "diff", "--", "unrelated.md"); !strings.Contains(got, "dirty note outside review scope") {
+			t.Fatalf("unrelated dirt changed: %s", got)
+		}
 	}
 }

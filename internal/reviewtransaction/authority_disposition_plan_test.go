@@ -277,6 +277,77 @@ func TestHistoricalAuthorityDispositionPlanRejectsAnyAdditionalDiagnostic(t *tes
 	}
 }
 
+// TestHistoricalDispositionPlanForSelectorRefusesRetainedEdgeReference pins
+// the fail-closed edge-detachment guard on the historical selector path: a
+// historical entry that any retained report edge still names (on either
+// side) must not admit a per-entry disposition plan while the graph still
+// references it. The PREDECESSOR side of the reference is reachable in real
+// stores — edges are built from loaded successors, so a loaded successor
+// naming a now-historical predecessor yields the retained reference (#2995)
+// — while the SUCCESSOR side stays drift hardening: a historical entry never
+// loads, so it can never be an edge successor.
+func TestHistoricalDispositionPlanForSelectorRefusesRetainedEdgeReference(t *testing.T) {
+	const historicalLineage = "edge-referenced-historical-authority"
+	const counterpart = "retained-edge-counterpart"
+	digest := "sha256:" + strings.Repeat("b", 64)
+	base := CompactRecoveryInspectionReport{
+		EntryDiagnostics: []CompactRecoveryEntryDiagnostic{{LineageID: historicalLineage, Problem: compactInspectionEntryOutdated}},
+		historical:       map[string]historicalCompactForensicRecord{historicalLineage: {RawDigest: digest}},
+	}
+	selector := AuthorityDispositionSelector{SuccessorLineageID: historicalLineage, SuccessorExpectedRevision: digest}
+
+	t.Run("entry referenced as an edge successor refuses", func(t *testing.T) {
+		report := base
+		report.Edges = []CompactRecoveryEdgeInspection{{PredecessorLineageID: counterpart, SuccessorLineageID: historicalLineage, Valid: false}}
+		_, err := deriveAuthorityDispositionPlan(report, map[string]CompactRecord{}, "binding", "maintainer@example.com", "edge-detached forensic quarantine", selector)
+		if !errors.Is(err, errAuthorityDispositionPlanNotDerivable) || !strings.Contains(err.Error(), historicalLineage) || !strings.Contains(err.Error(), counterpart) {
+			t.Fatalf("successor-referenced historical entry derivation error = %v, want errAuthorityDispositionPlanNotDerivable naming the retained edge", err)
+		}
+	})
+	t.Run("entry referenced as an edge predecessor refuses", func(t *testing.T) {
+		report := base
+		report.Edges = []CompactRecoveryEdgeInspection{{PredecessorLineageID: historicalLineage, SuccessorLineageID: counterpart, Valid: false}}
+		_, err := deriveAuthorityDispositionPlan(report, map[string]CompactRecord{}, "binding", "maintainer@example.com", "edge-detached forensic quarantine", selector)
+		if !errors.Is(err, errAuthorityDispositionPlanNotDerivable) || !strings.Contains(err.Error(), historicalLineage) || !strings.Contains(err.Error(), counterpart) {
+			t.Fatalf("predecessor-referenced historical entry derivation error = %v, want errAuthorityDispositionPlanNotDerivable naming the retained edge", err)
+		}
+	})
+	t.Run("a retained edge naming no selected entry leaves derivation intact", func(t *testing.T) {
+		report := base
+		report.Edges = []CompactRecoveryEdgeInspection{{PredecessorLineageID: counterpart, SuccessorLineageID: "unrelated-successor", Valid: false}}
+		if _, err := deriveAuthorityDispositionPlan(report, map[string]CompactRecord{}, "binding", "maintainer@example.com", "edge-detached forensic quarantine", selector); err != nil {
+			t.Fatalf("unrelated retained edge blocked the historical plan: %v", err)
+		}
+	})
+}
+
+// TestHistoricalDispositionPlanSelectorlessRefusesEdgeReferencedEntry pins
+// the same edge-detachment invariant on the selectorless historical gate:
+// a store whose single historical entry a retained edge still references
+// (the PREDECESSOR side — reachable in real stores through a loaded
+// successor naming a now-historical predecessor, #2995) must refuse to mint
+// the historical plan exactly like the exact-selector path does, so the
+// gate and the per-entry selector path share one eligibility contract.
+func TestHistoricalDispositionPlanSelectorlessRefusesEdgeReferencedEntry(t *testing.T) {
+	const historicalLineage = "edge-referenced-historical-authority"
+	const successor = "loaded-edge-successor"
+	digest := "sha256:" + strings.Repeat("b", 64)
+	report := CompactRecoveryInspectionReport{
+		EntryDiagnostics: []CompactRecoveryEntryDiagnostic{{LineageID: historicalLineage, Problem: compactInspectionEntryOutdated}},
+		historical:       map[string]historicalCompactForensicRecord{historicalLineage: {RawDigest: digest}},
+		Edges:            []CompactRecoveryEdgeInspection{{PredecessorLineageID: historicalLineage, SuccessorLineageID: successor, Valid: false, Problems: []string{"missing predecessor"}}},
+	}
+	// A loaded successor record, modeling the real store shape that produced
+	// the retained reference above; its fields are not read before refusal.
+	records := map[string]CompactRecord{successor: {
+		Revision: "sha256:" + strings.Repeat("c", 64),
+		State:    CompactState{LineageID: successor, Recovery: &CompactRecoveryProvenance{PredecessorLineageID: historicalLineage, PredecessorRevision: digest}},
+	}}
+	if _, err := deriveAuthorityDispositionPlan(report, records, "binding", "", ""); !errors.Is(err, errAuthorityDispositionPlanNotDerivable) {
+		t.Fatalf("selectorless derivation on an edge-referenced historical entry = %v, want errAuthorityDispositionPlanNotDerivable", err)
+	}
+}
+
 func TestAuthorityDispositionPlanScopesEntryDiagnosticsToClosure(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	predecessor, successor, _ := forgedRecoveryPair(t, repo, "diagnostic-scope", "diagnostic scope target\n")

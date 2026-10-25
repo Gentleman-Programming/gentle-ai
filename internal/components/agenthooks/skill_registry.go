@@ -2,16 +2,14 @@
 package agenthooks
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 type Result struct {
@@ -92,7 +90,7 @@ func installSkillRegistry(homeDir string, adapter agents.Adapter, platform strin
 	if path == "" {
 		return Result{}, nil
 	}
-	root := map[string]any{}
+	var data []byte
 	info, err := os.Lstat(path)
 	if err != nil && !os.IsNotExist(err) {
 		return Result{}, err
@@ -101,15 +99,13 @@ func installSkillRegistry(homeDir string, adapter agents.Adapter, platform strin
 		if !info.Mode().IsRegular() {
 			return Result{}, fmt.Errorf("hook settings %q is not a regular file", path)
 		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return Result{}, readErr
+		if data, err = os.ReadFile(path); err != nil {
+			return Result{}, err
 		}
-		if len(strings.TrimSpace(string(data))) > 0 {
-			if jsonErr := json.Unmarshal(data, &root); jsonErr != nil {
-				return Result{}, fmt.Errorf("parse hook settings %q: %w", path, jsonErr)
-			}
-		}
+	}
+	root, err := decodeHookSettings(data)
+	if err != nil {
+		return Result{}, fmt.Errorf("parse hook settings %q: %w", path, err)
 	}
 	hooks, ok := root["hooks"].(map[string]any)
 	if _, exists := root["hooks"]; exists && !ok {
@@ -147,15 +143,14 @@ func installSkillRegistry(homeDir string, adapter agents.Adapter, platform strin
 		}
 		hooks[event] = append(entries, entry)
 	}
-	root["hooks"] = hooks
-	out, err := json.MarshalIndent(root, "", "  ")
+	out, err := encodeHookSettings(data, root, hooks)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("rewrite hook settings %q: %w", path, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return Result{}, err
 	}
-	wr, err := filemerge.WriteFileAtomic(path, append(out, '\n'), 0o644)
+	wr, err := filemerge.WriteFileAtomic(path, out, 0o644)
 	if err != nil {
 		return Result{}, err
 	}

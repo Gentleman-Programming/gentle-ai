@@ -3,13 +3,16 @@ package state
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const stateDir = ".gentle-ai"
@@ -78,6 +81,11 @@ type InstallState struct {
 
 	// CodexOrchestratorAssignment is optional so legacy state preserves the user's top-level Codex configuration.
 	CodexOrchestratorAssignment *CodexOrchestratorAssignmentState `json:"codexOrchestratorAssignment,omitempty"`
+
+	// CodexServiceTier is the top-level config.toml service_tier Gentle AI wrote
+	// (for example "priority" for Fast). Empty means Gentle AI manages none, so
+	// a user-set service_tier is never touched.
+	CodexServiceTier string `json:"codexServiceTier,omitempty"`
 
 	// CodexCarrilModelAssignments maps the three carril profile names
 	// (sdd-strong|sdd-mid|sdd-cheap) to OpenAI subscription model IDs
@@ -162,6 +170,12 @@ func (s *InstallState) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
+	if fields == nil {
+		return errors.New("state file must contain a JSON object, not null; restore a valid state file from a backup that keeps your intended persona and installation settings, then retry")
+	}
+	if err := rejectAmbiguousPersonaKeys(data); err != nil {
+		return err
+	}
 
 	*s = InstallState(decoded)
 	if legacy, ok := fields["strict_tdd"]; ok {
@@ -173,9 +187,41 @@ func (s *InstallState) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// rejectAmbiguousPersonaKeys refuses top-level keys that the case-insensitive
+// struct decoder would collapse into Persona, so presence and value cannot
+// disagree. Keys are compared after JSON unescaping.
+func rejectAmbiguousPersonaKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	seen := false
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := token.(string)
+		if strings.EqualFold(key, "persona") {
+			if key != "persona" {
+				return fmt.Errorf("state file key %q must be spelled %q; rename it and retry", key, "persona")
+			}
+			if seen {
+				return fmt.Errorf("state file has duplicate %q keys; keep exactly one and retry", "persona")
+			}
+			seen = true
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Path returns the absolute path to the state file for the given home directory.
 func Path(homeDir string) string {
-	return filepath.Join(homeDir, stateDir, stateFile)
+	return filepath.Join(Dir(homeDir), stateFile)
 }
 
 // Read reads and unmarshals the state file from the given home directory.
@@ -264,6 +310,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		KiroModelAssignments:        existing.KiroModelAssignments,
 		CodexModelAssignments:       existing.CodexModelAssignments,
 		CodexOrchestratorAssignment: existing.CodexOrchestratorAssignment,
+		CodexServiceTier:            existing.CodexServiceTier,
 		CodexCarrilModelAssignments: existing.CodexCarrilModelAssignments,
 		CodexPhaseModelAssignments:  existing.CodexPhaseModelAssignments,
 		Persona:                     existing.Persona,
@@ -282,7 +329,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 // Write persists the full install state to disk under the given home directory.
 // It creates the .gentle-ai directory if it does not already exist.
 func Write(homeDir string, s InstallState) error {
-	dir := filepath.Join(homeDir, stateDir)
+	dir := Dir(homeDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 // PiBackgroundSubagentsEnv is the environment source for the managed Pi
@@ -149,9 +150,13 @@ func ResolvePiBackgroundInteractive(prior model.PiBackgroundIntent) (PiBackgroun
 }
 
 // piBackgroundPolicyPath resolves the gentle-pi-readable policy location:
-// <base>/gentle-ai/background-subagents.json where base is
+// <GENTLE_AI_PI_CONFIG_DIR>/background-subagents.json when that is set,
+// otherwise <base>/gentle-ai/background-subagents.json where base is
 // GENTLE_PI_CONFIG_HOME when set, otherwise ~/.pi.
 func piBackgroundPolicyPath(homeDir string) string {
+	if dir, ok := piagent.GentlePiConfigDirOverride(); ok {
+		return filepath.Join(dir, "background-subagents.json")
+	}
 	base := strings.TrimSpace(os.Getenv(PiConfigHomeEnv))
 	if base == "" {
 		base = filepath.Join(homeDir, ".pi")

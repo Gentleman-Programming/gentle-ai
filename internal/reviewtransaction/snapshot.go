@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pathidentity"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pathidentity"
 )
 
 type TargetKind string
@@ -246,6 +246,18 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 		return Snapshot{}, err
 	}
 
+	// Defensive guard: no snapshot may ever have empty base or candidate tree.
+	// This protects against any future code path or target kind that might
+	// leave trees unresolved without an error. Agents and downstream code
+	// must never see "base_tree: None" or "candidate_tree: None" after a
+	// successful Build(). (issue start-candidate-context-failure)
+	if strings.TrimSpace(baseTree) == "" {
+		return Snapshot{}, fmt.Errorf("base tree empty after resolving target %s; review the repository state and rerun with a valid base_ref", target.Kind) // refusal:by-design world-action: repository base or candidate tree should never be empty after Build(); if encountered, the working tree or index is corrupted
+	}
+	if strings.TrimSpace(candidateTree) == "" {
+		return Snapshot{}, fmt.Errorf("candidate tree empty after building target %s; the working tree or staged index may be corrupted", target.Kind) // refusal:by-design world-action: repository base or candidate tree should never be empty after Build(); if encountered, the working tree or index is corrupted
+	}
+
 	paths, err := builder.changedPaths(ctx, baseTree, candidateTree)
 	if err != nil {
 		return Snapshot{}, err
@@ -287,14 +299,12 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 	if err != nil {
 		return "", "", err
 	}
-	// Keep the private index beside Git's writable control files. A restricted
-	// integration environment may not provide an accessible process temp dir.
-	temp, err := os.CreateTemp(gitDir, ".gentle-ai-review-index-*")
+	temp, cleanup, err := createSnapshotIndex(gitDir)
 	if err != nil {
 		return "", "", err
 	}
 	tempIndex := temp.Name()
-	defer os.Remove(tempIndex)
+	defer cleanup()
 	if err := temp.Close(); err != nil {
 		return "", "", err
 	}
@@ -314,6 +324,35 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 	candidateTree := strings.TrimSpace(string(output))
 	proof, err := builder.untrackedProof(ctx, candidateTree, intended)
 	return candidateTree, proof, err
+}
+
+// createSnapshotIndex keeps ordinary inspection scratch outside the caller's
+// Git directory. A private directory also contains Git's sibling index lock.
+// Restricted hosts without usable process temporaries retain the repository
+// fallback required by #2044 and #2132.
+func createSnapshotIndex(gitDir string) (*os.File, func(), error) {
+	base, baseErr := filepath.Abs(os.TempDir())
+	if baseErr == nil && snapshotTempBaseSafe(base) {
+		directory, err := os.MkdirTemp(base, ".gentle-ai-review-index-*")
+		if err == nil {
+			err = validatePrivateRARDirectory(directory)
+			if err == nil {
+				var file *os.File
+				file, err = createPrivateRARTempFile(directory)
+				if err == nil {
+					return file, func() { _ = os.RemoveAll(directory) }, nil
+				}
+			}
+			if removeErr := os.Remove(directory); removeErr != nil {
+				return nil, nil, errors.Join(err, removeErr)
+			}
+		}
+	}
+	file, err := os.CreateTemp(gitDir, ".gentle-ai-review-index-*")
+	if err != nil {
+		return nil, nil, err
+	}
+	return file, func() { _ = os.Remove(file.Name()) }, nil
 }
 
 // ValidateEvidence binds snapshot metadata to repository object evidence.
@@ -1202,14 +1241,12 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 			return "", "", "", fmt.Errorf("intended-untracked path %q must name a file or symlink, not a directory", logicalPath)
 		}
 	}
-	// Keep the private index beside Git's writable control files. A restricted
-	// integration environment may not provide an accessible process temp dir.
-	temp, err := os.CreateTemp(filepath.Dir(indexPath), ".gentle-ai-review-index-*")
+	temp, cleanup, err := createSnapshotIndex(filepath.Dir(indexPath))
 	if err != nil {
 		return "", "", "", err
 	}
 	tempIndex := temp.Name()
-	defer os.Remove(tempIndex)
+	defer cleanup()
 	if err := temp.Close(); err != nil {
 		return "", "", "", err
 	}

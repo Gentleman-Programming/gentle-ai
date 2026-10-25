@@ -7,8 +7,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // ReviewAssessmentSchema is the typed envelope gentle-ai review assess prints
@@ -148,9 +148,9 @@ func reviewAssessDue(consumed bool, publicRisk string, changedLines int) (bool, 
 		return false, reviewAssessDueReasonAlreadyReviewed
 	case publicRisk == "high":
 		return true, reviewAssessDueReasonHighRisk
-	case publicRisk == "medium" && changedLines >= reviewtransaction.LargeChangeLines:
-		return true, reviewAssessDueReasonSliceBudgetReached
 	case publicRisk == "medium":
+		// Automatic review is for high risk only (verify-always-rdd-high S2):
+		// size is a reviewer prompt budget, not risk, and verify covers medium.
 		return false, reviewAssessDueReasonUnderBudget
 	default:
 		return false, reviewAssessDueReasonPassive
@@ -189,6 +189,52 @@ func reviewAssessNextTransitionFor(root string, runtime model.AgentID, baseRef s
 		Command:   reviewTransitionCommandLine("review.status", tokenized),
 		Arguments: tokenized,
 	}
+}
+
+// reviewAssessHighRiskItems is the shared high-risk list of the routing
+// block's Task Size section (gentle-shell#1494). The agent that made a change
+// may cite one item to raise the assessed risk to high; it can never lower a
+// tier, so lowering stays with the deterministic assessment.
+var reviewAssessHighRiskItems = map[int]string{
+	1: "data or irreversible effects",
+	2: "security",
+	3: "contracts others consume",
+	4: "concurrency",
+	5: "delivery or environment",
+	6: "no test would catch a regression",
+}
+
+const reviewAssessEscalationReasonCode = "agent_escalation"
+
+// parseReviewAssessEscalation validates the optional --escalate-item and
+// --escalate-reason pair with the same rules START applies
+// (reviewEscalationFromFlags). Both or neither must be present.
+func parseReviewAssessEscalation(args []string, item, reason string) (*reviewtransaction.CompactAgentEscalation, error) {
+	escalation, fault := reviewEscalationFromFlags(args, item, reason)
+	switch fault {
+	case reviewEscalationUnpaired:
+		return nil, errors.New("review assess --escalate-item and --escalate-reason must be passed together; rerun `gentle-ai review assess --escalate-item <1-6> --escalate-reason <text>`")
+	case reviewEscalationBadItem:
+		return nil, fmt.Errorf("review assess --escalate-item %q must be an integer from 1 to 6 naming a high-risk item; rerun `gentle-ai review assess --escalate-item <1-6> --escalate-reason <text>`", item)
+	case reviewEscalationBadReason:
+		return nil, fmt.Errorf("review assess --escalate-reason must be non-empty and at most %d characters; rerun `gentle-ai review assess --escalate-item <1-6> --escalate-reason <text>` with a one-line reason", reviewtransaction.AgentEscalationReasonMax)
+	}
+	return escalation, nil
+}
+
+// escalateReviewAssessRisk raises passive or medium to high for an agent
+// escalation and records why; it never lowers a tier.
+func escalateReviewAssessRisk(publicRisk string, reasons []ReviewAssessmentReason, escalation *reviewtransaction.CompactAgentEscalation) (string, []ReviewAssessmentReason) {
+	if escalation == nil {
+		return publicRisk, reasons
+	}
+	if publicRisk == "passive" || publicRisk == "medium" {
+		publicRisk = "high"
+	}
+	return publicRisk, append(reasons, ReviewAssessmentReason{
+		Code:   reviewAssessEscalationReasonCode,
+		Detail: fmt.Sprintf("item %d (%s): %s", escalation.Item, reviewAssessHighRiskItems[escalation.Item], escalation.Reason),
+	})
 }
 
 func reviewFlagProvided(args []string, flag string) bool {
@@ -251,6 +297,8 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref excludes dirty tracked changes")
 	agent := flags.String("agent", "", "optional generated active runtime identity to carry on the next_transition preflight")
 	jsonOutput := flags.Bool("json", false, "print the gentle-ai.review-assessment/v1 envelope as JSON instead of human-readable text")
+	escalateItem := flags.String("escalate-item", "", "raise the risk to high by citing one high-risk item (1-6); never lowers a tier")
+	escalateReason := flags.String("escalate-reason", "", "one-line reason for --escalate-item")
 	untrackedScope := reviewSingleValueFlag{}
 	intendedUntracked := reviewRepeatedPathFlag{}
 	expectedUntrackedInventory := reviewSingleValueFlag{}
@@ -265,6 +313,11 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	}
 	if flags.NArg() != 0 {
 		return failClosed(reviewPreflightError(fmt.Errorf("unexpected review assess argument %q; run `gentle-ai review assess --help` for the closed command form", flags.Arg(0))), failClosedCandidate)
+	}
+
+	escalation, err := parseReviewAssessEscalation(args, *escalateItem, *escalateReason)
+	if err != nil {
+		return failClosed(reviewPreflightError(err), failClosedCandidate)
 	}
 
 	trimmedBaseRef := strings.TrimSpace(*baseRef)
@@ -338,6 +391,7 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	if err != nil {
 		return failClosed(err, failClosedCandidate)
 	}
+	publicRisk, reasons := escalateReviewAssessRisk(publicRisk, reviewAssessmentReasons(assessment.Reasons), escalation)
 
 	// Computed the same way STATUS itself computes it, so a lineage STATUS
 	// would already report consumed can never disagree with what assess
@@ -347,14 +401,22 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	if err != nil {
 		return failClosed(fmt.Errorf("review assess could not read terminal consumption evidence; retry with `gentle-ai review assess --help`: %w", err), failClosedCandidate)
 	}
-	reviewDue, reviewDueReason := reviewAssessDue(consumed, publicRisk, assessment.ChangedLines)
+	// #4739: STATUS withholds START when the candidate only adds passive
+	// content to an acknowledged one, so assess must not call it due either.
+	// Candidate.Consumed stays exact: this candidate itself was never burned.
+	alreadyReviewed := consumed
+	if !alreadyReviewed {
+		passive, passiveErr := reviewtransaction.AcknowledgedPassivePredecessor(ctx, root, snapshot)
+		alreadyReviewed = passiveErr == nil && passive
+	}
+	reviewDue, reviewDueReason := reviewAssessDue(alreadyReviewed, publicRisk, assessment.ChangedLines)
 	var nextTransition *ReviewAssessmentNextTransition
 	if reviewDue {
 		nextTransition = reviewAssessNextTransitionFor(root, runtimeAgent, trimmedBaseRef)
 	}
 
 	result := ReviewAssessmentResult{
-		Schema: ReviewAssessmentSchema, Risk: publicRisk, Reasons: reviewAssessmentReasons(assessment.Reasons),
+		Schema: ReviewAssessmentSchema, Risk: publicRisk, Reasons: reasons,
 		ChangedPaths: len(snapshot.Paths), ChangedLines: assessment.ChangedLines,
 		Candidate:       ReviewAssessmentCandidate{Kind: string(snapshot.Kind), BaseRef: trimmedBaseRef, Consumed: consumed},
 		ReviewDue:       reviewDue,

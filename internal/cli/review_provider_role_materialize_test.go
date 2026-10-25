@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // piRefuterReview builds a reviewing authority whose one captured lens carries
@@ -447,7 +447,7 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			// eligibility gate keyed on the relay handshake env var.
 			name: "without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true"),
-			want: "repository_context_unavailable",
+			want: "rctx2_binding_unusable",
 		},
 		{
 			name: "without materialize or input", env: reviewPiHostRelayContract,
@@ -493,7 +493,7 @@ func TestReviewCaptureRefuterRefusals(t *testing.T) {
 			// var (issue #4256).
 			name: "execution without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--execute=true"),
-			want: "repository_context_unavailable",
+			want: "rctx2_binding_unusable",
 		},
 	}
 	for _, test := range tests {
@@ -925,13 +925,8 @@ func TestRefuterRequestCarriesTheFindingClaimText(t *testing.T) {
 	}
 }
 
-// START admits a candidate by proving the lens block assembles, and the lens
-// block summarizes generated paths. The refuter and the targeted validator
-// answer only findings a lens issued, and a lens is told that anything it
-// cannot see is not evidence, so no lens finding can ever cite generated
-// content. Materializing that content for them would let START admit a
-// candidate whose refuter evidence no runtime can hold: the unexecutable
-// lineage #3367 closed and #4680 reopened by a different door.
+// Roles receive exactly the evidence policy a lens uses: full dependency-lock
+// patches and metadata-only nonsemantic generated outputs.
 func TestReviewProviderMaterializeEvidenceSummarizesGeneratedPaths(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -950,7 +945,7 @@ func TestReviewProviderMaterializeEvidenceSummarizesGeneratedPaths(t *testing.T)
 	for _, item := range evidence {
 		byPath[item.Path] = item.Content
 	}
-	for _, generated := range []string{"go.sum", "web/package-lock.json", "internal/render/testdata/golden/rendered.golden"} {
+	for _, generated := range []string{"internal/render/testdata/golden/rendered.golden"} {
 		content, ok := byPath[generated]
 		if !ok {
 			t.Fatalf("generated path %q is missing from refuter evidence", generated)
@@ -961,6 +956,14 @@ func TestReviewProviderMaterializeEvidenceSummarizesGeneratedPaths(t *testing.T)
 		}
 		if summary["generated"] != true || summary["content_omitted"] != true {
 			t.Fatalf("generated path %q summary is not marked generated and omitted: %s", generated, content)
+		}
+	}
+	for _, lock := range []struct{ path, marker string }{
+		{"go.sum", "+new dependency line"},
+		{"web/package-lock.json", "+package-lock line"},
+	} {
+		if !strings.Contains(byPath[lock.path], "diff --git") || !strings.Contains(byPath[lock.path], lock.marker) {
+			t.Fatalf("role evidence lost dependency lock patch %q", lock.path)
 		}
 	}
 	authored, ok := byPath["internal/auth/token.go"]

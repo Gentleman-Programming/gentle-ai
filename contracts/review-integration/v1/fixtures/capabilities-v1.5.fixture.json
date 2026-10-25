@@ -201,6 +201,36 @@
         ]
       },
       {
+        "name": "start_agent_escalation",
+        "supported": true,
+        "requires": [
+          "risk_reasons"
+        ]
+      },
+      {
+        "name": "start_lens_selection",
+        "supported": true,
+        "requires": [
+          "start_options_preflight"
+        ]
+      },
+      {
+        "name": "start_options_preflight",
+        "supported": true,
+        "requires": [
+          "native_next_transition",
+          "start_agent_escalation",
+          "start_request_context"
+        ]
+      },
+      {
+        "name": "start_request_context",
+        "supported": true,
+        "requires": [
+          "compact_v2_authority"
+        ]
+      },
+      {
         "name": "validating_result_reopen",
         "supported": true,
         "requires": [

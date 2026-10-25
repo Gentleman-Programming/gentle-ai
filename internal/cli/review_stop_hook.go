@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // reviewStopHookSchema identifies the reminder envelope this hook prints to
@@ -178,6 +178,11 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 		status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
 		return nil
 	}
+	// Only a review_due candidate earns a reminder (verify-always-rdd-high
+	// S2): high risk, by the same assessment `review assess` reports.
+	if !reviewStopHookReviewDue(root, runtimeAgent) {
+		return nil
+	}
 
 	// Check first, persist after delivery below: recording before the write
 	// risks losing the reminder if it fails or the process dies in between.
@@ -233,7 +238,8 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 // identity together -- the read-only preflight both SessionStart and Stop
 // need. ok is false whenever there is nothing to check: no usable cwd, a cwd
 // outside a Git repository (never bootstrapped: ResolveRepositoryRoot alone,
-// never PrepareReviewRepositoryRoot, so `git init` never runs), or RDD off.
+// never PrepareReviewRepositoryRoot, so `git init` never runs), RDD off, or a
+// Git common directory whose filesystem cannot hold review authority (#4670).
 // err is non-nil only for a genuine unexpected internal failure.
 //
 // The Git-repository check runs before resolving RDD mode: the clone-local
@@ -256,6 +262,9 @@ func reviewStopHookResolveTargetIdentity(ctx context.Context, repo, runtimeAgent
 	}
 	rddStatus, rddErr := reviewtransaction.ResolveRDDMode(ctx, root, global)
 	if rddErr != nil {
+		if reviewStopHookAuthorityUnsupported(rddErr) {
+			return "", "", ReviewTargetStatusResult{}, false, nil
+		}
 		return "", "", ReviewTargetStatusResult{}, false, fmt.Errorf("review stop-hook: resolve review mode: %w", rddErr)
 	}
 	if !rddStatus.Enabled() {
@@ -272,6 +281,9 @@ func reviewStopHookResolveTargetIdentity(ctx context.Context, repo, runtimeAgent
 		"--agent", runtimeAgent, "--next-transition",
 	}, &statusOutput)
 	if statusErr != nil {
+		if reviewStopHookAuthorityUnsupported(statusErr) {
+			return "", "", ReviewTargetStatusResult{}, false, nil
+		}
 		return "", "", ReviewTargetStatusResult{}, false, fmt.Errorf("review stop-hook: review status: %w", statusErr)
 	}
 	var result ReviewTargetStatusResult
@@ -279,6 +291,16 @@ func reviewStopHookResolveTargetIdentity(ctx context.Context, repo, runtimeAgent
 		return "", "", ReviewTargetStatusResult{}, false, fmt.Errorf("review stop-hook: decode review status: %w", err)
 	}
 	return root, result.TargetIdentity, result, true, nil
+}
+
+// reviewStopHookAuthorityUnsupported reports the #4670 typed refusal for a
+// Git common directory whose filesystem cannot keep review authority private.
+// No review can start on such a volume, so the reminder would point at a
+// START that refuses with the same message; the refusal is surfaced by the
+// review commands themselves rather than by failing every turn here.
+func reviewStopHookAuthorityUnsupported(err error) bool {
+	var unsupported *reviewtransaction.UnsupportedAuthorityFilesystemError
+	return errors.As(err, &unsupported)
 }
 
 // reviewStopHookReasonText composes the one-paragraph reminder Claude Code
@@ -431,4 +453,24 @@ func recordReviewStopHookReminder(sessionID, targetIdentity string) (silent bool
 	}
 	_, err = filemerge.WriteFileAtomic(path, payload, 0o644)
 	return false, err
+}
+
+// reviewStopHookReviewDue reports review_due for the current candidate by
+// running the same in-process assessment `review assess` publishes. An
+// assessment that cannot answer fails closed to due, so a reminder is never
+// lost to an assessment error.
+func reviewStopHookReviewDue(root, runtimeAgent string) bool {
+	args := []string{"--cwd", root, "--json"}
+	if strings.TrimSpace(runtimeAgent) != "" {
+		args = append(args, "--agent", runtimeAgent)
+	}
+	var output bytes.Buffer
+	if err := RunReviewAssess(args, &output); err != nil {
+		return true
+	}
+	var result ReviewAssessmentResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		return true
+	}
+	return result.ReviewDue
 }

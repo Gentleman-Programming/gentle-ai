@@ -410,6 +410,22 @@ assert_no_duplicate_section() {
 
 # assert_output_contains OUTPUT PATTERN LABEL
 # Checks that the output string contains a grep-compatible pattern.
+# Print a bounded excerpt of captured output so failing assertions stay
+# diagnosable: a flaky check otherwise loses exactly the evidence that
+# explains it. Bounded so suite logs remain readable.
+log_output_excerpt() {
+    local output="$1"
+    local lines="${2:-10}"
+    local excerpt
+    excerpt="$(printf '%s\n' "$output" | head -"$lines")"
+    if [ -n "$excerpt" ]; then
+        log_info "Actual output (first $lines lines):"
+        printf '%s\n' "$excerpt" | sed 's/^/    /'
+    else
+        log_info "Actual output was empty."
+    fi
+}
+
 assert_output_contains() {
     local output="$1"
     local pattern="$2"
@@ -419,6 +435,7 @@ assert_output_contains() {
         return 0
     else
         log_fail "Output does NOT contain '$pattern'"
+        log_output_excerpt "$output"
         return 1
     fi
 }
@@ -430,6 +447,8 @@ assert_output_not_contains() {
     local label="${3:-output does NOT contain '$pattern'}"
     if echo "$output" | grep -qi "$pattern"; then
         log_fail "Output unexpectedly contains '$pattern'"
+        log_info "Matching line(s):"
+        echo "$output" | grep -i "$pattern" | head -5 | sed 's/^/    /'
         return 1
     else
         log_pass "$label"

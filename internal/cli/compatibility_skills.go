@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // compatibilitySkillsRefreshStep refreshes the registry-scanned shared skills
@@ -106,6 +106,15 @@ func compatibilitySkillPaths(skillDir string, components []model.ComponentID, se
 		for _, path := range prospective {
 			paths[path] = struct{}{}
 		}
+		// The compatibility refresh also owns the shared references and the
+		// obsolete marker it removes, as it did in v3.7.0 (#4471).
+		shared, err := skills.SharedReferencePaths(skillDir)
+		if err != nil {
+			return nil, fmt.Errorf("enumerate compatibility shared references: %w", err)
+		}
+		for _, path := range append(shared, skills.LegacySharedMarkerPath(skillDir)) {
+			paths[path] = struct{}{}
+		}
 	}
 	files := make([]string, 0, len(paths))
 	for path := range paths {
@@ -183,7 +192,7 @@ func (s compatibilitySkillsRefreshStep) Run() error {
 	if slices.Contains(s.components, model.ComponentSkills) {
 		skillIDs := selectedSkillIDs(s.selection)
 		if len(skillIDs) > 0 {
-			result, injectErr := skills.InjectDirectoryWithWriter(skillDir, skillIDs, writer.Write)
+			result, injectErr := skills.InjectDirectoryWithWriter(skillDir, skillIDs, writer.Write, writer.Remove)
 			if injectErr != nil {
 				return fmt.Errorf("refresh compatibility skills: %w", injectErr)
 			}

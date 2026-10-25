@@ -1,5 +1,8 @@
 # Why we kept missing these — a detection-gap audit
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 > Written 2026-07-27, at the end of the organic RDD recovery effort (PR #1801), after a
 > day in which eight further defects surfaced on a branch that had already absorbed
 > hundreds of fixes, dozens of mechanical guards, a 48-journey friction benchmark, and

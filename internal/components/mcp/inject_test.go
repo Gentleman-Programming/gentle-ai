@@ -13,18 +13,80 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/versions"
 )
+
+func TestContext7SelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		mode          os.FileMode
+	}{
+		{"nested comments", "{\"mcp\":{\"other\":{/* keep */\"type\":\"remote\"}}}\n", 0o600},
+		{"locked mode", "{\"mcp\":{}}\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && tc.mode != 0o600 {
+				t.Skip("file permission bits are not supported on Windows")
+			}
+			path := filepath.Join(t.TempDir(), "opencode.jsonc")
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := injectOpenCodeMergeIntoSettings(path, model.AgentOpenCode)
+			if err == nil || !strings.Contains(err.Error(), "refuse") {
+				t.Fatalf("want actionable refusal, got %v", err)
+			}
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if runtime.GOOS != "windows" && info.Mode().Perm() != tc.mode {
+				t.Fatalf("settings mode changed: %04o", info.Mode().Perm())
+			}
+			if err := os.Chmod(path, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(got) != tc.content {
+				t.Fatalf("settings bytes changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestContext7SelectedSettingsPreservePrivateMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.jsonc")
+	if err := os.WriteFile(path, []byte("{\"mcp\":{}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := injectOpenCodeMergeIntoSettings(path, model.AgentOpenCode); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return // POSIX permission bits are not preserved on Windows.
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("settings mode = %v, error = %v; want 0600", info, err)
+	}
+}
 
 func cursorAdapter(t *testing.T) agents.Adapter {
 	t.Helper()
@@ -229,7 +291,8 @@ func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServe
 	existing := `{
   "mcpServers": {
     "legacyDocs": {
-      "command": "legacy-docs"
+      "command": "legacy-docs",
+      "headers": {"number": 9007199254740993}
     },
     "context7": {
       "command": "old-context7"
@@ -279,6 +342,9 @@ func TestInjectOpenClawMergesContext7UnderMCPDotServersAndMigratesLegacyMCPServe
 	}
 	if !strings.Contains(text, `"legacyDocs"`) {
 		t.Fatalf("openclaw.json should migrate legacy mcpServers entries into mcp.servers; got:\n%s", text)
+	}
+	if !strings.Contains(text, `"number": 9007199254740993`) {
+		t.Fatalf("legacy MCP header number lost precision: %s", text)
 	}
 	if !strings.Contains(text, `"sessionIdleTtlMs": 120000`) {
 		t.Fatalf("openclaw.json should preserve existing mcp fields; got:\n%s", text)
@@ -335,19 +401,18 @@ func TestInjectOpenCodeAndKilocodePreserveContext7Headers(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Inject() first error = %v", err)
 			}
-			if !first.Changed {
-				t.Fatal("Inject() first changed = false")
+			if first.Changed {
+				t.Fatal("Inject() changed a configured Context7 entry")
 			}
 
-			assertOpenCodeRemoteContext7Schema(t, configPath)
 			context7 := readOpenCodeContext7Entry(t, configPath)
 			headers, ok := context7["headers"].(map[string]any)
 			if !ok || headers["CONTEXT7_API_KEY"] != "{env:CONTEXT7_API_KEY}" {
 				t.Fatalf("mcp.context7.headers = %#v; want existing API key header", context7["headers"])
 			}
 			for _, key := range []string{"number", "nested", "list"} {
-				if _, exists := headers[key]; exists {
-					t.Fatalf("mcp.context7.headers[%q] = %#v; want invalid value discarded", key, headers[key])
+				if _, exists := headers[key]; !exists {
+					t.Fatalf("mcp.context7.headers[%q] was discarded", key)
 				}
 			}
 
@@ -399,6 +464,13 @@ func TestInjectOpenCodeAndKilocodeRecoverMalformedSettingsAndDiscardInvalidHeade
 			if err != nil {
 				t.Fatalf("Inject() first error = %v", err)
 			}
+			if strings.Contains(tt.name, "non-object") {
+				if first.Changed {
+					t.Fatal("custom headers entry changed")
+				}
+				assertContext7FileUnchanged(t, configPath, tt.existing)
+				return
+			}
 			if !first.Changed {
 				t.Fatal("Inject() first changed = false")
 			}
@@ -444,7 +516,7 @@ func TestInjectOpenCodeRejectsMalformedJSONCSettingsWithoutReplacingBytes(t *tes
 	}
 }
 
-func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.T) {
+func TestInjectOpenCodePreservesOtherMCPEntriesAlongsideContext7(t *testing.T) {
 	home := t.TempDir()
 	adapter := opencodeAdapter()
 	configPath := adapter.SettingsPath(home)
@@ -477,7 +549,7 @@ func TestInjectOpenCodePreservesOtherMCPEntriesWhenReplacingContext7(t *testing.
 		t.Fatalf("Inject() error = %v", err)
 	}
 
-	assertOpenCodeRemoteContext7Schema(t, configPath)
+	assertContext7FileUnchanged(t, configPath, legacy)
 
 	content, err := os.ReadFile(configPath)
 	if err != nil {
@@ -529,18 +601,30 @@ func TestInjectClaudeWritesUserConfigAndIsIdempotent(t *testing.T) {
 		t.Fatalf("ReadFile(user config after first) error = %v", err)
 	}
 
-	// Loosen the mode: the no-op run must still re-tighten 0600.
+	// Loosen the mode: the byte-identical run must still re-tighten 0600, and
+	// that mode-only repair is a change (#5022).
+	loosened := false
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(userConfigPath, 0o644); err != nil {
 			t.Fatalf("Chmod(loosen) error = %v", err)
 		}
+		loosened = true
 	}
 	second, err := Inject(home, home, claudeAdapter())
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
-	if second.Changed {
-		t.Fatalf("Inject() second changed = true")
+	if second.Changed != loosened {
+		t.Fatalf("Inject() second changed = %v; want %v (mode-only repair)", second.Changed, loosened)
+	}
+
+	// Same bytes and same mode: a true no-op.
+	third, err := Inject(home, home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() third error = %v", err)
+	}
+	if third.Changed {
+		t.Fatalf("Inject() third changed = true")
 	}
 
 	raw, err := os.ReadFile(userConfigPath)
@@ -593,7 +677,7 @@ func TestInjectClaudeSettingsInertBlockCleanup(t *testing.T) {
 		settings       string
 		wantKeyRemoved bool
 	}{
-		{"managed-only block is removed", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, true},
+		{"managed-only block is removed", `{"theme":"dark","mcpServers":{"context7":` + string(DefaultContext7ServerJSON()) + `}}`, true},
 		{"foreign block is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, false},
 		{"user-authored context7 is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"my-own-proxy"}}}`, false},
 		{"empty block is left alone", `{"theme":"dark","mcpServers":{}}`, false},
@@ -966,7 +1050,7 @@ func TestInjectClaudeWorkspaceCleansInertSettingsBlock(t *testing.T) {
 		name, settings string
 		wantKey        bool
 	}{
-		{"managed-only", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, false},
+		{"managed-only", `{"theme":"dark","mcpServers":{"context7":` + string(DefaultContext7ServerJSON()) + `}}`, false},
 		{"foreign", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, true},
 		{"empty", `{"theme":"dark","mcpServers":{}}`, true},
 	} {
@@ -1203,6 +1287,49 @@ args = ["mcp", "--tools=agent"]
 	}
 }
 
+func TestInjectCodexContext7PreservesHeaderInsideMultilineString(t *testing.T) {
+	home := t.TempDir()
+	configTOML := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configTOML), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	instructions := `developer_instructions = '''
+Example config:
+[mcp_servers.context7]
+command = "fake"
+Keep this text.
+'''`
+	existing := instructions + `
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "context7-mcp"]
+`
+	if err := os.WriteFile(configTOML, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+
+	if _, err := Inject(home, home, codex.NewAdapter()); err != nil {
+		t.Fatalf("Inject(codex) first error = %v", err)
+	}
+	second, err := Inject(home, home, codex.NewAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(codex) second changed = true (should be idempotent)")
+	}
+
+	content, err := os.ReadFile(configTOML)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	want := existing
+	if got := string(content); got != want {
+		t.Fatalf("config.toml mismatch:\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
 func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
@@ -1243,7 +1370,7 @@ func TestInjectVSCodeWritesContext7ToMCPConfigFile(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
+func TestInjectAntigravityPreservesLegacyContext7LocalConfig(t *testing.T) {
 	home := t.TempDir()
 	adapter := antigravityAdapter()
 	configPath := adapter.MCPConfigPath(home, "context7")
@@ -1268,11 +1395,11 @@ func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inject() first error = %v", err)
 	}
-	if !first.Changed {
-		t.Fatalf("Inject() first changed = false; expected migration to rewrite legacy context7")
+	if first.Changed {
+		t.Fatal("Inject() changed a configured Context7 entry")
 	}
 
-	assertAntigravityContext7Schema(t, configPath)
+	assertContext7FileUnchanged(t, configPath, legacy)
 
 	second, err := Inject(home, home, adapter)
 	if err != nil {
@@ -1282,7 +1409,7 @@ func TestInjectAntigravityReplacesLegacyContext7LocalConfig(t *testing.T) {
 		t.Fatalf("Inject() second changed = true; expected idempotent context7 rewrite")
 	}
 
-	assertAntigravityContext7Schema(t, configPath)
+	assertContext7FileUnchanged(t, configPath, legacy)
 }
 
 func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
@@ -1325,7 +1452,7 @@ func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 	}
 }
 
-func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
+func TestInjectKimiPreservesLegacyContext7LocalConfig(t *testing.T) {
 	home := t.TempDir()
 	adapter := kimiAdapter()
 	configPath := adapter.MCPConfigPath(home, "context7")
@@ -1350,11 +1477,11 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inject(kimi) first error = %v", err)
 	}
-	if !first.Changed {
-		t.Fatalf("Inject(kimi) first changed = false; expected migration to rewrite legacy context7")
+	if first.Changed {
+		t.Fatal("Inject(kimi) changed a configured Context7 entry")
 	}
 
-	assertKimiContext7Schema(t, configPath)
+	assertContext7FileUnchanged(t, configPath, legacy)
 
 	second, err := Inject(home, home, adapter)
 	if err != nil {
@@ -1364,7 +1491,7 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 		t.Fatalf("Inject(kimi) second changed = true; expected idempotent context7 rewrite")
 	}
 
-	assertKimiContext7Schema(t, configPath)
+	assertContext7FileUnchanged(t, configPath, legacy)
 }
 
 // TestInjectHermesContext7IntoYAML verifies that Inject(hermes) writes context7
@@ -1512,5 +1639,63 @@ func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 	text2 := string(content2)
 	if !strings.Contains(text2, "model: claude") {
 		t.Fatalf("config.yaml lost pre-existing key on second Inject:\n%s", text2)
+	}
+}
+
+// TestMergeJSONFilePreservesExistingModeOnRewrite is the representative
+// end-to-end regression test for gentle-ai#5006(F5): mergeJSONFile is the
+// settings-merge codepath shared by every non-OpenCode/OpenClaw MCP
+// injection, and rewriting a pre-seeded private settings file must never
+// widen it.
+func TestMergeJSONFilePreservesExistingModeOnRewrite(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"already":"set"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := mergeJSONFile(path, DefaultContext7OverlayJSON()); err != nil {
+		t.Fatalf("mergeJSONFile() error = %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode after mergeJSONFile = %v, want 0600 preserved", got)
+	}
+}
+
+func TestKilocodeSymlinkedContext7SettingsKeepBaseWriterBehavior(t *testing.T) {
+	home := t.TempDir()
+	adapter := kilocodeAdapter()
+	settings := adapter.SettingsPath(home)
+	target := filepath.Join(home, "dotfiles", "opencode.json")
+	original := []byte("{\"mcp\":{}}\n")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, settings); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	_, err := Inject(home, home, adapter)
+	if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") || strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("Inject(kilocode) error = %v; want base writer symlink error, not the OpenCode refusal", err)
+	}
+	if link, err := os.Readlink(settings); err != nil || link != target {
+		t.Fatalf("settings symlink changed: %q, %v", link, err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != string(original) {
+		t.Fatalf("settings target changed: %q, %v", got, err)
 	}
 }

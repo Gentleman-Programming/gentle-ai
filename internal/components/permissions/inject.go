@@ -1,12 +1,13 @@
 package permissions
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 type InjectionResult struct {
@@ -56,46 +57,6 @@ var claudeCodeOverlayJSON = []byte(`{
       "Read(**/secrets/*)",
       "Edit(**/secrets/*)"
     ]
-  }
-}
-`)
-
-// openCodeOverlayJSON uses the OpenCode "permission" key with bash/read granularity.
-var openCodeOverlayJSON = []byte(`{
-  "permission": {
-    "bash": {
-      "*": "allow",
-      "git commit *": "ask",
-      "git push *": "ask",
-      "git push": "ask",
-      "git push --force *": "ask",
-      "git rebase *": "ask",
-      "git reset --hard *": "ask",
-      "ssh": "ask",
-      "ssh *": "ask",
-      "scp": "ask",
-      "scp *": "ask",
-      "sftp": "ask",
-      "sftp *": "ask",
-      "rsync": "ask",
-      "rsync *": "ask"
-    },
-    "read": {
-      "*": "allow",
-      "*.env": "deny",
-      "*.env.*": "deny",
-      "**/.env": "deny",
-      "**/.env.*": "deny",
-      "**/secrets/**": "deny",
-      "**/credentials.json": "deny",
-      "**/.ssh/**": "deny",
-      "**/.credentials/**": "deny",
-      "**/Library/Keychains/**": "deny",
-      "**/.aws/credentials": "deny",
-      "**/.config/gh/hosts.yml": "deny",
-      "**/*.pem": "deny",
-      "**/*.key": "deny"
-    }
   }
 }
 `)
@@ -161,7 +122,14 @@ func agentOverlay(id model.AgentID) []byte {
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	settingsPath := TargetPath(homeDir, adapter)
+	return InjectAtPath(TargetPath(homeDir, adapter), adapter)
+}
+
+// InjectAtPath writes the permission overlay to the caller-selected settings
+// path while preserving each adapter's permission capability check. Only the
+// OpenCode selected settings refuse symlinked, non-regular or locked files;
+// other agents keep the shared writer behavior.
+func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult, error) {
 	if settingsPath == "" {
 		return InjectionResult{}, nil
 	}
@@ -170,9 +138,28 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if overlay == nil {
 		return InjectionResult{}, nil
 	}
+	if adapter.Agent() == model.AgentOpenCode {
+		if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
+			return InjectionResult{}, err
+		}
+	}
 
-	defaults := adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode
-	writeResult, err := mergeJSONFile(settingsPath, overlay, defaults)
+	merge := filemerge.MergeJSONObjectsForPath
+	switch adapter.Agent() {
+	case model.AgentClaudeCode:
+		merge = mergeClaudeCodePermissionsForPath
+	case model.AgentOpenCode:
+		merge = filemerge.MergeOpenCodeJSONDefaultsForPath
+	case model.AgentKilocode:
+		merge = filemerge.MergeJSONDefaultsForPath
+	}
+	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+		defaultsMerge := merge
+		merge = func(path string, base, overlay []byte) ([]byte, error) {
+			return defaultsMerge(path, base, withoutRulesLooserThanUserDefault(base, overlay))
+		}
+	}
+	writeResult, err := mergeJSONFile(settingsPath, overlay, merge)
 	if err != nil {
 		return InjectionResult{}, err
 	}
@@ -180,22 +167,83 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
 }
 
-func mergeJSONFile(path string, overlay []byte, defaults bool) (filemerge.WriteResult, error) {
+// mergeClaudeCodePermissionsForPath seeds deny only when absent. Existing lists,
+// including an explicit empty list, belong to the user; reinjection must neither
+// replace them nor append defaults that undo a deliberately narrowed policy.
+func mergeClaudeCodePermissionsForPath(path string, base, overlay []byte) ([]byte, error) {
+	existing, err := filemerge.UnmarshalJSONObject(base)
+	if err != nil {
+		return filemerge.MergeJSONObjectsForPath(path, base, overlay)
+	}
+	permissions, _ := existing["permissions"].(map[string]any)
+	if _, exists := permissions["deny"]; !exists {
+		return filemerge.MergeJSONObjectsForPath(path, base, overlay)
+	}
+	defaults, err := filemerge.UnmarshalJSONObject(overlay)
+	if err != nil {
+		return nil, err
+	}
+	if permissions, ok := defaults["permissions"].(map[string]any); ok {
+		delete(permissions, "deny")
+	}
+	overlay, err = json.Marshal(defaults)
+	if err != nil {
+		return nil, err
+	}
+	return filemerge.MergeJSONObjectsForPath(path, base, overlay)
+}
+
+// withoutRulesLooserThanUserDefault drops overlay tool rules looser than the
+// user's root permission "*" (deny is stricter than ask, ask than allow).
+// Merged into a tool map the user scoped, such a rule follows the root "*" and,
+// as the last match, would loosen the user's default.
+func withoutRulesLooserThanUserDefault(base, overlay []byte) []byte {
+	strictness := map[string]int{"allow": 0, "ask": 1, "deny": 2}
+	root, err := filemerge.UnmarshalJSONObject(base)
+	if err != nil {
+		return overlay
+	}
+	permission, _ := root["permission"].(map[string]any)
+	rootAction, _ := permission["*"].(string)
+	if patterns, ok := permission["*"].(map[string]any); ok {
+		rootAction, _ = patterns["*"].(string)
+	}
+	floor, ok := strictness[rootAction]
+	if !ok || floor == 0 {
+		return overlay
+	}
+	defaults, err := filemerge.UnmarshalJSONObject(overlay)
+	if err != nil {
+		return overlay
+	}
+	rules, _ := defaults["permission"].(map[string]any)
+	for _, value := range rules {
+		patterns, _ := value.(map[string]any)
+		for pattern, action := range patterns {
+			if name, _ := action.(string); strictness[name] < floor {
+				delete(patterns, pattern)
+			}
+		}
+	}
+	encoded, err := json.Marshal(defaults)
+	if err != nil {
+		return overlay
+	}
+	return encoded
+}
+
+func mergeJSONFile(path string, overlay []byte, merge func(string, []byte, []byte) ([]byte, error)) (filemerge.WriteResult, error) {
 	baseJSON, err := osReadFile(path)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
 
-	merge := filemerge.MergeJSONObjectsForPath
-	if defaults {
-		merge = filemerge.MergeJSONDefaultsForPath
-	}
 	merged, err := merge(path, baseJSON, overlay)
 	if err != nil {
 		return filemerge.WriteResult{}, err
 	}
 
-	return filemerge.WriteFileAtomic(path, merged, 0o644)
+	return filemerge.WriteFileAtomic(path, merged, filemerge.ExistingFileMode(path, 0o644))
 }
 
 var osReadFile = func(path string) ([]byte, error) {

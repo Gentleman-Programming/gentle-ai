@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetrycollector"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/telemetrycollector"
 )
 
 func TestTelemetryRuntimeCollectorCompatibility(t *testing.T) {

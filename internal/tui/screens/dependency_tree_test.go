@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
 )
 
 func TestRenderDependencyTreePiOnlyEngramPlanShowsComponentAndPiInstallCopy(t *testing.T) {
@@ -30,14 +30,15 @@ func TestRenderDependencyTreePiOnlyEngramPlanShowsComponentAndPiInstallCopy(t *t
 		"Pi agent support will be installed.",
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
-		"pi install npm:pi-mcp-adapter",
-		"npm exec --yes --package gentle-engram@latest -- pi-engram init",
 		"pi install npm:pi-web-access",
 		"pi install npm:pi-btw",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("RenderDependencyTree() missing %q for Pi-only plan; output:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "pi-engram init") || strings.Contains(out, "pi-mcp-adapter") {
+		t.Fatalf("RenderDependencyTree() shows retired initialization for Pi-only plan; output:\n%s", out)
 	}
 }
 
@@ -70,13 +71,14 @@ func TestRenderDependencyTreeMixedPiEmptyPlanShowsPiInstallCopy(t *testing.T) {
 		"Pi agent support will be installed.",
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
-		"pi install npm:pi-mcp-adapter",
-		"npm exec --yes --package gentle-engram@latest -- pi-engram init",
 		"pi install npm:pi-web-access",
 		"pi install npm:pi-btw",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("RenderDependencyTree() missing %q for mixed Pi plan; output:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "pi-engram init") || strings.Contains(out, "pi-mcp-adapter") {
+		t.Fatalf("RenderDependencyTree() shows retired initialization for mixed Pi plan; output:\n%s", out)
 	}
 }
