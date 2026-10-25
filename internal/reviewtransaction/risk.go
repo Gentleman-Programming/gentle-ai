@@ -605,19 +605,27 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 		return nil, nil
 	}
 	reasons, scanned := make([]RiskReason, 0), int64(0)
+	// blobOIDByTree carries the immutable blob identity of every scanned path
+	// per tree, so the confirmation pass can re-read a suspect's frozen bytes
+	// from the same ls-tree inventory that bounded the scan, without a second
+	// inventory pass.
+	blobOIDByTree := make(map[string]map[string]string, 2)
 	for _, tree := range []string{snapshot.BaseTree, snapshot.CandidateTree} {
 		blobs, err := treeBlobSizes(ctx, repo, tree, paths)
 		if err != nil {
 			return nil, err
 		}
 		treePaths := make([]string, 0, len(blobs))
+		oids := make(map[string]string, len(blobs))
 		for _, blob := range blobs {
+			oids[blob.path] = blob.oid
 			scanned += blob.size
 			if scanned > processBoundaryScanByteLimit {
 				return []RiskReason{{Code: RiskReasonProcessScanLimit, Signal: SignalShellProcess, Path: blob.path}}, nil
 			}
 			treePaths = append(treePaths, blob.path)
 		}
+		blobOIDByTree[tree] = oids
 		if len(treePaths) == 0 {
 			continue
 		}
@@ -703,7 +711,177 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 			}
 		}
 	}
+	// The sweeps above are deliberately over-inclusive: they run without
+	// knowing which textual hits are live code and which are documentation
+	// prose. Confirmation re-reads each suspect's frozen blob and keeps only
+	// files whose bytes still contain live process evidence (#5662).
+	reasons, err = builder.confirmLiveProcessBoundaryReasons(ctx, repo, snapshot, blobOIDByTree, reasons)
+	if err != nil {
+		return nil, err
+	}
 	return canonicalRiskReasons(reasons), nil
+}
+
+// confirmLiveProcessBoundaryReasons keeps a process_boundary reason only when
+// the implicated file's frozen bytes still contain live process evidence: a
+// line-one interpreter directive, or a spawn construct on a line that is
+// neither a comment nor inside a triple-quoted block. Prose mentions --
+// docstring interior lines, commented-out code, shebang examples inside
+// documentation -- carry no executable boundary (#5662): flagging them forced
+// a false high tier whose lens evidence could not fit the runtime budget,
+// leaving a candidate as small as 33 changed lines permanently unreviewable.
+// The old flag-everything conservatism rested on "false positives only widen
+// review"; the lens budget falsified that premise, so precision wins for this
+// signal. A suspect with no frozen bytes to confirm against keeps its flag:
+// an unreadable file is live evidence, never proven prose.
+func (builder SnapshotBuilder) confirmLiveProcessBoundaryReasons(ctx context.Context, repo string, snapshot Snapshot, blobOIDByTree map[string]map[string]string, reasons []RiskReason) ([]RiskReason, error) {
+	suspects := make(map[string]string)
+	for _, reason := range reasons {
+		if reason.Code != RiskReasonProcessBoundary {
+			continue
+		}
+		if _, known := suspects[reason.Path]; known {
+			continue
+		}
+		// A deleted file's only remaining bytes live on the base side; an
+		// edited or added file's boundary is judged in the candidate tree.
+		oid := blobOIDByTree[snapshot.CandidateTree][reason.Path]
+		if oid == "" {
+			oid = blobOIDByTree[snapshot.BaseTree][reason.Path]
+		}
+		suspects[reason.Path] = oid
+	}
+	if len(suspects) == 0 {
+		return reasons, nil
+	}
+	liveByOID, err := builder.readLiveProcessEvidence(ctx, repo, suspects)
+	if err != nil {
+		return nil, err
+	}
+	kept := make([]RiskReason, 0, len(reasons))
+	for _, reason := range reasons {
+		if reason.Code != RiskReasonProcessBoundary {
+			kept = append(kept, reason)
+			continue
+		}
+		// An empty oid means there were no frozen bytes to read; the flag
+		// survives rather than claiming prose was proven.
+		if oid := suspects[reason.Path]; oid == "" || liveByOID[oid] {
+			kept = append(kept, reason)
+		}
+	}
+	return kept, nil
+}
+
+// readLiveProcessEvidence reads every suspect blob in one batched cat-file
+// call and judges each against the live-evidence rule. Any parse anomaly,
+// missing blob, or output overflow leaves the verdicts still unknown, which
+// the returned map encodes as live: the confirmation can only remove a flag
+// it proved prose, never one it failed to read.
+func (builder SnapshotBuilder) readLiveProcessEvidence(ctx context.Context, repo string, suspects map[string]string) (map[string]bool, error) {
+	liveByOID := make(map[string]bool, len(suspects))
+	oids := make([]string, 0, len(suspects))
+	for _, oid := range suspects {
+		if oid == "" {
+			continue
+		}
+		liveByOID[oid] = true
+		oids = append(oids, oid)
+	}
+	sort.Strings(oids)
+	if len(oids) == 0 {
+		return liveByOID, nil
+	}
+	request := strings.Join(oids, "\n") + "\n"
+	output, err := runGitCaptured(ctx, repo, nil, []byte(request), int(processBoundaryScanByteLimit), false, true, "cat-file", "--batch")
+	if err != nil {
+		return liveByOID, nil
+	}
+	remaining := output
+	for len(remaining) > 0 {
+		headerEnd := bytes.IndexByte(remaining, '\n')
+		if headerEnd < 0 {
+			return liveByOID, nil
+		}
+		fields := strings.Fields(string(remaining[:headerEnd]))
+		if len(fields) != 3 || fields[1] != "blob" {
+			return liveByOID, nil
+		}
+		size, err := strconv.Atoi(fields[2])
+		if err != nil || size < 0 || len(remaining) < headerEnd+1+size+1 {
+			return liveByOID, nil
+		}
+		oid := fields[0]
+		liveByOID[oid] = blobHasLiveProcessBoundary(remaining[headerEnd+1 : headerEnd+1+size])
+		remaining = remaining[headerEnd+1+size:]
+		if len(remaining) > 0 && remaining[0] == '\n' {
+			remaining = remaining[1:]
+		}
+	}
+	return liveByOID, nil
+}
+
+// blobHasLiveProcessBoundary judges one frozen blob against the live-evidence
+// rule: a line-one interpreter directive, or a spawn construct on a line that
+// is neither a comment prefix nor inside a triple-quoted block. Triple-quote
+// state advances across every line, so a docstring opened hundreds of lines
+// above a changed hunk still silences its interior (#5662), and a shebang is
+// only evidence where an interpreter would actually honor it: line one.
+func blobHasLiveProcessBoundary(blob []byte) bool {
+	inTriple := byte(0)
+	for index, raw := range bytes.Split(blob, []byte{'\n'}) {
+		line := string(raw)
+		if index == 0 && strings.HasPrefix(line, "#!") {
+			return true
+		}
+		prose := inTriple != 0 || prosePrefixedLine(line)
+		inTriple = advanceTripleQuoteState(line, inTriple)
+		if !prose && processSpawnLine.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// advanceTripleQuoteState tracks triple-quoted block openings and closings
+// across a document's lines. It is a documentation heuristic, not a parser:
+// it does not model backslash escapes, so a byte sequence like \""" inside a
+// block closes the state one line early. The error direction is conservative
+// for review -- a line of live code is never silenced by mistaken prose
+// state for longer than that one line, and the next quote sequence resyncs.
+func advanceTripleQuoteState(line string, inTriple byte) byte {
+	for i := 0; i < len(line); {
+		if inTriple != 0 {
+			if i+3 <= len(line) && line[i] == inTriple && line[i+1] == inTriple && line[i+2] == inTriple {
+				inTriple = 0
+				i += 3
+				continue
+			}
+			i++
+			continue
+		}
+		if i+3 <= len(line) && (line[i:i+3] == `"""` || line[i:i+3] == "'''") {
+			inTriple = line[i]
+			i += 3
+			continue
+		}
+		i++
+	}
+	return inTriple
+}
+
+// prosePrefixedLine reports whether a line opens as a comment in any of the
+// languages both the process-boundary and dangerous-sink scans cover. It is
+// the one shared definition of "this line is prose, not behavior", so the two
+// classifiers can never disagree about a line one of them skips.
+func prosePrefixedLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	for _, prefix := range []string{"//", "#", "--", "/*", "*", "<!--", "'''", `"""`} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func isTestRiskPath(logicalPath string) bool {

@@ -81,11 +81,8 @@ func dangerousSinkLine(logicalPath, line string) bool {
 	if isTestRiskPath(logicalPath) {
 		return false
 	}
-	trimmed := strings.TrimSpace(line)
-	for _, prefix := range []string{"//", "#", "--", "/*", "*", "<!--", "'''", `"""`} {
-		if strings.HasPrefix(trimmed, prefix) {
-			return false
-		}
+	if prosePrefixedLine(line) {
+		return false
 	}
 	extension := strings.ToLower(path.Ext(logicalPath))
 	for _, entry := range dangerousSinkCatalog {

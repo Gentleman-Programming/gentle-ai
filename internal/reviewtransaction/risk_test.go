@@ -897,9 +897,14 @@ func TestTierIsClassifiedByContentNotExtension(t *testing.T) {
 			want:  RiskMedium,
 		},
 		{
-			name:  "dependency manifest proving a spawn construct",
+			// Contract change for #5662: a comment line is prose in every file
+			// class, so a manifest comment cannot prove a spawn construct by
+			// itself. The old conservative rule escalated it because false
+			// positives "only widened review"; the lens budget turned that
+			// false high into a refusal no slice could escape.
+			name:  "manifest comment mentioning a spawn construct stays medium",
 			files: []candidateFile{{path: "requirements.txt", content: "# installed via subprocess.run(pip)\nrequests==2.31.0\n"}},
-			want:  RiskHigh,
+			want:  RiskMedium,
 		},
 		{
 			name:  "CMake list proving a spawn construct",

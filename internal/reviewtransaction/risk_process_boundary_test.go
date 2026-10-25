@@ -326,12 +326,73 @@ func TestAssessSnapshotRiskProcessBoundaryNegativesAndDocumentedConservatism(t *
 			want:    RiskLow,
 		},
 		{
-			// Documented conservative contract: pattern presence triggers the
-			// signal even inside comments or strings. False positives only
-			// widen review; false negatives would skip the mandated 4R set.
-			name:    "comment-only mention still triggers the conservative signal",
+			// Contract change for #5662: a comment-only mention is prose, not
+			// behavior. The old conservative rule flagged it because "false
+			// positives only widen review", but the lens context budget turned
+			// that false high into a preflight refusal no commit slice could
+			// escape, so a mention without live code no longer escalates.
+			name:    "comment-only mention is prose, not a live boundary",
 			path:    "tools/notes.py",
 			content: "# This module will wrap subprocess.run in a follow-up.\nVALUE = 1\n",
+			want:    RiskMedium,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, tt.path, tt.content)
+			snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{tt.path}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assessment, err := (SnapshotBuilder{Repo: repo}).AssessSnapshotRisk(context.Background(), snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if assessment.Level != tt.want {
+				t.Fatalf("AssessSnapshotRisk() = %q with reasons %#v, want %q", assessment.Level, assessment.Reasons, tt.want)
+			}
+		})
+	}
+}
+
+// TestProcessBoundaryIgnoresDocumentationProse captures the issue #5662
+// reproduction class: a pure data module whose dense documentation mentions
+// spawn constructs or shebang examples must stay out of the high tier, so
+// its changes stay reviewable instead of being refused at preflight.
+func TestProcessBoundaryIgnoresDocumentationProse(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		content string
+		want    RiskLevel
+	}{
+		{
+			// The issue #5662 shape: a docstring interior line whose prose
+			// carries the bare word "exec". The diff sweep sees the added
+			// line; only the blob confirmation can see the docstring opened
+			// lines above it.
+			name:    "docstring interior prose stays medium",
+			path:    "optimization/windowed_data.py",
+			content: "\"\"\"Windowed data helpers.\n\nThe exec stage of the pipeline copies the window frame only.\n\"\"\"\nimport numpy as np\n\ndef window(values):\n    return np.asarray(values)\n",
+			want:    RiskMedium,
+		},
+		{
+			name:    "shebang example inside documentation stays medium",
+			path:    "optimization/windowed_data.py",
+			content: "\"\"\"Usage:\n\n#!/usr/bin/env python3\npython windowed_data.py\n\nThe frame copy is pure arithmetic.\n\"\"\"\nimport numpy as np\n",
+			want:    RiskMedium,
+		},
+		{
+			name:    "commented-out spawn stays medium",
+			path:    "tools/deferred.py",
+			content: "# subprocess.run(argv)  # re-enable after the migration\nVALUE = 1\n",
+			want:    RiskMedium,
+		},
+		{
+			name:    "live spawn beside documentation prose stays high",
+			path:    "tools/mixed.py",
+			content: "\"\"\"Runner docs mention exec and subprocess.\n\"\"\"\nimport subprocess\n\nsubprocess.run(argv)\n",
 			want:    RiskHigh,
 		},
 	}
@@ -352,6 +413,48 @@ func TestAssessSnapshotRiskProcessBoundaryNegativesAndDocumentedConservatism(t *
 			}
 		})
 	}
+}
+
+// TestProcessBoundaryDocstringInteriorAddedLine reproduces the exact #5662
+// refusal shape: the prose line is added inside a docstring that already
+// existed, so the unified-zero diff hunk carries no opening quotes. Only the
+// candidate blob confirmation can prove the added line is prose.
+func TestProcessBoundaryDocstringInteriorAddedLine(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tools/windowed.py", "\"\"\"Frame documentation.\n")
+	gitSnapshot(t, repo, "add", "--", "tools/windowed.py")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	writeSnapshotFile(t, repo, "tools/windowed.py", "\"\"\"Frame documentation.\nThe exec stage copies frames only.\n\"\"\"\nvalue = 1\n")
+	assertProcessBoundaryMedium(t, repo)
+}
+
+// TestProcessBoundaryDeletedShebangScriptKeepsBaseEvidence pins the base-side
+// half of the confirmation contract: a deleted interpreter script still
+// carries its boundary through the base blob, so removal cannot hide a live
+// process boundary behind the confirmation pass.
+func TestProcessBoundaryDeletedShebangScriptKeepsBaseEvidence(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tools/deploy.sh", "#!/bin/sh\nexec \"$@\"\n")
+	gitSnapshot(t, repo, "add", "--", "tools/deploy.sh")
+	gitSnapshot(t, repo, "commit", "-m", "deploy")
+	gitSnapshot(t, repo, "rm", "--", "tools/deploy.sh")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment, err := (SnapshotBuilder{Repo: repo}).AssessSnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.Level != RiskHigh {
+		t.Fatalf("AssessSnapshotRisk() = %q with reasons %#v, want high", assessment.Level, assessment.Reasons)
+	}
+	for _, reason := range assessment.Reasons {
+		if reason.Code == RiskReasonProcessBoundary && reason.Path == "tools/deploy.sh" {
+			return
+		}
+	}
+	t.Fatalf("AssessSnapshotRisk() reasons %#v, want the base-side process_boundary for tools/deploy.sh", assessment.Reasons)
 }
 
 func TestAssessSnapshotRiskProcessBoundaryIsDeterministic(t *testing.T) {
