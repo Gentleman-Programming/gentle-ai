@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -32,9 +33,12 @@ func TestUserPNPMPublish(t *testing.T) {
 	parent := filepath.Dir(installStagePath(t))
 	stage, root := filepath.Join(parent, "stage"), filepath.Join(parent, "final")
 	got, err := publishNativePNPMInstallationWithExperienceForTest(ctx, "/out", stage, root, location, nil)
-	want := UserInstallResult{root, root + "/pnpm", root + "/agent", "ComponentInstalled"}
-	if err != nil || got != want {
+	want := UserInstallResult{root, root + "/pnpm", root + "/agent", "ComponentInstalled", ""}
+	if err != nil || got.Destination != want.Destination || got.Prefix != want.Prefix || got.Agent != want.Agent || got.State != want.State {
 		t.Fatal("publication failed", got, err)
+	}
+	if !strings.Contains(got.LauncherNote, filepath.Join(".local", "bin", "gentle-shell")) {
+		t.Fatal("launcher note missing from the publication result", got.LauncherNote)
 	}
 	if _, err := os.Lstat(stage); !os.IsNotExist(err) {
 		t.Fatal("stage remains after publication", err)

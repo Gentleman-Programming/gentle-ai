@@ -152,6 +152,11 @@ func userNativeCoordinate(ctx context.Context, self string, args []string, stdin
 	if _, err := fmt.Fprintf(stdout, "Installed %s; commands %s/bin/gentle-shell and %s/bin/pi\n", installed.Destination, installed.Destination, installed.Destination); err != nil {
 		return err
 	}
+	if installed.LauncherNote != "" {
+		if _, err := fmt.Fprintf(stdout, "%s\n", installed.LauncherNote); err != nil {
+			return err
+		}
+	}
 	// The producer's physical receipt has settled. Cleanup remains inside the
 	// capped coordinator; outer cancellation bounds it with the same deadline.
 	return privateCleanup(workspace, identity)

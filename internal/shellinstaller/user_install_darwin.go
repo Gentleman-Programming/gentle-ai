@@ -75,7 +75,14 @@ func RunUserEntry(ctx context.Context, _ string, args []string, stdin io.Reader,
 		}
 		result, err := RunUserInstall(ctx, req)
 		if err == nil {
-			_, err = fmt.Fprintf(stdout, "Installed %s; commands %s/bin/gentle-shell and %s/bin/pi\n", result.Destination, result.Destination, result.Destination)
+			if _, err = fmt.Fprintf(stdout, "Installed %s; commands %s/bin/gentle-shell and %s/bin/pi\n", result.Destination, result.Destination, result.Destination); err != nil {
+				return err
+			}
+			if result.LauncherNote != "" {
+				if _, err = fmt.Fprintf(stdout, "%s\n", result.LauncherNote); err != nil {
+					return err
+				}
+			}
 		}
 		return err
 	case "recover":

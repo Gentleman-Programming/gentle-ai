@@ -245,7 +245,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 		if manifest.PNPM != nil {
-			return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled"}, nil
+			return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", ""}, nil
 		}
 		if err = userVerifyInstalledGlobal(ctx, req.Destination, manifest); err != nil {
 			return result, userGraphRepairError(req.Destination, req.Mode, err)
@@ -253,7 +253,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if err = userNativeReadback(ctx, filepath.Join(manifest.Prefix, "lib/node_modules/gentle-pi/.gentle-ai")); err != nil {
 			return result, err
 		}
-		return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled"}, nil
+		return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", ""}, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, userUnixInstallBound)
 	defer cancel()
@@ -469,17 +469,20 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 		return result, privateError("uncertain", err)
 	}
 	userRecordPublishedShell(manifest)
+	launcherNote := ""
 	if manifest.Mode == "separate" {
-		if err := PublishUserShellLauncher(manifest.Destination); err != nil {
+		report, err := PublishUserShellLauncher(manifest.Destination)
+		if err != nil {
 			return result, fmt.Errorf("installation published but launcher registration failed: %w", err)
 		}
+		launcherNote = userShellLauncherNote(report)
 	}
 	// The publication is renamed, read back and registered; drop only the
 	// ephemeral caches. Failure is reported but never retracts the install.
 	if cleanupErr := userPublishEphemeralCleanup(manifest.Destination); cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "Installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", manifest.Destination, cleanupErr)
 	}
-	return UserInstallResult{manifest.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled"}, nil
+	return UserInstallResult{manifest.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", launcherNote}, nil
 }
 
 // userPublishEphemeralCleanup drops the installer's ephemeral caches after a

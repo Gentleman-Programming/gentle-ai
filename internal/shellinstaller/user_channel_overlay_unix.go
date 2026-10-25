@@ -191,7 +191,7 @@ func userUnixChannelOverlay(ctx context.Context, req UserInstallRequest) (result
 		}
 	}
 	userRecordPublishedShell(rebound)
-	return UserInstallResult{root, manifest.Prefix, manifest.Agent, "channel-overlay"}, true, nil
+	return UserInstallResult{root, manifest.Prefix, manifest.Agent, "channel-overlay", ""}, true, nil
 }
 
 // userUnixOverlaySelectSDK flips the agent's SDK declaration between the

@@ -11,6 +11,10 @@ import (
 
 type UserInstallResult struct {
 	Destination, Prefix, Agent, State string
+	// LauncherNote carries the user-facing launcher publication report
+	// (#5740): published commands, occupied names and the PATH remediation
+	// hint. Empty when no launcher was published.
+	LauncherNote string
 }
 
 type userManifest struct {
