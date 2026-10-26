@@ -3,20 +3,16 @@ package cli
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
-
-type personaInjectFunc func(string, agents.Adapter, model.PersonaID, string) (persona.InjectionResult, error)
 
 var errInjectedRetiredStyleRemoval = errors.New("injected retired output style removal failure")
 
@@ -64,31 +60,25 @@ func newOutputStyleTransitionFixture(t *testing.T, home string) outputStyleTrans
 	return f
 }
 
-// failRetiredGentlemanRemoval runs the real persona injection, then reproduces
-// the observable state of a failed retired-style removal: the selected Neutral
-// style and settings are already published, gentleman.md is still present, and
-// the injection reports an error.
-func (f outputStyleTransitionFixture) failRetiredGentlemanRemoval(t *testing.T, inject personaInjectFunc, reached *bool) personaInjectFunc {
+// failRetiredGentlemanRemoval makes the real persona injection fail when it
+// removes the retired gentleman.md, after the Neutral style and settings have
+// been published. reached records that the removal was attempted in that state.
+// Every other removal goes through os.Remove.
+func (f outputStyleTransitionFixture) failRetiredGentlemanRemoval(t *testing.T, reached *bool) {
 	t.Helper()
-	return func(home string, adapter agents.Adapter, id model.PersonaID, selectedSettingsPath string) (persona.InjectionResult, error) {
-		if adapter.Agent() != model.AgentClaudeCode {
-			return inject(home, adapter, id, selectedSettingsPath)
-		}
-		if _, err := inject(home, adapter, id, selectedSettingsPath); err != nil {
-			return persona.InjectionResult{}, err
+	persona.SetRemoveForTest(t, func(path string) error {
+		if path != f.gentleman {
+			return os.Remove(path)
 		}
 		settings, err := os.ReadFile(f.settings)
 		if err != nil {
-			return persona.InjectionResult{}, err
+			return err
 		}
 		if _, err := os.Stat(f.neutral); err == nil && strings.Contains(string(settings), `"outputStyle": "Neutral"`) {
 			*reached = true
 		}
-		if err := os.WriteFile(f.gentleman, f.before[f.gentleman], 0o644); err != nil {
-			return persona.InjectionResult{}, err
-		}
-		return persona.InjectionResult{}, fmt.Errorf("remove retired output style: %w", errInjectedRetiredStyleRemoval)
-	}
+		return errInjectedRetiredStyleRemoval
+	})
 }
 
 func (f outputStyleTransitionFixture) assertRestored(t *testing.T) {
@@ -112,9 +102,7 @@ func TestInstallRollsBackOutputStyleSwitchWhenRetiredStyleRemovalFails(t *testin
 	f := newOutputStyleTransitionFixture(t, home)
 
 	reached := false
-	original := injectInstallPersona
-	injectInstallPersona = f.failRetiredGentlemanRemoval(t, original, &reached)
-	t.Cleanup(func() { injectInstallPersona = original })
+	f.failRetiredGentlemanRemoval(t, &reached)
 
 	_, err := RunInstall([]string{"--agent", "claude-code", "--component", "persona", "--persona", "neutral"}, system.DetectionResult{})
 	if !errors.Is(err, errInjectedRetiredStyleRemoval) {
@@ -135,9 +123,7 @@ func TestSyncRollsBackOutputStyleSwitchWhenRetiredStyleRemovalFails(t *testing.T
 	}
 
 	reached := false
-	original := injectSyncPersona
-	injectSyncPersona = f.failRetiredGentlemanRemoval(t, original, &reached)
-	t.Cleanup(func() { injectSyncPersona = original })
+	f.failRetiredGentlemanRemoval(t, &reached)
 
 	if _, err := RunSyncWithSelection(f.home, selection); !errors.Is(err, errInjectedRetiredStyleRemoval) {
 		t.Fatalf("RunSyncWithSelection() error = %v, want injected retired style removal failure", err)
@@ -148,7 +134,7 @@ func TestSyncRollsBackOutputStyleSwitchWhenRetiredStyleRemovalFails(t *testing.T
 	f.assertRestored(t)
 
 	// Once removal succeeds, the switch completes and a rerun is a no-op.
-	injectSyncPersona = original
+	persona.SetRemoveForTest(t, os.Remove)
 	if _, err := RunSyncWithSelection(f.home, selection); err != nil {
 		t.Fatalf("recovery RunSyncWithSelection() error = %v", err)
 	}
