@@ -15,19 +15,19 @@ import (
 
 func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
-	// issue #5255: v1 handle/repository_context patterns now match the rctx2_
-	// handle every current START/STATUS envelope emits; rctx1_ is historical,
-	// read-only decode only. Deliberate, not drift.
+	// issue #5255: v1 handle/repository_context patterns now admit both the
+	// rctx2_ handle every current START/STATUS envelope emits and the historical
+	// rctx1_ handle the Go transport still decodes. Deliberate, not drift.
 	want := map[string]string{
 		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
 		"fixtures/consent.fixture.json":           "b95d02fb3468cc7c017380f7193aff86691a47cbe3879eddb0092893d7b8bb5b",
-		"fixtures/start.fixture.json":             "0947326a999aaf5d4c5c60fa72d3a71b2882ce43a0deb564e7b69f7ba8744b5d",
+		"fixtures/start.fixture.json":             "3b963b221cd1560eb8872cbabbb5407096f593ced2f13eb9cb06eb61e4cca4d1",
 		// issue #2659: start-v2/status-v2 embed a freshly minted target_identity,
 		// and the purified identity domain legitimately changed that hash for
 		// every new snapshot. Deliberate, not drift.
-		"fixtures/start-v2.fixture.json":         "65abd1ef000cbcb8c27e31e78d135f8c5bb6e029d8f2b802d58394c0175bfe57",
-		"fixtures/status.fixture.json":           "2bb956113520db313b4389e65ef055d8f3b57df4f4b0eaf7646b3a5d9eaf035f",
-		"fixtures/status-v2.fixture.json":        "b208154c2f2d62620cb7494cb320e2ce8fd74ed57fafaead6cd45a5853eb2056",
+		"fixtures/start-v2.fixture.json":         "2699660832c0d944184d5d314f08774ab9a02f5b8a7a4c2a07983440e0e346ad",
+		"fixtures/status.fixture.json":           "a1f28b7d5351e000aca5238ed6348a0838fe2c0e64ce894ebcd8b43851063ff6",
+		"fixtures/status-v2.fixture.json":        "ff3690a9e716c9fa48e3c26a67047f9b4ce4c3cce8391a240dbe9834bd4e13ee",
 		"fixtures/status-ambiguous.fixture.json": "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
 		"fixtures/status-corrupted.fixture.json": "4cfc0048c28a39cec8a32fecfaad66e56e5c1248263ceb4ce66b6717981880b2",
 		"fixtures/status-recover.fixture.json":   "ad814f34f438583fdf699cd5ce95ab7cd0700de9b21a4d1ed79207de9c463dfc",
@@ -36,7 +36,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/artifact-subject.schema.json":   "f7dcd934e27e8f3735a37f3d0ec8048dd8ccc1811b9df61124a1dcbf8a03f40e",
 		"schemas/capabilities-v1.4.schema.json":  "926b61c8ac0f870f09214f6bd8af1b035c5b72f14f0b83c0d4a7bdbb277f5447",
 		"schemas/result-artifact.schema.json":    "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
-		"schemas/start.schema.json":              "7ead11fe436c8e346f2944239c2fe0d12fae0eee86060216669841cfcbe58092",
+		"schemas/start.schema.json":              "736b5579b8943a686f141d9aeb81823739844b3f683e1ea59758bbbbb6e50660",
 		// Frozen v1 START artifacts do not project the v3 replay or retired
 		// stale-burn fields.
 		//
@@ -45,10 +45,10 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		//
 		// rdd-risk-gated S14: the risk reason enums admit the agent_escalation
 		// code and signal START publishes for --escalate-item. Deliberate, not drift.
-		"schemas/start-v2.schema.json":             "8a40fafcb36a43bf151f0f64c96b44e078df6bd325d221027cb90340a0d302b8",
-		"schemas/status.schema.json":               "51d9e651d4e2897f1033033260f99787557951c9043a66e4aa0467a1547c27c7",
+		"schemas/start-v2.schema.json":             "0e5667ff9d396f3ecaa20f90b8223174701c23741d80a07c5b713e4bb18df5bb",
+		"schemas/status.schema.json":               "98274aa65b2dd57c4272c39e5307c4abd4f14360c12257db4a3b0f5dc81cfa13",
 		"schemas/status-v2.schema.json":            "7c51627d133592839ba4afa860b358b68109afd5f70ee998cd421f563201b23e",
-		"schemas/transition-execution.schema.json": "121a8f0d3bbd8525c8214cee1ed2852c3db12379bc61b34e63b9eb16069a38c7",
+		"schemas/transition-execution.schema.json": "d7cd641db6a7d9396df128f207da2823e646d0e8ea9a648a2e3876845718ef27",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

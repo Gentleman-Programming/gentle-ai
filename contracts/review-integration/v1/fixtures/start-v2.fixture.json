@@ -81,7 +81,7 @@
   ],
   "repository_context": {
     "capability": "review.opaque_repository_context",
-    "handle": "rctx2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "handle": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "revision": "sha256:e10bced7198e3c817c5ff6d1172d6aa8ce3321d45ec4d68834e0b5f03a4246d9",
     "target_identity": "sha256:04c970c2b0f7c128751ed2b0f7e672a2fe26dc267f018bf10e612096d19cfa04"
   }
