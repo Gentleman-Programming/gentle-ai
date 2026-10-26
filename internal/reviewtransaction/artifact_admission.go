@@ -992,7 +992,7 @@ func artifactRepositoryPathReference(token artifactReferenceToken) (string, bool
 	// deployment endpoint, not a file path with a line number. Paths always
 	// contain a separator (/ or \).
 	host := value[:separator]
-	if !strings.Contains(host, "/") {
+	if !strings.Contains(host, "/") && strings.Trim(host, "0123456789.") == "" {
 		return "", false
 	}
 	line := value[separator+1:]
