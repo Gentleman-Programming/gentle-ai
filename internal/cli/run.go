@@ -949,7 +949,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
 		piAgentDir = piagent.AgentConfigPath(r.homeDir)
 	}
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, piAgentDir: piAgentDir})
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, piAgentDir: piAgentDir, codexHomeDir: codexRollbackRoot(r.homeDir, r.resolved.Agents)})
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
 	}
@@ -2762,6 +2762,7 @@ type rollbackRestoreStep struct {
 	workspaceDir       string
 	telemetryConfigDir string // Selected adapter authority, potentially outside HOME via XDG.
 	piAgentDir         string // Selected Pi adapter authority, never derived from the manifest.
+	codexHomeDir       string // Selected Codex CODEX_HOME override, potentially outside HOME.
 }
 
 type openCodeBackgroundActivationStep struct {
@@ -2802,6 +2803,10 @@ func (s rollbackRestoreStep) Rollback() error {
 	if s.piAgentDir != "" {
 		roots = append(roots, s.piAgentDir)
 	}
+	// guard:population codex-home-rollback-root too-loose: Only the CODEX_HOME override of a selected Codex adapter extends restore roots; unselected agents, isolated homes, and the default root add nothing.
+	if s.codexHomeDir != "" {
+		roots = append(roots, s.codexHomeDir)
+	}
 	if s.telemetryConfigDir != "" {
 		roots = append(roots, s.telemetryConfigDir)
 		// The retained journals, never the generic backup, own this pair's rollback.
@@ -2822,6 +2827,16 @@ func (s rollbackRestoreStep) Rollback() error {
 		return telemetryErr
 	}
 	return errors.Join(telemetryErr, (backup.RestoreService{Roots: roots}).Restore(manifest))
+}
+
+// codexRollbackRoot returns the CODEX_HOME override a selected Codex adapter
+// writes under, or "" when no override applies. The default ~/.codex already
+// lives under the home restore root.
+func codexRollbackRoot(homeDir string, agents []model.AgentID) string {
+	if !containsAgent(agents, model.AgentCodex) || !system.CodexHomeOverridden(homeDir) {
+		return ""
+	}
+	return system.CodexConfigDir(homeDir)
 }
 
 // rollbackRoots returns the directories this install/sync run could

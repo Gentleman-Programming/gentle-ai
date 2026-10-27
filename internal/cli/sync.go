@@ -551,7 +551,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		}}, prepare...)
 	}
 	apply := []pipeline.Step{
-		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir},
+		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, codexHomeDir: codexRollbackRoot(r.homeDir, r.agentIDs)},
 	}
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "sync:opencode:telemetry-runtime", configDir: telemetryDir, changedFiles: &r.changedFiles, state: r.state})
