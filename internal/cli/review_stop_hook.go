@@ -179,8 +179,10 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 		return nil
 	}
 	// Only a review_due candidate earns a reminder (verify-always-rdd-high
-	// S2): high risk, by the same assessment `review assess` reports.
-	if !reviewStopHookReviewDue(root, runtimeAgent) {
+	// S2): high risk, by the same assessment `review assess` reports. The
+	// gate mirrors the selectors the offered START carries, so a committed
+	// range is assessed over the same range STATUS offered (#4815).
+	if !reviewStopHookReviewDue(root, runtimeAgent, &status) {
 		return nil
 	}
 
@@ -456,16 +458,31 @@ func recordReviewStopHookReminder(sessionID, targetIdentity string) (silent bool
 }
 
 // reviewStopHookReviewDue reports review_due for the current candidate by
-// running the same in-process assessment `review assess` publishes. An
-// assessment that cannot answer fails closed to due, so a reminder is never
-// lost to an assessment error.
-func reviewStopHookReviewDue(root, runtimeAgent string) bool {
+// running the same in-process assessment `review assess` publishes, over the
+// same selector set the offered START carries. A selectorless STATUS that
+// derived a committed range offers START with --base-ref --committed-only
+// (#4412); assessing that range is the only way the hook and `review assess`
+// answer the same question. Mirroring the default selectorless assessment
+// here classified an empty workspace candidate as a high-risk due review
+// while assess over the offered range reported under_budget -- the exact
+// disagreement issue #4815 documents. Only the committed-range selectors are
+// mirrored: `review assess` has no --workspace-overlay form, so overlay and
+// current-changes candidates keep the selectorless evaluation. An assessment
+// that cannot answer still fails closed to due, so a reminder is never lost
+// to an assessment error; the one exception is the empty committed range
+// (the boundary already reaches HEAD), where there is nothing to review and
+// assess refuses rather than answering not-due.
+func reviewStopHookReviewDue(root, runtimeAgent string, status *ReviewTargetStatusResult) bool {
 	args := []string{"--cwd", root, "--json"}
 	if strings.TrimSpace(runtimeAgent) != "" {
 		args = append(args, "--agent", runtimeAgent)
 	}
+	args = append(args, reviewStopHookAssessSelectors(status)...)
 	var output bytes.Buffer
 	if err := RunReviewAssess(args, &output); err != nil {
+		if reviewStopHookEmptyCommittedRange(err) {
+			return false
+		}
 		return true
 	}
 	var result ReviewAssessmentResult
@@ -473,4 +490,36 @@ func reviewStopHookReviewDue(root, runtimeAgent string) bool {
 		return true
 	}
 	return result.ReviewDue
+}
+
+// reviewStopHookAssessSelectors extracts the assess selectors the offered
+// START carries. Only the committed-range pair is mirrored: an overlay or
+// current-changes START (or an Execute without arguments) keeps the
+// selectorless assessment, which is what those scopes assessed before this
+// gate existed.
+func reviewStopHookAssessSelectors(status *ReviewTargetStatusResult) []string {
+	if status == nil || status.NextTransition == nil || status.NextTransition.Execute == nil {
+		return nil
+	}
+	var baseRef, committedOnly string
+	for _, argument := range status.NextTransition.Execute.Arguments {
+		switch argument.Name {
+		case "base-ref":
+			baseRef = argument.Value
+		case "committed-only":
+			committedOnly = argument.Value
+		}
+	}
+	if strings.TrimSpace(baseRef) == "" || committedOnly != "true" {
+		return nil
+	}
+	return []string{"--base-ref", baseRef, "--committed-only"}
+}
+
+// reviewStopHookEmptyCommittedRange reports whether err is assess's refusal
+// to classify an empty candidate ("no pending changes"): with the offered
+// --base-ref the committed range is empty, so there is nothing to review and
+// the hook stays silent instead of failing open into a reminder.
+func reviewStopHookEmptyCommittedRange(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "has no pending changes")
 }
