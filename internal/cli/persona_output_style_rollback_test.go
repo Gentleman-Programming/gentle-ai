@@ -23,6 +23,7 @@ type outputStyleTransitionFixture struct {
 	gentleman string
 	neutral   string
 	settings  string
+	userStyle string
 	before    map[string][]byte
 }
 
@@ -34,17 +35,17 @@ func newOutputStyleTransitionFixture(t *testing.T, home string) outputStyleTrans
 		gentleman: filepath.Join(claudeDir, "output-styles", "gentleman.md"),
 		neutral:   filepath.Join(claudeDir, "output-styles", "neutral.md"),
 		settings:  filepath.Join(claudeDir, "settings.json"),
+		userStyle: filepath.Join(claudeDir, "output-styles", "user-owned.md"),
 	}
-	userStyle := filepath.Join(claudeDir, "output-styles", "user-owned.md")
 	mustWriteFile(t, f.settings, []byte(`{"permissions":{"allow":["Read"]}}`))
-	mustWriteFile(t, userStyle, []byte("user-owned style\n"))
+	mustWriteFile(t, f.userStyle, []byte("user-owned style\n"))
 
 	if _, err := persona.Inject(home, claude.NewAdapter(), model.PersonaGentleman); err != nil {
 		t.Fatalf("Inject(gentleman) error = %v", err)
 	}
 
 	f.before = map[string][]byte{}
-	for _, path := range []string{f.gentleman, f.settings, userStyle, filepath.Join(claudeDir, "CLAUDE.md")} {
+	for _, path := range []string{f.gentleman, f.settings, f.userStyle, filepath.Join(claudeDir, "CLAUDE.md")} {
 		content, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("precondition: read %s: %v", path, err)
@@ -143,6 +144,12 @@ func TestSyncRollsBackOutputStyleSwitchWhenRetiredStyleRemovalFails(t *testing.T
 	}
 	if _, err := os.Stat(f.neutral); err != nil {
 		t.Fatalf("recovery sync did not publish neutral output style: %v", err)
+	}
+	if got, err := os.ReadFile(f.userStyle); err != nil || !bytes.Equal(got, f.before[f.userStyle]) {
+		t.Fatalf("recovery sync changed user-owned output style = %q, err=%v", got, err)
+	}
+	if got, err := os.ReadFile(f.settings); err != nil || !strings.Contains(string(got), `"Read"`) {
+		t.Fatalf("recovery sync dropped unrelated permissions from settings = %s, err=%v", got, err)
 	}
 	settled := map[string][]byte{}
 	for path := range f.before {

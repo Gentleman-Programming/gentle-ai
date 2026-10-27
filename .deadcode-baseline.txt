@@ -60,6 +60,7 @@ internal/components/gga/config.go	PostInstallMessages
 internal/components/gga/install.go	ShouldInstall
 internal/components/gga/runtime.go	RuntimeBinDir
 internal/components/mcp/inject.go	context7Args
+internal/components/persona/inject.go	SetRemoveForTest
 internal/components/telemetryruntime/managed.go	Reconcile
 internal/filecoord/lock.go	UnsupportedError.Error
 internal/filecoord/lock.go	UnsupportedError.Unwrap

@@ -620,14 +620,12 @@ func TestInjectClaudeNeutralReturnsRetiredStyleRemovalFailure(t *testing.T) {
 	}
 
 	injected := errors.New("injected remove failure")
-	originalRemove := osRemove
-	t.Cleanup(func() { osRemove = originalRemove })
-	osRemove = func(path string) error {
+	SetRemoveForTest(t, func(path string) error {
 		if path == gentlemanPath {
 			return injected
 		}
-		return originalRemove(path)
-	}
+		return os.Remove(path)
+	})
 
 	_, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
 	if !errors.Is(err, injected) {
