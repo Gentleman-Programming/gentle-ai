@@ -259,8 +259,10 @@ if (piMetadata.bin?.pi !== 'dist/bundle/cli.js' || gentleMetadata.bin?.['gentle-
 read(path.join(modules, '@earendil-works/pi-coding-agent/dist/bundle/cli.js'));
 read(path.join(gentle, 'bin/gentle-shell.mjs'));
 // Stock supplier pins authorize installation; Main source is bound by the frozen ZIP.
+// Unlike the Unix lanes, this one resolves `latest` at install time, so both digests
+// must track the published gentle-pi release and be refreshed together with it.
 if (action === 'install' || !mainOverlay) for (const [name, expected] of [
-  ['scripts/gentle-ai-installer.mjs', '8679f49d3675323bf7ff5c24321f08016bb0f8e79ded307b5900c37648f52470'],
+  ['scripts/gentle-ai-installer.mjs', '37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed'],
   ['runtime/gentle-ai-binary.mjs', '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80'],
 ]) if (digest(read(path.join(gentle, name))) !== expected) reject('stock native supplier source pin');
 if (action === 'install') {
