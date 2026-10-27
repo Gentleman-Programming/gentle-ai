@@ -1403,8 +1403,8 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 	case model.StrategyTOMLFile:
 		targets = append(targets,
 			adapter.MCPConfigPath(homeDir, "engram"),
-			filepath.Join(homeDir, ".codex", "engram-instructions.md"),
-			filepath.Join(homeDir, ".codex", "engram-compact-prompt.md"),
+			filepath.Join(system.CodexConfigDir(homeDir), "engram-instructions.md"),
+			filepath.Join(system.CodexConfigDir(homeDir), "engram-compact-prompt.md"),
 		)
 	}
 	return targets
@@ -1453,14 +1453,19 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 		return ops
 	case model.StrategyTOMLFile:
 		configPath := adapter.MCPConfigPath(homeDir, "engram")
-		instructionsPath := filepath.Join(homeDir, ".codex", "engram-instructions.md")
-		compactPath := filepath.Join(homeDir, ".codex", "engram-compact-prompt.md")
-		return []operation{
+		instructionsPath := filepath.Join(system.CodexConfigDir(homeDir), "engram-instructions.md")
+		compactPath := filepath.Join(system.CodexConfigDir(homeDir), "engram-compact-prompt.md")
+		ops := []operation{
 			rewriteTOMLFile(configPath, cleanCodexTOML),
 			removeFile(instructionsPath),
 			removeFile(compactPath),
-			removeDirIfEmpty(filepath.Dir(instructionsPath)),
 		}
+		// A CODEX_HOME override is the user's directory, and ValidateCodexHome
+		// requires it to exist; only the default ~/.codex is pruned when empty.
+		if !system.CodexHomeOverridden(homeDir) {
+			ops = append(ops, removeDirIfEmpty(filepath.Dir(instructionsPath)))
+		}
+		return ops
 	default:
 		return nil
 	}

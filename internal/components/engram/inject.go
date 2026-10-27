@@ -1133,9 +1133,10 @@ func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) 
 }
 
 // writeCodexInstructionFiles writes the Engram memory protocol and compact prompt
-// files to ~/.codex/ and returns their paths and write results.
+// files to the resolved Codex home (honoring CODEX_HOME when the supplied home
+// is the real user home — issue #5031) and returns their paths and write results.
 func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath string, changed bool, files []string, err error) {
-	codexDir := filepath.Join(homeDir, ".codex")
+	codexDir := system.CodexConfigDir(homeDir)
 	instructionsPath = filepath.Join(codexDir, "engram-instructions.md")
 	compactPath = filepath.Join(codexDir, "engram-compact-prompt.md")
 
