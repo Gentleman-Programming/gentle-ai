@@ -92,3 +92,30 @@ func TestUserReadReusableManifestReplacesScopedComponents(t *testing.T) {
 		t.Fatal("strict read accepted a recorded tree from another build")
 	}
 }
+
+// A full reconfigure rebuilds the agent from a fresh stage. The recorded agent
+// of a separate installation is fixed by the destination, so a tree whose
+// strict verification refused still carries its operator state, and an absent
+// agent is never synthesized.
+func TestUserRecordedAgentFollowsTheDestination(t *testing.T) {
+	root := userUnixTempRoot(t)
+	destination := filepath.Join(root, "install")
+	agent := filepath.Join(destination, "agent")
+	if err := os.MkdirAll(agent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := userRecordedAgent(destination, nil); !ok || got != agent {
+		t.Fatalf("recorded agent = %q %v, want %q", got, ok, agent)
+	}
+	if _, ok := userRecordedAgent(filepath.Join(root, "absent"), nil); ok {
+		t.Fatal("an absent agent was synthesized")
+	}
+	verified := userManifest{Mode: "separate", Agent: agent}
+	if got, ok := userRecordedAgent(destination, &verified); !ok || got != agent {
+		t.Fatalf("a verified manifest was ignored: %q %v", got, ok)
+	}
+	foreign := userManifest{Mode: "separate", Agent: filepath.Join(root, "elsewhere")}
+	if _, ok := userRecordedAgent(destination, &foreign); ok {
+		t.Fatal("an absent recorded agent was synthesized")
+	}
+}

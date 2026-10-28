@@ -457,13 +457,15 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err = userTools(ctx, root, agent, !scope.reused[UserComponentSDK]); err != nil {
 		return result, privateError("source", err)
 	}
-	if req.Mode == "separate" && existing != nil && !scope.reused[UserComponentSDK] {
+	if req.Mode == "separate" && !scope.reused[UserComponentSDK] {
 		// A rebuilt agent must not look like a fresh installation to the
 		// operator: provider logins, sessions, project state and user models
 		// survive every update through the recorded installation's agent.
-		userShellDetail(ctx, 4, 5, "Carrying the installation's operator state")
-		if err = userCarryAgentState(ctx, existing.Agent, agent); err != nil {
-			return result, fmt.Errorf("operator state carry: %w", err)
+		if recorded, ok := userRecordedAgent(req.Destination, existing); ok {
+			userShellDetail(ctx, 4, 5, "Carrying the installation's operator state")
+			if err = userCarryAgentState(ctx, recorded, agent); err != nil {
+				return result, fmt.Errorf("operator state carry: %w", err)
+			}
 		}
 	}
 	userShellDetail(ctx, 4, 5, "Recording supervisor provenance")
@@ -1152,6 +1154,21 @@ func userVerifyReusableMain(ctx context.Context, root string, manifest userManif
 		return userCompareMainSource(ctx, root, *manifest.MainSDK)
 	}
 	return nil
+}
+
+// userRecordedAgent names the agent a rebuilt separate installation carries
+// operator state from. Its destination fixes the agent, so a recorded tree that
+// refused strict verification still contributes its operator state instead of
+// rebuilding the agent as if this were a fresh installation.
+func userRecordedAgent(destination string, recorded *userManifest) (string, bool) {
+	agent := filepath.Join(destination, "agent")
+	if recorded != nil {
+		agent = recorded.Agent
+	}
+	if _, err := os.Lstat(agent); err != nil {
+		return "", false
+	}
+	return agent, true
 }
 
 func userLaunchCommand(ctx context.Context, root string, manifest userManifest, cli string, args []string) *exec.Cmd {
