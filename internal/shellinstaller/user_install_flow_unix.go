@@ -319,6 +319,15 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	root := filepath.Join(workspace, "installed")
+	userShellDetail(ctx, 2, 5, "Validating the stage preferences")
+	stageFiles, err := userValidateInstallStage(ctx, req.Mode, req.Experience)
+	if err != nil {
+		return result, err
+	}
+	userShellDetail(ctx, 2, 5, "Creating the private staging skeleton")
+	if err = userStageSkeleton(root); err != nil {
+		return result, err
+	}
 	if !scope.full {
 		userShellDetail(ctx, 2, 5, "Reusing unchanged components from the installation")
 		if err = userReuseComponents(ctx, root, req, existing, scope); err != nil {
@@ -326,7 +335,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 	}
 	userShellDetail(ctx, 2, 5, "Writing persona and recommended preferences")
-	if err = userPrepareInstallStage(ctx, root, req.Mode, req.Experience); err != nil {
+	if err = userStagePreferences(ctx, root, req.Mode, req.Experience, stageFiles); err != nil {
 		return result, err
 	}
 	userShellStep(ctx, 2, 5, "Private stage and preferences prepared")
