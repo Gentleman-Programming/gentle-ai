@@ -491,7 +491,7 @@ func validateAntigravityGlobalMCPConfig(path string) error {
 }
 
 func installAntigravityEngramPlugin(homeDir, engramCommand string) (bool, []string, antigravityPluginTransfer, error) {
-	pluginDir := filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram")
+	pluginDir := AntigravityPluginDir(homeDir)
 	type pluginAsset struct {
 		path    string
 		content []byte
