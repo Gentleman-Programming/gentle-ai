@@ -294,7 +294,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if userReconfigureTarget() != req.Destination {
 			return result, privateError("refused", errors.New("a component update requires the reconfigure target binding"))
 		}
-		recorded, manifestErr := userReadManifest(ctx, req.Destination)
+		recorded, manifestErr := userReadReusableManifest(ctx, req.Destination, scope)
 		if manifestErr != nil {
 			return result, privateError("refused", fmt.Errorf("component update requires a recorded installation: %w", manifestErr))
 		}
@@ -1028,8 +1028,44 @@ func userNativeSemver(version string) bool {
 	return err == nil && matched
 }
 
+// userRecordedChecks names the recorded-installation verifications that apply
+// to an update. A component in scope is replaced from the running build, so
+// verifying its recorded bytes would refuse the update that replaces them. The
+// supervisor is never reused and is always checked against its recorded pin.
+type userRecordedChecks struct {
+	node      bool
+	sdk       bool
+	codegraph bool
+}
+
+func userRecordedChecksFor(reuse *userInstallScope) userRecordedChecks {
+	if reuse == nil {
+		return userRecordedChecks{node: true, sdk: true, codegraph: true}
+	}
+	return userRecordedChecks{
+		node:      reuse.reused[UserComponentNode],
+		sdk:       reuse.reused[UserComponentSDK],
+		codegraph: reuse.reused[UserComponentCodeGraph],
+	}
+}
+
 func userReadManifest(ctx context.Context, root string) (userManifest, error) {
+	return userReadRecordedManifest(ctx, root, nil)
+}
+
+// userReadReusableManifest validates the recorded installation a component-
+// scoped update is about to reuse. It proves exactly what the update keeps: the
+// manifest identity, the bin bindings, the custody of the installer-owned
+// inventory, and the pins of the components outside scope. The recorded
+// provisioner is never executed and a component in scope is never pinned,
+// because the stage rebuilds both from the running build.
+func userReadReusableManifest(ctx context.Context, root string, scope userInstallScope) (userManifest, error) {
+	return userReadRecordedManifest(ctx, root, &scope)
+}
+
+func userReadRecordedManifest(ctx context.Context, root string, reuse *userInstallScope) (userManifest, error) {
 	var manifest userManifest
+	checks := userRecordedChecksFor(reuse)
 	if _, err := privateDirectory(filepath.Dir(root)); err != nil {
 		return manifest, err
 	}
@@ -1051,8 +1087,10 @@ func userReadManifest(ctx context.Context, root string) (userManifest, error) {
 		if manifest.Mode != "separate" && manifest.Mode != "shared" && manifest.Mode != "agent" {
 			return manifest, privateError("refused", errors.New("CodeGraph requires a Separate, Shared or agent manifest"))
 		}
-		if err := userCodeGraphReadback(ctx, root); err != nil {
-			return manifest, fmt.Errorf("CodeGraph retained integrity: %w", err)
+		if checks.codegraph {
+			if err := userCodeGraphReadback(ctx, root); err != nil {
+				return manifest, fmt.Errorf("CodeGraph retained integrity: %w", err)
+			}
 		}
 	}
 	for _, name := range []string{"gentle-shell", "pi"} {
@@ -1067,23 +1105,53 @@ func userReadManifest(ctx context.Context, root string) (userManifest, error) {
 	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || actual != manifest.AgentIdentity {
 		return manifest, privateError("preimage", err)
 	}
-	for _, source := range []struct{ path, pin string }{{"supervisor", manifest.SupervisorSHA}, {"runtime/node/bin/node", privateNativeNodeSHA}} {
-		if len(source.pin) != 64 {
-			return manifest, privateError("source", nil)
-		}
-		if _, err := privateNativeFile(ctx, filepath.Join(root, source.path), 0700, -1, source.pin); err != nil {
+	if err := userRecordedPin(ctx, root, "supervisor", manifest.SupervisorSHA); err != nil {
+		return manifest, err
+	}
+	if checks.node {
+		if err := userRecordedPin(ctx, root, "runtime/node/bin/node", privateNativeNodeSHA); err != nil {
 			return manifest, err
 		}
 	}
-	if err := userTools(ctx, root, manifest.Agent, false); err != nil {
-		return manifest, privateError("source", err)
+	if checks.sdk {
+		if err := userTools(ctx, root, manifest.Agent, false); err != nil {
+			return manifest, privateError("source", err)
+		}
 	}
-	if manifest.MainSDK != nil {
-		if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
+	if reuse == nil {
+		if manifest.MainSDK != nil {
+			if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
+				return manifest, err
+			}
+		}
+	} else if manifest.MainSDK != nil {
+		if err := userVerifyReusableMain(ctx, root, manifest, checks); err != nil {
 			return manifest, err
 		}
 	}
 	return manifest, nil
+}
+
+func userRecordedPin(ctx context.Context, root, relative, pin string) error {
+	if len(pin) != 64 {
+		return privateError("source", nil)
+	}
+	_, err := privateNativeFile(ctx, filepath.Join(root, relative), 0700, -1, pin)
+	return err
+}
+
+// userVerifyReusableMain proves a recorded Main tree can be reused without
+// executing the provisioner it recorded: the stage writes that helper from the
+// running build before it runs anything. A reused SDK is still compared against
+// the snapshot its manifest recorded.
+func userVerifyReusableMain(ctx context.Context, root string, manifest userManifest, checks userRecordedChecks) error {
+	if err := userMainBindingShape(root, manifest); err != nil {
+		return err
+	}
+	if checks.sdk {
+		return userCompareMainSource(ctx, root, *manifest.MainSDK)
+	}
+	return nil
 }
 
 func userLaunchCommand(ctx context.Context, root string, manifest userManifest, cli string, args []string) *exec.Cmd {
