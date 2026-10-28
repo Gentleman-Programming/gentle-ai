@@ -1033,7 +1033,7 @@ func userNativeSemver(version string) bool {
 // userRecordedChecks names the recorded-installation verifications that apply
 // to an update. A component in scope is replaced from the running build, so
 // verifying its recorded bytes would refuse the update that replaces them. The
-// supervisor is never reused and is always checked against its recorded pin.
+// supervisor is never reused either, so only the strict read verifies it.
 type userRecordedChecks struct {
 	node      bool
 	sdk       bool
@@ -1107,8 +1107,10 @@ func userReadRecordedManifest(ctx context.Context, root string, reuse *userInsta
 	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || actual != manifest.AgentIdentity {
 		return manifest, privateError("preimage", err)
 	}
-	if err := userRecordedPin(ctx, root, "supervisor", manifest.SupervisorSHA); err != nil {
-		return manifest, err
+	if reuse == nil {
+		if err := userRecordedPin(ctx, root, "supervisor", manifest.SupervisorSHA); err != nil {
+			return manifest, err
+		}
 	}
 	if checks.node {
 		if err := userRecordedPin(ctx, root, "runtime/node/bin/node", privateNativeNodeSHA); err != nil {

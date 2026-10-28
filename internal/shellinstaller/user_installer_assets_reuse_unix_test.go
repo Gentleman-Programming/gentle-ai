@@ -91,6 +91,17 @@ func TestUserReadReusableManifestReplacesScopedComponents(t *testing.T) {
 	if _, err := userReadManifest(ctx, root); err == nil {
 		t.Fatal("strict read accepted a recorded tree from another build")
 	}
+	// The supervisor is copied from the running build, never reused, so the
+	// reuse pre-flight does not pin the one the recorded tree left behind.
+	if err := os.WriteFile(filepath.Join(root, "supervisor"), []byte("supervisor recorded by another build\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := userReadReusableManifest(ctx, root, replaced); err != nil {
+		t.Fatalf("reuse pinned the supervisor it replaces: %v", err)
+	}
+	if _, err := userReadManifest(ctx, root); err == nil {
+		t.Fatal("strict read accepted a foreign recorded supervisor")
+	}
 }
 
 // A full reconfigure rebuilds the agent from a fresh stage. The recorded agent
