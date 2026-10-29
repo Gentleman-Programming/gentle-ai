@@ -79,7 +79,7 @@ func TestUserWindowsAcquireServesVerifiedCacheWithoutNetwork(t *testing.T) {
 	artifact := userWindowsCacheArtifact(data, "https://127.0.0.1:1/fixture.zip") // Refused instantly if the cache were bypassed.
 	userWindowsCacheSeed(t, cache, artifact, data)
 	target := filepath.Join(t.TempDir(), "fixture.zip")
-	got, err := userWindowsAcquire(context.Background(), artifact, target)
+	got, err := userWindowsAcquire(context.Background(), artifact, target, t.TempDir())
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("verified cache entry was not served: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestUserWindowsAcquireIgnoresUnverifiedCacheEntries(t *testing.T) {
 		artifact := userWindowsCacheArtifact(data, "https://127.0.0.1:1/fixture.zip")
 		userWindowsCacheSeed(t, cache, artifact, corrupt(data))
 		target := filepath.Join(t.TempDir(), "fixture.zip")
-		if _, err := userWindowsAcquire(context.Background(), artifact, target); err == nil {
+		if _, err := userWindowsAcquire(context.Background(), artifact, target, t.TempDir()); err == nil {
 			t.Fatalf("%s-mismatched cache entry was served without verification", name)
 		}
 		if _, err := os.Lstat(target); !os.IsNotExist(err) {
@@ -124,7 +124,7 @@ func TestUserWindowsAcquireReplacesCorruptCacheEntry(t *testing.T) {
 	artifact := userWindowsCacheArtifact(data, server.URL+"/fixture.zip")
 	userWindowsCacheSeed(t, cache, artifact, data[:len(data)/2]) // A partial entry left by a crash.
 	target := filepath.Join(t.TempDir(), "fixture.zip")
-	got, err := userWindowsAcquire(context.Background(), artifact, target)
+	got, err := userWindowsAcquire(context.Background(), artifact, target, t.TempDir())
 	if err != nil || !bytes.Equal(got, data) || requests != 1 {
 		t.Fatalf("corrupt cache entry was not replaced by a download: requests=%d err=%v", requests, err)
 	}
@@ -149,7 +149,7 @@ func TestUserWindowsAcquireKeepsForeignCacheEntryShape(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(cache, artifact.Archive, "keep"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	got, err := userWindowsAcquire(context.Background(), artifact, filepath.Join(t.TempDir(), "fixture.zip"))
+	got, err := userWindowsAcquire(context.Background(), artifact, filepath.Join(t.TempDir(), "fixture.zip"), t.TempDir())
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("non-file cache entry failed the install: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestUserWindowsAcquireRetriesTransientFailures(t *testing.T) {
 			}))
 			defer server.Close()
 			artifact := userWindowsCacheArtifact(data, server.URL+"/fixture.zip")
-			got, err := userWindowsAcquire(context.Background(), artifact, filepath.Join(t.TempDir(), "fixture.zip"))
+			got, err := userWindowsAcquire(context.Background(), artifact, filepath.Join(t.TempDir(), "fixture.zip"), t.TempDir())
 			if requests != tc.requests || (err == nil) != tc.ok || (tc.ok && !bytes.Equal(got, data)) {
 				t.Fatalf("requests=%d err=%v, want requests=%d ok=%v", requests, err, tc.requests, tc.ok)
 			}
@@ -238,7 +238,7 @@ func TestUserWindowsAcquireBypassesForeignCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	userWindowsSymlinkOrSkip(t, aliased, cache)
-	if _, err := userWindowsAcquire(context.Background(), artifact, filepath.Join(t.TempDir(), "fixture.zip")); err == nil {
+	if _, err := userWindowsAcquire(context.Background(), artifact, filepath.Join(t.TempDir(), "fixture.zip"), t.TempDir()); err == nil {
 		t.Fatal("aliased cache custody was not bypassed")
 	}
 }
@@ -256,7 +256,7 @@ func TestUserWindowsAcquireStoresVerifiedCacheAndHitsIt(t *testing.T) {
 	defer server.Close()
 	artifact := userWindowsCacheArtifact(data, server.URL+"/fixture.zip")
 	target := filepath.Join(t.TempDir(), "fixture.zip")
-	first, err := userWindowsAcquire(context.Background(), artifact, target)
+	first, err := userWindowsAcquire(context.Background(), artifact, target, t.TempDir())
 	if err != nil || !bytes.Equal(first, data) || requests != 1 {
 		t.Fatalf("download did not reach the supplier once: requests=%d err=%v", requests, err)
 	}
@@ -267,7 +267,7 @@ func TestUserWindowsAcquireStoresVerifiedCacheAndHitsIt(t *testing.T) {
 	if err := os.Remove(target); err != nil {
 		t.Fatal(err)
 	}
-	second, err := userWindowsAcquire(context.Background(), artifact, target)
+	second, err := userWindowsAcquire(context.Background(), artifact, target, t.TempDir())
 	if err != nil || !bytes.Equal(second, data) || requests != 1 {
 		t.Fatalf("second acquire did not come from the cache: requests=%d err=%v", requests, err)
 	}
@@ -293,7 +293,7 @@ func TestUserWindowsAcquireSurvivesHostileCachePath(t *testing.T) {
 	defer server.Close()
 	artifact := userWindowsCacheArtifact(data, server.URL+"/fixture.zip")
 	target := filepath.Join(t.TempDir(), "fixture.zip")
-	got, err := userWindowsAcquire(context.Background(), artifact, target)
+	got, err := userWindowsAcquire(context.Background(), artifact, target, t.TempDir())
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("bad cache custody failed the install: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestUserWindowsAcquireFailedDownloadLeavesCacheEmpty(t *testing.T) {
 	_, artifact := userWindowsZipFixture(t, "fixture/fd.exe")
 	artifact.URL = "https://127.0.0.1:1/fixture.zip" // Refused before any byte is read.
 	target := filepath.Join(t.TempDir(), "fixture.zip")
-	if _, err := userWindowsAcquire(context.Background(), artifact, target); err == nil {
+	if _, err := userWindowsAcquire(context.Background(), artifact, target, t.TempDir()); err == nil {
 		t.Fatal("a refused download was not reported")
 	}
 	entries, err := os.ReadDir(cache)
