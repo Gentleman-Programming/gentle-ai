@@ -792,6 +792,8 @@ func TestUserBusEnvironmentAcceptsTrailingSlashRuntimeDir(t *testing.T) {
 		"/run/user/" + uid + "//",
 		"/run/user/" + uid + "/.",
 		"//run/user/" + uid,
+		"/run/user/../user/" + uid,
+		"/run/user/" + uid + "/x/..",
 		"/run/user/" + strconv.Itoa(os.Getuid()+1) + "/../" + uid,
 		"run/user/" + uid,
 		"",
