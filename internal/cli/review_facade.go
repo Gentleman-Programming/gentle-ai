@@ -1886,7 +1886,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	// overrides inheritance, so the successor target derives from the exact
 	// selection STATUS authorized rather than from the predecessor alone.
 	declaredSelection := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
-	currentChangesSuccessor := !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay
+	currentChangesSuccessor := !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay && !baseDiff
 	if declaredSelection && !currentChangesSuccessor {
 		return errors.New("intended-untracked selection requires a current-changes recovery; rerun `gentle-ai review recover` without --untracked-scope, --intended-untracked, and --expected-untracked-inventory")
 	}
@@ -1921,6 +1921,10 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		if target.BaseRef == "" {
 			target.BaseRef = predecessorRecord.State.InitialSnapshot.BaseTree
 		}
+	} else if baseDiff {
+		// Issues #5038/#5420: a base-diff predecessor recovered without a base
+		// selector keeps its frozen base tree, as an overlay predecessor does.
+		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, predecessorRecord.State.InitialSnapshot.BaseTree
 	}
 	var snapshot reviewtransaction.Snapshot
 	if *releaseScope {
