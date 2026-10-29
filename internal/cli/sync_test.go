@@ -2213,6 +2213,84 @@ func TestSyncBackupTargetsOpenClawSkillsUseGlobalRoot(t *testing.T) {
 	}
 }
 
+func TestCodeGraphGuidanceSyncStepNativePreservation(t *testing.T) {
+	for _, tt := range []struct {
+		name, entry string
+		wantError   bool
+	}{
+		{"no watch", `{"type":"local","command":["codegraph","serve","--mcp","--no-watch"]}`, false},
+		{"invalid native", `{"type":"local","command":["wrong-program","serve","--mcp"]}`, true},
+		{"disabled native", `{"type":"local","command":["codegraph","serve","--mcp"],"disabled":true}`, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", "")
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+			agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+			settingsBefore := "{\n// keep native comment\n\"userMetadata\":\"keep\",\"mcp\":{\"codegraph\":{\"type\":\"local\",\"command\":[\"codegraph\",\"serve\",\"--mcp\"]},\"servers\":{\"codegraph\":" + tt.entry + "}}}\n"
+			guidanceBefore := "custom notes\n<!-- gentle-ai:codegraph-guidance -->\nstale\n<!-- /gentle-ai:codegraph-guidance -->\n"
+			mustWriteFile(t, settingsPath, []byte(settingsBefore))
+			mustWriteFile(t, agentsPath, []byte(guidanceBefore))
+			restoreLookPath := cmdLookPath
+			t.Cleanup(func() { cmdLookPath = restoreLookPath })
+			cmdLookPath = func(string) (string, error) { return "/bin/codegraph", nil }
+			calls := 0
+			var changed []string
+			step := codeGraphGuidanceSyncStep{
+				id:      "sync:community-tool:codegraph-guidance",
+				homeDir: home,
+				runner: communitytool.RunnerFunc(func(string, ...string) error {
+					calls++
+					return nil
+				}),
+				changedFiles: &changed,
+			}
+			err := step.Run()
+			if tt.wantError {
+				if err == nil {
+					t.Error("Run() must refuse unmet native wiring")
+				} else {
+					for _, want := range []string{settingsPath, "mcp.servers.codegraph"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("Run() diagnostic %q missing %q", err, want)
+						}
+					}
+				}
+				if len(changed) != 0 {
+					t.Errorf("failed native reconcile reported changes: %v", changed)
+				}
+				body, readErr := os.ReadFile(agentsPath)
+				if readErr != nil || string(body) != guidanceBefore {
+					t.Errorf("failed Run() did not preserve guidance: %q, error=%v", body, readErr)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Run() valid no-watch native wiring: %v", err)
+				}
+				if !reflect.DeepEqual(changed, []string{agentsPath}) {
+					t.Errorf("changed files = %v, want only guidance %q", changed, agentsPath)
+				}
+			}
+			if calls != 0 {
+				t.Errorf("native sync called installer %d times, want zero", calls)
+			}
+			body, readErr := os.ReadFile(settingsPath)
+			if readErr != nil || string(body) != settingsBefore {
+				t.Fatalf("Run() changed native config bytes: %q, error=%v", body, readErr)
+			}
+			if err := step.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+			for path, want := range map[string]string{settingsPath: settingsBefore, agentsPath: guidanceBefore} {
+				body, readErr := os.ReadFile(path)
+				if readErr != nil || string(body) != want {
+					t.Errorf("Rollback() did not restore %q: %q, error=%v", path, body, readErr)
+				}
+			}
+		})
+	}
+}
+
 func TestCodeGraphGuidanceSyncStepRefreshesOldMarkerWhenConfigured(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
