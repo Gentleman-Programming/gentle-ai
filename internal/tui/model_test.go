@@ -7735,3 +7735,25 @@ func TestMarkPendingSyncUnderLockReReadsLatestStateAfterLockContention(t *testin
 		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
 	}
 }
+
+func TestGetTurnTimeout(t *testing.T) {
+	// unset env -> default 10 minutes
+	if v := os.Getenv("GENTLE_AI_TURN_TIMEOUT"); v != "" {
+		os.Unsetenv("GENTLE_AI_TURN_TIMEOUT")
+		defer os.Setenv("GENTLE_AI_TURN_TIMEOUT", v)
+	}
+	if got := GetTurnTimeout(); got != 10*time.Minute {
+		t.Errorf("GetTurnTimeout() = %v, want %v", got, 10*time.Minute)
+	}
+	// set valid duration
+	os.Setenv("GENTLE_AI_TURN_TIMEOUT", "2m30s")
+	if got := GetTurnTimeout(); got != 2*time.Minute+30*time.Second {
+		t.Errorf("GetTurnTimeout() = %v, want %v", got, 2*time.Minute+30*time.Second)
+	}
+	// invalid duration falls back to default
+	os.Setenv("GENTLE_AI_TURN_TIMEOUT", "notaduration")
+	if got := GetTurnTimeout(); got != 10*time.Minute {
+		t.Errorf("GetTurnTimeout() = %v, want %v (fallback)", got, 10*time.Minute)
+	}
+}
+
