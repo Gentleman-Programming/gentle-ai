@@ -110,15 +110,25 @@ var userWindowsArtifacts = []userWindowsArtifact{
 // userWindowsArtifacts are cached, keyed by their exact archive name; the
 // Main snapshot descriptor and every mutable/user artifact are acquired
 // through their own path and are never routed through userWindowsAcquire.
-// Every failure — an unresolvable LOCALAPPDATA, a creation error or a
-// foreign/aliased cache identity — is a bypass, never an install failure:
-// caching is a pure optimization.
-func userWindowsDownloadCacheDirectory() (string, bool) {
+// Every failure — an unresolvable LOCALAPPDATA, a creation error, a
+// foreign/aliased cache identity or a cache path that overlaps the
+// installation destination — is a bypass, never an install failure: caching
+// is a pure optimization. The overlap refusal preserves the publication
+// invariant that the destination is absent, or a completed owned
+// installation, at the mandatory pre-publication re-inspection: this cache is
+// created before publication, so a cache path that equals, contains or lives
+// inside the destination would make the installer create its own destination
+// and every fresh install would abort with "Windows selection changed before
+// publication".
+func userWindowsDownloadCacheDirectory(destination string) (string, bool) {
 	local, err := userWindowsLocalAppData()
 	if err != nil {
 		return "", false
 	}
 	cache := filepath.Join(local, "gentle-shell", "cache", "downloads")
+	if userWindowsCacheOverlaps(destination, cache) {
+		return "", false
+	}
 	if _, err := os.Lstat(cache); err != nil {
 		if !errors.Is(err, os.ErrNotExist) || os.MkdirAll(cache, 0700) != nil {
 			return "", false
@@ -130,16 +140,39 @@ func userWindowsDownloadCacheDirectory() (string, bool) {
 	return cache, true
 }
 
+// userWindowsCacheOverlaps reports whether the optional download cache and the
+// installation destination overlap in either direction, so the cache can never
+// create the destination before the pre-publication re-inspection. Paths that
+// share only a textual prefix (…\gentle-shell and …\gentle-shell2) are
+// siblings and do not overlap.
+func userWindowsCacheOverlaps(destination, cache string) bool {
+	return userWindowsPathWithin(destination, cache) || userWindowsPathWithin(cache, destination)
+}
+
+// userWindowsPathWithin reports whether child is parent or lives below it. An
+// unrepresentable relationship is reported as containment: an uncertain cache
+// path is refused rather than allowed to touch the destination.
+func userWindowsPathWithin(parent, child string) bool {
+	if parent == "" || child == "" {
+		return false
+	}
+	relative, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
+	if err != nil {
+		return true
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
+}
+
 // userWindowsDownloadCacheHit returns cached archive bytes only when the
 // exact-name entry is owned (no reparse point, current-SID owner, private
 // DACL, NTFS, canonical path), stays within the artifact byte bound and
 // matches the artifact descriptor's exact size and SHA-256. Anything else is
 // a miss; unverified cache bytes are never returned.
-func userWindowsDownloadCacheHit(ctx context.Context, artifact userWindowsArtifact) ([]byte, bool) {
+func userWindowsDownloadCacheHit(ctx context.Context, artifact userWindowsArtifact, destination string) ([]byte, bool) {
 	if ctx.Err() != nil {
 		return nil, false
 	}
-	cache, ok := userWindowsDownloadCacheDirectory()
+	cache, ok := userWindowsDownloadCacheDirectory(destination)
 	if !ok {
 		return nil, false
 	}
@@ -157,8 +190,8 @@ func userWindowsDownloadCacheHit(ctx context.Context, artifact userWindowsArtifa
 // unverified entry is removed rather than left behind, and an entry another
 // concurrent install already stored is kept as found (it is re-verified
 // before any later read).
-func userWindowsDownloadCacheStore(artifact userWindowsArtifact, data []byte) {
-	cache, ok := userWindowsDownloadCacheDirectory()
+func userWindowsDownloadCacheStore(artifact userWindowsArtifact, data []byte, destination string) {
+	cache, ok := userWindowsDownloadCacheDirectory(destination)
 	if !ok {
 		return
 	}
@@ -168,8 +201,8 @@ func userWindowsDownloadCacheStore(artifact userWindowsArtifact, data []byte) {
 	}
 }
 
-func userWindowsAcquire(ctx context.Context, artifact userWindowsArtifact, target string) ([]byte, error) {
-	if data, hit := userWindowsDownloadCacheHit(ctx, artifact); hit {
+func userWindowsAcquire(ctx context.Context, artifact userWindowsArtifact, target, destination string) ([]byte, error) {
+	if data, hit := userWindowsDownloadCacheHit(ctx, artifact, destination); hit {
 		if err := userWindowsWrite(target, data); err != nil {
 			return nil, err
 		}
@@ -182,7 +215,7 @@ func userWindowsAcquire(ctx context.Context, artifact userWindowsArtifact, targe
 	if err := userWindowsWrite(target, data); err != nil {
 		return nil, err
 	}
-	userWindowsDownloadCacheStore(artifact, data)
+	userWindowsDownloadCacheStore(artifact, data, destination)
 	return data, nil
 }
 

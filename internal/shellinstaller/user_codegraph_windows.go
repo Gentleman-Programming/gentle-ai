@@ -57,14 +57,20 @@ var userWindowsCodeGraphSources = []struct {
 // downloads and extracts the pinned packages. The launcher is written with an
 // exclusive create: a reused copy carried into the stage would fail it with
 // "file exists" (issue #5847), which is why no reuse path may copy bin.
+//
+// The download leg forwards req.Destination into provisioning: the optional
+// download cache must see the installation destination so it can decline a
+// cache path that overlaps it. Dropping it here would let
+// %LOCALAPPDATA%\gentle-shell recreate the destination and abort publication
+// for a CodeGraph-enabled fresh install.
 func userWindowsCodeGraphAcquire(ctx context.Context, stage string, req UserInstallRequest, scope userInstallScope) error {
 	if scope.reused[UserComponentCodeGraph] && req.Experience != nil && req.Experience.CodeGraph == "on" {
 		return userWindowsCodeGraphCommand(ctx, stage)
 	}
-	return userWindowsCodeGraphProvision(ctx, stage, req.Experience)
+	return userWindowsCodeGraphProvision(ctx, stage, req.Destination, req.Experience)
 }
 
-func userWindowsCodeGraphProvision(ctx context.Context, root string, profile *UserExperience) error {
+func userWindowsCodeGraphProvision(ctx context.Context, root, destination string, profile *UserExperience) error {
 	if profile == nil || profile.CodeGraph != "on" {
 		return nil
 	}
@@ -81,7 +87,7 @@ func userWindowsCodeGraphProvision(ctx context.Context, root string, profile *Us
 			Prefix: "", Bound: 64 << 20, Size: source.size,
 		}
 		fmt.Fprintf(os.Stderr, "Windows install phase: codegraph-download %s\n", source.name)
-		data, err := userWindowsAcquire(ctx, artifact, filepath.Join(archives, source.archive))
+		data, err := userWindowsAcquire(ctx, artifact, filepath.Join(archives, source.archive), destination)
 		if err != nil {
 			return err
 		}

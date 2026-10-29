@@ -655,7 +655,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		index, artifact := index, artifact
 		go func() {
 			defer downloads.Done()
-			fetched[index].data, fetched[index].err = userWindowsAcquire(ctx, artifact, filepath.Join(stage, "runtime/archives", artifact.Archive))
+			fetched[index].data, fetched[index].err = userWindowsAcquire(ctx, artifact, filepath.Join(stage, "runtime/archives", artifact.Archive), req.Destination)
 		}()
 	}
 	downloads.Wait()
