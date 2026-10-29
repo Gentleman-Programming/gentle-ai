@@ -110,6 +110,13 @@ var execCommandFn = exec.Command
 var communityToolInstallFn = communitytool.Install
 var communityToolStatusFn = communitytool.DetectStatus
 
+// agentBuilderEngineAvailableFn reports whether an agent-builder engine binary
+// is on PATH. Tests may override it to count or fake PATH probes.
+var agentBuilderEngineAvailableFn = func(id model.AgentID) bool {
+	engine := agentbuilder.NewEngine(id)
+	return engine != nil && engine.Available()
+}
+
 // readCurrentAssignmentsFn reads OpenCode agent assignments for Configure models.
 // Tests may override it without touching user settings.
 var readCurrentAssignmentsFn = func(settingsPath string) (map[string]model.ModelAssignment, error) {
@@ -639,6 +646,9 @@ const (
 )
 
 type Model struct {
+	// agentBuilderEngines is detected once in NewModel so View and optionCount
+	// never probe PATH per frame (#268).
+	agentBuilderEngines   []model.AgentID
 	shellExperience       *shellExperienceConfig
 	shellDetected         []shellinstaller.UserShellInstall
 	shellDetectedProfiles []shellinstaller.UserExperience
@@ -926,6 +936,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 	}
 
 	return Model{
+		agentBuilderEngines:   detectAgentBuilderEngines(),
 		Screen:                ScreenWelcome,
 		Version:               version,
 		Selection:             selection,
@@ -2362,11 +2373,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			m.setScreen(ScreenCustomAgentDelete)
 		case m.Cursor == agentCount:
+			m.agentBuilderEngines = detectAgentBuilderEngines()
 			if !m.hasAgentBuilderEngines() {
 				return m, nil
 			}
 			m.AgentBuilder = AgentBuilderState{}
-			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
+			m.AgentBuilder.AvailableEngines = m.agentBuilderEngines
 			ta := textarea.New()
 			ta.Placeholder = "Describe what you want your agent to do..."
 			ta.Focus()
@@ -4610,7 +4622,7 @@ func (m Model) isScrollableScreen() bool {
 
 // detectAgentBuilderEngines scans for supported AI agent binaries on PATH and
 // returns the list of available AgentIDs.
-func (m Model) detectAgentBuilderEngines() []model.AgentID {
+func detectAgentBuilderEngines() []model.AgentID {
 	candidateIDs := []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
@@ -4619,17 +4631,17 @@ func (m Model) detectAgentBuilderEngines() []model.AgentID {
 	}
 	var available []model.AgentID
 	for _, id := range candidateIDs {
-		engine := agentbuilder.NewEngine(id)
-		if engine != nil && engine.Available() {
+		if agentBuilderEngineAvailableFn(id) {
 			available = append(available, id)
 		}
 	}
 	return available
 }
 
-// hasAgentBuilderEngines reports whether any supported AI agent binary is installed.
+// hasAgentBuilderEngines reports whether any supported AI agent binary was
+// detected; it reads the stored result and never probes PATH.
 func (m Model) hasAgentBuilderEngines() bool {
-	return len(m.detectAgentBuilderEngines()) > 0
+	return len(m.agentBuilderEngines) > 0
 }
 
 // agentBuilderInstallTargets returns the list of install target paths for the preview screen.
