@@ -782,8 +782,23 @@ func TestUserBusEnvironmentAcceptsTrailingSlashRuntimeDir(t *testing.T) {
 	if _, err := userBusEnvironment(); err != nil && strings.Contains(err.Error(), "set XDG_RUNTIME_DIR") {
 		t.Fatalf("trailing slash refused as a different runtime dir: %v", err)
 	}
-	t.Setenv("XDG_RUNTIME_DIR", "/run/user/"+strconv.Itoa(os.Getuid()+1))
-	if _, err := userBusEnvironment(); err == nil || !strings.Contains(err.Error(), "set XDG_RUNTIME_DIR") {
-		t.Fatalf("foreign runtime dir accepted: %v", err)
+	if got, want := userRuntimeDirEnv(), "/run/user/"+strconv.Itoa(os.Getuid()); got != want {
+		t.Fatalf("userRuntimeDirEnv() = %q, want %q", got, want)
+	}
+	uid := strconv.Itoa(os.Getuid())
+	for _, value := range []string{
+		"/run/user/" + strconv.Itoa(os.Getuid()+1),
+		"/run/user/" + strconv.Itoa(os.Getuid()+1) + "/",
+		"/run/user/" + uid + "//",
+		"/run/user/" + uid + "/.",
+		"//run/user/" + uid,
+		"/run/user/" + strconv.Itoa(os.Getuid()+1) + "/../" + uid,
+		"run/user/" + uid,
+		"",
+	} {
+		t.Setenv("XDG_RUNTIME_DIR", value)
+		if _, err := userBusEnvironment(); err == nil || !strings.Contains(err.Error(), "set XDG_RUNTIME_DIR") {
+			t.Fatalf("XDG_RUNTIME_DIR=%q accepted: %v", value, err)
+		}
 	}
 }
