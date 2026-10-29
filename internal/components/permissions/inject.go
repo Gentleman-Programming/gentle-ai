@@ -40,16 +40,16 @@ var claudeCodeOverlayJSON = []byte(`{
       "Read(.env.*)",
       "Edit(.env)",
       "Edit(.env.*)",
-      "Read(.ssh/*)",
-      "Edit(.ssh/*)",
-      "Read(.credentials/*)",
-      "Edit(.credentials/*)",
-      "Read(Library/Keychains/*)",
-      "Edit(Library/Keychains/*)",
-      "Read(.aws/credentials)",
-      "Edit(.aws/credentials)",
-      "Read(.config/gh/hosts.yml)",
-      "Edit(.config/gh/hosts.yml)",
+      "Read(~/.ssh/**)",
+      "Edit(~/.ssh/**)",
+      "Read(~/.credentials/**)",
+      "Edit(~/.credentials/**)",
+      "Read(~/Library/Keychains/**)",
+      "Edit(~/Library/Keychains/**)",
+      "Read(~/.aws/credentials)",
+      "Edit(~/.aws/credentials)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Edit(~/.config/gh/hosts.yml)",
       "Read(**/*.pem)",
       "Edit(**/*.pem)",
       "Read(**/*.key)",
@@ -167,9 +167,25 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
 }
 
+// staleClaudeCodeDenyRules maps the cwd-relative home rules earlier releases
+// wrote to their home-anchored replacements (#5280).
+var staleClaudeCodeDenyRules = map[string]string{
+	"Read(.ssh/*)":               "Read(~/.ssh/**)",
+	"Edit(.ssh/*)":               "Edit(~/.ssh/**)",
+	"Read(.credentials/*)":       "Read(~/.credentials/**)",
+	"Edit(.credentials/*)":       "Edit(~/.credentials/**)",
+	"Read(Library/Keychains/*)":  "Read(~/Library/Keychains/**)",
+	"Edit(Library/Keychains/*)":  "Edit(~/Library/Keychains/**)",
+	"Read(.aws/credentials)":     "Read(~/.aws/credentials)",
+	"Edit(.aws/credentials)":     "Edit(~/.aws/credentials)",
+	"Read(.config/gh/hosts.yml)": "Read(~/.config/gh/hosts.yml)",
+	"Edit(.config/gh/hosts.yml)": "Edit(~/.config/gh/hosts.yml)",
+}
+
 // mergeClaudeCodePermissionsForPath seeds deny only when absent. Existing lists,
 // including an explicit empty list, belong to the user; reinjection must neither
-// replace them nor append defaults that undo a deliberately narrowed policy.
+// replace them nor append defaults that undo a deliberately narrowed policy. It
+// only anchors stale package rules in place, dropping any duplicate.
 func mergeClaudeCodePermissionsForPath(path string, base, overlay []byte) ([]byte, error) {
 	existing, err := filemerge.UnmarshalJSONObject(base)
 	if err != nil {
@@ -183,14 +199,39 @@ func mergeClaudeCodePermissionsForPath(path string, base, overlay []byte) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	if permissions, ok := defaults["permissions"].(map[string]any); ok {
-		delete(permissions, "deny")
+	if defaultPermissions, ok := defaults["permissions"].(map[string]any); ok {
+		delete(defaultPermissions, "deny")
+		if deny, ok := permissions["deny"].([]any); ok {
+			defaultPermissions["deny"] = anchorStaleClaudeCodeDenyRules(deny)
+		}
 	}
 	overlay, err = json.Marshal(defaults)
 	if err != nil {
 		return nil, err
 	}
 	return filemerge.MergeJSONObjectsForPath(path, base, overlay)
+}
+
+func anchorStaleClaudeCodeDenyRules(deny []any) []any {
+	present := map[string]bool{}
+	for _, rule := range deny {
+		if name, ok := rule.(string); ok {
+			present[name] = true
+		}
+	}
+	anchored := make([]any, 0, len(deny))
+	for _, rule := range deny {
+		name, _ := rule.(string)
+		if replacement, stale := staleClaudeCodeDenyRules[name]; stale {
+			if present[replacement] {
+				continue
+			}
+			present[replacement] = true
+			rule = replacement
+		}
+		anchored = append(anchored, rule)
+	}
+	return anchored
 }
 
 // withoutRulesLooserThanUserDefault drops overlay tool rules looser than the

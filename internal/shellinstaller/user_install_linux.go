@@ -115,9 +115,20 @@ func InspectUserInstall(req UserInstallRequest) (string, error) {
 	return userInspectInstall(req)
 }
 
+// userRuntimeDirEnv returns XDG_RUNTIME_DIR without one trailing slash, the
+// form WSL2 exports ("/run/user/UID/"). Every other spelling is kept as given,
+// so callers still refuse anything but the exact runtime directory.
+func userRuntimeDirEnv() string {
+	value := os.Getenv("XDG_RUNTIME_DIR")
+	if len(value) > 1 {
+		value = strings.TrimSuffix(value, "/")
+	}
+	return value
+}
+
 func userBusEnvironment() ([]string, error) {
 	runtimeDir := "/run/user/" + strconv.Itoa(os.Getuid())
-	if os.Getenv("XDG_RUNTIME_DIR") != runtimeDir {
+	if userRuntimeDirEnv() != runtimeDir {
 		return nil, errors.New("set XDG_RUNTIME_DIR to your existing /run/user/UID; delegated user manager required")
 	}
 	if _, err := privateDirectory(runtimeDir); err != nil {

@@ -253,6 +253,9 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if err = userVerifyInstalledGlobal(ctx, req.Destination, manifest); err != nil {
 			return result, userGraphRepairError(req.Destination, req.Mode, err)
 		}
+		if err = userVerifyRecordedSuppliers(ctx, req.Destination, manifest); err != nil {
+			return result, err
+		}
 		if err = userNativeReadback(ctx, filepath.Join(manifest.Prefix, "lib/node_modules/gentle-pi/.gentle-ai")); err != nil {
 			return result, err
 		}
@@ -1256,6 +1259,11 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
 		return userGraphRepairError(root, manifest.Mode, err)
 	}
+	// A tree without a staged reviewed list keeps its supplier files
+	// authenticated against the embedded entry on every launch.
+	if err := userVerifyRecordedSuppliers(ctx, root, manifest); err != nil {
+		return err
+	}
 	if err := userNativeReadback(ctx, filepath.Join(manifest.Prefix, "lib/node_modules/gentle-pi/.gentle-ai")); err != nil {
 		return err
 	}
@@ -1282,6 +1290,11 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 		}
 		if readbackErr := userVerifyInstalledGlobal(context.Background(), root, manifest); readbackErr != nil {
 			failure := privateError("uncertain", errors.Join(err, readbackErr))
+			failure.Workspace, failure.Destination = root, manifest.Prefix
+			return failure
+		}
+		if supplierErr := userVerifyRecordedSuppliers(context.Background(), root, manifest); supplierErr != nil {
+			failure := privateError("uncertain", errors.Join(err, supplierErr))
 			failure.Workspace, failure.Destination = root, manifest.Prefix
 			return failure
 		}

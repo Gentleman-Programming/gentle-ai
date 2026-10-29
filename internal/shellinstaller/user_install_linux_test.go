@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -771,5 +772,35 @@ func TestUserUnitReadbackKernelMarkerCause(t *testing.T) {
 func TestUserLaunchProbeUnitCheckArgs(t *testing.T) {
 	if args := userLaunchProbeArgs(); !reflect.DeepEqual(args, []string{"internal-check"}) {
 		t.Fatalf("launch probe does not recheck the kernel inside a unit: %v", args)
+	}
+}
+
+// WSL2 exports XDG_RUNTIME_DIR with a trailing slash; the same directory must
+// pass the runtime-dir clause (#5798, #5807).
+func TestUserBusEnvironmentAcceptsTrailingSlashRuntimeDir(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/"+strconv.Itoa(os.Getuid())+"/")
+	if _, err := userBusEnvironment(); err != nil && strings.Contains(err.Error(), "set XDG_RUNTIME_DIR") {
+		t.Fatalf("trailing slash refused as a different runtime dir: %v", err)
+	}
+	if got, want := userRuntimeDirEnv(), "/run/user/"+strconv.Itoa(os.Getuid()); got != want {
+		t.Fatalf("userRuntimeDirEnv() = %q, want %q", got, want)
+	}
+	uid := strconv.Itoa(os.Getuid())
+	for _, value := range []string{
+		"/run/user/" + strconv.Itoa(os.Getuid()+1),
+		"/run/user/" + strconv.Itoa(os.Getuid()+1) + "/",
+		"/run/user/" + uid + "//",
+		"/run/user/" + uid + "/.",
+		"//run/user/" + uid,
+		"/run/user/../user/" + uid,
+		"/run/user/" + uid + "/x/..",
+		"/run/user/" + strconv.Itoa(os.Getuid()+1) + "/../" + uid,
+		"run/user/" + uid,
+		"",
+	} {
+		t.Setenv("XDG_RUNTIME_DIR", value)
+		if _, err := userBusEnvironment(); err == nil || !strings.Contains(err.Error(), "set XDG_RUNTIME_DIR") {
+			t.Fatalf("XDG_RUNTIME_DIR=%q accepted: %v", value, err)
+		}
 	}
 }

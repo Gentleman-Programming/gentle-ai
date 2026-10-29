@@ -57,11 +57,11 @@ func newUserNativeSlice(ctx context.Context) (*userNativeSlice, error) {
 		return nil, err
 	}
 	s := &userNativeSlice{env: env, tools: map[string]string{}}
-	s.runtimeIdentity, err = userIdentity(os.Getenv("XDG_RUNTIME_DIR"))
+	s.runtimeIdentity, err = userIdentity(userRuntimeDirEnv())
 	if err != nil {
 		return nil, err
 	}
-	socket, err := os.Lstat(filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "bus"))
+	socket, err := os.Lstat(filepath.Join(userRuntimeDirEnv(), "bus"))
 	if err != nil {
 		return nil, err
 	}
@@ -126,11 +126,11 @@ func (s *userNativeSlice) run(ctx context.Context, tool string, args ...string) 
 	if err != nil || !reflect.DeepEqual(env, s.env) {
 		return "", privateError("preimage", err)
 	}
-	identity, err := userIdentity(os.Getenv("XDG_RUNTIME_DIR"))
+	identity, err := userIdentity(userRuntimeDirEnv())
 	if err != nil || identity != s.runtimeIdentity {
 		return "", privateError("preimage", err)
 	}
-	socket, err := os.Lstat(filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "bus"))
+	socket, err := os.Lstat(filepath.Join(userRuntimeDirEnv(), "bus"))
 	if err != nil || privateStamp(socket) != s.busStamp {
 		return "", privateError("preimage", err)
 	}

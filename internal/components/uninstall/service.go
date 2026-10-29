@@ -32,6 +32,7 @@ import (
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type Manager interface {
@@ -953,6 +954,14 @@ func settingsTargets(homeDir string, adapter agents.Adapter) []string {
 }
 
 func (s *Service) componentOperations(adapter agents.Adapter, componentID model.ComponentID) ([]operation, []string, error) {
+	if adapter.Agent() == model.AgentCodex {
+		globalEngram := componentID == model.ComponentEngram && s.engramUninstallScope != model.EngramUninstallScopeProject
+		if globalEngram || componentID == model.ComponentPersona || componentID == model.ComponentContext7 || componentID == model.ComponentSkills {
+			if err := system.ValidateCodexHome(s.homeDir); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
 	ops := make([]operation, 0)
 	targets := make([]string, 0)
 	homeDir := s.homeDir
