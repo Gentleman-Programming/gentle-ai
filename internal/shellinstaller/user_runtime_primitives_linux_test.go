@@ -151,7 +151,7 @@ func TestPrivateKernelRefusalCauses(t *testing.T) {
 			_, err := privateCgroupPath("0::/\n", "1 0 0:1 / /sys/fs/cgroup ro cgroup2 cgroup rw\n")
 			return err
 		},
-			`mountinfo line "1 0 0:1 / /sys/fs/cgroup ro cgroup2 cgroup rw" has 9 fields with the '-' separator at -1, want one '-' and four trailing fields`},
+			`mountinfo line "1 0 0:1 / /sys/fs/cgroup ro cgroup2 cgroup rw" has 9 fields with the '-' separator at -1, want one '-' and at least four trailing fields`},
 		{"noncanonical mount paths", func() error {
 			_, err := privateCgroupPath("0::/\n", strings.Replace(mount, `0:1 / `, `0:1 /tenant\040/../ `, 1))
 			return err
@@ -201,6 +201,33 @@ func TestPrivateKernelRefusalCauses(t *testing.T) {
 	}
 }
 
+// Host mounts outside the trusted hierarchy never block resolution, even when
+// the kernel prints them with escapes or free-text super options (#5854, #5818).
+func TestPrivateCgroupPathIgnoresUnrelatedHostMounts(t *testing.T) {
+	mount := "1 0 0:1 / /sys/fs/cgroup ro - cgroup2 cgroup rw\n"
+	cases := map[string]string{
+		"9p super options with spaces": `95 80 0:56 / /mnt/host/c rw,noatime - 9p drvfs rw,aname=drvfs;path=C:\Program Files\Docker;symlinkroot=/mnt/,trans=fd` + "\n",
+		"escaped backslash mountpoint": `40 26 0:42 / /run/credentials/systemd-tmpfiles-setup\134x2dsetup.service ro - tmpfs tmpfs rw` + "\n",
+	}
+	for name, unrelated := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := privateCgroupPath("0::/child\n", mount+unrelated)
+			if err != nil || got != "/sys/fs/cgroup/child" {
+				t.Fatalf("mapping=%q error=%v", got, err)
+			}
+		})
+	}
+	// The trusted hierarchy keeps strict validation and a truncated line still refuses.
+	for name, hostile := range map[string]string{
+		"escaped mountpoint under the hierarchy": `2 1 0:2 / /sys/fs/cgroup/x\134y ro - tmpfs tmpfs rw` + "\n",
+		"truncated trailing fields":              "2 1 0:2 / /opt ro - tmpfs tmpfs\n",
+	} {
+		if got, err := privateCgroupPath("0::/child\n", mount+hostile); err == nil {
+			t.Errorf("%s: accepted with mapping %q", name, got)
+		}
+	}
+}
+
 func TestPrivateCgroupMapping(t *testing.T) {
 	privateGuest(t)
 	mount := "1 0 0:1 / /sys/fs/cgroup ro - cgroup2 cgroup rw\n"
@@ -221,9 +248,9 @@ func TestPrivateCgroupMapping(t *testing.T) {
 		// Roots of non-cgroup2 mounts are never consumed, so even hostile
 		// values there cannot affect the resolution.
 		{"unrelated noncanonical root", "0::/child\n", mount + "36 26 0:41 /tenant/../ /opt nsfs rw - nsfs nsfs rw\n", "/sys/fs/cgroup/child"},
-		// A mountpoint that is not canonical cannot be classified against the
-		// trusted hierarchy, so it still refuses.
-		{"unrelated noncanonical mountpoint", "0::/\n", mount + "36 26 0:41 / /opt/../evil ro - tmpfs tmpfs rw\n", ""},
+		// A mountpoint inside the trusted hierarchy that is not canonical
+		// cannot be classified, so it still refuses.
+		{"noncanonical mountpoint under the hierarchy", "0::/\n", mount + "36 26 0:41 / /sys/fs/cgroup/../cgroup ro - tmpfs tmpfs rw\n", ""},
 		{"literal space", "0::/child space\n", mount, "/sys/fs/cgroup/child space"},
 		{"invalid UTF-8", "0::/child\xff\n", mount, ""},
 		{"missing membership", "", mount, ""},

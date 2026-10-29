@@ -117,7 +117,7 @@ func InspectUserInstall(req UserInstallRequest) (string, error) {
 
 func userBusEnvironment() ([]string, error) {
 	runtimeDir := "/run/user/" + strconv.Itoa(os.Getuid())
-	if os.Getenv("XDG_RUNTIME_DIR") != runtimeDir {
+	if filepath.Clean(os.Getenv("XDG_RUNTIME_DIR")) != runtimeDir {
 		return nil, errors.New("set XDG_RUNTIME_DIR to your existing /run/user/UID; delegated user manager required")
 	}
 	if _, err := privateDirectory(runtimeDir); err != nil {

@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -771,5 +772,18 @@ func TestUserUnitReadbackKernelMarkerCause(t *testing.T) {
 func TestUserLaunchProbeUnitCheckArgs(t *testing.T) {
 	if args := userLaunchProbeArgs(); !reflect.DeepEqual(args, []string{"internal-check"}) {
 		t.Fatalf("launch probe does not recheck the kernel inside a unit: %v", args)
+	}
+}
+
+// WSL2 exports XDG_RUNTIME_DIR with a trailing slash; the same directory must
+// pass the runtime-dir clause (#5798, #5807).
+func TestUserBusEnvironmentAcceptsTrailingSlashRuntimeDir(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/"+strconv.Itoa(os.Getuid())+"/")
+	if _, err := userBusEnvironment(); err != nil && strings.Contains(err.Error(), "set XDG_RUNTIME_DIR") {
+		t.Fatalf("trailing slash refused as a different runtime dir: %v", err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/"+strconv.Itoa(os.Getuid()+1))
+	if _, err := userBusEnvironment(); err == nil || !strings.Contains(err.Error(), "set XDG_RUNTIME_DIR") {
+		t.Fatalf("foreign runtime dir accepted: %v", err)
 	}
 }
