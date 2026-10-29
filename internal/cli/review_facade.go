@@ -620,6 +620,11 @@ func RunReview(args []string, stdout io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), reviewFacadeOperationDeadline(operation, args[1:]))
 	defer cancel()
+	var statusTimings *reviewtransaction.StatusPhaseTimings
+	if operation == "review.status" && reviewStatusPhaseTimingsEnabled(args[1:]) {
+		statusTimings = reviewtransaction.NewStatusPhaseTimings()
+		ctx = reviewtransaction.WithStatusPhaseTimings(ctx, statusTimings)
+	}
 	metadata, _ := reviewIntegrationOperationByName(operation)
 	joinOnTimeout := metadata.JoinOnTimeout && reviewIntegrationOperationMutates(metadata, args[1:])
 	var output bytes.Buffer
@@ -641,9 +646,15 @@ func RunReview(args []string, stdout io.Writer) error {
 			runErr = ctx.Err()
 		}
 	}
+	if statusTimings != nil {
+		emitReviewStatusPhaseTimings(statusTimings)
+	}
 	if runErr == nil {
 		_, err := io.Copy(stdout, &output)
 		return err
+	}
+	if statusTimings != nil {
+		runErr = fmt.Errorf("%w (%s)", runErr, statusTimings.Snapshot().FormatSummary())
 	}
 	failure := newReviewIntegrationFailure(operation, args[1:], runErr)
 	// Generate the defect report before emitting the envelope so a stdout
@@ -814,8 +825,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	escalateReason := flags.String("escalate-reason", "", "preflight review start --escalate-reason and render it into the fresh START next transition")
 	lensSelection := flags.String("lenses", "", "preflight review start --lenses and render it into the fresh START next transition")
 	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason and render it into the fresh START next transition")
+	phaseTimings := flags.Bool("phase-timings", false, "emit opt-in native STATUS phase timing diagnostics")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
+	}
+	if reviewtransaction.StatusPhaseTimingsFromContext(ctx) == nil && (*phaseTimings || reviewStatusPhaseTimingsEnvEnabled()) {
+		timings := reviewtransaction.NewStatusPhaseTimings()
+		ctx = reviewtransaction.WithStatusPhaseTimings(ctx, timings)
+		defer emitReviewStatusPhaseTimings(timings)
 	}
 	if reviewHelpRequested(args) {
 		return nil

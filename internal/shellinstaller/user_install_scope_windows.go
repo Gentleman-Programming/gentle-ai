@@ -97,7 +97,7 @@ func userWindowsReuseComponents(ctx context.Context, stage, backup string, insta
 		}
 	}
 	if scope.reused[UserComponentCodeGraph] && req.Experience != nil && req.Experience.CodeGraph == "on" {
-		if err := userWindowsReuseTree(ctx, filepath.Join(backup, "runtime", "codegraph"), filepath.Join(stage, "runtime", "codegraph")); err != nil {
+		if err := userWindowsReuseCodeGraphTree(ctx, filepath.Join(backup, "runtime", "codegraph"), filepath.Join(stage, "runtime", "codegraph")); err != nil {
 			return fmt.Errorf("CodeGraph reuse: %w", err)
 		}
 	}
@@ -131,4 +131,15 @@ func userWindowsCopyFile(from, to string) error {
 		return err
 	}
 	return userWindowsReuseFile(from, to)
+}
+
+// userWindowsReuseCodeGraphTree reuses the installed CodeGraph runtime into
+// the stage without its generated command: userWindowsCodeGraphCommand
+// regenerates bin\codegraph.cmd with an exclusive create, so a reused copy
+// would fail the update with "file exists".
+func userWindowsReuseCodeGraphTree(ctx context.Context, from, to string) error {
+	if err := userWindowsReuseTree(ctx, from, to); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(to, "bin"))
 }

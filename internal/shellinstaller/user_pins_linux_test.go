@@ -63,6 +63,10 @@ func TestUserPinParity(t *testing.T) {
 	if len(job) != 2 {
 		t.Fatal("live user-vm-laboratory job absent")
 	}
+	installerSHA, resolverSHA, pinsErr := userStableSupplierPins()
+	if pinsErr != nil {
+		t.Fatal(pinsErr)
+	}
 	cases := []struct {
 		name    string
 		source  []byte
@@ -73,7 +77,7 @@ func TestUserPinParity(t *testing.T) {
 		{"guest/archive", python, `(?m)^NODE_SHA = '([a-f0-9]{64})'$`, []string{privateColdSHA}},
 		{"guest/archive-check", python, `(?m)^                require\(len\(raw\) == 57224421 and hashlib.sha256\(raw\).hexdigest\(\) == NODE_SHA, 'independent fixture Node pin'\)$`, nil},
 		{"workflow/user-archive", job[1], `(?m)^          printf '%s  %s\\n' ([a-f0-9]{64}) "\$RUNNER_TEMP/node.data" \| sha256sum -c -$`, []string{privateColdSHA}},
-		{"provision/suppliers", files["provision.mjs"], `(?m)^  for \(const \[relative, expected\] of \[\n    \['scripts/gentle-ai-installer.mjs', '([a-f0-9]{64})'\],\n    \['runtime/gentle-ai-binary.mjs', '([a-f0-9]{64})'\],\n  \]\) \{\n    if \(digest\(read\(path.join\(supplier, relative\)\)\) !== expected\) reject\('stock supplier pin'\);$`, []string{userInstallerSHA, privateNativeResolverSHA}},
+		{"provision/suppliers", files["provision.mjs"], `(?m)^  for \(const \[relative, expected\] of \[\n    \['scripts/gentle-ai-installer.mjs', '([a-f0-9]{64})'\],\n    \['runtime/gentle-ai-binary.mjs', '([a-f0-9]{64})'\],\n  \]\) \{\n    if \(digest\(read\(path.join\(supplier, relative\)\)\) !== expected\) reject\('stock supplier pin'\);$`, []string{installerSHA, resolverSHA}},
 		{"provision/native-layout", files["provision.mjs"], `(?m)^    if \(entries.length !== 1 \|\| !versionPattern.test\(entries\[0\].slice\(1\)\) \|\| !entries\[0\].startsWith\('v'\)\) reject\('foreign native recovery state'\);$`, nil},
 		{"provision/native-digest", files["provision.mjs"], `(?m)^    if \(digest\(binary\) !== manifest.binarySha256\) reject\('native independent readback'\);$`, nil},
 		{"guest/native", python, `(?m)^    require\(hashlib.sha256\(native.read_bytes\(\)\).hexdigest\(\) == '([a-f0-9]{64})', 'authenticated native bytes differ'\)$`, []string{userBinarySHA}},

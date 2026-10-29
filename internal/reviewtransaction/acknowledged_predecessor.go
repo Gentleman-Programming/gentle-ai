@@ -59,6 +59,7 @@ func AcknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot)
 	if live.Kind != TargetBaseDiff || len(live.IntendedUntracked) != 0 || len(live.Paths) == 0 {
 		return AcknowledgedBoundary{}, false, nil
 	}
+	defer StartStatusPhase(ctx, StatusPhasePredecessorConsumptionAncestry)()
 	builder := SnapshotBuilder{Repo: repo}
 	root, err := builder.repositoryRoot(ctx)
 	if err != nil {

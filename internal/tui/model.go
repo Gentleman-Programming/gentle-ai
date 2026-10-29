@@ -614,6 +614,8 @@ const (
 	ScreenUninstallEngramScope
 	ScreenUninstallConfirm
 	ScreenUninstallResult
+	ScreenCustomAgents
+	ScreenCustomAgentDelete
 	ScreenAgentBuilderEngine
 	ScreenAgentBuilderPrompt
 	ScreenAgentBuilderGenerating
@@ -846,6 +848,11 @@ type Model struct {
 
 	// AgentBuilder holds the transient state for the agent-builder TUI flow.
 	AgentBuilder AgentBuilderState
+
+	// CustomAgents holds the list and deletion selection for custom agents.
+	CustomAgentsList          []agentbuilder.RegistryEntry
+	CustomAgentsErr           error
+	CustomAgentDeleteSelected map[string]bool
 
 	InstallFlowActive bool
 
@@ -1620,6 +1627,10 @@ func (m Model) View() string {
 		return screens.RenderDeleteResult(m.SelectedBackup, m.DeleteErr)
 	case ScreenRenameBackup:
 		return screens.RenderRenameBackup(m.SelectedBackup, m.BackupRenameText, m.BackupRenamePos)
+	case ScreenCustomAgents:
+		return screens.RenderCustomAgents(m.CustomAgentsList, m.Cursor, m.CustomAgentsErr, m.hasAgentBuilderEngines())
+	case ScreenCustomAgentDelete:
+		return screens.RenderCustomAgentDelete(m.CustomAgentsList, m.CustomAgentDeleteSelected, m.Cursor)
 	case ScreenAgentBuilderEngine:
 		return screens.RenderABEngine(m.AgentBuilder.AvailableEngines, m.Cursor)
 	case ScreenAgentBuilderPrompt:
@@ -1949,6 +1960,14 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggleCurrentSkill()
 		case ScreenCommunityTools:
 			m.toggleCurrentCommunityTool()
+		case ScreenCustomAgentDelete:
+			if m.Cursor < len(m.CustomAgentsList) {
+				name := m.CustomAgentsList[m.Cursor].Name
+				if m.CustomAgentDeleteSelected == nil {
+					m.CustomAgentDeleteSelected = make(map[string]bool)
+				}
+				m.CustomAgentDeleteSelected[name] = !m.CustomAgentDeleteSelected[name]
+			}
 		}
 		return m, nil
 	case "r":
@@ -1961,6 +1980,15 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "d":
+		if m.Screen == ScreenCustomAgents && len(m.CustomAgentsList) > 0 {
+			m.CustomAgentsErr = nil
+			m.CustomAgentDeleteSelected = make(map[string]bool)
+			if m.Cursor < len(m.CustomAgentsList) {
+				m.CustomAgentDeleteSelected[m.CustomAgentsList[m.Cursor].Name] = true
+			}
+			m.setScreen(ScreenCustomAgentDelete)
+			return m, nil
+		}
 		// Delete: only when on ScreenBackups and cursor is on a backup item (not "Back").
 		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
 			m.SelectedBackup = m.Backups[m.Cursor]
@@ -2073,19 +2101,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 4:
 			m.setScreen(ScreenModelConfig)
 		case 5:
-			// "Create your own Agent" — blocked when no engines are available.
-			if !m.hasAgentBuilderEngines() {
-				return m, nil
-			}
-			m.AgentBuilder = AgentBuilderState{}
-			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
-			ta := textarea.New()
-			ta.Placeholder = "Describe what you want your agent to do..."
-			ta.Focus()
-			ta.SetWidth(60)
-			ta.SetHeight(5)
-			m.AgentBuilder.Textarea = ta
-			m.setScreen(ScreenAgentBuilderEngine)
+			m.CustomAgentsErr = nil
+			m.setScreen(ScreenCustomAgents)
+			return m, nil
 		default:
 			next := 6
 
@@ -2332,6 +2350,61 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			return m, discoveryCmd
 		case 4: // Back
 			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenCustomAgents:
+		agentCount := len(m.CustomAgentsList)
+		switch {
+		case m.Cursor < agentCount:
+			m.CustomAgentsErr = nil
+			m.CustomAgentDeleteSelected = map[string]bool{
+				m.CustomAgentsList[m.Cursor].Name: true,
+			}
+			m.setScreen(ScreenCustomAgentDelete)
+		case m.Cursor == agentCount:
+			if !m.hasAgentBuilderEngines() {
+				return m, nil
+			}
+			m.AgentBuilder = AgentBuilderState{}
+			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
+			ta := textarea.New()
+			ta.Placeholder = "Describe what you want your agent to do..."
+			ta.Focus()
+			ta.SetWidth(60)
+			ta.SetHeight(5)
+			m.AgentBuilder.Textarea = ta
+			m.setScreen(ScreenAgentBuilderEngine)
+		case m.Cursor == agentCount+1:
+			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenCustomAgentDelete:
+		agentCount := len(m.CustomAgentsList)
+		if agentCount == 0 {
+			m.setScreen(ScreenCustomAgents)
+			return m, nil
+		}
+		deleteIdx := agentCount
+		cancelIdx := agentCount + 1
+		switch m.Cursor {
+		case deleteIdx:
+			registryPath := customAgentsRegistryPath()
+			var toDelete []string
+			for name, selected := range m.CustomAgentDeleteSelected {
+				if selected {
+					toDelete = append(toDelete, name)
+				}
+			}
+			adapters := m.buildAgentBuilderAdapters()
+			err := agentbuilder.Uninstall(registryPath, toDelete, adapters)
+			m.CustomAgentDeleteSelected = nil
+			m.setScreen(ScreenCustomAgents)
+			if err != nil {
+				m.CustomAgentsErr = err
+			}
+		case cancelIdx:
+			m.setScreen(ScreenCustomAgents)
+			m.CustomAgentDeleteSelected = nil
 		}
 		return m, nil
 	case ScreenDetection:
@@ -2778,7 +2851,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenAgentBuilderComplete)
 		}
 	case ScreenAgentBuilderComplete:
-		m.setScreen(ScreenWelcome)
+		m.setScreen(ScreenCustomAgents)
 	case ScreenUpdatePrompt:
 		// Cursor maps to: 0=Update now, 1=View changes, 2=Keep current version.
 		// Enter always confirms the currently highlighted option.
@@ -3598,7 +3671,10 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	// Agent builder back navigation.
 	switch m.Screen {
 	case ScreenAgentBuilderComplete:
-		m.setScreen(ScreenWelcome)
+		m.setScreen(ScreenCustomAgents)
+		return m
+	case ScreenAgentBuilderEngine:
+		m.setScreen(ScreenCustomAgents)
 		return m
 	case ScreenAgentBuilderInstalling:
 		// Can't go back while installing — guard above handles this.
@@ -3777,6 +3853,9 @@ func (m *Model) setScreen(next Screen) {
 	if next == ScreenUninstallMode {
 		m.refreshUninstallEngramScope()
 	}
+	if next == ScreenCustomAgents {
+		m.loadCustomAgents()
+	}
 }
 
 // handleRenameInput processes key events when the rename backup screen is active.
@@ -3933,6 +4012,10 @@ func (m Model) optionCount() int {
 		return 0
 	case ScreenRenameBackup:
 		return 0 // text input mode — no cursor navigation
+	case ScreenCustomAgents:
+		return screens.CustomAgentsOptionCount(m.CustomAgentsList)
+	case ScreenCustomAgentDelete:
+		return screens.CustomAgentDeleteOptionCount(m.CustomAgentsList)
 	case ScreenAgentBuilderEngine:
 		return len(m.AgentBuilder.AvailableEngines) + 1 // engines + Back
 	case ScreenAgentBuilderPrompt:
@@ -4606,6 +4689,24 @@ func homeDir() string {
 		return h
 	}
 	return ""
+}
+
+// customAgentsRegistryPath resolves the user custom-agent registry file.
+func customAgentsRegistryPath() string {
+	return filepath.Join(homeDir(), ".config", "gentle-ai", "custom-agents.json")
+}
+
+// loadCustomAgents populates CustomAgentsList from the custom-agents.json registry.
+func (m *Model) loadCustomAgents() {
+	registryPath := customAgentsRegistryPath()
+	reg, err := agentbuilder.LoadRegistry(registryPath)
+	if err != nil {
+		m.CustomAgentsList = nil
+		m.CustomAgentsErr = err
+		return
+	}
+	m.CustomAgentsList = reg.Agents
+	m.CustomAgentsErr = nil
 }
 
 // buildInstalledAgentIDs returns the list of AgentIDs from the adapter list.

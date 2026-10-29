@@ -67,9 +67,13 @@ func TestUserMainSDKPreviewAdmission(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatal(err, string(output))
 	}
+	installerSHA, resolverSHA, pinsErr := userStableSupplierPins()
+	if pinsErr != nil {
+		t.Fatal(pinsErr)
+	}
 	for name, expected := range map[string]string{
-		"scripts/gentle-ai-installer.mjs": userInstallerSHA,
-		"runtime/gentle-ai-binary.mjs":    privateNativeResolverSHA,
+		"scripts/gentle-ai-installer.mjs": installerSHA,
+		"runtime/gentle-ai-binary.mjs":    resolverSHA,
 	} {
 		bytes, err := os.ReadFile(filepath.Join(stock, name))
 		if err != nil {

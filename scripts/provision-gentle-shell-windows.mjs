@@ -31,8 +31,51 @@ if (selection.Channel === 'main') {
 }
 // Stable resolves npm's `latest` dist-tag for the five stock root packages at
 // install time; the generated package-lock.json pins the exact resolved versions
-// and SRI. No static version is trusted anywhere in this provisioner.
+// and SRI. gentle-pi additionally resolves only onto reviewed supplier versions
+// (see reviewedSuppliers): an unreviewed `latest` falls back once to the newest
+// reviewed release, and every listed-version deviation fails closed.
 const pins = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
+// Reviewed gentle-pi releases for the Windows stock lane, loaded from the
+// stage list the Go worker writes (gentle-pi-suppliers.json, schema
+// gentle-shell-reviewed-suppliers/v1): the live repository copy when its
+// fetch and strict validation succeeded, otherwise the embedded copy. The
+// provisioner re-validates the staged bytes strictly and never widens them.
+// Each entry binds the exact version to its npm tarball SRI (the lock's
+// `integrity`) and to the SHA-256 of the two native supplier files inside the
+// package. Reviewing a new release is a one-line change to that JSON; the
+// root specs stay `latest`.
+function reviewedSuppliers() {
+  const raw = read(path.join(root, 'gentle-pi-suppliers.json'));
+  // The staged list read is bounded at 256 KiB, matching the Go loader's bound.
+  if (raw.length > 262144) reject('reviewed supplier list');
+  const list = JSON.parse(raw);
+  const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+  const sri = value => typeof value === 'string' && /^sha512-[A-Za-z0-9+/]{86}==$/.test(value) &&
+    Buffer.from(value.slice(7), 'base64').toString('base64') === value.slice(7);
+  if (list === null || typeof list !== 'object' || Array.isArray(list) || list.schema !== 'gentle-shell-reviewed-suppliers/v1' ||
+      list.releases === null || typeof list.releases !== 'object' || Array.isArray(list.releases)) reject('reviewed supplier list');
+  // Strict top-level shape: exactly the schema and releases fields, mirroring
+  // the Go decoder's DisallowUnknownFields.
+  if (Object.keys(list).sort().join(',') !== 'releases,schema') reject('reviewed supplier list');
+  const table = {};
+  for (const [version, entry] of Object.entries(list.releases)) {
+    if (!semver.test(version) || entry === null || typeof entry !== 'object' || Array.isArray(entry) ||
+        Object.keys(entry).sort().join(',') !== 'binary,installer,integrity' || !sri(entry.integrity) ||
+        !/^[0-9a-f]{64}$/.test(entry.installer) || !/^[0-9a-f]{64}$/.test(entry.binary)) reject('reviewed supplier list');
+    table[version] = entry;
+  }
+  if (Object.keys(table).length === 0) reject('reviewed supplier list');
+  return table;
+}
+// Newest reviewed version in semantic order (4.10.0 > 4.9.0): the fallback
+// target when npm's `latest` resolution is unreviewed.
+function newestReviewedSupplier(table) {
+  const order = version => version.split('.').map(Number);
+  return Object.keys(table).sort((left, right) => {
+    const a = order(left), b = order(right);
+    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  }).at(-1);
+}
 // NTFS owner/DACL/reparse checks are enforced by the Go worker before entry and
 // on the complete produced tree afterward. This is not a substitute for them.
 function read(file) {
@@ -71,6 +114,25 @@ function rootAuthorities(lock, names) {
   }
   return resolved;
 }
+// The locked gentle-pi version must be reviewed with the entry's exact npm
+// tarball SRI. A listed version with a differing integrity fails closed and
+// never falls back; only an unlisted one is fallback-eligible.
+function reviewedSupplierEntry(version, integrity, table) {
+  const entry = table[version];
+  return entry && entry.integrity === integrity ? entry : null;
+}
+// Lock gate: stable install/verify and every install must lock a reviewed
+// gentle-pi with its entry's exact SRI. Main overlay/verify keep the supplier
+// exemption below: their gentle-pi is bound by the frozen Main ZIP, not this lock.
+function reviewedSupplierLock(action, mainOverlay, version, integrity, table) {
+  if ((action === 'install' || !mainOverlay) && !reviewedSupplierEntry(version, integrity, table)) reject('stock native supplier source pin');
+}
+// Single fallback re-resolution target: an unreviewed `latest` resolution is
+// replaced by the newest reviewed version instead of failing. Listed versions
+// are decided by reviewedSupplierEntry alone; verify/overlay never fall back.
+function supplierFallbackVersion(version, integrity, table) {
+  return table[version] ? null : newestReviewedSupplier(table);
+}
 // Locate the single supported native bundle directory under .gentle-ai: exactly
 // one entry, named v<resolved gentle-pi version>, a physical directory. A
 // missing, duplicate, foreign or non-directory version layout fails closed.
@@ -93,6 +155,17 @@ function stockNativeIntegrity(manifest, native, version) {
       manifest.version !== version || manifest.method !== 'go-sumdb-source-build' ||
       !/^h1:[A-Za-z0-9+/]{43}=$/.test(manifest.moduleChecksum) ||
       manifest.binarySha256 !== digest(read(path.join(native, 'gentle-ai.exe')))) reject('stock native source manifest');
+}
+// Reviewed supplier sources: the materialized/installed gentle-pi tree must
+// carry the reviewed entry's exact installer and binary digests. Unlisted
+// versions fail closed before any supplier file is read.
+function reviewedSupplierSources(gentle, version, table) {
+  const entry = table[version];
+  if (!entry) reject('stock native supplier source pin');
+  for (const [name, expected] of [
+    ['scripts/gentle-ai-installer.mjs', entry.installer],
+    ['runtime/gentle-ai-binary.mjs', entry.binary],
+  ]) if (digest(read(path.join(gentle, name))) !== expected) reject('stock native supplier source pin');
 }
 // Whole-tree materialization digest adapted from the private-global provisioner's
 // inventory: bounded entry/byte counts, physical regular files only, every entry
@@ -157,16 +230,43 @@ function npmCommand(args, timeout = NPM_NETWORK_TIMEOUT) {
   }
 }
 const lockPath = path.join(source, 'package-lock.json');
+const lockInstall = ['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/'];
+// Root declaration: every stock root at `latest`, except a reviewed gentle-pi
+// fallback, which is pinned to its exact version.
+function rootDeclaration(names, gentlePi = 'latest') {
+  const dependencies = Object.fromEntries(names.map(name => [name, name === 'gentle-pi' ? gentlePi : 'latest']));
+  return JSON.stringify({ name: 'gentle-shell-windows-private', private: true, version: '1.0.0', dependencies });
+}
+// Fallback rewrite before the single re-resolution: exclusive() writes with wx,
+// so the declaration is removed first, and the generated lock is discarded.
+function rewriteSupplierDeclaration(directory, names, fallback) {
+  fs.unlinkSync(path.join(directory, 'package.json'));
+  fs.unlinkSync(path.join(directory, 'package-lock.json'));
+  exclusive(path.join(directory, 'package.json'), rootDeclaration(names, fallback));
+}
 if (action === 'install') {
   console.error('Windows install phase: provision-lock');
   fs.mkdirSync(source);
-  exclusive(path.join(source, 'package.json'), JSON.stringify({ name: 'gentle-shell-windows-private', private: true, version: '1.0.0', dependencies: Object.fromEntries(pins.map(name => [name, 'latest'])) }));
-  npmCommand(['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
+  exclusive(path.join(source, 'package.json'), rootDeclaration(pins));
+  npmCommand(lockInstall);
   const { completeFile } = await import(pathToFileURL(path.join(root, 'complete-generated-lock-sri.mjs')).href);
   await completeFile(lockPath);
+  // Reviewed-latest fallback: an unreviewed `latest` resolution installs the
+  // newest reviewed gentle-pi version instead of failing; the other four roots
+  // stay `latest`. One re-resolution only.
+  const first = JSON.parse(read(lockPath)), firstResolved = rootAuthorities(first, pins);
+  const fallback = supplierFallbackVersion(firstResolved['gentle-pi'], first.packages['node_modules/gentle-pi'].integrity, reviewedSuppliers());
+  if (fallback) {
+    console.error(`Windows install phase: provision-supplier-fallback ${firstResolved['gentle-pi']} -> ${fallback}`);
+    rewriteSupplierDeclaration(source, pins, fallback);
+    npmCommand(lockInstall);
+    await completeFile(lockPath);
+  }
 }
 const lockBytes = read(lockPath), lock = JSON.parse(lockBytes);
 const resolved = rootAuthorities(lock, pins);
+// A listed version whose integrity differs from the reviewed entry never falls back.
+reviewedSupplierLock(action, mainOverlay, resolved['gentle-pi'], lock.packages['node_modules/gentle-pi'].integrity, reviewedSuppliers());
 for (const [relative, record] of Object.entries(lock.packages)) {
   if (!relative) continue;
   if (!/^node_modules\/(?:@?[a-z0-9][a-z0-9._-]*\/)*[a-z0-9][a-z0-9._-]*$/.test(relative)) reject('lock placement');
@@ -259,10 +359,7 @@ if (piMetadata.bin?.pi !== 'dist/bundle/cli.js' || gentleMetadata.bin?.['gentle-
 read(path.join(modules, '@earendil-works/pi-coding-agent/dist/bundle/cli.js'));
 read(path.join(gentle, 'bin/gentle-shell.mjs'));
 // Stock supplier pins authorize installation; Main source is bound by the frozen ZIP.
-if (action === 'install' || !mainOverlay) for (const [name, expected] of [
-  ['scripts/gentle-ai-installer.mjs', '8679f49d3675323bf7ff5c24321f08016bb0f8e79ded307b5900c37648f52470'],
-  ['runtime/gentle-ai-binary.mjs', '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80'],
-]) if (digest(read(path.join(gentle, name))) !== expected) reject('stock native supplier source pin');
+if (action === 'install' || !mainOverlay) reviewedSupplierSources(gentle, resolved['gentle-pi'], reviewedSuppliers());
 if (action === 'install') {
   const { installGentleAi } = await import(pathToFileURL(path.join(gentle, 'scripts/gentle-ai-installer.mjs')).href);
   console.error('Windows install phase: provision-native'); // Explicit, authenticated stock API, no postinstall/fullscreen hook.

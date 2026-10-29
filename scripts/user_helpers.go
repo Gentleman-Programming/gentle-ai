@@ -3,9 +3,17 @@ package scripts
 import "embed"
 
 // The provisioner and authenticated locks are distinct from the runtime helpers.
+// gentle-pi-suppliers.json is the reviewed gentle-pi release list (S11): the
+// only copy in the repository, embedded on every OS, read live from the
+// repository main branch at check/update time with this copy as fallback.
 //
-//go:embed provision-gentle-shell-private-global.mjs user-global-graph.mjs user-main-bindings.mjs user-locks/modern/package-lock.json user-locks/prior/package-lock.json
+//go:embed provision-gentle-shell-private-global.mjs user-global-graph.mjs user-main-bindings.mjs user-locks/modern/package-lock.json user-locks/prior/package-lock.json gentle-pi-suppliers.json
 var userHelpers embed.FS
+
+// ReadReviewedSuppliers returns the embedded reviewed gentle-pi supplier list.
+func ReadReviewedSuppliers() ([]byte, error) {
+	return userHelpers.ReadFile("gentle-pi-suppliers.json")
+}
 
 func ReadUserHelper() ([]byte, error) {
 	return userHelpers.ReadFile("provision-gentle-shell-private-global.mjs")

@@ -60,6 +60,7 @@ internal/components/gga/config.go	PostInstallMessages
 internal/components/gga/install.go	ShouldInstall
 internal/components/gga/runtime.go	RuntimeBinDir
 internal/components/mcp/inject.go	context7Args
+internal/components/persona/inject.go	SetRemoveForTest
 internal/components/telemetryruntime/managed.go	Reconcile
 internal/filecoord/lock.go	UnsupportedError.Error
 internal/filecoord/lock.go	UnsupportedError.Unwrap
@@ -204,6 +205,7 @@ internal/reviewtransaction/verification_contract.go	verificationSVGIsPassive
 internal/reviewtransaction/verification_convergence.go	ResnapshotVerificationSubject
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Error
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
+internal/shellinstaller/user_reviewed_suppliers.go	userReviewedList.newestReviewedRelease
 internal/state/manifest.go	AppendJournal
 internal/state/manifest.go	ComputeBundleDigest
 internal/state/manifest.go	JournalPath

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -83,6 +84,51 @@ func TestCheckUserShellUpdateAllPinsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	version, err := userFrozenLockGentlePiVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := userUnixTempRoot(t)
+	writeInstallFixture(t, target, userManifest{
+		Schema: userSchema, Destination: target,
+		Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"),
+		Mode: "separate", SupervisorSHA: supervisor, NodeSHA: privateNativeNodeSHA,
+		SDKLockSHA: lock, SDKVersion: version, ToolsSHA: tools,
+	})
+	update, err := CheckUserShellUpdate(ctx, UserShellInstall{Target: target, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if update.Available {
+		t.Fatalf("expected up to date, got: %+v", update)
+	}
+	if len(update.Scope) != 0 {
+		t.Fatalf("expected empty scope, got %v", update.Scope)
+	}
+}
+
+// S14 legacy detection: a manifest that records every current pin but predates
+// the recorded gentle-pi version has no version field, so the stable SDK is
+// reported outdated once; the next update installs and records the version,
+// and the check converges (no endless "update available" loop).
+func TestCheckUserShellUpdateLegacyVersionReportsSDKOnce(t *testing.T) {
+	ctx := context.Background()
+	self, err := userExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := userSDKLockSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := userToolsPinSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
 	target := userUnixTempRoot(t)
 	writeInstallFixture(t, target, userManifest{
 		Schema: userSchema, Destination: target,
@@ -94,11 +140,85 @@ func TestCheckUserShellUpdateAllPinsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !update.Available || !slices.Equal(update.Scope, []string{UserComponentSDK}) {
+		t.Fatalf("expected the SDK outdated once for a pre-version manifest, got: %+v", update)
+	}
+}
+
+// S17(c): a recorded version strictly newer than this build's stable target
+// (the frozen lock's gentle-pi until the live listed release replaces it) —
+// e.g. after a fallback to an older embedded list — never offers a downgrade.
+func TestCheckUserShellUpdateNewerSDKVersionSkipsDowngrade(t *testing.T) {
+	ctx := context.Background()
+	self, err := userExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := userSDKLockSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := userToolsPinSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := userUnixTempRoot(t)
+	writeInstallFixture(t, target, userManifest{
+		Schema: userSchema, Destination: target,
+		Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"),
+		Mode: "separate", SupervisorSHA: supervisor, NodeSHA: privateNativeNodeSHA,
+		SDKLockSHA: lock, SDKVersion: "9.9.9", ToolsSHA: tools,
+	})
+	update, err := CheckUserShellUpdate(ctx, UserShellInstall{Target: target, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if update.Available {
-		t.Fatalf("expected up to date, got: %+v", update)
+		t.Fatalf("expected no downgrade offer for a newer recorded version, got: %+v", update)
 	}
 	if len(update.Scope) != 0 {
 		t.Fatalf("expected empty scope, got %v", update.Scope)
+	}
+}
+
+// A recorded version that differs from this build's stable target (the frozen
+// lock's gentle-pi until the live listed release replaces it) reports the SDK
+// outdated.
+func TestCheckUserShellUpdateChangedSDKVersionReportsSDK(t *testing.T) {
+	ctx := context.Background()
+	self, err := userExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := userSDKLockSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := userToolsPinSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := userUnixTempRoot(t)
+	writeInstallFixture(t, target, userManifest{
+		Schema: userSchema, Destination: target,
+		Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"),
+		Mode: "separate", SupervisorSHA: supervisor, NodeSHA: privateNativeNodeSHA,
+		SDKLockSHA: lock, SDKVersion: "0.0.1", ToolsSHA: tools,
+	})
+	update, err := CheckUserShellUpdate(ctx, UserShellInstall{Target: target, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !update.Available || !slices.Equal(update.Scope, []string{UserComponentSDK}) {
+		t.Fatalf("expected the SDK outdated for a differing recorded version, got: %+v", update)
 	}
 }
 

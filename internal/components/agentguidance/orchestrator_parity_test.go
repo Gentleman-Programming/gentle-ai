@@ -66,6 +66,59 @@ var gentleShellOnlyContent = []string{
 	"Pi Runtime Overlays",
 }
 
+// TestInstalledApprovalContinuity checks delivered prompt content, not model
+// behavior, on both initial installation and an unchanged sync.
+func TestInstalledApprovalContinuity(t *testing.T) {
+	type carrier struct {
+		name    string
+		agent   model.AgentID
+		options RoutingOptions
+	}
+	var carriers []carrier
+	for _, agent := range orchestratorRuntimes(t) {
+		carriers = append(carriers, carrier{string(agent), agent, RoutingOptions{}})
+	}
+	carriers = append(carriers, carrier{"small-generic", model.AgentVSCodeCopilot, RoutingOptions{OrchestratorCapability: "small"}})
+
+	for _, carrier := range carriers {
+		t.Run(carrier.name, func(t *testing.T) {
+			root := t.TempDir()
+			var first string
+			for _, phase := range []string{"install", "sync"} {
+				result, err := InjectRoutingWithOptions(root, carrier.agent, carrier.options)
+				if err != nil {
+					t.Fatalf("%s: %v", phase, err)
+				}
+				prompt := strings.Join(strings.Fields(deliveredGuidance(t, result.Files[0])), " ")
+				if phase == "install" {
+					first = prompt
+				} else if prompt != first {
+					t.Error("identical sync changed guidance")
+				}
+				if carrier.name == "small-generic" && !strings.Contains(prompt, "Orchestrator Instructions (Small Model)") {
+					t.Error("small capability did not select the small-model variant")
+				}
+				for _, want := range []string{
+					"Interpret short replies such as \"yes\", \"go ahead\", or \"eso mismo\" against the immediately preceding proposal.",
+					"When the human unambiguously accepts a concrete implementation action they already understand, execute that action within its agreed scope without asking again.",
+					"Confirming a preference alone does not authorize implementation; genuinely unclear change intent still requires one focused question.",
+					"Contextual approval never substitutes for provider-owned consent, exact-token authorization, or separate publishing and destructive-action permission.",
+					"Resolving an incident or subdecision does not complete or cancel the original authorized objective",
+					"using judgment for proportionate recovery and respecting explicit user dispositions",
+					"Investigate pending technical uncertainty rather than treating it alone as a new human decision.",
+					"Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule.",
+					"Clarify scope, constraints, acceptance criteria, and non-goals when needed for the human to understand the action or to resolve consequential uncertainty.",
+					"after informed approval, proceed without repeating the clarification unless new consequential uncertainty appears.",
+				} {
+					if !strings.Contains(prompt, want) {
+						t.Errorf("%s guidance missing %q", phase, want)
+					}
+				}
+			}
+		})
+	}
+}
+
 // Exercises the real installation carrier for every non-Pi runtime, then
 // syncs it again. Pi routing is covered by the renderer; its orchestrator is
 // owned by Gentle Shell and must not be copied here.

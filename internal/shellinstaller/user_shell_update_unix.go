@@ -94,6 +94,25 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 		if manifest.SDKLockSHA != lock {
 			changed[UserComponentSDK] = true
 		}
+		// The manifest's recorded gentle-pi version is the S14 detection input:
+		// a manifest without the field is a pre-feature install reported
+		// outdated once, and a recorded version must not be older than the
+		// version this build's stable install produces. Until the live listed
+		// release replaces the frozen lock (T4), that target is the embedded
+		// modern lock's version; a strictly newer recorded version — e.g.
+		// after a fallback to an older embedded list — never offers a
+		// downgrade (S17(c)), so a fresh install can never report an endless
+		// "update available" loop for the version it just installed. PNPM
+		// route manifests keep their current behaviour.
+		if manifest.PNPM == nil {
+			version, err := userFrozenLockGentlePiVersion()
+			if err != nil {
+				return update, err
+			}
+			if userReviewedVersionOlder(manifest.SDKVersion, version) {
+				changed[UserComponentSDK] = true
+			}
+		}
 	}
 	// The pinned agent tools are part of the SDK component on every channel:
 	// a reused agent whose bound binaries no longer match this build would

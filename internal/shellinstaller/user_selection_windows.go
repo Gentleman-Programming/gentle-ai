@@ -41,7 +41,7 @@ func userConfirmation(req UserInstallRequest, identity string) string {
 }
 
 func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
-	args, profile, err := userEntryExperience(args)
+	args, profile, scope, err := userEntryExperience(args)
 	if err != nil {
 		return UserInstallRequest{}, err
 	}
@@ -65,5 +65,5 @@ func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
 	if profile != nil && profile.SDKSource == "main-preview" {
 		channel = userChannelMain
 	}
-	return UserInstallRequest{Destination: args[0], Mode: args[1], SharedPrefix: args[2], SharedAgent: args[3], Confirmation: args[4], Channel: channel, Experience: profile}, nil
+	return UserInstallRequest{Destination: args[0], Mode: args[1], SharedPrefix: args[2], SharedAgent: args[3], Confirmation: args[4], Channel: channel, Experience: profile, Scope: scope}, nil
 }

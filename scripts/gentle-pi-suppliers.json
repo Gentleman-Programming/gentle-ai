@@ -1,0 +1,20 @@
+{
+  "schema": "gentle-shell-reviewed-suppliers/v1",
+  "releases": {
+    "4.3.0": {
+      "integrity": "sha512-xXBEZaGqden4bblEPagQEnkF12L0JHhsPr1REBGvhSeDy6mbHDQmEvUU5ATr9lvWb7xsTOXV7gwnfq4U+z7lpA==",
+      "installer": "8679f49d3675323bf7ff5c24321f08016bb0f8e79ded307b5900c37648f52470",
+      "binary": "61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80"
+    },
+    "4.4.0": {
+      "integrity": "sha512-NlBlDil1sNeoEXqpmT4DkgTCLv/KCZiGYG4ukzx2Z0PQm1+X8FZEtoFnb0eeO5mmgTkWly7vItgAhc9ApGVF0A==",
+      "installer": "37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed",
+      "binary": "61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80"
+    },
+    "4.5.0": {
+      "integrity": "sha512-hw4W2hBvyGWPbPEpvAIgx4F+5IgQjZ1Yzhj159DRcbrvFBde3H8Jh9qKQF2EYTH7WcI+ixJqTXFF92pykOuXIg==",
+      "installer": "37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed",
+      "binary": "61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80"
+    }
+  }
+}

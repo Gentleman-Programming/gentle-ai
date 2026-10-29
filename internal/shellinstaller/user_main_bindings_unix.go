@@ -83,11 +83,22 @@ func userMaterializeMainSDK(ctx context.Context, root, finalRoot, prefix, agent 
 }
 
 // Historical nil metadata keeps the exact ordinary stock verifier. A selected
-// SDK never bypasses the supplier/graph checks or repairs settings drift.
+// SDK never bypasses the supplier/graph checks or repairs settings drift. Its
+// manifest shape is shared with the reuse check, which applies it without
+// driving the provisioner.
 func userVerifyInstalledGlobal(ctx context.Context, root string, manifest userManifest) error {
 	if manifest.MainSDK == nil {
 		return userVerifyGlobal(ctx, root, manifest.Prefix, manifest.Agent, manifest.Prefix, root, manifest.Mode)
 	}
+	if err := userMainBindingShape(root, manifest); err != nil {
+		return err
+	}
+	return userMainSDKAction(ctx, root, root, manifest.Prefix, manifest.Agent, *manifest.MainSDK, userMainSDKSelectedAction)
+}
+
+// userMainBindingShape holds the manifest shape every Main SDK verification
+// requires, so a reuse check can apply it without driving the provisioner.
+func userMainBindingShape(root string, manifest userManifest) error {
 	if !userMainPlatform() || (manifest.Mode != "separate" && manifest.Mode != "agent") || manifest.Destination != root || manifest.Prefix != filepath.Join(root, "prefix") {
 		return experienceError("Main SDK manifest requires qualified Linux amd64 or macOS arm64 bindings for On my existing Pi or Separate")
 	}
@@ -97,5 +108,5 @@ func userVerifyInstalledGlobal(ctx context.Context, root string, manifest userMa
 	if manifest.Mode == "agent" && (manifest.Agent == "" || !privateHierarchyPath(manifest.Agent) || strings.HasPrefix(manifest.Agent, root+"/")) {
 		return experienceError("Main SDK manifest requires a qualified external agent")
 	}
-	return userMainSDKAction(ctx, root, root, manifest.Prefix, manifest.Agent, *manifest.MainSDK, userMainSDKSelectedAction)
+	return nil
 }

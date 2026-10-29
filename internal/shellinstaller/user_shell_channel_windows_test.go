@@ -85,6 +85,11 @@ func TestWindowsInventoryAcceptsUpdateChannelPreference(t *testing.T) {
 }
 
 func TestWindowsChannelPreferenceAndCheckRouting(t *testing.T) {
+	// The stable check resolves the reviewed supplier list through the
+	// injection seam; the stub keeps this test off the network.
+	previousList := userSelectedReviewedListFunc
+	userSelectedReviewedListFunc = func(context.Context) (userReviewedList, []byte, error) { return userEmbeddedReviewedList() }
+	defer func() { userSelectedReviewedListFunc = previousList }()
 	home, target, install := writeWindowsChannelFixture(t)
 	if installs := DiscoverUserShellInstalls(home); len(installs) != 1 || installs[0].Channel != "stable" {
 		t.Fatalf("stock discovery differs: %+v", installs)

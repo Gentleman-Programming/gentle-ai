@@ -766,6 +766,10 @@ func renderPhaseList(
 		b.WriteString(styles.WarningStyle.Render(state.ConfigWarning))
 		b.WriteString("\n\n")
 	}
+	if warning := modelPickerDegradedCatalogWarning(state); warning != "" && len(state.AvailableIDs) > 0 {
+		b.WriteString(styles.WarningStyle.Render(warning))
+		b.WriteString("\n\n")
+	}
 
 	if len(state.AvailableIDs) == 0 {
 		message := "OpenCode reported no tool-capable models for this project."
@@ -867,6 +871,10 @@ func renderProviderSelect(state ModelPickerState) string {
 
 	b.WriteString(styles.TitleStyle.Render("Select provider:"))
 	b.WriteString("\n\n")
+	if warning := modelPickerDegradedCatalogWarning(state); warning != "" {
+		b.WriteString(styles.WarningStyle.Render(warning))
+		b.WriteString("\n\n")
+	}
 
 	entries := ProviderEntries(state)
 
@@ -990,6 +998,20 @@ func resolveNames(assignment model.ModelAssignment, state ModelPickerState) (pro
 	}
 
 	return provName, modelName
+}
+
+// modelPickerDegradedCatalogWarning returns the user-facing warning for a
+// picker that fell back to configured models after runtime discovery failed.
+// When OpenCode discovery fails but configured tool-capable models exist, the
+// picker still works, so it must say plainly that the list is incomplete
+// instead of presenting the configured subset as the full catalog (issue
+// #5833). Empty when discovery succeeded or never ran.
+func modelPickerDegradedCatalogWarning(state ModelPickerState) string {
+	if state.CatalogError == nil {
+		return ""
+	}
+	headline, nextStep := modelPickerCatalogFailureExplanation(state.CatalogError)
+	return headline + " " + nextStep + "\nShowing configured models only; some OpenCode providers and models may be missing."
 }
 
 // modelPickerCatalogFailureExplanation renders the user-facing diagnostic for

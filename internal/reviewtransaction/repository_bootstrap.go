@@ -16,6 +16,7 @@ import (
 // SnapshotBuilder and every lower-level repository boundary remain read-only:
 // callers that need lifecycle preparation must opt in at this boundary.
 func PrepareReviewRepositoryRoot(ctx context.Context, workspace string) (string, error) {
+	defer StartStatusPhase(ctx, StatusPhaseRepositoryIdentityResolution)()
 	builder := SnapshotBuilder{Repo: workspace}
 	root, resolveErr := builder.ResolveRepositoryRoot(ctx)
 	if resolveErr == nil {
