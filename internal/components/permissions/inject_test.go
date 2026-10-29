@@ -593,6 +593,47 @@ func TestInjectClaudeCodePreservesExistingDeny(t *testing.T) {
 	}
 }
 
+// TestInjectClaudeCodeAnchorsStaleHomeDenyRules upgrades the cwd-relative home
+// rules earlier releases wrote, which only matched inside the project (#5280).
+func TestInjectClaudeCodeAnchorsStaleHomeDenyRules(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"permissions":{"deny":["Read(.env)","Read(.ssh/*)","Edit(.ssh/*)","Read(.credentials/*)","Edit(.credentials/*)",` +
+		`"Read(Library/Keychains/*)","Edit(Library/Keychains/*)","Read(.aws/credentials)","Edit(.aws/credentials)",` +
+		`"Read(.config/gh/hosts.yml)","Edit(~/.config/gh/hosts.yml)","Edit(.config/gh/hosts.yml)","Read(custom/**)"]}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Permissions struct {
+			Deny []string `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Read(.env)", "Read(~/.ssh/**)", "Edit(~/.ssh/**)", "Read(~/.credentials/**)", "Edit(~/.credentials/**)",
+		"Read(~/Library/Keychains/**)", "Edit(~/Library/Keychains/**)", "Read(~/.aws/credentials)", "Edit(~/.aws/credentials)",
+		"Read(~/.config/gh/hosts.yml)", "Edit(~/.config/gh/hosts.yml)", "Read(custom/**)"}
+	if !reflect.DeepEqual(got.Permissions.Deny, want) {
+		t.Fatalf("deny = %q; want %q", got.Permissions.Deny, want)
+	}
+	second, err := Inject(home, claudeAdapter())
+	if err != nil || second.Changed {
+		t.Errorf("reinjection = %#v, %v; want unchanged", second, err)
+	}
+}
+
 func TestInjectClaudeCodeSeedsMissingDeny(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".claude", "settings.json")
@@ -927,16 +968,16 @@ func TestTargetPathCodexHasNoInjectionTarget(t *testing.T) {
 // deny list is present in the Claude Code permissions block.
 func TestInjectClaudeCodeSensitivePathsDenied(t *testing.T) {
 	sensitivePatterns := []string{
-		"Read(.ssh/*)",
-		"Edit(.ssh/*)",
-		"Read(.credentials/*)",
-		"Edit(.credentials/*)",
-		"Read(Library/Keychains/*)",
-		"Edit(Library/Keychains/*)",
-		"Read(.aws/credentials)",
-		"Edit(.aws/credentials)",
-		"Read(.config/gh/hosts.yml)",
-		"Edit(.config/gh/hosts.yml)",
+		"Read(~/.ssh/**)",
+		"Edit(~/.ssh/**)",
+		"Read(~/.credentials/**)",
+		"Edit(~/.credentials/**)",
+		"Read(~/Library/Keychains/**)",
+		"Edit(~/Library/Keychains/**)",
+		"Read(~/.aws/credentials)",
+		"Edit(~/.aws/credentials)",
+		"Read(~/.config/gh/hosts.yml)",
+		"Edit(~/.config/gh/hosts.yml)",
 		"Read(**/*.pem)",
 		"Edit(**/*.pem)",
 		"Read(**/*.key)",
@@ -1103,7 +1144,7 @@ func TestInjectClaudeCodeDefaultDenyRulesApplied(t *testing.T) {
 	}
 
 	// Sensitive-path rules must be present after overlay application.
-	for _, rule := range []string{"Read(.ssh/*)", "Read(**/*.pem)", "Read(**/*.key)"} {
+	for _, rule := range []string{"Read(~/.ssh/**)", "Read(**/*.pem)", "Read(**/*.key)"} {
 		if !denySet[rule] {
 			t.Errorf("default deny rule %q was not present; got: %v", rule, denyList)
 		}
