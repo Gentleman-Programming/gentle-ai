@@ -70,6 +70,9 @@ func userWindowsCodeGraphAcquire(ctx context.Context, stage string, req UserInst
 	return userWindowsCodeGraphProvision(ctx, stage, req.Destination, req.Experience)
 }
 
+// userWindowsCodeGraphProvision acquires and unpacks the agreed CodeGraph
+// archives into the private stage. The installation destination is carried only
+// so the optional download cache can refuse an overlapping path.
 func userWindowsCodeGraphProvision(ctx context.Context, root, destination string, profile *UserExperience) error {
 	if profile == nil || profile.CodeGraph != "on" {
 		return nil
