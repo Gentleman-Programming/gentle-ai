@@ -201,6 +201,11 @@ func userWindowsDownloadCacheStore(artifact userWindowsArtifact, data []byte, de
 	}
 }
 
+// userWindowsAcquire returns the pinned supplier archive bytes for target:
+// served from the optional download cache when it holds a verified entry and
+// downloaded otherwise. The cache is only consulted when it cannot overlap the
+// installation destination; a refused cache is a bypass, never an install
+// failure.
 func userWindowsAcquire(ctx context.Context, artifact userWindowsArtifact, target, destination string) ([]byte, error) {
 	if data, hit := userWindowsDownloadCacheHit(ctx, artifact, destination); hit {
 		if err := userWindowsWrite(target, data); err != nil {
