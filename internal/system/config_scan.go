@@ -41,7 +41,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "gemini-cli", Path: filepath.Join(homeDir, ".gemini")},
 		{Agent: "cursor", Path: filepath.Join(homeDir, ".cursor")},
 		{Agent: "vscode-copilot", Path: vscodeCopilotGlobalConfigDir(homeDir)},
-		{Agent: "codex", Path: filepath.Join(homeDir, ".codex")},
+		{Agent: "codex", Path: CodexConfigDir(homeDir)},
 		{Agent: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity-cli")},
 		{Agent: "windsurf", Path: filepath.Join(homeDir, ".codeium", "windsurf")},
 		{Agent: "kimi", Path: kimiConfigDir(homeDir)},
