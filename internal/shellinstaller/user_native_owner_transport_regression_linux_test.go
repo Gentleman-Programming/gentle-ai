@@ -85,6 +85,7 @@ func init() {
 }
 
 func TestIndependentNativeOwnerTransport(t *testing.T) {
+	enableNativeInstall(t)
 	if os.Getenv("INDEPENDENT_OWNER_ROLE") == "launch" {
 		deadline, err := strconv.ParseInt(os.Getenv("INDEPENDENT_OWNER_DEADLINE"), 10, 64)
 		if err != nil {

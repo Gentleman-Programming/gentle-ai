@@ -48,6 +48,9 @@ func ShellInstallArguments(selection ShellInstallSelection) []string {
 	profile := req.Experience
 	req.Experience = nil // Encoded separately, never discarded from the request.
 	args := append([]string{"install"}, shellEntryValues(req)...)
+	if req.Scope != "" {
+		args = append(args, "--scope", req.Scope)
+	}
 	if profile != nil {
 		encoded, err := profile.Encode()
 		if err != nil || len(encoded) > 256 {

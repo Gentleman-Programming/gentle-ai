@@ -30,6 +30,24 @@ func CanonicalUpdateScope(components []string) string {
 	return strings.Join(names, ",")
 }
 
+// userValidRequestScope reports whether scope is the canonical comma-separated
+// request scope of known updatable components, exactly as inspection binds it.
+// The supervisor is requestable but never reused (see userInstallScopeOf).
+func userValidRequestScope(scope string) bool {
+	names := userScopeComponents(scope)
+	if len(names) == 0 {
+		return false
+	}
+	for _, name := range names {
+		switch name {
+		case UserComponentSupervisor, UserComponentNode, UserComponentSDK, UserComponentCodeGraph, UserComponentContext7:
+		default:
+			return false
+		}
+	}
+	return CanonicalUpdateScope(names) == scope
+}
+
 // userSortedComponents returns the scope names in canonical report order.
 func userSortedComponents(scope map[string]bool) []string {
 	names := make([]string, 0, len(scope))

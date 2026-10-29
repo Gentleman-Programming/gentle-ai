@@ -24,7 +24,12 @@ type userManifest struct {
 	// Component pins recorded at install time. An empty pin on an otherwise
 	// valid manifest is the pre-pin legacy layout: the update check then
 	// reports the component as changed so the next update refreshes it.
-	SDKLockSHA                    string `json:"sdk_lock_sha,omitempty"`
+	SDKLockSHA string `json:"sdk_lock_sha,omitempty"`
+	// SDKVersion records the exact installed gentle-pi version of a stable
+	// install (empty for Main SDK installs, whose authority is the snapshot).
+	// A manifest without the field is a pre-feature install: the update check
+	// reports the SDK as changed once, and the next update records it.
+	SDKVersion                    string `json:"sdk_version,omitempty"`
 	ToolsSHA                      string `json:"tools_sha,omitempty"`
 	CodeGraphSHA                  string `json:"codegraph_sha,omitempty"`
 	Context7SHA                   string `json:"context7_sha,omitempty"`

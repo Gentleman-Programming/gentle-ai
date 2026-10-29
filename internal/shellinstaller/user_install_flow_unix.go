@@ -294,7 +294,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if userReconfigureTarget() != req.Destination {
 			return result, privateError("refused", errors.New("a component update requires the reconfigure target binding"))
 		}
-		recorded, manifestErr := userReadManifest(ctx, req.Destination)
+		recorded, manifestErr := userReadReusableManifest(ctx, req.Destination, scope)
 		if manifestErr != nil {
 			return result, privateError("refused", fmt.Errorf("component update requires a recorded installation: %w", manifestErr))
 		}
@@ -319,6 +319,15 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	root := filepath.Join(workspace, "installed")
+	userShellDetail(ctx, 2, 5, "Validating the stage preferences")
+	stageFiles, err := userValidateInstallStage(ctx, req.Mode, req.Experience)
+	if err != nil {
+		return result, err
+	}
+	userShellDetail(ctx, 2, 5, "Creating the private staging skeleton")
+	if err = userStageSkeleton(root); err != nil {
+		return result, err
+	}
 	if !scope.full {
 		userShellDetail(ctx, 2, 5, "Reusing unchanged components from the installation")
 		if err = userReuseComponents(ctx, root, req, existing, scope); err != nil {
@@ -326,7 +335,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 	}
 	userShellDetail(ctx, 2, 5, "Writing persona and recommended preferences")
-	if err = userPrepareInstallStage(ctx, root, req.Mode, req.Experience); err != nil {
+	if err = userStagePreferences(ctx, root, req.Mode, req.Experience, stageFiles); err != nil {
 		return result, err
 	}
 	userShellStep(ctx, 2, 5, "Private stage and preferences prepared")
@@ -404,7 +413,11 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		userShellDetail(ctx, 3, 5, "Reusing the installed global runtime")
 	}
 	pkg := filepath.Join(prefix, "lib/node_modules/gentle-pi")
-	for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", userInstallerSHA}, {"runtime/gentle-ai-binary.mjs", privateNativeResolverSHA}} {
+	installerSHA, resolverSHA, pinsErr := userStableSupplierPins()
+	if pinsErr != nil {
+		return result, pinsErr
+	}
+	for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", installerSHA}, {"runtime/gentle-ai-binary.mjs", resolverSHA}} {
 		if _, err = userSourceFile(ctx, filepath.Join(pkg, source.name), -1, source.pin); err != nil {
 			return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, err)
 		}
@@ -420,7 +433,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err = userNativeReadback(ctx, filepath.Join(pkg, ".gentle-ai")); err != nil {
 		return result, fmt.Errorf("native supplier readback: %w", err)
 	}
-	if err = userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode); err != nil {
+	if err = userPostNativeReadback(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode, scope, existing); err != nil {
 		return result, fmt.Errorf("post-native global readback: %w", err)
 	}
 	if req.Mode == "shared" && req.Experience != nil && !scope.reused[UserComponentContext7] {
@@ -457,13 +470,15 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err = userTools(ctx, root, agent, !scope.reused[UserComponentSDK]); err != nil {
 		return result, privateError("source", err)
 	}
-	if req.Mode == "separate" && existing != nil && !scope.reused[UserComponentSDK] {
+	if req.Mode == "separate" && !scope.reused[UserComponentSDK] {
 		// A rebuilt agent must not look like a fresh installation to the
 		// operator: provider logins, sessions, project state and user models
 		// survive every update through the recorded installation's agent.
-		userShellDetail(ctx, 4, 5, "Carrying the installation's operator state")
-		if err = userCarryAgentState(ctx, existing.Agent, agent); err != nil {
-			return result, fmt.Errorf("operator state carry: %w", err)
+		if recorded, ok := userRecordedAgent(req.Destination, existing); ok {
+			userShellDetail(ctx, 4, 5, "Carrying the installation's operator state")
+			if err = userCarryAgentState(ctx, recorded, agent); err != nil {
+				return result, fmt.Errorf("operator state carry: %w", err)
+			}
 		}
 	}
 	userShellDetail(ctx, 4, 5, "Recording supervisor provenance")
@@ -487,6 +502,11 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	// Context7 pins are the deterministic derivations of this build.
 	if mainSDK == nil {
 		if manifest.SDKLockSHA, err = userSDKLockSHA(); err != nil {
+			return result, err
+		}
+		// Record the exact installed gentle-pi version: the stable update
+		// check compares it against this build's stable target.
+		if manifest.SDKVersion, err = userFrozenLockGentlePiVersion(); err != nil {
 			return result, err
 		}
 	}
@@ -688,9 +708,26 @@ func userRecover(ctx context.Context, args []string, stdout io.Writer) error {
 	return err
 }
 
-const userInstallerSHA = "8679f49d3675323bf7ff5c24321f08016bb0f8e79ded307b5900c37648f52470"
-const privateNativeResolverSHA = "61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80"
 const privateNativeInvoke = `import {installGentleAi} from './scripts/gentle-ai-installer.mjs'; const packageRoot=process.cwd(); await installGentleAi({packageRoot});`
+
+// userStableSupplierPins returns the reviewed supplier file digests of the
+// frozen lock's gentle-pi version, read from the embedded reviewed supplier
+// list — the repository's only copy of the reviewed table.
+func userStableSupplierPins() (installer, resolver string, err error) {
+	version, err := userFrozenLockGentlePiVersion()
+	if err != nil {
+		return "", "", err
+	}
+	list, _, err := userEmbeddedReviewedList()
+	if err != nil {
+		return "", "", err
+	}
+	entry, ok := list.Releases[version]
+	if !ok {
+		return "", "", fmt.Errorf("reviewed supplier list has no entry for the frozen lock's gentle-pi %s", version)
+	}
+	return entry.Installer, entry.Binary, nil
+}
 
 // userWriteBootstrapHelpers writes the staged provisioning helpers. They are
 // needed by both the fresh Node bootstrap and a component-scoped reuse (the
@@ -904,6 +941,18 @@ func userProvisionAssets(ctx context.Context, root string, stage bool) error {
 	return nil
 }
 
+// userPostNativeReadback verifies the staged global tree after the native
+// supplier step. A reused Main preview SDK carries an agent that already
+// selects runtime/main-sdk, so it verifies that selection exactly as a fresh
+// Main composition does; the stock verify would refuse it with "selected
+// settings bindings changed". Every other stage verifies the stock package.
+func userPostNativeReadback(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string, scope userInstallScope, existing *userManifest) error {
+	if scope.reused[UserComponentSDK] && existing != nil && existing.MainSDK != nil {
+		return userMainSDKAction(ctx, root, finalRoot, prefix, agent, *existing.MainSDK, userMainSDKSelectedAction)
+	}
+	return userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, finalRoot, mode)
+}
+
 func userVerifyGlobal(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string) error {
 	return userVerifyGlobalAction(ctx, root, prefix, agent, finalPrefix, finalRoot, mode, "verify")
 }
@@ -1028,8 +1077,44 @@ func userNativeSemver(version string) bool {
 	return err == nil && matched
 }
 
+// userRecordedChecks names the recorded-installation verifications that apply
+// to an update. A component in scope is replaced from the running build, so
+// verifying its recorded bytes would refuse the update that replaces them. The
+// supervisor is never reused either, so only the strict read verifies it.
+type userRecordedChecks struct {
+	node      bool
+	sdk       bool
+	codegraph bool
+}
+
+func userRecordedChecksFor(reuse *userInstallScope) userRecordedChecks {
+	if reuse == nil {
+		return userRecordedChecks{node: true, sdk: true, codegraph: true}
+	}
+	return userRecordedChecks{
+		node:      reuse.reused[UserComponentNode],
+		sdk:       reuse.reused[UserComponentSDK],
+		codegraph: reuse.reused[UserComponentCodeGraph],
+	}
+}
+
 func userReadManifest(ctx context.Context, root string) (userManifest, error) {
+	return userReadRecordedManifest(ctx, root, nil)
+}
+
+// userReadReusableManifest validates the recorded installation a component-
+// scoped update is about to reuse. It proves exactly what the update keeps: the
+// manifest identity, the bin bindings, the custody of the installer-owned
+// inventory, and the pins of the components outside scope. The recorded
+// provisioner is never executed and a component in scope is never pinned,
+// because the stage rebuilds both from the running build.
+func userReadReusableManifest(ctx context.Context, root string, scope userInstallScope) (userManifest, error) {
+	return userReadRecordedManifest(ctx, root, &scope)
+}
+
+func userReadRecordedManifest(ctx context.Context, root string, reuse *userInstallScope) (userManifest, error) {
 	var manifest userManifest
+	checks := userRecordedChecksFor(reuse)
 	if _, err := privateDirectory(filepath.Dir(root)); err != nil {
 		return manifest, err
 	}
@@ -1051,8 +1136,10 @@ func userReadManifest(ctx context.Context, root string) (userManifest, error) {
 		if manifest.Mode != "separate" && manifest.Mode != "shared" && manifest.Mode != "agent" {
 			return manifest, privateError("refused", errors.New("CodeGraph requires a Separate, Shared or agent manifest"))
 		}
-		if err := userCodeGraphReadback(ctx, root); err != nil {
-			return manifest, fmt.Errorf("CodeGraph retained integrity: %w", err)
+		if checks.codegraph {
+			if err := userCodeGraphReadback(ctx, root); err != nil {
+				return manifest, fmt.Errorf("CodeGraph retained integrity: %w", err)
+			}
 		}
 	}
 	for _, name := range []string{"gentle-shell", "pi"} {
@@ -1067,23 +1154,70 @@ func userReadManifest(ctx context.Context, root string) (userManifest, error) {
 	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || actual != manifest.AgentIdentity {
 		return manifest, privateError("preimage", err)
 	}
-	for _, source := range []struct{ path, pin string }{{"supervisor", manifest.SupervisorSHA}, {"runtime/node/bin/node", privateNativeNodeSHA}} {
-		if len(source.pin) != 64 {
-			return manifest, privateError("source", nil)
-		}
-		if _, err := privateNativeFile(ctx, filepath.Join(root, source.path), 0700, -1, source.pin); err != nil {
+	if reuse == nil {
+		if err := userRecordedPin(ctx, root, "supervisor", manifest.SupervisorSHA); err != nil {
 			return manifest, err
 		}
 	}
-	if err := userTools(ctx, root, manifest.Agent, false); err != nil {
-		return manifest, privateError("source", err)
+	if checks.node {
+		if err := userRecordedPin(ctx, root, "runtime/node/bin/node", privateNativeNodeSHA); err != nil {
+			return manifest, err
+		}
 	}
-	if manifest.MainSDK != nil {
-		if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
+	if checks.sdk {
+		if err := userTools(ctx, root, manifest.Agent, false); err != nil {
+			return manifest, privateError("source", err)
+		}
+	}
+	if reuse == nil {
+		if manifest.MainSDK != nil {
+			if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
+				return manifest, err
+			}
+		}
+	} else if manifest.MainSDK != nil {
+		if err := userVerifyReusableMain(ctx, root, manifest, checks); err != nil {
 			return manifest, err
 		}
 	}
 	return manifest, nil
+}
+
+func userRecordedPin(ctx context.Context, root, relative, pin string) error {
+	if len(pin) != 64 {
+		return privateError("source", nil)
+	}
+	_, err := privateNativeFile(ctx, filepath.Join(root, relative), 0700, -1, pin)
+	return err
+}
+
+// userVerifyReusableMain proves a recorded Main tree can be reused without
+// executing the provisioner it recorded: the stage writes that helper from the
+// running build before it runs anything. A reused SDK is still compared against
+// the snapshot its manifest recorded.
+func userVerifyReusableMain(ctx context.Context, root string, manifest userManifest, checks userRecordedChecks) error {
+	if err := userMainBindingShape(root, manifest); err != nil {
+		return err
+	}
+	if checks.sdk {
+		return userCompareMainSource(ctx, root, *manifest.MainSDK)
+	}
+	return nil
+}
+
+// userRecordedAgent names the agent a rebuilt separate installation carries
+// operator state from. Its destination fixes the agent, so a recorded tree that
+// refused strict verification still contributes its operator state instead of
+// rebuilding the agent as if this were a fresh installation.
+func userRecordedAgent(destination string, recorded *userManifest) (string, bool) {
+	agent := filepath.Join(destination, "agent")
+	if recorded != nil {
+		agent = recorded.Agent
+	}
+	if _, err := os.Lstat(agent); err != nil {
+		return "", false
+	}
+	return agent, true
 }
 
 func userLaunchCommand(ctx context.Context, root string, manifest userManifest, cli string, args []string) *exec.Cmd {

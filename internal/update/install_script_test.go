@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -340,6 +341,9 @@ const installPathMark = "# gentle-ai installer"
 // ensure_install_dir_on_path for dir with the given SHELL, OS and PATH.
 func runInstallPathSetup(t *testing.T, home, shell, osName, path, dir string, extraEnv ...string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh targets macOS and Linux; Windows installs through install.ps1")
+	}
 	script, err := filepath.Abs(filepath.Join("..", "..", "scripts", "install.sh"))
 	if err != nil {
 		t.Fatal(err)

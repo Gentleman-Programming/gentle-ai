@@ -997,11 +997,27 @@ func legacyVSCodePersonaPaths(homeDir string) []string {
 	}
 }
 
+var osRemove = os.Remove
+
+// SetRemoveForTest replaces the file removal used by persona injection for the
+// duration of a test and restores the original after the test completes.
+// Exported so that external test packages (e.g. internal/cli) can fail a real
+// removal inside the install and sync pipelines.
+func SetRemoveForTest(t interface {
+	Helper()
+	Cleanup(func())
+}, remove func(string) error) {
+	t.Helper()
+	orig := osRemove
+	osRemove = remove
+	t.Cleanup(func() { osRemove = orig })
+}
+
 // removeFileAtomic removes path if it exists. Returns true when the file was
 // present and successfully deleted, false when it did not exist. Any other
 // OS-level error is returned as-is.
 func removeFileAtomic(path string) (bool, error) {
-	err := os.Remove(path)
+	err := osRemove(path)
 	if err == nil {
 		return true, nil
 	}

@@ -47,6 +47,36 @@ func userSDKLockSHA() (string, error) {
 	return fmt.Sprintf("%x", sha256.Sum256(lock)), nil
 }
 
+// userFrozenLockGentlePiVersion parses the exact gentle-pi version the
+// embedded modern lock installs: the version this build's stable SDK
+// provisioning produces. It is recorded in the manifest at install time and
+// compared at update check time; until the live listed release replaces the
+// frozen lock, it is also the stable update target, so the check can never
+// report an endless update for the version it just installed.
+func userFrozenLockGentlePiVersion() (string, error) {
+	files, err := userReadUserAssets()
+	if err != nil {
+		return "", err
+	}
+	lock, ok := files["user-locks/modern/package-lock.json"]
+	if !ok {
+		return "", fmt.Errorf("embedded modern package lock is absent")
+	}
+	var record struct {
+		Packages map[string]struct {
+			Version string `json:"version"`
+		} `json:"packages"`
+	}
+	if err := json.Unmarshal(lock, &record); err != nil {
+		return "", err
+	}
+	version := record.Packages["node_modules/gentle-pi"].Version
+	if !userReviewedListSemver(version) {
+		return "", fmt.Errorf("embedded modern package lock pins no exact gentle-pi version")
+	}
+	return version, nil
+}
+
 // userToolsPinSHA digests the pinned fd/rg sources of this build. The bound
 // agent binaries are part of the SDK component: a tool pin change refreshes
 // the SDK so the reused agent can never fail the bind verification.

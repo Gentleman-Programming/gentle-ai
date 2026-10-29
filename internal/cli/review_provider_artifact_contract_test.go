@@ -15,6 +15,9 @@ import (
 
 func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
+	// issue #5255: v1 handle/repository_context patterns now admit both the
+	// rctx2_ handle every current START/STATUS envelope emits and the historical
+	// rctx1_ handle the Go transport still decodes. Deliberate, not drift.
 	want := map[string]string{
 		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
 		"fixtures/consent.fixture.json":           "b95d02fb3468cc7c017380f7193aff86691a47cbe3879eddb0092893d7b8bb5b",
@@ -33,7 +36,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/artifact-subject.schema.json":   "f7dcd934e27e8f3735a37f3d0ec8048dd8ccc1811b9df61124a1dcbf8a03f40e",
 		"schemas/capabilities-v1.4.schema.json":  "926b61c8ac0f870f09214f6bd8af1b035c5b72f14f0b83c0d4a7bdbb277f5447",
 		"schemas/result-artifact.schema.json":    "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
-		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
+		"schemas/start.schema.json":              "736b5579b8943a686f141d9aeb81823739844b3f683e1ea59758bbbbb6e50660",
 		// Frozen v1 START artifacts do not project the v3 replay or retired
 		// stale-burn fields.
 		//
@@ -42,10 +45,10 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		//
 		// rdd-risk-gated S14: the risk reason enums admit the agent_escalation
 		// code and signal START publishes for --escalate-item. Deliberate, not drift.
-		"schemas/start-v2.schema.json":             "efde388bc82be38c947bfab8de5c94b27f0a1cbb9983a16239abef9ac3342a36",
-		"schemas/status.schema.json":               "86d0a5ff09a833ff723804c3e31185a80826cbd81a73cf61026feea8c5df2314",
+		"schemas/start-v2.schema.json":             "0e5667ff9d396f3ecaa20f90b8223174701c23741d80a07c5b713e4bb18df5bb",
+		"schemas/status.schema.json":               "98274aa65b2dd57c4272c39e5307c4abd4f14360c12257db4a3b0f5dc81cfa13",
 		"schemas/status-v2.schema.json":            "7c51627d133592839ba4afa860b358b68109afd5f70ee998cd421f563201b23e",
-		"schemas/transition-execution.schema.json": "ddee03bd0c1b6e70f21c399bae7fe528aa4ad46cebb5a48ec72b6e6b3694aa2d",
+		"schemas/transition-execution.schema.json": "d7cd641db6a7d9396df128f207da2823e646d0e8ea9a648a2e3876845718ef27",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

@@ -462,6 +462,16 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 	if lock, err := userWindowsSDKLockSHA(); err == nil && manifest.SDKLockSHA != lock {
 		changed[UserComponentSDK] = true
 	}
+	// S14: the installed gentle-pi version is outdated only when it is strictly
+	// older than the newest reviewed release of the selected list (live
+	// repository copy with the embedded fallback — the same authority the
+	// update installs), or unrecorded. A newer recorded version — e.g. after a
+	// fallback to an older embedded list — never offers a downgrade (S17(c)).
+	// A manifest without the version field is a pre-feature install reported
+	// outdated once; the next update records the version it installs.
+	if list, _, err := userSelectedReviewedListFunc(ctx); err == nil && userReviewedVersionOlder(manifest.SDKVersion, list.newestReviewedRelease()) {
+		changed[UserComponentSDK] = true
+	}
 	if tools, err := userWindowsToolsPinSHA(); err == nil && manifest.ToolsSHA != tools {
 		changed[UserComponentSDK] = true
 	}

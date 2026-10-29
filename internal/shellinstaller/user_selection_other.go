@@ -45,7 +45,7 @@ func userConfirmation(req UserInstallRequest, identity string) string {
 }
 
 func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
-	args, profile, err := userEntryExperience(args)
+	args, profile, scope, err := userEntryExperience(args)
 	if err != nil {
 		return UserInstallRequest{}, err
 	}
@@ -53,6 +53,6 @@ func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
 		return UserInstallRequest{}, fmt.Errorf("invalid internal install arguments")
 	}
 	return UserInstallRequest{
-		Destination: args[0], Mode: args[1], SharedPrefix: args[2], SharedAgent: args[3], Confirmation: args[4], Experience: profile,
+		Destination: args[0], Mode: args[1], SharedPrefix: args[2], SharedAgent: args[3], Confirmation: args[4], Experience: profile, Scope: scope,
 	}, nil
 }

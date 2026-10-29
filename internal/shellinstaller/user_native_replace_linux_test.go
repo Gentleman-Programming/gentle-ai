@@ -16,6 +16,7 @@ import (
 )
 
 func TestUserNativeReplaceOwner(t *testing.T) {
+	enableNativeInstall(t)
 	parent := filepath.Dir(installStagePath(t))
 	req := UserInstallRequest{Destination: filepath.Join(parent, "final"), Mode: "separate", Experience: &UserExperience{Persona: "neutral", BackgroundSubagents: "off"}}
 	encoded, err := req.Experience.Encode()
@@ -65,6 +66,7 @@ func TestUserNativeReplaceOwner(t *testing.T) {
 }
 
 func TestUserNativeReplaceOwnerRefusals(t *testing.T) {
+	enableNativeInstall(t)
 	for _, name := range []string{"canceled", "unconfirmed", "stale", "wrong executable", "custom streams"} {
 		t.Run(name, func(t *testing.T) {
 			parent := filepath.Dir(installStagePath(t))

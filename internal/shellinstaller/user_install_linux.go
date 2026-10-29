@@ -460,7 +460,7 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		if err != nil {
 			return err
 		}
-		if fresh {
+		if userNativeInstallDispatch(fresh) {
 			return userNativeInstall(ctx, self, args[1:], req, stdin, stdout, stderr)
 		}
 	}
@@ -600,4 +600,20 @@ func userKillGroup(pgid int, sig syscall.Signal) error {
 // ESRCH answer means the group already emptied.
 func privateReapRun(_ int, _ error, kill func() error) error {
 	return kill()
+}
+
+// userNativeInstallEnabled gates the native coordinator for fresh Separate
+// installs. Its guards require an empty capability bounding set and no
+// supplementary groups, which an ordinary user under a systemd user manager
+// cannot meet: the coordinator unit exits 218 on CapabilityBoundingSet=, and
+// the namespace guard refuses the user's groups. Fresh installs therefore keep
+// the legacy worker, which installs end to end, until the native path supports
+// ordinary users. A variable rather than a constant keeps the native path
+// reachable for its own tests and the dead-code ratchet.
+var userNativeInstallEnabled = false
+
+// userNativeInstallDispatch reports whether an install takes the native
+// coordinator instead of the legacy worker.
+func userNativeInstallDispatch(fresh bool) bool {
+	return fresh && userNativeInstallEnabled
 }

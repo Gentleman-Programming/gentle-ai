@@ -122,6 +122,9 @@ func TestShellAgentReuseOption(t *testing.T) {
 // admits it and reaches the plan; the target says the tools are set aside
 // and restored on uninstall, and nothing in the agent changes before install.
 func TestShellAgentReuseSetsAsidePiTools(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows supports Separate install only; TestShellAgentReuseOption pins the refusal")
+	}
 	agent := restrictedAgentHome(t)
 	bin := filepath.Join(agent, "bin")
 	if err := os.Mkdir(bin, 0755); err != nil {

@@ -32,7 +32,7 @@ func userReplaceOwner(ctx context.Context, self string, args []string, stdin io.
 	if err != nil {
 		return err
 	}
-	if !fresh {
+	if !userNativeInstallDispatch(fresh) {
 		return RunUserEntry(ctx, self, args, stdin, stdout, stderr)
 	}
 	actual, err := os.Executable()

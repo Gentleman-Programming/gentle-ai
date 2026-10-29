@@ -34,27 +34,20 @@ func TestShellOriginalOrdinaryWelcomeDispatch(t *testing.T) {
 			}
 		})
 	}
-	// The agent row label follows the host's engine detection: an enabled host
-	// opens the builder, a host without engines keeps the row inert.
+	// The agent row is now the custom-agent management entry: it navigates
+	// regardless of engine availability, and engine gating lives inside the
+	// management screen ("Create new agent (no engine available)").
 	m := NewModel(system.DetectionResult{}, "restore-ui-test").WithShellInstaller()
-	hasEngines := m.hasAgentBuilderEngines()
-	label := "Create your own Agent"
-	if !hasEngines {
-		label = "Create your own Agent (no agents)"
-	}
-	for index, option := range screens.WelcomeOptionsWithShellInstaller(nil, false, hasEngines, true) {
+	label := "Manage Custom Agents"
+	for index, option := range screens.WelcomeOptionsWithShellInstaller(nil, false, m.hasAgentBuilderEngines(), true) {
 		if option == label {
 			m.Cursor = index
 		}
 	}
-	cursor := m.Cursor
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(Model)
-	want := ScreenAgentBuilderEngine
-	if !hasEngines {
-		want = ScreenWelcome
-	}
-	if got.Screen != want || want == ScreenWelcome && got.Cursor != cursor {
+	want := ScreenCustomAgents
+	if got.Screen != want {
 		t.Fatalf("agent row %q routed to %v, want %v", label, got.Screen, want)
 	}
 }

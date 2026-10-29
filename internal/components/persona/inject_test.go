@@ -2,6 +2,7 @@ package persona
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -601,6 +602,40 @@ func TestInjectClaudeNeutralWritesNeutralOutputStyleAndSettings(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("second neutral Claude inject changed = true, want idempotent false")
+	}
+}
+
+// TestInjectClaudeNeutralReturnsRetiredStyleRemovalFailure pins the contract
+// the install/sync rollback boundary depends on: a failed removal of the
+// retired output style is returned to the caller instead of being swallowed.
+func TestInjectClaudeNeutralReturnsRetiredStyleRemovalFailure(t *testing.T) {
+	home := t.TempDir()
+	stylesDir := filepath.Join(home, ".claude", "output-styles")
+	if err := os.MkdirAll(stylesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	gentlemanPath := filepath.Join(stylesDir, "gentleman.md")
+	if err := os.WriteFile(gentlemanPath, []byte("gentleman style"), 0o644); err != nil {
+		t.Fatalf("WriteFile(gentleman) error = %v", err)
+	}
+
+	injected := errors.New("injected remove failure")
+	SetRemoveForTest(t, func(path string) error {
+		if path == gentlemanPath {
+			return injected
+		}
+		return os.Remove(path)
+	})
+
+	_, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
+	if !errors.Is(err, injected) {
+		t.Fatalf("Inject() error = %v, want wrapped injected remove failure", err)
+	}
+	if !strings.Contains(err.Error(), "remove retired output style") {
+		t.Fatalf("Inject() error = %q, want retired output style context", err)
+	}
+	if _, statErr := os.Stat(gentlemanPath); statErr != nil {
+		t.Fatalf("retired gentleman output style should remain after failed removal, stat err=%v", statErr)
 	}
 }
 

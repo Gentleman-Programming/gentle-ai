@@ -1161,6 +1161,9 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 		targets = append(targets, settingsTargets(homeDir, adapter)...)
 	case model.StrategyMCPConfigFile:
 		targets = append(targets, adapter.MCPConfigPath(homeDir, "engram"))
+		if adapter.Agent() == model.AgentAntigravity {
+			targets = append(targets, engram.AntigravityPluginAssetPaths(homeDir)...)
+		}
 	case model.StrategyTOMLFile:
 		targets = append(targets,
 			adapter.MCPConfigPath(homeDir, "engram"),
@@ -1194,7 +1197,18 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 		if adapter.Agent() == model.AgentVSCodeCopilot {
 			return []operation{rewriteJSONFile(path, jsonPath{"servers", "engram"})}
 		}
-		return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "engram"})}
+		ops := []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "engram"})}
+		if adapter.Agent() == model.AgentAntigravity {
+			// #779: since #5065 Antigravity Engram registration is
+			// plugin-owned; the rewrite above only clears a legacy duplicate
+			// entry. Remove the plugin assets install wrote, leaving any
+			// edited asset (and so its directory) in place.
+			for _, asset := range engram.AntigravityPluginAssetPaths(homeDir) {
+				ops = append(ops, removeManagedAntigravityPluginAsset(asset))
+			}
+			ops = append(ops, removeDirIfEmpty(engram.AntigravityPluginDir(homeDir)))
+		}
+		return ops
 	case model.StrategyTOMLFile:
 		configPath := adapter.MCPConfigPath(homeDir, "engram")
 		instructionsPath := filepath.Join(homeDir, ".codex", "engram-instructions.md")
@@ -1624,6 +1638,17 @@ func removeManagedContext7File(path string) operation {
 				return false, false, err
 			}
 			return true, true, nil
+		},
+	}
+}
+
+func removeManagedAntigravityPluginAsset(path string) operation {
+	return operation{
+		typeID: opRemoveFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			removed, err := engram.RemoveManagedAntigravityPluginAsset(path)
+			return removed, removed, err
 		},
 	}
 }

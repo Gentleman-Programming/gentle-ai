@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -84,6 +85,11 @@ func TestWindowsInventoryAcceptsUpdateChannelPreference(t *testing.T) {
 }
 
 func TestWindowsChannelPreferenceAndCheckRouting(t *testing.T) {
+	// The stable check resolves the reviewed supplier list through the
+	// injection seam; the stub keeps this test off the network.
+	previousList := userSelectedReviewedListFunc
+	userSelectedReviewedListFunc = func(context.Context) (userReviewedList, []byte, error) { return userEmbeddedReviewedList() }
+	defer func() { userSelectedReviewedListFunc = previousList }()
 	home, target, install := writeWindowsChannelFixture(t)
 	if installs := DiscoverUserShellInstalls(home); len(installs) != 1 || installs[0].Channel != "stable" {
 		t.Fatalf("stock discovery differs: %+v", installs)
@@ -127,11 +133,45 @@ func TestWindowsChannelPreferenceAndCheckRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if update.Channel != "stable" || !update.Available || len(update.Components) != 2 {
+	// The fixture is a pre-pin manifest, so the SDK refreshes once alongside
+	// the components that differ from this build.
+	if update.Channel != "stable" || !update.Available || !slices.Equal(update.Scope, []string{UserComponentNode, UserComponentSDK, UserComponentSupervisor}) {
 		t.Fatalf("Stable routing differs: %+v", update)
 	}
 	if _, err := os.Lstat(filepath.Join(target, "config", "update-channel.json")); err != nil {
 		t.Fatalf("channel preference lost: %v", err)
+	}
+}
+
+// TestWindowsDiscoversPrePinManifest pins upgrade compatibility: a manifest
+// written before the component pins existed must stay discoverable.
+func TestWindowsDiscoversPrePinManifest(t *testing.T) {
+	home, target, _ := writeWindowsChannelFixture(t)
+	current, err := userWindowsManifestRead(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := struct {
+		Schema, Destination, SID, Identity, SupervisorSHA string
+		PrefixIdentity, AgentIdentity                     string
+		SelectionSHA                                      string
+		MainCommit, MainArchiveSHA, LockSHA               string
+	}{
+		Schema: current.Schema, Destination: current.Destination, SID: current.SID, Identity: current.Identity,
+		SupervisorSHA: current.SupervisorSHA, SelectionSHA: current.SelectionSHA, LockSHA: current.LockSHA,
+	}
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(target, "manifest.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsWrite(filepath.Join(target, "manifest.json"), append(encoded, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	if installs := DiscoverUserShellInstalls(home); len(installs) != 1 || installs[0].Target != target {
+		t.Fatalf("pre-pin manifest is not discoverable: %+v", installs)
 	}
 }
 

@@ -115,3 +115,55 @@ func TestUserPrepareInstallStageRefusesBeforeCreation(t *testing.T) {
 		})
 	}
 }
+
+// userStageSkeleton runs before the component reuse, and the reuse brings
+// directories into the skeleton. A skeleton that demanded a fresh path after
+// that reuse refused every component-scoped update with a detail-less refusal.
+func TestUserStageSkeletonRefusesAReuseFilledStage(t *testing.T) {
+	root := installStagePath(t)
+	if err := os.MkdirAll(filepath.Join(root, "runtime", "node"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userStageSkeleton(root); err == nil {
+		t.Fatal("skeleton accepted a stage the component reuse had already filled")
+	}
+}
+
+// The component reuse lands between the skeleton and the preferences, so the
+// preferences must complete a stage that already holds reused components and
+// operator state.
+func TestUserStagePreferencesCompleteAReusedStage(t *testing.T) {
+	ctx := context.Background()
+	root := installStagePath(t)
+	profile := UserExperience{Persona: "gentleman", BackgroundSubagents: "on", CodeGraph: "on"}
+	files, err := userValidateInstallStage(ctx, "separate", &profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := userStageSkeleton(root); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(root, "runtime", "node", "bin", "node")
+	if err := os.MkdirAll(filepath.Dir(marker), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte("reused\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(root, "agent", "auth.json")
+	if err := os.WriteFile(state, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := userStagePreferences(ctx, root, "separate", &profile, files); err != nil {
+		t.Fatalf("preferences refused a reused stage: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("reused component was removed: %v", err)
+	}
+	if _, err := os.Stat(state); err != nil {
+		t.Fatalf("reused operator state was removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "config", "persona.json")); err != nil {
+		t.Fatalf("persona was not written: %v", err)
+	}
+}

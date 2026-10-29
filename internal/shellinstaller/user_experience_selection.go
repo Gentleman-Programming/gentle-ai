@@ -6,17 +6,47 @@ import (
 	"runtime"
 )
 
+// userEntryScopeBound bounds the canonical scope string: the widest known
+// scope is far below this, so the bound only refuses crafted input.
+const userEntryScopeBound = 128
+
 // The optional named suffix keeps legacy positional fields and Windows channel
 // selectors unambiguous. Decoding is inert; inspection still owns admission.
-func userEntryExperience(args []string) ([]string, *UserExperience, error) {
-	if len(args) < 2 || args[len(args)-2] != "--experience" {
-		return args, nil, nil
+// The --scope suffix carries the component scope the inspected confirmation
+// bound: without it the worker recomputes a different token and refuses the
+// exact selection the operator confirmed.
+func userEntryExperience(args []string) ([]string, *UserExperience, string, error) {
+	var profile *UserExperience
+	scope := ""
+	seen := map[string]bool{}
+	for len(args) >= 2 {
+		flag, value := args[len(args)-2], args[len(args)-1]
+		switch flag {
+		case "--experience":
+			if seen[flag] {
+				return nil, nil, "", experienceError("duplicate experience choice")
+			}
+			seen[flag] = true
+			decoded, err := DecodeUserExperience(value)
+			if err != nil {
+				return nil, nil, "", err
+			}
+			profile = &decoded
+		case "--scope":
+			if seen[flag] {
+				return nil, nil, "", experienceError("duplicate update scope")
+			}
+			seen[flag] = true
+			if value == "" || len(value) > userEntryScopeBound || !userValidRequestScope(value) {
+				return nil, nil, "", experienceError("invalid update component scope")
+			}
+			scope = value
+		default:
+			return args, profile, scope, nil
+		}
+		args = args[:len(args)-2]
 	}
-	profile, err := DecodeUserExperience(args[len(args)-1])
-	if err != nil {
-		return nil, nil, err
-	}
-	return args[:len(args)-2], &profile, nil
+	return args, profile, scope, nil
 }
 
 func userExperienceConfirmationData(fields []string, profile *UserExperience) ([]byte, error) {

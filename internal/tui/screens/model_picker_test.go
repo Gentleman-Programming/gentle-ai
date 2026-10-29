@@ -752,6 +752,54 @@ func TestRuntimeCatalogDiscoveryFailureKeepsConfiguredProvider(t *testing.T) {
 	}
 }
 
+// TestRenderModelPickerWarnsOnDegradedConfiguredFallback pins the issue #5833
+// contract: when runtime discovery fails but configured tool-capable models
+// keep the picker usable, both the phase list and the provider selector must
+// say plainly that the list is the configured subset and incomplete, instead
+// of presenting it as the full OpenCode catalog. A successful discovery must
+// not warn.
+func TestRenderModelPickerWarnsOnDegradedConfiguredFallback(t *testing.T) {
+	configured := map[string]opencode.Provider{"configured": {
+		ID: "configured", Name: "Configured", Models: map[string]opencode.Model{"configured/model": {ID: "configured/model", ToolCall: true}},
+	}}
+	state := NewRuntimeModelPickerStateWithDiscoverer(filepath.Join(t.TempDir(), "missing.json"), nil)
+	state.ConfiguredProviders = configured
+	state = state.Update(RuntimeCatalogDiscoveryMsg{Err: &opencode.CatalogError{Kind: opencode.CatalogErrorMalformed}})
+	if state.CatalogStatus != RuntimeCatalogReady || state.CatalogError == nil {
+		t.Fatalf("degraded fallback state = status %d, err %v; want ready with recorded error", state.CatalogStatus, state.CatalogError)
+	}
+
+	phaseList := RenderModelPicker(nil, state, 0)
+	for _, fragment := range []string{
+		"Could not parse models from OpenCode.",
+		"Showing configured models only; some OpenCode providers and models may be missing.",
+	} {
+		if !strings.Contains(phaseList, fragment) {
+			t.Errorf("phase list missing degraded fallback warning %q: %s", fragment, phaseList)
+		}
+	}
+
+	state.Mode = ModeProviderSelect
+	providerSelect := RenderModelPicker(nil, state, 0)
+	if !strings.Contains(providerSelect, "Showing configured models only") {
+		t.Errorf("provider select missing degraded fallback warning: %s", providerSelect)
+	}
+
+	// A successful discovery clears the error and must render without the
+	// degraded warning in both screens.
+	state = state.Update(RuntimeCatalogDiscoveryMsg{Providers: configured})
+	state.Mode = ModePhaseList
+	if state.CatalogError != nil {
+		t.Fatalf("successful discovery kept CatalogError: %v", state.CatalogError)
+	}
+	for _, mode := range []ModelPickerMode{ModePhaseList, ModeProviderSelect} {
+		state.Mode = mode
+		if got := RenderModelPicker(nil, state, 0); strings.Contains(got, "Showing configured models only") {
+			t.Errorf("successful discovery still renders degraded warning in mode %d: %s", mode, got)
+		}
+	}
+}
+
 func TestRuntimeCatalogDiscoveryEmptyCatalogRendersActionableState(t *testing.T) {
 	state := NewRuntimeModelPickerStateWithDiscoverer(filepath.Join(t.TempDir(), "missing.json"), nil)
 	state = state.Update(RuntimeCatalogDiscoveryMsg{Providers: map[string]opencode.Provider{}})

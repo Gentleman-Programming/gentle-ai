@@ -57,10 +57,14 @@ func TestUserMainDeclaredStockBindings(t *testing.T) {
 		}
 		original[name] = data
 	}
-	if installer := sha256.Sum256(original[names[1]]); hex.EncodeToString(installer[:]) != userInstallerSHA {
+	installerSHA, resolverSHA, pinsErr := userStableSupplierPins()
+	if pinsErr != nil {
+		t.Fatal(pinsErr)
+	}
+	if installer := sha256.Sum256(original[names[1]]); hex.EncodeToString(installer[:]) != installerSHA {
 		t.Fatal("stock installer pin differs")
 	}
-	if resolver := sha256.Sum256(original[names[2]]); hex.EncodeToString(resolver[:]) != privateNativeResolverSHA {
+	if resolver := sha256.Sum256(original[names[2]]); hex.EncodeToString(resolver[:]) != resolverSHA {
 		t.Fatal("stock resolver pin differs")
 	}
 	for _, field := range []string{"unchanged", "dependencies", "exports", "pi", "engines", "scripts", "unknown", names[1], names[2]} {
