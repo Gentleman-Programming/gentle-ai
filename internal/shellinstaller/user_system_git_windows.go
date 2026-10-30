@@ -59,8 +59,8 @@ func userWindowsSystemGitBin() (string, bool) {
 }
 
 // userWindowsLaunchEnvironment is the owned launch environment: the provision
-// environment plus the revalidated Git directory (just before System32) and
-// the validated ProgramFiles. Provision (install, overlay, verify) keeps
+// environment plus the revalidated Git directory (just before System32), the
+// validated ProgramFiles and the outer entry's Engram entries. Provision (install, overlay, verify) keeps
 // userWindowsEnvironment exactly as it was.
 func userWindowsLaunchEnvironment(root string) ([]string, error) {
 	env, err := userWindowsEnvironment(root)
@@ -84,6 +84,10 @@ func userWindowsLaunchEnvironment(root string) ([]string, error) {
 	if programFiles, ok := userWindowsProgramFiles(); ok {
 		env = append(env, "ProgramFiles="+programFiles)
 	}
+	// The worker environment is the outer entry's list, so its Engram
+	// entries are exactly the outer decision or the user's own selection;
+	// without one, the (Separate-only) launch runs with memory disabled.
+	env = append(env, userEngramSeparateLaunch("separate", userEngramForwarded(os.LookupEnv))...)
 	return env, nil
 }
 

@@ -51,6 +51,7 @@ func userLaunchPNPM(ctx context.Context, root, role string, args []string, stdin
 	userCodeGraphLaunchEnv(root, manifest, cmd)
 	// Keep supplier home selection: direct Pi uses Agent; Shell's isolated
 	// default stays under private HOME. Never inherit caller runtime injection.
+	cmd.Env = append(cmd.Env, userEngramSeparateLaunch(manifest.Mode, nil)...)
 	cmd.Env = append(cmd.Env, "PNPM_HOME="+manifest.Prefix, "XDG_DATA_HOME="+root+"/data", "XDG_CACHE_HOME="+root+"/data/cache", "GIT_OPTIONAL_LOCKS=0", "GOMAXPROCS=1", "UV_THREADPOOL_SIZE=1", "NODE_OPTIONS=--v8-pool-size=1")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	return userLaunchGroup(cmd, stdin, func(exitErr error) error {
