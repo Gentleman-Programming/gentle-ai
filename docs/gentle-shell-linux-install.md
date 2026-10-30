@@ -53,6 +53,8 @@ Launch `TARGET/bin/gentle-shell` or `TARGET/bin/pi`. Normal launches have no ins
 
 The installer TUI runs the portable direct worker, so it first probes the delegated systemd unit every later launch uses. When that probe fails (for example no `XDG_RUNTIME_DIR=/run/user/UID` or no user manager), the install is refused **before any change**: no target, launcher or registry entry is created. A published installation is recorded in `~/.gentle-ai/shell-installs.json` (0600) for Manage. That directory may be gentle-ai's usual `0755` state directory, but it must be owned by you, not a symlink, and not writable by group or others. If the installation cannot be recorded, the completion output says so; the installation itself is kept.
 
+On the Stable SDK channel, gentle-pi is installed at the newest release of the reviewed supplier list, and every update check compares the installed version against that list live — a newly reviewed release needs no gentle-ai rebuild. See [the Stable trust boundary](gentle-shell-stable-trust-boundary.md) for which authority admits supplier code and what an attacker would need.
+
 ## Shared settings: preview before confirming
 
 Inspect prints the selected agent's `settings.json` path and **only** its `packages` and `npmCommand` before/after values, including actual physical paths:
