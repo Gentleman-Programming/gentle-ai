@@ -319,8 +319,26 @@ type ReviewIntegrationFailureContext struct {
 	ScopeChange *ReviewIntegrationScopeChange `json:"scope_change,omitempty"`
 	// TargetDrift is the additive #4494 stale-target evidence: the negotiated
 	// components beside their live rebuild, with the differing component
-	// names. Exactly one of the two context variants is ever set.
+	// names. LensBudget is the additive #5662/#5499/#4954 budget evidence:
+	// the measured block size beside the effective runtime budget, with the
+	// section that consumed the most, so an over-budget refusal is triageable
+	// from its own envelope instead of from nine measurement attempts.
+	// Exactly one of the three context variants is ever set.
 	TargetDrift *ReviewIntegrationTargetDrift `json:"target_drift,omitempty"`
+	LensBudget  *ReviewIntegrationLensBudget  `json:"lens_budget,omitempty"`
+}
+
+// ReviewIntegrationLensBudget carries the measured numbers behind one
+// lens_context_budget_exceeded refusal. top_section names the section header
+// (a patch section's header includes its manifest path) that consumed the
+// most bytes of any section admitted before the one that overflowed, so a
+// caller can see what dominates the block without re-deriving the assembly.
+type ReviewIntegrationLensBudget struct {
+	Runtime         string `json:"runtime"`
+	BudgetBytes     int64  `json:"budget_bytes"`
+	BlockBytes      int64  `json:"block_bytes"`
+	TopSection      string `json:"top_section,omitempty"`
+	TopSectionBytes int64  `json:"top_section_bytes,omitempty"`
 }
 
 // ReviewIntegrationTargetDrift decomposes one stale-target refusal into the
@@ -1454,7 +1472,14 @@ func (failure ReviewIntegrationFailure) Validate() error {
 	if failure.Context != nil {
 		scope := failure.Context.ScopeChange
 		drift := failure.Context.TargetDrift
-		if (scope == nil) == (drift == nil) {
+		lensBudget := failure.Context.LensBudget
+		variants := 0
+		for _, set := range []bool{scope != nil, drift != nil, lensBudget != nil} {
+			if set {
+				variants++
+			}
+		}
+		if variants != 1 {
 			return errors.New("negotiated review failure context carries exactly one variant")
 		}
 		if scope != nil {
@@ -1488,6 +1513,20 @@ func (failure ReviewIntegrationFailure) Validate() error {
 					return errors.New("negotiated review target-drift names an unknown component")
 				}
 				seen[name] = true
+			}
+		}
+		if lensBudget != nil {
+			// Issue #5662/#5499/#4954: the over-budget refusal carries its own
+			// measured numbers, so a caller can see how far over the runtime
+			// cap the candidate reached and which section dominates it without
+			// re-deriving the assembly. The runtime may be empty: an absent or
+			// unknown identity fails closed to the same approved cap, which is
+			// exactly what the numbers then report. The context is scoped to
+			// the one code whose semantics the numbers describe.
+			if failure.Code != "lens_context_budget_exceeded" ||
+				lensBudget.BudgetBytes <= 0 || lensBudget.BlockBytes <= lensBudget.BudgetBytes ||
+				lensBudget.TopSectionBytes < 0 || (lensBudget.TopSection == "") != (lensBudget.TopSectionBytes == 0) {
+				return errors.New("negotiated review lens-budget context does not measure an over-budget block") // refusal:by-design world-action: a lens-budget context whose numbers do not describe an over-budget block was built wrong; only corrected producer code can emit a valid one
 			}
 		}
 	}
