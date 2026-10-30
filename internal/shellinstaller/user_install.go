@@ -63,12 +63,23 @@ func userGraphRepairError(root, mode string, err error) error {
 	return err
 }
 
+// userUnitMemoryMaxBytes and userUnitTasksMax are the shared transient unit
+// budget: the systemd-run property path, the native D-Bus slice path and the
+// exact leaf-limit check must all agree on these values (#5815). TasksMax 64
+// sat below the managed runtime's own footprint (~61 tasks with the default
+// components), so any further fork inside the unit failed with EAGAIN; 512
+// restores real headroom while the unit stays a bounded sandbox.
+const (
+	userUnitMemoryMaxBytes uint64 = 3221225472
+	userUnitTasksMax       uint64 = 512
+)
+
 // userServicePropertyBase holds the identical sandbox properties for the user
 // and system delegation paths: both create the same bounded transient unit.
 func userServicePropertyBase(unit string, interactive bool, cwd string) []string {
 	result := []string{"--quiet", "--wait", "--collect", "--service-type=exec", "--expand-environment=no", "--description=Gentle Shell owned runtime", "--unit=" + unit, "--working-directory=" + cwd,
-		"--property=MemoryMax=3221225472", "--property=MemorySwapMax=0", "--property=CPUQuota=100%", "--property=CPUQuotaPeriodSec=100ms",
-		"--property=TasksMax=64", "--property=NoNewPrivileges=yes", "--property=UMask=0077", "--property=KillMode=control-group", "--property=TimeoutStopSec=2s",
+		fmt.Sprintf("--property=MemoryMax=%d", userUnitMemoryMaxBytes), "--property=MemorySwapMax=0", "--property=CPUQuota=100%", "--property=CPUQuotaPeriodSec=100ms",
+		fmt.Sprintf("--property=TasksMax=%d", userUnitTasksMax), "--property=NoNewPrivileges=yes", "--property=UMask=0077", "--property=KillMode=control-group", "--property=TimeoutStopSec=2s",
 		"--property=UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT NODE_OPTIONS NODE_PATH"}
 	if interactive {
 		result = append(result, "--pty")
