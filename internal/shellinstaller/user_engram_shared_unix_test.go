@@ -259,7 +259,7 @@ func TestUserEngramUnixLaunchNeverStartsBesideAnotherDecision(t *testing.T) {
 		{name: "listener without compatibility", mode: "separate", base: silent, want: userEngramDisabled(userEngramRecoveryNotice)},
 		{name: "refused without core", mode: "separate", base: refused, noCore: true, want: userEngramDisabled(userEngramCoreMissingNotice)},
 		{name: "newer store schema", mode: "separate", base: refused, store: newer, want: userEngramDisabled(userEngramNewerSchemaNotice)},
-		{name: "user selection", mode: "separate", base: refused, user: "/user/engram", want: []string{"ENGRAM_BIN=/user/engram"}},
+		{name: "user selection", mode: "separate", base: refused, user: "/user/engram", want: append([]string{"ENGRAM_BIN=/user/engram"}, userEngramDisabled(userEngramRecoveryNotice)...)},
 		{name: "shared mode decides nothing", mode: "shared", base: refused},
 		{name: "agent mode decides nothing", mode: "agent", base: refused},
 	}

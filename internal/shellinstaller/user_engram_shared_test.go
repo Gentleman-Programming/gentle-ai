@@ -65,27 +65,42 @@ func userEngramPolicy(entries []string) string {
 	return ""
 }
 
-func TestUserEngramDecideForwardsUserSelectionUntouched(t *testing.T) {
-	for _, key := range userEngramSelections {
-		t.Run(key, func(t *testing.T) {
-			fake := &userEngramFakeHost{env: map[string]string{key: " user value ", "PATH": "/caller/bin", "ENGRAM_HTTP_TOKEN": "secret"}, endpoints: []userEngramEndpoint{userEngramCompatible}, core: true}
+// Bundled's rule for an explicit selection: forwarded untouched, memory
+// disabled (keeping a user's own non-allow policy), and never a PATH engram:
+// an absent ENGRAM_BIN names the verified core when it revalidates, otherwise
+// the disabled policy keeps the companion from running any binary.
+func TestUserEngramDecideSelectionNeverFallsBackToPath(t *testing.T) {
+	disabled := []string{"ENGRAM_STARTUP_POLICY=disabled", "ENGRAM_STARTUP_NOTICE=" + userEngramRecoveryNotice}
+	tests := []struct {
+		name string
+		env  map[string]string
+		core bool
+		want []string
+	}{
+		{"data directory with core", map[string]string{"ENGRAM_DATA_DIR": "/home/u/mem"}, true, append([]string{"ENGRAM_DATA_DIR=/home/u/mem", "ENGRAM_BIN=/agent/bin/engram"}, disabled...)},
+		{"data directory without core", map[string]string{"ENGRAM_DATA_DIR": "/home/u/mem"}, false, append([]string{"ENGRAM_DATA_DIR=/home/u/mem"}, disabled...)},
+		{"port with core", map[string]string{"ENGRAM_PORT": "7438"}, true, append([]string{"ENGRAM_PORT=7438", "ENGRAM_BIN=/agent/bin/engram"}, disabled...)},
+		{"explicit URL keeps URL and gets the core", map[string]string{"ENGRAM_URL": "http://127.0.0.1:9000"}, true, append([]string{"ENGRAM_URL=http://127.0.0.1:9000", "ENGRAM_BIN=/agent/bin/engram"}, disabled...)},
+		{"explicit BIN is never replaced", map[string]string{"ENGRAM_BIN": " /user/engram "}, true, append([]string{"ENGRAM_BIN= /user/engram "}, disabled...)},
+		{"allow policy cannot enable a selection", map[string]string{"ENGRAM_PORT": "7438", "ENGRAM_STARTUP_POLICY": "allow"}, false, append([]string{"ENGRAM_PORT=7438"}, disabled...)},
+		{"user notice is kept after ours", map[string]string{"ENGRAM_PORT": "7438", "ENGRAM_STARTUP_NOTICE": "mine"}, false, []string{"ENGRAM_PORT=7438", "ENGRAM_STARTUP_POLICY=disabled", "ENGRAM_STARTUP_NOTICE=" + userEngramRecoveryNotice + " mine"}},
+		{"user's own policy is kept", map[string]string{"ENGRAM_STARTUP_POLICY": "off", "ENGRAM_STARTUP_NOTICE": "mine"}, true, []string{"ENGRAM_BIN=/agent/bin/engram", "ENGRAM_STARTUP_POLICY=off", "ENGRAM_STARTUP_NOTICE=mine"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.env["PATH"], tt.env["ENGRAM_HTTP_TOKEN"] = "/caller/bin", "secret"
+			fake := &userEngramFakeHost{env: tt.env, endpoints: []userEngramEndpoint{userEngramCompatible}, core: tt.core}
 			got := userEngramDecide(context.Background(), fake.host())
-			if want := []string{key + "= user value "}; !reflect.DeepEqual(got, want) {
-				t.Fatalf("forwarded %q, want exactly %q", got, want)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("selection forwarded %q, want %q", got, tt.want)
 			}
 			if fake.probes != 0 || len(fake.starts) != 0 || fake.headers != 0 {
 				t.Fatalf("an explicit selection must decide nothing: probes=%d starts=%v headers=%d", fake.probes, fake.starts, fake.headers)
 			}
 		})
 	}
-	// A user policy other than allow is the user's choice too: forwarded as given.
-	fake := &userEngramFakeHost{env: map[string]string{"ENGRAM_STARTUP_POLICY": "disabled", "ENGRAM_STARTUP_NOTICE": "mine"}, endpoints: []userEngramEndpoint{userEngramCompatible}, core: true}
-	got := userEngramDecide(context.Background(), fake.host())
-	if want := []string{"ENGRAM_STARTUP_POLICY=disabled", "ENGRAM_STARTUP_NOTICE=mine"}; !reflect.DeepEqual(got, want) || fake.probes != 0 {
-		t.Fatalf("user policy forwarded %q (probes %d), want %q", got, fake.probes, want)
-	}
 	// Blank selections select nothing.
-	fake = &userEngramFakeHost{env: map[string]string{"ENGRAM_URL": "  ", "ENGRAM_STARTUP_POLICY": "allow"}, endpoints: []userEngramEndpoint{userEngramCompatible}}
+	fake := &userEngramFakeHost{env: map[string]string{"ENGRAM_URL": "  ", "ENGRAM_STARTUP_POLICY": "allow"}, endpoints: []userEngramEndpoint{userEngramCompatible}}
 	if got := userEngramDecide(context.Background(), fake.host()); !reflect.DeepEqual(got, userEngramAllow) || fake.probes != 1 {
 		t.Fatalf("blank selection forwarded %q (probes %d), want the decided %q", got, fake.probes, userEngramAllow)
 	}
@@ -190,6 +205,9 @@ func TestUserEngramProbe(t *testing.T) {
 		}), userEngramIncompatible},
 		{"redirect to a ready server is not followed", serve(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, ready+"/compatibility", http.StatusFound)
+		}), userEngramIncompatible},
+		{"keys differ only in case", serve(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(strings.Replace(userEngramReadyBody, `"status"`, `"STATUS"`, 1)))
 		}), userEngramIncompatible},
 		{"oversized body", serve(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(userEngramReadyBody + strings.Repeat(" ", 32<<10)))

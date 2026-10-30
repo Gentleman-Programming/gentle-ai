@@ -54,6 +54,9 @@ const (
 	userEngramStartFailedNotice = "Engram memory disabled for this launch: Gentle Shell could not start the shared Engram server, or it did not report ready in time. Relaunch to retry; if another program holds 127.0.0.1:7437, stop it first. Gentle Shell remains usable without memory."
 )
 
+// userEngramProbeTimeout bounds one /compatibility request of a decision.
+const userEngramProbeTimeout = time.Second
+
 // userEngramAllow is the launch environment of a verified shared server.
 var userEngramAllow = []string{userEngramPolicyEnv + "=allow", "ENGRAM_URL=" + userEngramDefaultURL}
 
@@ -95,9 +98,9 @@ func userEngramDecide(ctx context.Context, host userEngramHost) []string {
 		}
 	}
 	if selected {
-		return userEngramForwarded(host.lookup)
+		return userEngramSelected(host)
 	}
-	switch host.probe(ctx, time.Second) {
+	switch host.probe(ctx, userEngramProbeTimeout) {
 	case userEngramCompatible:
 		return userEngramAllow
 	case userEngramRefused:
@@ -155,6 +158,36 @@ func userEngramSeparateLaunch(mode string, entries []string) []string {
 	return userEngramDisabled(userEngramNoDecisionNotice)
 }
 
+// userEngramSelected ports bundled Shell's rule for an explicit selection:
+// it is forwarded untouched and memory is disabled (a user's own non-allow
+// policy is kept as given). An explicit ENGRAM_BIN is never replaced; without
+// one, ENGRAM_BIN names the verified core when it revalidates (bundled names
+// its core or its guard, which Separate does not have), and otherwise the
+// disabled policy keeps the companion from running any engram, so PATH is
+// never the source.
+func userEngramSelected(host userEngramHost) []string {
+	var env []string
+	for _, key := range userEngramSelections {
+		if value, ok := host.lookup(key); ok && value != "" {
+			env = append(env, key+"="+value)
+		}
+	}
+	if bin, ok := host.lookup("ENGRAM_BIN"); !ok || strings.TrimSpace(bin) == "" {
+		if core, ok := host.core(); ok {
+			env = append(env, "ENGRAM_BIN="+core)
+		}
+	}
+	notice, _ := host.lookup(userEngramNoticeEnv)
+	if policy, ok := host.lookup(userEngramPolicyEnv); ok && policy != "allow" {
+		env = append(env, userEngramPolicyEnv+"="+policy)
+		if notice != "" {
+			env = append(env, userEngramNoticeEnv+"="+notice)
+		}
+		return env
+	}
+	return append(env, userEngramDisabled(strings.TrimSpace(userEngramRecoveryNotice+" "+notice))...)
+}
+
 // userEngramForwarded is the user's own Engram configuration, as given.
 func userEngramForwarded(lookup func(string) (string, bool)) []string {
 	var env []string
@@ -170,24 +203,16 @@ var userEngramHex32 = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 // userEngramReady is Shell's isReadyCompatibility: the exact contract a
 // startup-verified store reports on GET /compatibility.
-func userEngramReady(body []byte) bool {
-	var answer struct {
-		Status     string `json:"status"`
-		Reuse      *bool  `json:"active_reuse_authorized"`
-		Capability string `json:"capability"`
-		Revision   *int   `json:"revision"`
-		Source     string `json:"source"`
-		Offline    *bool  `json:"offline_automatic_opening_authorized"`
-		InstanceID string `json:"instance_id"`
-		RuntimeID  string `json:"runtime_id"`
-	}
-	// A mistyped field fails decoding, so it can only refuse.
-	if json.Unmarshal(body, &answer) != nil {
+func userEngramReady(raw []byte) bool {
+	// Exact keys, as Shell reads them: a map never matches case-insensitively.
+	var body map[string]any
+	if json.Unmarshal(raw, &body) != nil {
 		return false
 	}
-	return answer.Status == "ready" && answer.Reuse != nil && *answer.Reuse && answer.Capability == "startup-verified-store-v1" &&
-		answer.Revision != nil && *answer.Revision == 1 && answer.Source == "active" && (answer.Offline == nil || !*answer.Offline) &&
-		userEngramHex32.MatchString(answer.InstanceID) && userEngramHex32.MatchString(answer.RuntimeID)
+	text := func(key string) string { value, _ := body[key].(string); return value }
+	return text("status") == "ready" && body["active_reuse_authorized"] == true && text("capability") == "startup-verified-store-v1" &&
+		body["revision"] == float64(1) && text("source") == "active" && body["offline_automatic_opening_authorized"] != true &&
+		userEngramHex32.MatchString(text("instance_id")) && userEngramHex32.MatchString(text("runtime_id"))
 }
 
 // userEngramProbe is one bounded GET of base/compatibility on a direct

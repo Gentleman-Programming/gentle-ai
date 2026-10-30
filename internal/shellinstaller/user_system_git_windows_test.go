@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -138,9 +139,18 @@ func TestUserWindowsProgramFilesComesOnlyFromValidatedKnownFolder(t *testing.T) 
 // Git and ProgramFiles only ever add to the owned launch environment: every
 // existing entry stays byte-identical, the validated Git directory is
 // inserted just before System32, and ProgramFiles is the validated known
-// folder. Without both, the environment is exactly today's.
+// folder. Without both, the environment is exactly today's. The only other
+// additions are the Engram decision entries, which close the list.
 func TestUserWindowsEnvironmentAddsOnlyValidatedGitAndProgramFiles(t *testing.T) {
 	root := t.TempDir()
+	for _, key := range append(append([]string{}, userEngramSelections...), userEngramPolicyEnv, userEngramNoticeEnv) {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// No decision was forwarded: a Separate launch fails closed.
+	engram := userEngramDisabled(userEngramNoDecisionNotice)
 	t.Setenv("ProgramFiles", filepath.Join(t.TempDir(), "caller"))
 	t.Setenv(userWindowsSystemGitCandidateEnv, "")
 	userWindowsProgramFilesStub(t, "", errors.New("fixture known-folder failure"))
@@ -169,7 +179,7 @@ func TestUserWindowsEnvironmentAddsOnlyValidatedGitAndProgramFiles(t *testing.T)
 	if err != nil {
 		t.Fatalf("owned launch environment refused: %v", err)
 	}
-	if len(env) != len(baseline)+1 {
+	if len(env) != len(baseline)+1+len(engram) || !reflect.DeepEqual(env[len(baseline)+1:], engram) {
 		t.Fatalf("environment gained unexpected entries: %q", env)
 	}
 	for i, entry := range baseline {
@@ -185,7 +195,7 @@ func TestUserWindowsEnvironmentAddsOnlyValidatedGitAndProgramFiles(t *testing.T)
 	if path, _ := userWindowsEnvValue(env, "PATH"); path != strings.Join(want, string(os.PathListSeparator)) {
 		t.Fatalf("PATH = %q; want %q", path, strings.Join(want, string(os.PathListSeparator)))
 	}
-	if value, _ := userWindowsEnvValue(env, "ProgramFiles"); value != folder || env[len(env)-1] != "ProgramFiles="+folder {
+	if value, _ := userWindowsEnvValue(env, "ProgramFiles"); value != folder || env[len(baseline)] != "ProgramFiles="+folder {
 		t.Fatalf("ProgramFiles = %q; want %q", value, folder)
 	}
 

@@ -5,10 +5,15 @@ package shellinstaller
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestUserEngramWindowsWorkerEnvOnlyForLaunch(t *testing.T) {
@@ -114,5 +119,66 @@ func TestUserEngramWindowsHomeComesFromTheProfileFolder(t *testing.T) {
 	userWindowsProfileFolder = func() (string, error) { return folder, nil }
 	if home, ok := userEngramWindowsHome(); !ok || home != folder {
 		t.Fatalf("home = %q,%v want the profile folder %q", home, ok, folder)
+	}
+}
+
+// R2: Windows retries a loopback SYN answered by RST before reporting
+// WSAECONNREFUSED. With nothing listening, the production probe bound must
+// still classify the port as refused, or Shell would never start the server.
+func TestUserEngramWindowsProbeSeesClosedLoopbackAsRefused(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	began := time.Now()
+	got := userEngramProbe(context.Background(), "http://"+address, userEngramProbeTimeout)
+	t.Logf("closed loopback probe took %v", time.Since(began))
+	if got != userEngramRefused {
+		t.Fatalf("closed loopback probe = %v within %v, want refused", got, userEngramProbeTimeout)
+	}
+}
+
+// R1: a started shared server keeps running from <dest>\agent\bin. This
+// mirrors the reinstall/update step that renames <dest> to its backup
+// (user_install_windows.go os.Rename(req.Destination, backup)) while an image
+// below it runs, using a copy of the stock PING.EXE as the running image.
+func TestUserEngramWindowsRenameDestinationWithRunningAgentImage(t *testing.T) {
+	system, err := windows.GetSystemDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := os.ReadFile(filepath.Join(system, "PING.EXE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "shell")
+	bin := filepath.Join(dest, "agent", "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	running := filepath.Join(bin, "engram.exe")
+	if err := os.WriteFile(running, image, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(running, "-n", "30", "127.0.0.1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	time.Sleep(500 * time.Millisecond) // Let the loader map the image.
+	backup := dest + ".replaced-20261030T000000Z"
+	if err := os.Rename(dest, backup); err != nil {
+		t.Fatalf("renaming the installation while %s runs failed: %v", running, err)
+	}
+	// Restore the path so cleanup removes the tree after the kill.
+	if err := os.Rename(backup, dest); err != nil {
+		t.Logf("restore rename: %v", err)
 	}
 }

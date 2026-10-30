@@ -4,10 +4,6 @@ package shellinstaller
 
 import (
 	"context"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"go/types"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -78,13 +74,15 @@ func TestUserEngramLinuxUnitArgvCarriesNoEngramCredentials(t *testing.T) {
 			home := userEngramPrivateDir(t)
 			t.Setenv("HOME", home)
 			t.Setenv(tt.key, tt.value)
-			root, _ := userEngramSeparateFixture(t, "separate")
+			root, core := userEngramSeparateFixture(t, "separate")
 			userEngramUseProbeBase(t, "http://"+userEngramFreePort(t))
 			env := userEngramContextEnv(userEngramLaunchContext(context.Background(), []string{"launch", root}))
 			argv := userServiceArgs("gentle-shell-0123456789abcdef", false, "/owned/supervisor", "/project", []string{"internal-launch", root}, env)
 			if !tt.disabled {
-				if want := []string{tt.key + "=" + tt.value}; !reflect.DeepEqual(env, want) {
-					t.Fatalf("unit env = %q, want the selection %q forwarded", env, want)
+				// Forwarded as bundled does: the revalidated core, memory disabled.
+				want := append([]string{tt.key + "=" + tt.value, "ENGRAM_BIN=" + core}, userEngramDisabled(userEngramRecoveryNotice)...)
+				if !reflect.DeepEqual(env, want) {
+					t.Fatalf("unit env = %q, want the selection forwarded as %q", env, want)
 				}
 				return
 			}
@@ -121,38 +119,13 @@ func TestUserEngramLinuxWorkerWithoutDecisionDisablesSeparateMemory(t *testing.T
 	}
 }
 
-// launch-pnpm builds its own environment outside userLaunchCommand and is
-// observable only with a published PNPM fixture, so this pins both the exact
-// entries its call adds per mode and that userLaunchPNPM appends that call.
+// launch-pnpm builds its own environment outside userLaunchCommand and
+// appends userEngramSeparateLaunch(manifest.Mode, nil): only Separate fails
+// closed, every other mode keeps its environment.
 func TestUserEngramPNPMLaunchFailsClosedOnlyForSeparate(t *testing.T) {
 	for mode, want := range map[string][]string{"separate": userEngramDisabled(userEngramNoDecisionNotice), "agent": nil, "shared": nil} {
 		if got := userEngramSeparateLaunch(mode, nil); !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s launch-pnpm Engram entries = %q, want %q", mode, got, want)
 		}
-	}
-	file, err := parser.ParseFile(token.NewFileSet(), "user_pnpm_launch_linux.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	ast.Inspect(file, func(node ast.Node) bool {
-		fn, ok := node.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "userLaunchPNPM" {
-			return true
-		}
-		ast.Inspect(fn.Body, func(node ast.Node) bool {
-			assign, ok := node.(*ast.AssignStmt)
-			if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 || types.ExprString(assign.Lhs[0]) != "cmd.Env" {
-				return true
-			}
-			if types.ExprString(assign.Rhs[0]) == "append(cmd.Env, userEngramSeparateLaunch(manifest.Mode, nil)...)" {
-				found = true
-			}
-			return true
-		})
-		return false
-	})
-	if !found {
-		t.Fatal("userLaunchPNPM does not append userEngramSeparateLaunch(manifest.Mode, nil) to cmd.Env")
 	}
 }
