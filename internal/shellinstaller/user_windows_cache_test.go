@@ -3,9 +3,13 @@
 package shellinstaller
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -29,6 +33,12 @@ func TestUserWindowsCacheOverlaps(t *testing.T) {
 		{name: "sibling with a shared prefix", destination: filepath.Join(root, "gentle-shell2"), want: false},
 		{name: "unrelated destination", destination: filepath.Join(root, "Programs", "gentle-shell"), want: false},
 		{name: "empty destination is not an overlap", destination: "", want: false},
+		// Windows paths are case-insensitive, so a differently cased destination
+		// names the same directory: the refusal must hold on the leaf component
+		// and on the drive letter alike, or the cache recreates the destination
+		// whenever the operator's casing differs from the resolved cache path.
+		{name: "destination differs only by casing", destination: `C:\Users\fixture\AppData\Local\GENTLE-SHELL`, want: true},
+		{name: "destination differs only in drive-letter casing", destination: `c:\Users\fixture\AppData\local\gentle-shell`, want: true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -83,5 +93,68 @@ func TestUserWindowsCacheKeepsNonOverlappingDestination(t *testing.T) {
 	info, err := os.Lstat(cache)
 	if err != nil || !info.IsDir() {
 		t.Fatalf("the ordinary cache directory was not created: %v", err)
+	}
+}
+
+// userWindowsCodeGraphSourceFixture mirrors the anonymous element type of
+// userWindowsCodeGraphSources so a test can substitute a local source without a
+// network or a real pinned archive.
+type userWindowsCodeGraphSourceFixture = struct {
+	name, url, sri, sha, archive string
+	size, unpacked               int64
+	entries                      int
+	skipNode                     bool
+}
+
+// TestUserWindowsCodeGraphAcquireForwardsDestinationToTheCache pins the
+// CodeGraph call site of the download cache. The wrapper introduced for issue
+// #5847 decides the reuse path and hands everything else to provisioning; if it
+// drops req.Destination there, a CodeGraph-enabled fresh install into
+// %LOCALAPPDATA%\gentle-shell recreates the download cache, the installer
+// creates its own destination and publication aborts with "Windows selection
+// changed before publication". The substituted source fails acquisition on
+// purpose: the cache is resolved before the download, so the cache path is
+// observable without the network.
+func TestUserWindowsCodeGraphAcquireForwardsDestinationToTheCache(t *testing.T) {
+	parent := t.TempDir()
+	if err := userWindowsPrivate(parent); err != nil {
+		t.Fatal(err)
+	}
+	local := t.TempDir()
+	t.Setenv("LOCALAPPDATA", local)
+	cache := filepath.Join(local, "gentle-shell", "cache", "downloads")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := w.Write([]byte("not the pinned archive")); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	original := userWindowsCodeGraphSources
+	userWindowsCodeGraphSources = []userWindowsCodeGraphSourceFixture{{
+		name: "fixture", url: server.URL + "/codegraph.tgz",
+		sha: userWindowsSHA([]byte("pinned")), archive: "codegraph.fixture.tgz",
+		size: int64(len("pinned")), skipNode: true,
+	}}
+	t.Cleanup(func() { userWindowsCodeGraphSources = original })
+
+	stage := filepath.Join(parent, "stage")
+	if err := os.MkdirAll(stage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := UserInstallRequest{Experience: &UserExperience{CodeGraph: "on"}}
+	// The destination is the cache path itself: the overlap the wrapper must
+	// forward, exactly as a fresh install into %LOCALAPPDATA%\gentle-shell.
+	req.Destination = cache
+	if err := userWindowsCodeGraphAcquire(context.Background(), stage, req, userInstallScope{}); err == nil {
+		t.Fatal("the substituted CodeGraph source did not fail acquisition")
+	} else if !strings.Contains(err.Error(), "Windows supplier digest/size differs") {
+		// Pinning the reason keeps the test honest: any error would also accept a
+		// refusal that fired before the cache was consulted, which is the very
+		// path the forwarding assertion above needs to have exercised.
+		t.Fatalf("acquisition failed before the download: %v", err)
+	}
+	if _, err := os.Lstat(cache); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("CodeGraph acquire created the download cache under an overlapping destination: %v", err)
 	}
 }
