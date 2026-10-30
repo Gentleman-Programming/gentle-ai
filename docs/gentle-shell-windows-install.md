@@ -34,6 +34,19 @@ already contains this unreleased installer.
 | Processes | Suspended child bound before resume; Job Object CPU/memory/process readback, inherited console, bounded cleanup |
 | Preservation | Isolated HOME/agent/config, caller CWD inherited; console modes saved/restored; personal PATH unchanged |
 
+## Persistent memory (Engram)
+
+Separate provisions Engram from the gentle-pi it installs, never from a
+second version list. The `gentle-engram` companion joins the verified npm
+composition at that gentle-pi's exact pin and is declared in the private
+agent's `settings.json` exactly as bundled Gentle Shell declares it
+(`npm:gentle-engram@<version>`). The SHA-256-pinned Engram core is published
+to `AGENT\bin\engram.exe`. Memory is shared like the bundled install: a
+launch reuses a verified Engram server on `127.0.0.1:7437`, or starts one on
+your real `~/.engram` store, so every agent sees the same memory. If a piece
+is missing or cannot be verified, the install still succeeds and Shell runs
+without memory.
+
 ## Launch custody: artefacts versus runtime state
 
 Every launch re-walks the **installed artefacts** with the complete per-file

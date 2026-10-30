@@ -44,20 +44,22 @@ const cases = [
   ['changed-packages', { packages: ['R:\\Foreign Package'] }, 'reject'],
   ['changed-npm-command', { npmCommand: ['R:\\Foreign Executable'] }, 'reject'],
   ['extension-injection', { extensions: ['-builtin:codemode', 'R:\\Foreign'] }, 'reject'],
+  ['locked-companion', { packages: [...owned().packages, 'npm:gentle-engram@0.4.2'] }, 'accept', 'npm:gentle-engram@0.4.2'],
+  ['foreign-companion-version', { packages: [...owned().packages, 'npm:gentle-engram@9.9.9'] }, 'reject', 'npm:gentle-engram@0.4.2'],
 ];
 // Executable, resource, redirection, trust and telemetry keys stay refused.
 for (const key of ['skills', 'prompts', 'themes', 'shellPath', 'shellCommandPrefix', 'externalEditor', 'sessionDir', 'httpProxy', 'defaultProjectTrust', 'enableAnalytics', 'customProviders', '__proto__', 'constructor']) {
   cases.push([`injected-${key}`, { [key]: 'R:\\Foreign Resource' }, 'reject']);
 }
 const failures = [];
-for (const [name, extra, want] of cases) {
+for (const [name, extra, want, companion = null] of cases) {
   // Computed keys (including __proto__) are own data properties, so JSON keeps them.
   const bytes = JSON.stringify({ ...owned(), ...extra });
   assert.ok(Object.keys(extra).every(key => bytes.includes(JSON.stringify(key))), `${name} fixture key serialized`);
   let observed = 'accept';
   try {
     vm.runInNewContext(body, {
-      root, finalRoot: root, agent, path: win, action: 'verify',
+      root, finalRoot: root, agent, path: win, action: 'verify', declaredCompanion: null, lockedCompanion: companion,
       read(file) {
         assert.equal(file, win.join(agent, 'settings.json'), 'only virtual settings reads permitted');
         return Buffer.from(bytes);

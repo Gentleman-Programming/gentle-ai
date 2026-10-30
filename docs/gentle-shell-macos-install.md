@@ -58,6 +58,10 @@ Separate publishes `~/.local/bin/gentle-shell` and `~/.local/bin/gs`. When `~/.l
 
 "On my existing Pi" reuses your Pi agent (`~/.pi/agent`, `0755` as Pi creates it) and follows the same agent checks and rollback as on Linux. See [On my existing Pi](gentle-shell-linux-install.md#on-my-existing-pi-agent-checks-and-rollback). Pi's own `bin/fd` and `bin/rg` are set aside inside the installation, replaced by the pinned builds below, and restored by uninstall. A failure before publication restores them with the rest of the agent. Uninstall restores `settings.json` and `mcp.json` with their original bytes and modes, and removes an `mcp.json` that did not exist before. Every refusal happens before any write, and a failure after the first write restores the agent exactly.
 
+## Persistent memory (Engram)
+
+Separate provisions Engram from the gentle-pi it installs, never from a second version list. The `gentle-engram` companion joins the verified npm composition at that gentle-pi's exact pin and is declared in the private agent's `settings.json` exactly as bundled Gentle Shell declares it (`npm:gentle-engram@<version>`). The SHA-256-pinned Engram core is published to `AGENT/bin/engram` (mode `0700`). Memory is shared like the bundled install: a launch reuses a verified Engram server on `127.0.0.1:7437`, or starts one on your real `~/.engram` store, so every agent sees the same memory. If a piece is missing or cannot be verified, the install still succeeds and Shell runs without memory.
+
 ## Undo Shared changes
 
 Use the **actual installed TARGET**, never a prefix or agent:

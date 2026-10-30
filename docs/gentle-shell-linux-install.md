@@ -55,6 +55,10 @@ The installer TUI runs the portable direct worker, so it first probes the delega
 
 On the Stable SDK channel, gentle-pi is installed at the newest release of the reviewed supplier list, and every update check compares the installed version against that list live — a newly reviewed release needs no gentle-ai rebuild. See [the Stable trust boundary](gentle-shell-stable-trust-boundary.md) for which authority admits supplier code and what an attacker would need.
 
+## Persistent memory (Engram)
+
+Separate provisions Engram from the gentle-pi it installs, never from a second version list. The `gentle-engram` companion joins the verified npm composition at that gentle-pi's exact pin and is declared in the private agent's `settings.json` exactly as bundled Gentle Shell declares it (`npm:gentle-engram@<version>`). The SHA-256-pinned Engram core is published to `AGENT/bin/engram` (mode `0700`). Memory is shared like the bundled install: a launch reuses a verified Engram server on `127.0.0.1:7437`, or starts one on your real `~/.engram` store, so every agent sees the same memory. If a piece is missing or cannot be verified, the install still succeeds and Shell runs without memory.
+
 ## Shared settings: preview before confirming
 
 Inspect prints the selected agent's `settings.json` path and **only** its `packages` and `npmCommand` before/after values, including actual physical paths:

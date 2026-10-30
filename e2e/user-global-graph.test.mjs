@@ -39,7 +39,7 @@ async function compareGraph(observed, expected, lock, retainedPaths) {
 // linux/x64/glibc, and the observed rows including each lock's retained
 // nonapplicable optional platform binaries.
 const witnesses = {
-  modern: { keys: 202, expected: 184, actual: 202, extras: ['node_modules/@yuuang/', 'node_modules/@ff-labs/'],
+  modern: { keys: 203, expected: 185, actual: 203, extras: ['node_modules/@yuuang/', 'node_modules/@ff-labs/'],
     retained: 'node_modules/@yuuang/ffi-rs-darwin-arm64', applicable: 'node_modules/@yuuang/ffi-rs-linux-x64-gnu' },
   prior: { keys: 315, expected: 272, actual: 297, extras: ['/node_modules/@esbuild/'],
     retained: 'node_modules/@earendil-works/pi-coding-agent/node_modules/@esbuild/darwin-arm64',
