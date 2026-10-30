@@ -2,7 +2,8 @@ name: Close Stale Issues
 
 # Closes open issues with no activity for more than 21 days (3 weeks),
 # together with the open pull requests linked to them (closing keywords
-# such as "Closes #N" or the Development sidebar).
+# such as "Closes #N" or the Development sidebar). Approved and high or
+# critical priority issues are maintainer decisions, so they never go stale.
 
 on:
   schedule:
@@ -32,7 +33,7 @@ jobs:
         env:
           STALE_DAYS: '21'
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
-          EXEMPT_LABELS: ''
+          EXEMPT_LABELS: 'status:approved,priority:high,priority:critical'
         with:
           script: |
             const staleDays = Number(process.env.STALE_DAYS);
