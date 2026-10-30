@@ -32,6 +32,10 @@ func userMainDescriptor(commit, archiveSHA string) (userSnapshotArtifact, error)
 	return userSnapshotArtifact{URL: "https://codeload.github.com/Gentleman-Programming/gentle-shell/zip/" + commit, SHA: archiveSHA, Archive: "main.zip", Prefix: "gentle-shell-" + commit, Bound: 32 << 20}, nil
 }
 
+// userMainSnapshotFunc is the update check's Main snapshot authority; tests
+// stub it so the detection never touches the network.
+var userMainSnapshotFunc = userMainSnapshot
+
 func userSnapshotLowerHex(value string, length int) bool {
 	_, err := hex.DecodeString(value)
 	return len(value) == length && err == nil && value == strings.ToLower(value)

@@ -107,6 +107,59 @@ func TestCheckUserShellUpdateAllPinsCurrent(t *testing.T) {
 	}
 }
 
+// A Main preview install runs the same stock supervisor: the check reports it
+// when this build's supervisor differs from the recorded one, and stays quiet
+// when it matches. The Main snapshot authority is stubbed, so the detection
+// never touches the network.
+func TestCheckUserShellUpdateMainPreviewReportsSupervisor(t *testing.T) {
+	previous := userMainSnapshotFunc
+	userMainSnapshotFunc = func(context.Context) (userSnapshotArtifact, []byte, error) {
+		return userSnapshotArtifact{URL: "x", SHA: "main-sha", Archive: "main.zip"}, nil, nil
+	}
+	t.Cleanup(func() { userMainSnapshotFunc = previous })
+	ctx := context.Background()
+	self, err := userExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := userToolsPinSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := userUnixTempRoot(t)
+	writeInstallFixture(t, target, userManifest{
+		Schema: userSchema, Destination: target,
+		Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"),
+		Mode: "separate", SupervisorSHA: supervisor, NodeSHA: privateNativeNodeSHA,
+		ToolsSHA: tools, MainSDK: &userSnapshotArtifact{URL: "x", SHA: "main-sha"},
+	})
+	update, err := CheckUserShellUpdate(ctx, UserShellInstall{Target: target, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if update.Available || len(update.Scope) != 0 {
+		t.Fatalf("expected an up-to-date Main preview tree, got: %+v", update)
+	}
+	outdated := userUnixTempRoot(t)
+	writeInstallFixture(t, outdated, userManifest{
+		Schema: userSchema, Destination: outdated,
+		Prefix: filepath.Join(outdated, "prefix"), Agent: filepath.Join(outdated, "agent"),
+		Mode: "separate", SupervisorSHA: strings.Repeat("a", 64), NodeSHA: privateNativeNodeSHA,
+		ToolsSHA: tools, MainSDK: &userSnapshotArtifact{URL: "x", SHA: "main-sha"},
+	})
+	update, err = CheckUserShellUpdate(ctx, UserShellInstall{Target: outdated, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !update.Available || !slices.Equal(update.Scope, []string{UserComponentSupervisor}) {
+		t.Fatalf("expected the supervisor reported on a Main preview tree, got: %+v", update)
+	}
+}
+
 // S19 detection: the Stable sdk is outdated when the recorded gentle-pi is
 // strictly older than the newest listed release — including a version that
 // matches the frozen lock but not the selected list, which an existing build
