@@ -150,6 +150,9 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
         COMMAND_FAILURE = {**evidence, 'nulBytes': raw.count(b'\0'),
                            'stdoutBytes': len(out), 'stdoutSHA256': hashlib.sha256(out).hexdigest(),
                            'stderrBytes': len(error), 'stderrSHA256': hashlib.sha256(error).hexdigest()}
+        if b'\0' not in raw:
+            COMMAND_FAILURE.update(stdoutTailBase64=base64.b64encode(out[-600:]).decode('ascii'),
+                                   stderrTailBase64=base64.b64encode(error[-600:]).decode('ascii'))
         raise RuntimeError('whole raw command output withheld: byte/NUL bound')
     text = raw.decode('utf-8', 'strict')
     if (child.returncode == 0) != good:
@@ -498,6 +501,34 @@ def project_events(fd):
     return {'partial': True, 'queueBytes': len(data), 'observedUnique': len(events), 'firstEight': sorted(events)[:8]}
 
 
+def _pid_process(pid, exe, project):
+    """True when a live process runs exactly this executable from this cwd."""
+    try:
+        return os.readlink(f'/proc/{pid}/exe') == str(exe) and os.readlink(f'/proc/{pid}/cwd') == str(project)
+    except (OSError, IOError):
+        return False
+
+
+def terminal_reply(chunk):
+    """Reply to the installed Pi's terminal capability queries the way the
+    qualifying terminal must. Unanswered queries are not evidence: they leak
+    into the capture and stall the real startup. Returns b'' when nothing
+    queried. Every token here is <= 8 bytes so a 8-byte per-chunk carry in the
+    PTY loop reassembles queries that straddle reads."""
+    replies = b''
+    if b']11;?' in chunk:
+        replies += b'\x1b]11;rgb:0000/0000/0000\x1b\\'
+    if b']10;?' in chunk:
+        replies += b'\x1b]10;rgb:ffff/ffff/ffff\x1b\\'
+    if b'\x1b[c' in chunk or b'\x1b[0c' in chunk:
+        replies += b'\x1b[?62;1;2;6;9;15;22c'
+    if b'\x1b[6n' in chunk:
+        replies += b'\x1b[1;1R'
+    if b'\x1b[?u' in chunk:
+        replies += b'\x1b[?0u'
+    return replies
+
+
 def pty_status(binding, project, command=None, extra=None, installer=None, cancel_installer=False, opening_only=False):
     project_before_entries = []
     project_before, requests_before = physical_inventory(project, project_before_entries), len(REQUESTS)
@@ -512,6 +543,13 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
 
     env = {'PATH': '/usr/local/bin:/usr/bin:/bin:/work/personal/prefix/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'), 'TERM': 'xterm-256color'}
     env.update(extra or {})
+    if installer is None and extra is None:
+        # The installed bindings delegate their launch through the real user
+        # manager (userBusEnvironment refuses without the session runtime
+        # directory), so the PTY caller carries the delegated-manager session
+        # environment exactly like the acquisition and manager calls.
+        env['XDG_RUNTIME_DIR'] = '/run/user/%d' % FIXTURE_UID
+        env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=/run/user/%d/bus' % FIXTURE_UID
     selected = command or [str(binding)]
     require(all("'" not in value and '\n' not in value for value in selected), 'unsafe PTY command selection')
     invocation = ' '.join("'" + value + "'" for value in selected)
@@ -528,6 +566,8 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
         raise
     os.close(slave)
     raw = bytearray()
+    carry = b''
+    truncated = 0
     deadline = time.monotonic() + min(45, remaining())
     sent = False
     typed = False
@@ -535,6 +575,13 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     confirmed = False
     stopped = False
     observed_cwd = ''
+    trust_answered = False
+    installer_seen = False
+    extension_failure = False
+    no_models_seen = False
+    prompt_seen = False
+    stop_stage = 0
+    stop_at = 0.0
     try:
         while time.monotonic() < deadline:
             ready, _, _ = select.select([master], [], [], 0.1)
@@ -546,21 +593,46 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 if not part:
                     break
                 raw.extend(part)
+                # Incremental markers over every observed byte, so per-chunk
+                # truncation can never drop an assertion input.
+                installer_seen = installer_seen or b'Gentle Shell Linux user installer' in part
+                extension_failure = extension_failure or b'Failed to load extension' in part
+                no_models_seen = no_models_seen or b'No models available.' in part
+                prompt_seen = prompt_seen or b'type, or / for commands' in part
+                # Answer the installed Pi's terminal capability queries; a real
+                # terminal answers, and unanswered queries stall the startup.
+                scan = carry + part
+                carry = scan[-8:]
+                reply = terminal_reply(scan)
+                if reply:
+                    os.write(master, reply)
+                # Per-chunk truncation keeps the whole capture bound: the
+                # retained window stays bounded, every discarded byte is
+                # counted and disclosed, and no assertion input is lost.
+                if len(raw) > 65536:
+                    discarded = len(raw) - 65536
+                    del raw[:discarded]
+                    truncated += discarded
                 require(len(raw) <= 65536, 'whole PTY capture bound')
-                # Credentialless Pi emits this fallback after installing its editor submit handler.
-                input_ready = b'No models available.' in raw if installer is None else b'Gentle Shell Linux user installer' in raw
+                input_ready = installer_seen if installer is not None else (no_models_seen or prompt_seen)
+                if not trust_answered and b'Trust project folder' in raw:
+                    time.sleep(0.2)
+                    require(os.write(master, b'\r') == 1, 'incomplete PTY trust answer')
+                    trust_answered = True
                 if not typed and input_ready and not opening_only:
                     if installer is not None:
                         os.write(master, b'\x1b' if cancel_installer else (str(installer) + '\r').encode())
                         confirmed = cancel_installer
                         sent = True
+                        typed = True
                     else:
-                        command_text = b'/gentle:status'
+                        # Pi 1.3.0's editor runs without echo: type and submit
+                        # in one write, because the typed command echo never
+                        # comes back and waiting for it deadlocks the driver.
+                        command_text = b'/gentle:status\r'
                         require(os.write(master, command_text) == len(command_text), 'incomplete PTY command typing')
-                    typed = True
-                if installer is None and typed and not sent and b'/gentle:status' in raw:
-                    require(os.write(master, b'\r') == 1, 'incomplete PTY command submission')
-                    sent = True
+                        typed = True
+                        sent = True
                 if installer is not None and not confirmed and b'Confirm this physical selection' in raw:
                     os.write(master, b'y')
                     confirmed = True
@@ -569,11 +641,25 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     observed_cwd = os.readlink(f'/proc/{foreground}/cwd')
                     require(observed_cwd == str(project), 'actual foreground caller CWD differs')
                     if opening_only:
-                        require(os.readlink(f'/proc/{foreground}/exe') == str(binding.parent.parent / 'runtime/node/bin/node'), 'actual foreground private Node differs')
-                        require(b'Failed to load extension' not in raw, 'Gentle startup extension failure')
-                    stop_key = b'\x04' if opening_only else b'\x03\x03'
-                    require(os.write(master, stop_key) == len(stop_key), 'incomplete PTY exit input')
+                        # The delegated launch keeps the installation's own
+                        # supervisor as the foreground group leader and runs
+                        # the private Node inside the user unit, so custody and
+                        # the live private-Node project process are both
+                        # asserted instead of one direct-child artifact.
+                        require(os.readlink(f'/proc/{foreground}/exe') == str(binding.parent.parent / 'supervisor'), 'actual foreground launch custody differs')
+                        require(any(_pid_process(pid, binding.parent.parent / 'runtime/node/bin/node', project) for pid in os.listdir('/proc') if pid.isdigit()), 'actual foreground private Node differs')
+                        require(not extension_failure, 'Gentle startup extension failure')
                     stopped = True
+                    stop_stage = 1
+                    stop_at = time.monotonic()
+                if stopped and stop_stage in (1, 2, 3) and time.monotonic() - stop_at >= 0.5:
+                    # Pi 1.3.0 clears the line on the first interrupt and exits
+                    # on the following ctrl+c/ctrl+d: the staged sequence its
+                    # own footer documents, not a single dead keystroke.
+                    key = {1: b'\x03', 2: b'\x03', 3: b'\x04'}[stop_stage]
+                    require(os.write(master, key) == len(key), 'incomplete PTY exit input')
+                    stop_stage += 1
+                    stop_at = time.monotonic()
                 if b'GUEST-STATUS:' in raw:
                     require(b'GUEST-STATUS:0' in raw, 'interactive child failed; evidence retained')
                     require(os.tcgetpgrp(master) == child.pid, 'real caller terminal foreground not restored')
@@ -583,7 +669,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
             require(expected in raw, 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')
             if opening_only:
                 require(stopped and b'GUEST-STATUS:0' in raw, 'Gentle opening did not settle successfully')
-            require(b'Gentle Shell Linux user installer' not in raw, 'ordinary launch opened installer')
+            require(not installer_seen, 'ordinary launch opened installer')
         else:
             require(confirmed and b'GUEST-STATUS:0' in raw, 'installer TUI did not settle successfully')
             REPORT['installerCancel' if cancel_installer else 'installerTUI'] = 'actual PTY idle cancellation' if cancel_installer else 'actual PTY physical review, typed confirmation and settled idempotent install'
@@ -620,7 +706,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                                                     'wholeUnique': observed if len(data) <= 1024 else 'withheld'}
             require(origins <= {'pi.dev'}, 'ordinary launch requested installer/package artifacts')
             REPORT['ordinaryStartup'] = 'blank caller project preserved; fixture-origin installer/package requests absent (not whole-network attestation)'
-        REPORT.setdefault('pty', []).append({'binding': binding.name, 'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(), 'nulBytes': raw.count(0), 'GentleRegistered': installer is None and not opening_only, 'GentleUIOpened': opening_only, 'foregroundCWD': observed_cwd, 'callerForegroundRestored': True})
+        REPORT.setdefault('pty', []).append({'binding': binding.name, 'rawBytes': len(raw), 'capturedBytes': len(raw) + truncated, 'truncatedBytes': truncated, 'rawSHA256': hashlib.sha256(bytes(raw)).hexdigest(), 'nulBytes': raw.count(0), 'GentleRegistered': installer is None and not opening_only, 'GentleUIOpened': opening_only, 'foregroundCWD': observed_cwd, 'callerForegroundRestored': True})
     except Exception:
         if installer is None and command is None:
             snapshot = bytes(raw)
@@ -660,7 +746,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 # it is neither a complete stream nor a startup/registration proof.
                 'tailBytes': min(len(snapshot), 1024),
                 'tailBase64': base64.b64encode(snapshot[-1024:]).decode('ascii'),
-                'bytes': len(snapshot), 'sha256': hashlib.sha256(snapshot).hexdigest(),
+                'bytes': len(snapshot), 'truncatedBytes': truncated, 'sha256': hashlib.sha256(snapshot).hexdigest(),
                 'nulBytes': snapshot.count(0), 'strictUTF8': valid_utf8,
                 'typingSent': typed, 'commandSent': sent, 'registrationObserved': b'el Gentleman package is active.' in snapshot,
                 'extensionLoadError': b'Failed to load extension' in snapshot,
