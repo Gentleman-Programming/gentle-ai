@@ -169,13 +169,8 @@ func userWindowsEnvironment(root string) ([]string, error) {
 		return append(env, "PATH="+filepath.Join(system, "System32")), nil
 	}
 	goBin := userWindowsSystemGoBin(root) // Best-effort: doubt keeps the pinned runtime Go entry.
-	path := []string{filepath.Join(root, "runtime/node"), goBin, filepath.Join(root, "runtime/codegraph/bin")}
-	if gitBin, ok := userWindowsSystemGitBin(); ok { // Best-effort: doubt omits Git.
-		path = append(path, gitBin)
-	}
-	path = append(path, filepath.Join(system, "System32"))
 	prefix, agent := filepath.Join(root, "prefix"), filepath.Join(root, "agent")
-	env = append(env,
+	return append(env,
 		"HOME="+filepath.Join(root, "home"), "USERPROFILE="+filepath.Join(root, "home"),
 		"APPDATA="+filepath.Join(root, "config"), "LOCALAPPDATA="+filepath.Join(root, "state"),
 		"TEMP="+filepath.Join(root, "tmp"), "TMP="+filepath.Join(root, "tmp"),
@@ -185,15 +180,10 @@ func userWindowsEnvironment(root string) ([]string, error) {
 		// Go's own defaults below the private HOME/LOCALAPPDATA, made explicit
 		// because launch verification classifies them as mutable runtime state.
 		"GOPATH="+filepath.Join(root, "home/go"), "GOMODCACHE="+filepath.Join(root, "home/go/pkg/mod"), "GOCACHE="+filepath.Join(root, "state/go-build"),
-		"PATH="+strings.Join(path, string(os.PathListSeparator)),
+		"PATH="+strings.Join([]string{filepath.Join(root, "runtime/node"), goBin, filepath.Join(root, "runtime/codegraph/bin"), filepath.Join(system, "System32")}, string(os.PathListSeparator)),
 		"NPM_CONFIG_PREFIX="+prefix, "NPM_CONFIG_IGNORE_SCRIPTS=true", "NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
 		"NPM_CONFIG_USERCONFIG="+filepath.Join(root, "config/user.npmrc"), "NPM_CONFIG_GLOBALCONFIG="+filepath.Join(root, "config/global.npmrc"),
-		"NPM_CONFIG_CACHE="+filepath.Join(root, "runtime/cache"), "NODE_USE_SYSTEM_CA=1")
-	// Derived from the system known folder, never the caller environment.
-	if programFiles, ok := userWindowsProgramFiles(); ok {
-		env = append(env, "ProgramFiles="+programFiles)
-	}
-	return env, nil
+		"NPM_CONFIG_CACHE="+filepath.Join(root, "runtime/cache"), "NODE_USE_SYSTEM_CA=1"), nil
 }
 
 // userWindowsExecutable is the running installer image in its long form.

@@ -157,9 +157,17 @@ func TestUserWindowsEnvironmentAddsOnlyValidatedGitAndProgramFiles(t *testing.T)
 	folder := t.TempDir()
 	t.Setenv(userWindowsSystemGitCandidateEnv, gitExe)
 	userWindowsProgramFilesStub(t, folder, nil)
-	env, err := userWindowsEnvironment(root)
+	// Provision (install, overlay, verify) keeps today's environment exactly.
+	provision, err := userWindowsEnvironment(root)
 	if err != nil {
-		t.Fatalf("owned environment refused: %v", err)
+		t.Fatalf("provision environment refused: %v", err)
+	}
+	if strings.Join(provision, "\n") != strings.Join(baseline, "\n") {
+		t.Fatalf("provision environment changed: %q", provision)
+	}
+	env, err := userWindowsLaunchEnvironment(root)
+	if err != nil {
+		t.Fatalf("owned launch environment refused: %v", err)
 	}
 	if len(env) != len(baseline)+1 {
 		t.Fatalf("environment gained unexpected entries: %q", env)

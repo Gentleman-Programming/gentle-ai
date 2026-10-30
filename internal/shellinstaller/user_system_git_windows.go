@@ -58,6 +58,35 @@ func userWindowsSystemGitBin() (string, bool) {
 	return filepath.Dir(candidate), true
 }
 
+// userWindowsLaunchEnvironment is the owned launch environment: the provision
+// environment plus the revalidated Git directory (just before System32) and
+// the validated ProgramFiles. Provision (install, overlay, verify) keeps
+// userWindowsEnvironment exactly as it was.
+func userWindowsLaunchEnvironment(root string) ([]string, error) {
+	env, err := userWindowsEnvironment(root)
+	if err != nil {
+		return nil, err
+	}
+	if gitBin, ok := userWindowsSystemGitBin(); ok {
+		for i, entry := range env {
+			path, found := strings.CutPrefix(entry, "PATH=")
+			if !found {
+				continue
+			}
+			entries := strings.Split(path, string(os.PathListSeparator))
+			withGit := make([]string, 0, len(entries)+1)
+			withGit = append(withGit, entries[:len(entries)-1]...)
+			withGit = append(withGit, gitBin, entries[len(entries)-1])
+			env[i] = "PATH=" + strings.Join(withGit, string(os.PathListSeparator))
+			break
+		}
+	}
+	if programFiles, ok := userWindowsProgramFiles(); ok {
+		env = append(env, "ProgramFiles="+programFiles)
+	}
+	return env, nil
+}
+
 // userWindowsProgramFilesFolder resolves the system Program Files folder
 // from the token, never from the caller environment. It is a seam so focused
 // tests never depend on the runner's real folder.

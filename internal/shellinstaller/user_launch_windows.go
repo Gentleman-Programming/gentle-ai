@@ -195,7 +195,7 @@ func userWindowsLaunch(ctx context.Context, root, product string, args []string,
 	if cause != nil {
 		return cause
 	}
-	env, err := userWindowsEnvironment(root)
+	env, err := userWindowsLaunchEnvironment(root)
 	if err != nil {
 		return err
 	}
