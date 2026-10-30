@@ -96,20 +96,20 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 		}
 		// The manifest's recorded gentle-pi version is the S14 detection input:
 		// a manifest without the field is a pre-feature install reported
-		// outdated once, and a recorded version must not be older than the
-		// version this build's stable install produces. Until the live listed
-		// release replaces the frozen lock (T4), that target is the embedded
-		// modern lock's version; a strictly newer recorded version — e.g.
-		// after a fallback to an older embedded list — never offers a
-		// downgrade (S17(c)), so a fresh install can never report an endless
-		// "update available" loop for the version it just installed. PNPM
-		// route manifests keep their current behaviour.
+		// outdated once. S19 detection: the Stable update targets the newest
+		// listed release of the selected reviewed list — the exact version the
+		// generated lock installs — like Windows. A recorded version is
+		// outdated only when strictly older (or unrecorded); a newer recorded
+		// version — e.g. after a fallback to an older embedded list — never
+		// offers a downgrade (S17(c)), so a fresh install can never report an
+		// endless "update available" loop for the version it just installed.
+		// PNPM route manifests keep their current behaviour.
 		if manifest.PNPM == nil {
-			version, err := userFrozenLockGentlePiVersion()
+			list, _, err := userSelectedReviewedListFunc(ctx)
 			if err != nil {
 				return update, err
 			}
-			if userReviewedVersionOlder(manifest.SDKVersion, version) {
+			if userReviewedVersionOlder(manifest.SDKVersion, list.newestReviewedRelease()) {
 				changed[UserComponentSDK] = true
 			}
 		}
