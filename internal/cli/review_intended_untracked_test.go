@@ -247,6 +247,9 @@ func TestIntendedUntrackedSelectionSubmissionKeepsBaseRefTarget(t *testing.T) {
 }
 
 func TestIntendedUntrackedSelectionSubmissionRejectsForeignSelector(t *testing.T) {
+	// The descriptor names the pi runtime, which is eligible only through the
+	// host relay contract; pin it so the test does not depend on the caller's env.
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	tree := strings.Repeat("a", 40)
 	for _, tt := range []struct {
 		name     string
