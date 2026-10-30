@@ -481,6 +481,10 @@ def qualify(context):
     shared_agent = os.path.join(context.work, 'shared-agent')
     conflict_agent = os.path.join(context.work, 'conflict-agent')
     shutil.copytree(prefix, shared_prefix, symlinks=True)
+    # Only Separate carries the Engram companion; a stock shared prefix never has it.
+    shutil.rmtree(os.path.join(shared_prefix, 'lib/node_modules/gentle-engram'), ignore_errors=True)
+    if os.path.lexists(os.path.join(shared_prefix, 'bin/pi-engram')):
+        os.unlink(os.path.join(shared_prefix, 'bin/pi-engram'))
     os.chmod(shared_prefix, 0o700)
     for directory in (shared_agent, conflict_agent, os.path.join(conflict_agent, 'bin')):
         os.mkdir(directory, 0o700)

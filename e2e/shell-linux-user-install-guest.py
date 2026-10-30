@@ -1154,6 +1154,10 @@ def main():
         REPORT['upgradeRecovery'] = 'actual unknown cohort refused, full saved trees restored and authenticated retry observed'
         shared_prefix, shared_agent = WORK / 'shared-prefix', WORK / 'shared-agent'
         shutil.copytree(manifest['Prefix'], shared_prefix, symlinks=True)
+        # Only Separate carries the Engram companion; a stock shared prefix never has it.
+        shutil.rmtree(shared_prefix / 'lib/node_modules/gentle-engram', ignore_errors=True)
+        if os.path.lexists(shared_prefix / 'bin/pi-engram'):
+            os.unlink(shared_prefix / 'bin/pi-engram')
         shared_agent.mkdir(mode=0o700)
         (shared_agent / 'settings.json').write_text('{}\n')
         os.chmod(shared_prefix, 0o700)
