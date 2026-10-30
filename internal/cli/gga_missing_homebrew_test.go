@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -149,6 +150,9 @@ func TestGGAStepWithoutHomebrewRecordsDeferredAction(t *testing.T) {
 // TestGGAStepUsesHomebrewOutsidePath pins that a Homebrew found only at its
 // standard prefix is used by absolute path, the same way Engram resolves it.
 func TestGGAStepUsesHomebrewOutsidePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew prefixes are POSIX paths; Windows never resolves Homebrew outside PATH")
+	}
 	var commands []string
 	home := stubGGAHomebrewEnv(t, nil, []string{"brew"}, func(name string, args ...string) error {
 		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
