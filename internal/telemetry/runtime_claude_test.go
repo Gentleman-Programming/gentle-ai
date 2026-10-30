@@ -295,6 +295,85 @@ func TestClaudeRuntimeAgentClassUsesCurrentAllowlist(t *testing.T) {
 	}
 }
 
+func TestClaudeRuntimeBuiltInSubagentsMapToAggregateClasses(t *testing.T) {
+	tests := []struct {
+		name      string
+		agentType string
+		wantKind  string
+		wantClass string
+	}{
+		{name: "general-purpose built-in is a worker", agentType: "general-purpose", wantKind: "built_in", wantClass: "worker"},
+		{name: "Explore built-in is explore", agentType: "Explore", wantKind: "built_in", wantClass: "explore"},
+		{name: "lowercase explore stays a custom name", agentType: "explore", wantKind: "custom", wantClass: "unknown"},
+		{name: "literal worker stays a custom name", agentType: "worker", wantKind: "custom", wantClass: "unknown"},
+		{name: "OpenCode general name stays custom", agentType: "general", wantKind: "custom", wantClass: "unknown"},
+		{name: "case variant of general-purpose stays custom", agentType: "General-Purpose", wantKind: "custom", wantClass: "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := strings.Replace(claudeSubagentHook, `"agent_type":"sdd-apply"`, `"agent_type":"`+tt.agentType+`"`, 1)
+			hook, err := ParseClaudeHook(strings.NewReader(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := NormalizeClaude(hook, ClaudeUsage{}, nil)
+			if o.Row.AgentKind != tt.wantKind || o.Row.AgentClass != tt.wantClass {
+				t.Fatalf("%s: got %s/%s, want %s/%s", tt.agentType, o.Row.AgentKind, o.Row.AgentClass, tt.wantKind, tt.wantClass)
+			}
+			if ClaudeNamedAgent(tt.agentType) {
+				t.Fatalf("%s must not be treated as an installable named agent definition", tt.agentType)
+			}
+		})
+	}
+}
+
+// The documented common hook field `effort.level` is the level Claude Code ran
+// (after model fallback and caps), so it is effective evidence only and never
+// becomes selected_effort.
+func TestClaudeRuntimeStopReportsHookEffortAsEffective(t *testing.T) {
+	stopHook := strings.Replace(claudeSubagentHook, `"hook_event_name":"SubagentStop","stop_hook_active":false,"agent_id":"PRIVATE_AGENT_ID","agent_type":"sdd-apply","agent_transcript_path":"PRIVATE_AGENT_PATH"`, `"hook_event_name":"Stop","stop_hook_active":false`, 1)
+	withEffort := func(hook, effort string) string {
+		return strings.Replace(hook, `"permission_mode":"default",`, `"permission_mode":"default","effort":`+effort+`,`, 1)
+	}
+	tests := []struct {
+		name          string
+		input         string
+		wantEffective string
+	}{
+		{name: "Stop low", input: withEffort(stopHook, `{"level":"low"}`), wantEffective: "low"},
+		{name: "Stop medium", input: withEffort(stopHook, `{"level":"medium"}`), wantEffective: "medium"},
+		{name: "Stop high", input: withEffort(stopHook, `{"level":"high"}`), wantEffective: "high"},
+		{name: "Stop xhigh", input: withEffort(stopHook, `{"level":"xhigh"}`), wantEffective: "xhigh"},
+		{name: "Stop max", input: withEffort(stopHook, `{"level":"max"}`), wantEffective: "max"},
+		{name: "Stop without effort", input: stopHook, wantEffective: "unavailable"},
+		{name: "Stop undocumented level", input: withEffort(stopHook, `{"level":"ultracode"}`), wantEffective: "unavailable"},
+		{name: "Stop contract meta value is not a level", input: withEffort(stopHook, `{"level":"unknown"}`), wantEffective: "unavailable"},
+		{name: "Stop free text level", input: withEffort(stopHook, `{"level":"PRIVATE_TEXT"}`), wantEffective: "unavailable"},
+		{name: "Stop non-object effort", input: withEffort(stopHook, `"high"`), wantEffective: "unavailable"},
+		{name: "Stop null effort", input: withEffort(stopHook, `null`), wantEffective: "unavailable"},
+		{name: "SubagentStop effort is not attributed", input: withEffort(claudeSubagentHook, `{"level":"high"}`), wantEffective: "unavailable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hook, err := ParseClaudeHook(strings.NewReader(tt.input))
+			if err != nil {
+				t.Fatalf("a malformed optional effort field must not discard the hook: %v", err)
+			}
+			o := NormalizeClaude(hook, ClaudeUsage{}, nil)
+			if o.Row.EffectiveEffort != tt.wantEffective {
+				t.Fatalf("effective effort = %q, want %q", o.Row.EffectiveEffort, tt.wantEffective)
+			}
+			if o.Row.SelectedEffort != "unavailable" {
+				t.Fatalf("hook effort must never become selected effort: %q", o.Row.SelectedEffort)
+			}
+			out, _ := json.Marshal(o)
+			if strings.Contains(string(out), "PRIVATE") {
+				t.Fatalf("private source leaked: %s", out)
+			}
+		})
+	}
+}
+
 func TestClaudeRuntimeIgnoredAndBounds(t *testing.T) {
 	hook, err := ParseClaudeHook(strings.NewReader(strings.Replace(claudeSubagentHook, "SubagentStop", "SubagentStart", 1)))
 	if err != nil || NormalizeClaude(hook, ClaudeUsage{}, nil) != nil {

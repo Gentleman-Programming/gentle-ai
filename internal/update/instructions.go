@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 const WindowsDistributionHoldMessage = "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced."
@@ -64,14 +64,6 @@ func updateHintForOwnership(tool ToolInfo, profile system.PlatformProfile, owner
 		return fmt.Sprintf("brew upgrade --%s %s", ownership, tool.Name)
 	}
 	return updateHint(tool, profile)
-}
-
-func openCodeRegisteredNotMaterializedHint(tool ToolInfo) string {
-	pkg := strings.TrimSpace(tool.NpmPackage)
-	if pkg == "" {
-		pkg = tool.Name
-	}
-	return fmt.Sprintf("registered in ~/.config/opencode/tui.json; pending npm dependency materialization for %s. Run gentle-ai upgrade to install/update ~/.config/opencode dependencies, then restart or reload OpenCode; if it stays pending, check OpenCode logs for package or peer dependency errors.", pkg)
 }
 
 // gentleAIHint is the stable-channel instruction only. When the checker

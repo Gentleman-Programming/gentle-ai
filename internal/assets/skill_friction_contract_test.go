@@ -142,3 +142,59 @@ func TestBranchPRGuidanceDoesNotOverrideHumanOrEvidence(t *testing.T) {
 		t.Error("collaboration checklist must preserve non-closing intent")
 	}
 }
+
+// TestBranchPRChecklistsKeepEveryTemplateGateSeparate pins checklist parity
+// with .github/PULL_REQUEST_TEMPLATE.md: every gate the template requires is
+// its own item, so a box can be checked only with evidence for that gate.
+func TestBranchPRChecklistsKeepEveryTemplateGateSeparate(t *testing.T) {
+	public, err := os.ReadFile("../../skills/branch-pr/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checklists := map[string]struct {
+		text, start, end string
+		items            []string
+	}{
+		"public schematic": {
+			text: string(public), start: "## ✅ Contributor Checklist", end: "## Automated Checks",
+			items: []string{
+				"- [ ] Unit tests pass (`go test ./...`)",
+				"- [ ] Go format passes (`go run ./internal/gofmtcheck`)",
+				"- [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)",
+				"- [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).",
+				"- [ ] I understand, reviewed, and take responsibility for the complete submission",
+				"- [ ] I selected exactly one AI-assistance option and, if material assistance was used, completed all applicable declaration fields",
+			},
+		},
+		"embedded asset": {
+			text: MustRead("skills/branch-pr/SKILL.md"), start: "### 6. Contributor Checklist", end: "## Automated Checks",
+			items: []string{
+				"- PR stays within 400 changed lines",
+				"- Unit tests pass (`go test ./...`)",
+				"- Go format passes (`go run ./internal/gofmtcheck`)",
+				"- E2E tests pass (`cd e2e && ./docker-test.sh`)",
+				"- Benchmark validation completed",
+				"- Understood, reviewed, and took responsibility for the complete submission",
+				"- Selected exactly one AI-assistance option",
+			},
+		},
+	}
+	for name, checklist := range checklists {
+		t.Run(name, func(t *testing.T) {
+			start := strings.Index(checklist.text, checklist.start)
+			end := strings.Index(checklist.text[max(start, 0):], checklist.end)
+			if start < 0 || end < 0 {
+				t.Fatalf("missing contributor checklist between %q and %q", checklist.start, checklist.end)
+			}
+			section := checklist.text[start : start+end]
+			for _, item := range checklist.items {
+				if !strings.Contains(section, item) {
+					t.Errorf("checklist omits separate template gate %q", item)
+				}
+			}
+			if strings.Contains(section, "Unit tests, Go format and E2E tests pass") {
+				t.Error("checklist merges independent gates into one item")
+			}
+		})
+	}
+}

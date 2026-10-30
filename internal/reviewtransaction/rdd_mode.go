@@ -290,7 +290,29 @@ func (err *RDDModePartialApplyError) Unwrap() error { return ErrRDDModePartially
 // ResolveRDDMode combines the global user mode with this clone's off-only
 // override. Any off wins, a repository can never force on, and every failure
 // projects a disabled status so a caller that drops the error still fails safe.
+//
+// #4670: a global OFF is already the answer. The override can only disable,
+// so nothing it holds can change the effective mode, and a clone-local
+// location that cannot be read or validated -- an SMB/UNC common directory,
+// for one -- must not turn a switched-off system into a failing one. The read
+// is still attempted, so a readable override keeps reporting its own source
+// and revision; only its failure is dropped, and only while the global mode
+// is off. With the global mode on or unset the override can still decide, and
+// its failure keeps failing closed.
 func ResolveRDDMode(ctx context.Context, repo string, global RDDGlobalMode) (RDDModeStatus, error) {
+	status, err := resolveRDDModeSources(ctx, repo, global)
+	if err != nil && ctx.Err() == nil {
+		if globalMode, globalErr := normalizeRDDMode(global.Value); globalErr == nil && globalMode == RDDModeOff {
+			return rddModeStatus(globalMode, rddModeOverrideRecord{}, false), nil
+		}
+	}
+	return status, err
+}
+
+// resolveRDDModeSources is the strict resolution: any override that cannot be
+// read fails it. Clone-scope writes use it directly because their
+// compare-and-set has to see the head they replace, whatever the global mode.
+func resolveRDDModeSources(ctx context.Context, repo string, global RDDGlobalMode) (RDDModeStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceDefault), err
 	}
@@ -327,7 +349,7 @@ func SetCloneLocalRDDMode(
 	if globalErr != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
 	}
-	currentStatus, currentErr := ResolveRDDMode(ctx, repo, global)
+	currentStatus, currentErr := resolveRDDModeSources(ctx, repo, global)
 	if currentErr == nil && strings.TrimSpace(expectedRevision) != currentStatus.Revision {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), fmt.Errorf(
 			"%w: expected %q but the clone-local head is %q", ErrRDDModeRevisionMismatch, expectedRevision, currentStatus.Revision)
@@ -356,7 +378,7 @@ func SetCloneLocalRDDMode(
 	if err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
-	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(dir, rddModeLockName))
+	lock, err := acquireCloneLocalRDDModeLock(ctx, filepath.Join(dir, rddModeLockName))
 	if err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
@@ -497,6 +519,16 @@ type cloneLocalRDDModeMirror struct {
 // walk, EIO, or ESTALE on a network mount. Production always uses the real
 // scan.
 var cloneLocalRDDModeMirrorSlotScan = cloneLocalRDDOverrideHeadGeneration
+
+// acquireCloneLocalRDDModeLock takes this build's clone-local writer lock.
+//
+// It is a variable because the lost-race contract cannot be proven by timing:
+// a writer that reads the head and then waits behind the winner can exhaust
+// the bounded lock wait on a slow runner before it ever reaches the
+// compare-and-set it exists to exercise. A test holds every writer at this
+// point until all of them have read the same head. Production always uses
+// the real bounded acquisition.
+var acquireCloneLocalRDDModeLock = acquireRARAuthorityLock
 
 func openCloneLocalRDDModeMirror(ctx context.Context, repo string) *cloneLocalRDDModeMirror {
 	mirror := &cloneLocalRDDModeMirror{}
@@ -792,8 +824,12 @@ func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (strin
 	if err != nil {
 		return "", err
 	}
-	base := filepath.Join(identity.GitCommonDir, "gentle-ai", rddModeSwitchDirectory, rarAuthorityDirectory, rarAuthorityVersion)
-	if err := ensureRARSwitchRoot(identity.GitCommonDir, base, create); err != nil {
+	return cloneLocalRDDModeRootAt(identity.GitCommonDir, create)
+}
+
+func cloneLocalRDDModeRootAt(commonDir string, create bool) (string, error) {
+	base := filepath.Join(commonDir, "gentle-ai", rddModeSwitchDirectory, rarAuthorityDirectory, rarAuthorityVersion)
+	if err := ensureRARSwitchRoot(commonDir, base, create); err != nil {
 		return "", err
 	}
 	dir := filepath.Join(base, rddModeDirectory)
@@ -816,14 +852,18 @@ func cloneLocalRDDModeLegacyRoot(ctx context.Context, repo string, create bool) 
 	if err != nil {
 		return "", err
 	}
+	return cloneLocalRDDModeLegacyRootAt(identity.GitCommonDir, create)
+}
+
+func cloneLocalRDDModeLegacyRootAt(commonDir string, create bool) (string, error) {
 	base := filepath.Join(
-		identity.GitCommonDir,
+		commonDir,
 		"gentle-ai",
 		rddModeLegacySwitchDirectory,
 		rarAuthorityDirectory,
 		rarAuthorityVersion,
 	)
-	if err := ensureRARRepositoryRoot(identity.GitCommonDir, base, create); err != nil {
+	if err := ensureRARRepositoryRoot(commonDir, base, create); err != nil {
 		return "", err
 	}
 	dir := filepath.Join(base, rddModeDirectory)
@@ -860,7 +900,14 @@ func cloneLocalRDDModeIdentity(ctx context.Context, repo string) (reviewReposito
 // same effective mode by the same default, and unlike the old behavior it
 // leaves the operator able to write one.
 func cloneLocalRDDModeReadRoot(ctx context.Context, repo string) (string, error) {
-	dir, err := cloneLocalRDDModeRoot(ctx, repo, false)
+	identity, err := cloneLocalRDDModeIdentity(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if !cloneLocalRDDModeLocationExists(identity.GitCommonDir) {
+		return "", nil
+	}
+	dir, err := cloneLocalRDDModeRootAt(identity.GitCommonDir, false)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
@@ -873,7 +920,7 @@ func cloneLocalRDDModeReadRoot(ctx context.Context, repo string) (string, error)
 			return dir, nil
 		}
 	}
-	legacy, legacyErr := cloneLocalRDDModeLegacyRoot(ctx, repo, false)
+	legacy, legacyErr := cloneLocalRDDModeLegacyRootAt(identity.GitCommonDir, false)
 	if legacyErr != nil {
 		return "", nil
 	}
@@ -881,6 +928,31 @@ func cloneLocalRDDModeReadRoot(ctx context.Context, repo string) (string, error)
 		return "", nil
 	}
 	return legacy, nil
+}
+
+// cloneLocalRDDModeLocationExists reports whether either location that can
+// hold this clone's override has begun to exist, without validating anything.
+//
+// #4670: a clone that never disabled has nothing under its common directory to
+// read, so answering "no override" for it must not depend on the common
+// directory passing RAR validation -- on an SMB/UNC share it never does, and
+// that turned a read of nothing into a refusal. Only a genuine absence skips
+// validation. Anything that exists, and any error other than absence, goes
+// through the full no-follow walk exactly as before, and writes never come
+// here: they validate whatever this reports.
+//
+// The probe stops at the first owner-only component, rar-authority. The
+// shared ancestors above it hold other clone-local state, and a partial tree
+// below it is still something the read walk must validate or repair (#3416,
+// #5112).
+func cloneLocalRDDModeLocationExists(commonDir string) bool {
+	for _, switchDirectory := range []string{rddModeSwitchDirectory, rddModeLegacySwitchDirectory} {
+		dir := filepath.Join(commonDir, "gentle-ai", switchDirectory, rarAuthorityDirectory)
+		if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+	}
+	return false
 }
 
 func readCloneLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrideRecord, bool, error) {

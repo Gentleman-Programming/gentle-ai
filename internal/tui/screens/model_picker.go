@@ -11,10 +11,10 @@ import (
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 // ModelPickerMode represents the current sub-mode of the model picker screen.
@@ -220,8 +220,14 @@ func ModelPickerRows() []string {
 }
 
 func modelPickerRowsWithCustomIdentity(includeReview bool, customAgents []string) []ModelPickerRow {
-	rows := make([]ModelPickerRow, 0, 1+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases())+3+len(customAgents)+2)
+	rows := make([]ModelPickerRow, 0, 1+1+len(opencode.GentleAIODDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases())+3+len(customAgents)+2)
 	rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: SDDOrchestratorPhase, AgentID: SDDOrchestratorPhase})
+	if len(opencode.GentleAIODDPhases()) > 0 {
+		rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Gentle AI agents ---"})
+		for _, phase := range opencode.GentleAIODDPhases() {
+			rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindAgent, Label: phase, AgentID: phase})
+		}
+	}
 	if len(opencode.JDPhases()) > 0 {
 		rows = append(rows, ModelPickerRow{Kind: ModelPickerRowKindSeparator, Label: "--- Judgment Day ---"})
 		for _, phase := range opencode.JDPhases() {
@@ -289,7 +295,11 @@ func SeparatorRowIdx() int {
 	if len(jd) == 0 {
 		return -1
 	}
-	return 1
+	idx := 1
+	if odd := opencode.GentleAIODDPhases(); len(odd) > 0 {
+		idx += 1 + len(odd)
+	}
+	return idx
 }
 
 // ProviderEntries returns sorted provider entries with display names and model counts.
@@ -756,6 +766,10 @@ func renderPhaseList(
 		b.WriteString(styles.WarningStyle.Render(state.ConfigWarning))
 		b.WriteString("\n\n")
 	}
+	if warning := modelPickerDegradedCatalogWarning(state); warning != "" && len(state.AvailableIDs) > 0 {
+		b.WriteString(styles.WarningStyle.Render(warning))
+		b.WriteString("\n\n")
+	}
 
 	if len(state.AvailableIDs) == 0 {
 		message := "OpenCode reported no tool-capable models for this project."
@@ -857,6 +871,10 @@ func renderProviderSelect(state ModelPickerState) string {
 
 	b.WriteString(styles.TitleStyle.Render("Select provider:"))
 	b.WriteString("\n\n")
+	if warning := modelPickerDegradedCatalogWarning(state); warning != "" {
+		b.WriteString(styles.WarningStyle.Render(warning))
+		b.WriteString("\n\n")
+	}
 
 	entries := ProviderEntries(state)
 
@@ -980,6 +998,20 @@ func resolveNames(assignment model.ModelAssignment, state ModelPickerState) (pro
 	}
 
 	return provName, modelName
+}
+
+// modelPickerDegradedCatalogWarning returns the user-facing warning for a
+// picker that fell back to configured models after runtime discovery failed.
+// When OpenCode discovery fails but configured tool-capable models exist, the
+// picker still works, so it must say plainly that the list is incomplete
+// instead of presenting the configured subset as the full catalog (issue
+// #5833). Empty when discovery succeeded or never ran.
+func modelPickerDegradedCatalogWarning(state ModelPickerState) string {
+	if state.CatalogError == nil {
+		return ""
+	}
+	headline, nextStep := modelPickerCatalogFailureExplanation(state.CatalogError)
+	return headline + " " + nextStep + "\nShowing configured models only; some OpenCode providers and models may be missing."
 }
 
 // modelPickerCatalogFailureExplanation renders the user-facing diagnostic for

@@ -1,6 +1,10 @@
 package pipeline
 
-import "time"
+import (
+	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+)
 
 type StepStatus string
 
@@ -36,4 +40,8 @@ type ExecutionResult struct {
 	// ManualActions are non-fatal but actionable outcomes propagated by runtime
 	// steps to both CLI and TUI completion renderers.
 	ManualActions []string
+	// DeferredComponents lists selected components whose binary was not
+	// installed because an optional prerequisite is missing. Their
+	// configuration was still applied, so this is not a failure.
+	DeferredComponents []model.ComponentID
 }

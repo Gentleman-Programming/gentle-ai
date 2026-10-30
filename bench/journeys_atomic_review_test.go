@@ -7,6 +7,32 @@ import (
 	"testing"
 )
 
+func TestNativeRecoveryJourneyIsRegisteredAndNamesItsControls(t *testing.T) {
+	const id = "j1658-native-status-recovery-executes-without-authored-authorization"
+	found := 0
+	for _, journey := range Journeys() {
+		if journey.ID != id {
+			continue
+		}
+		found++
+		if journey.Review != reviewOptedIn || len(journey.Steps) != 10 || journey.Steps[9].Composite == nil {
+			t.Fatalf("native recovery journey is not executable/opted in: %+v", journey)
+		}
+		declaration := journey.Source
+		for _, step := range journey.Steps {
+			declaration += " " + step.Name
+		}
+		for _, phrase := range []string{"CLI boundary only", "not OpenCode runtime proof", "wrong/empty/partial", "four-argument recovery", "existing successor", "unchanged failed-criteria"} {
+			if !strings.Contains(declaration, phrase) {
+				t.Errorf("native recovery journey omits %q", phrase)
+			}
+		}
+	}
+	if found != 1 {
+		t.Fatalf("native recovery journey registered %d times", found)
+	}
+}
+
 func TestAdjacentOpenCodeJourneysUseRetainedCLI(t *testing.T) {
 	for _, journey := range Journeys() {
 		if !strings.HasPrefix(journey.ID, "j2138-") && !strings.HasPrefix(journey.ID, "j3043-") && !strings.HasPrefix(journey.ID, "j3500-") && !strings.HasPrefix(journey.ID, "j3336-") {

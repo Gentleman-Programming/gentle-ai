@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
 func settleReviewMode(t *testing.T, model Model, cmd tea.Cmd) Model {
@@ -38,7 +38,7 @@ func TestReviewModeTUI(t *testing.T) {
 		return current, nil
 	}
 	open := func(model Model) Model {
-		model.Cursor = len(screens.WelcomeOptions(model.UpdateResults, model.UpdateCheckDone, false, 0, true)) - 4
+		model.Cursor = len(screens.WelcomeOptions(model.UpdateResults, model.UpdateCheckDone, true)) - 4
 		updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		return settleReviewMode(t, updated.(Model), cmd)
 	}

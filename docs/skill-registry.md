@@ -1,5 +1,8 @@
 # Skill Registry
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
 The skill registry is a project-local index that lets every supported agent find the same skills without rewriting them. It stores skill names, full descriptions, scopes, and exact `SKILL.md` paths.
@@ -75,6 +78,8 @@ Read these exact files before reading, writing, reviewing, testing, or creating 
 
 The subagent then reads those files. This keeps the original `SKILL.md` as the source of truth and avoids breaking author intent through automatic summarization.
 
+OpenCode delegators list installed skills by the identifier the native `skill` tool takes instead of a path. Installed skills live in the OpenCode config directory, outside the workspace, where a delegated agent may be denied reads; the `skill` tool loads them by `<name>` on OpenCode 1.x and by the skill's `<id>` as listed (its directory name for `<dir>/SKILL.md`) on OpenCode 2.x, and `<available_skills>` lists the identifier each major expects. Skill files inside the workspace are still listed by their workspace-relative `SKILL.md` path.
+
 ## Skill Authoring Flow
 
 ```text
@@ -121,8 +126,8 @@ Compact rules were cheaper per delegation but could distort skills. The index-fi
 ## Excluded Skills
 
 The registry never indexes `_shared`, `skill-registry`, or any `sdd-*` skill.
-The first two are internal plumbing; `sdd-*` skills are orchestrator-managed by
-the SDD workflow, not delegator-selected. This exclusion is intentional and
+The first two are internal plumbing; the `sdd-*` prefix stays reserved
+because it belonged to the retired SDD workflow. This exclusion is intentional and
 silent, so a user skill whose name collides with these prefixes is dropped
 without a warning.
 

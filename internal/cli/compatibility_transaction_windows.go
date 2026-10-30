@@ -16,10 +16,10 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 	"golang.org/x/sys/windows"
 )
 
@@ -129,7 +129,7 @@ func (t *windowsCompatibilityRefreshTransaction) Run() (runErr error) {
 	if slicesContainsComponent(t.components, model.ComponentSkills) {
 		skillIDs := selectedSkillIDs(t.selection)
 		if len(skillIDs) > 0 {
-			result, err := skills.InjectDirectoryWithWriter(t.writer.root, skillIDs, t.writer.Write)
+			result, err := skills.InjectDirectoryWithWriter(t.writer.root, skillIDs, t.writer.Write, t.writer.Remove)
 			if err != nil {
 				return fmt.Errorf("refresh compatibility skills: %w", err)
 			}

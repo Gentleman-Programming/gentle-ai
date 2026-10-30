@@ -7,9 +7,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const (
@@ -37,7 +37,7 @@ func CodeGraphGuidanceMarkdown() string {
 		"",
 		"CodeGraph-aware worktree placement:",
 		"",
-		"- Create Git worktrees that may need CodeGraph under the user's home directory, preferably as a sibling such as `<repo-parent>/<repo-name>-worktrees/<worktree-name>`. Never place a CodeGraph-dependent worktree under `/tmp`, `/var/tmp`, or `/tmp/opencode`; generic temporary-work guidance does not override this rule.",
+		"- Create Git worktrees that may need CodeGraph under the user's home directory. For a repository rooted there, place them as a sibling of the repository root at `<repo-parent>/<repo-name>-worktrees/<worktree-name>`, where `<repo-parent>` is the immediate parent directory of the repository root (repo `~/Projects/Rust/foo` → `~/Projects/Rust/foo-worktrees/<worktree-name>`). Never place a CodeGraph-dependent worktree under `/tmp`, `/var/tmp`, or `/tmp/opencode`; generic temporary-work guidance does not override this rule.",
 		"- Every worktree needs its own `.codegraph/` index. Never copy, symlink, or reuse another checkout's index because its root and checked-out bytes may differ.",
 		"",
 		"CodeGraph intelligence surface:",
@@ -49,13 +49,14 @@ func CodeGraphGuidanceMarkdown() string {
 		"",
 		"Required order for structural/codebase questions:",
 		"",
-		"1. Resolve the project root with `git rev-parse --show-toplevel || pwd`.",
+		"1. For project initialization, the explicit agent working directory is authoritative: use that directory as `<project-root>` (run `pwd` with the agent's shell tool if needed). Check `<cwd>/.git` (directory or worktree file) and `<cwd>/.codegraph/` before ancestor discovery. Never replace an initialization target with an enclosing repository. Only for an already-selected existing repository, resolve its root with `git rev-parse --show-toplevel || pwd`.",
+		"   If the explicit initialization target is not a Git root, stop CodeGraph initialization and explain that local Git initialization is required (`git -C <cwd> init`); never retry initialization against the parent. Do not initialize Git merely to answer a structural/codebase question.",
 		"2. Confirm the root is a real project/workspace. Do not ask the user before initializing CodeGraph in a real project. Do not initialize CodeGraph in `$HOME`, temporary directories, or non-project folders.",
 		"3. Check for `<project-root>/.codegraph/` before any broad Read/Glob/Grep filesystem exploration.",
 		"4. If `.codegraph/` is missing and CodeGraph is enabled/available, immediately run `gentle-ai codegraph init --cwd <project-root>` once.",
 		"5. Missing .codegraph/ is the trigger to initialize, not a reason to skip CodeGraph. Do not fall back just because `.codegraph/` is missing; a missing index is the trigger to lazy-initialize, not a reason to skip CodeGraph.",
-		"6. Use `codegraph_explore` after initialization, or the read-only upstream CLI commands when MCP tools are absent.",
-		"7. After edits, rely on watcher auto-sync by default. Run `codegraph sync` only when the watcher is disabled or CodeGraph reports stale files that do not refresh normally.",
+		"6. MCP auto-sync requires a running daemon with an active file watcher. CLI intelligence commands read the existing index as-is and do not auto-sync. Before CLI intelligence reads, run `codegraph sync -q <project-root>`, including after edits. If sync fails, do not treat the existing index as current; explain the failure and fall back to normal filesystem tools. The presence of `.codegraph/` alone does not guarantee freshness. For MCP, run `codegraph sync -q <project-root>` when the watcher is disabled or stale files do not refresh normally.",
+		"7. Use `codegraph_explore` after initialization, or the read-only upstream CLI commands when MCP tools are absent.",
 		"8. Only fall back to normal filesystem tools after CodeGraph initialization or use fails, and briefly explain the fallback.",
 		"",
 		"Broad Read/Glob/Grep exploration before this CodeGraph check is explicitly discouraged for structural/codebase questions.",

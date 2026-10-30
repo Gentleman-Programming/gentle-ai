@@ -13,10 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/doctor"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/storage"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/storage"
 )
 
 type CheckStatus = doctor.Status
@@ -59,6 +62,10 @@ var agentToolBinaries = map[string]string{
 	"hermes":         "hermes",
 }
 
+func init() {
+	agentToolBinaries["github-copilot-cli"] = "copilot"
+}
+
 const (
 	engramHealthEnvVar = "ENGRAM_BASE_URL"
 	diskWarnThreshold  = int64(100 * 1024 * 1024) // 100 MB
@@ -67,6 +74,8 @@ const (
 
 // Overridable for testing.
 var (
+	doctorReadStateFn   = state.Read
+	doctorToolProbeFn   = probeDoctorTool
 	lookPathFn          = exec.LookPath
 	availableBytesFn    = storage.AvailableBytes
 	osUserHomeDirDoctor = os.UserHomeDir
@@ -94,7 +103,8 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	installedAgents, _ := readDoctorInstalledAgents(homeDir)
+	installedState, _ := state.Read(homeDir)
+	installedAgents := installedState.InstalledAgents
 	// A state read failure (missing/malformed file) is surfaced separately by
 	// checkStateJSON. Here we fall back to an empty list so the doctor only
 	// reports the always-required core tools — preserving the first-time-install
@@ -105,8 +115,8 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	checks := make([]doctor.Check, 0, len(requiredTools)+3)
 	for _, tool := range requiredTools {
 		tool := tool
-		checks = append(checks, doctor.Check{ID: doctor.ToolCheckID(tool), Run: func(context.Context) doctor.Result {
-			return checkOneTool(tool, pathDirs)
+		checks = append(checks, doctor.Check{ID: doctor.ToolCheckID(tool), Run: func(ctx context.Context) doctor.Result {
+			return checkOneToolContext(ctx, tool, pathDirs)
 		}})
 	}
 	checks = append(checks,
@@ -115,22 +125,64 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
+	if installedState.BackgroundIntent == model.OpenCodeBackgroundOn && doctorGOOS != "windows" {
+		checks = append(checks, doctor.Check{ID: doctor.CheckOpenCodeProfile, Run: func(context.Context) doctor.Result {
+			return checkOpenCodeProfile(homeDir, pathDirs)
+		}})
+	}
+	for _, agent := range installedAgents {
+		if agent == string(model.AgentPi) {
+			checks = append(checks, doctor.Check{ID: "pi:mcp", Run: func(context.Context) doctor.Result { return checkPiMCP(homeDir) }})
+			break
+		}
+	}
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
 	renderDoctorReport(w, report)
 	return nil
 }
 
-// readDoctorInstalledAgents returns the agent IDs persisted in state.json.
-// An unreadable or absent state file yields a nil slice — callers must treat
-// nil/empty as "no agents selected" rather than a hard error so first-time
-// installs do not surface phantom agent-missing failures.
-func readDoctorInstalledAgents(homeDir string) ([]string, error) {
-	s, err := state.Read(homeDir)
-	if err != nil {
-		return nil, err
+// checkOpenCodeProfile reports whether a new POSIX login shell runs the
+// managed OpenCode launcher for bare `opencode`. It shares activation's
+// startup-file model, so a later rc file that puts another OpenCode ahead of
+// the launcher is reported instead of trusting the profile block alone.
+func checkOpenCodeProfile(homeDir string, pathDirs []string) CheckResult {
+	const id = doctor.CheckOpenCodeProfile
+	binDir := opencode.BinDir(homeDir)
+	resolution := opencode.ResolveLoginShellActivation(homeDir, opencode.ActivationOptions{
+		OS:   doctorGOOS,
+		Path: strings.Join(pathDirs, string(os.PathListSeparator)),
+	})
+	switch resolution.Status {
+	case opencode.ActivationStatusReady:
+		return CheckResult{Name: id, Status: CheckStatusPass, Detail: resolution.Reason}
+	case opencode.ActivationStatusUnknown:
+		// Informational: the launcher may well be effective; Gentle AI cannot
+		// prove it statically.
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "Gentle AI could not verify that new login shells run the managed OpenCode launcher: " + resolution.Reason,
+			Remedy: doctor.NewRemedy(doctor.RemedyEditShellPath, "In a new login shell, run `command -v opencode`; it should print "+opencode.POSIXLauncherPath(homeDir)+". If it does not, add "+opencode.ProfileExportLine(binDir)+" as the last PATH change in your shell startup files, then start a new login shell"),
+		}
+	case opencode.ActivationStatusShadowed:
+		remedy := "In " + resolution.Source + ", remove the line that adds " + filepath.Dir(resolution.Resolved) + " to PATH, or add " + opencode.ProfileExportLine(binDir) + " after it; then start a new login shell"
+		if !filepath.IsAbs(resolution.Source) {
+			remedy = "Prepend " + binDir + " to PATH with " + opencode.ProfileExportLine(binDir) + " in your login profile, then start a new login shell"
+		}
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "OpenCode background subagents are on, but " + resolution.Reason,
+			Remedy: doctor.NewRemedy(doctor.RemedyEditShellPath, remedy),
+		}
 	}
-	return s.InstalledAgents, nil
+	return CheckResult{
+		Name:   id,
+		Status: CheckStatusWarn,
+		Detail: "OpenCode background subagents are on, but new shells bypass the managed launcher: " + resolution.Reason,
+		Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' from a zsh or bash login shell, or add "+opencode.ProfileExportLine(binDir)+" to your login profile, then start a new login shell"),
+	}
 }
 
 // checkToolBinaries checks each required tool for PATH resolution and
@@ -158,16 +210,7 @@ func requiredDoctorTools(installedAgents []string) []string {
 	return required
 }
 
-func checkToolBinaries(pathDirs []string, installedAgents []string) []CheckResult {
-	required := requiredDoctorTools(installedAgents)
-	results := make([]CheckResult, 0, len(required))
-	for _, tool := range required {
-		results = append(results, checkOneTool(tool, pathDirs))
-	}
-	return results
-}
-
-func checkOneTool(tool string, pathDirs []string) CheckResult {
+func checkOneToolContext(ctx context.Context, tool string, pathDirs []string) CheckResult {
 	resolved, shim, err := resolveDoctorTool(tool)
 	if err != nil {
 		// resolved is "" here: there is no PATH-resolved copy to name or to
@@ -189,7 +232,16 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 		}
 	}
 
-	copies := doctorToolCopies(tool, pathDirs)
+	copies, shadow := doctorLauncherChain(doctorToolCopies(tool, pathDirs))
+	if shadow != nil {
+		binDir := filepath.Dir(shadow.launcher)
+		return CheckResult{
+			Name:   doctor.ToolCheckID(tool),
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("%s resolved to %s; %s precedes the Gentle AI managed launcher %s on PATH, so bare %s bypasses the launcher that delegates to it (copies in PATH order: %s)", tool, resolved, shadow.target, shadow.launcher, tool, strings.Join(copies, ", ")),
+			Remedy: doctor.NewRemedy(doctor.RemedyReorderPath, "Move "+binDir+" ahead of "+filepath.Dir(shadow.target)+" in PATH, then open a new terminal; keep both files, since the launcher delegates to "+shadow.target+". On Windows, machine PATH entries come before user PATH entries, so reorder or remove the machine entry."),
+		}
+	}
 	if len(copies) > 1 {
 		// The duplicate branch is exactly where ambiguity about which build
 		// is running is guaranteed, so this is the branch that most needs
@@ -210,8 +262,19 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 	if shim != "" {
 		detail += " (" + shim + ")"
 	}
+	if target, ok := doctorManagedLauncherTarget(resolved); ok {
+		detail += " (Gentle AI managed launcher for " + target + ")"
+	}
 	if tool == "gentle-ai" {
 		detail += doctorInvokedGentleAIClause(resolved)
+	}
+	if err := doctorToolProbeFn(ctx, tool, resolved); err != nil {
+		return CheckResult{
+			Name:   doctor.ToolCheckID(tool),
+			Status: CheckStatusWarn,
+			Detail: detail + "; version probe failed: " + err.Error(),
+			Remedy: doctor.NewRemedy(doctor.RemedyInstallTool, "Repair or reinstall "+tool+" at "+resolved+", then run 'gentle-ai doctor' again"),
+		}
 	}
 	return CheckResult{
 		Name:   doctor.ToolCheckID(tool),
@@ -297,6 +360,83 @@ func doctorToolCopies(tool string, pathDirs []string) []string {
 	return copies
 }
 
+// doctorLauncherShadow is a managed launcher bypassed by the executable it
+// delegates to, because that executable comes first on PATH.
+type doctorLauncherShadow struct {
+	launcher string
+	target   string
+}
+
+// doctorLauncherChain folds each managed launcher with the executable it
+// delegates to. A launcher followed by its target is one installation, so the
+// target is dropped (#5238); a target that precedes its launcher bypasses it
+// and is reported as a shadow instead.
+func doctorLauncherChain(copies []string) ([]string, *doctorLauncherShadow) {
+	var shadow *doctorLauncherShadow
+	drop := make(map[int]bool)
+	for i, p := range copies {
+		target, ok := doctorManagedLauncherTarget(p)
+		if !ok {
+			continue
+		}
+		for j, candidate := range copies {
+			if j == i || !doctorSameFile(candidate, target) {
+				continue
+			}
+			if j > i {
+				drop[j] = true
+			} else if shadow == nil {
+				shadow = &doctorLauncherShadow{launcher: p, target: candidate}
+			}
+		}
+	}
+	kept := make([]string, 0, len(copies))
+	for i, p := range copies {
+		if !drop[i] {
+			kept = append(kept, p)
+		}
+	}
+	return kept, shadow
+}
+
+// doctorManagedLauncherTarget returns the delegation target when path is the
+// Gentle-owned OpenCode launcher: located in the managed bin directory and
+// holding exactly the generated launcher bytes.
+func doctorManagedLauncherTarget(path string) (string, bool) {
+	homeDir, err := osUserHomeDirDoctor()
+	if err != nil || !doctorSamePath(filepath.Dir(path), opencode.BinDir(homeDir)) {
+		return "", false
+	}
+	return opencode.ManagedLauncherTarget(path)
+}
+
+// doctorSameFile reports whether a and b name the same file, tolerating
+// symlinks, short names, and Windows case differences.
+func doctorSameFile(a, b string) bool {
+	if infoA, err := os.Stat(a); err == nil {
+		if infoB, err := os.Stat(b); err == nil {
+			return os.SameFile(infoA, infoB)
+		}
+	}
+	resolvedA, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		resolvedA = a
+	}
+	resolvedB, err := filepath.EvalSymlinks(b)
+	if err != nil {
+		resolvedB = b
+	}
+	return doctorSamePath(resolvedA, resolvedB)
+}
+
+func doctorSamePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if doctorGOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
 // executableExtensions returns the filename suffixes to probe when scanning a
 // PATH directory for a tool binary. On Windows it mirrors exec.LookPath, which
 // resolves a bare name like "gentle-ai" to "gentle-ai.exe"/".cmd" via PATHEXT;
@@ -378,9 +518,9 @@ func checkStateJSON(homeDir string) CheckResult {
 	const id = doctor.CheckStateJSON
 	statePath := state.Path(homeDir)
 
-	s, err := state.Read(homeDir)
+	s, err := doctorReadStateFn(homeDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return CheckResult{
 				Name:   id,
 				Status: CheckStatusWarn,
@@ -388,11 +528,24 @@ func checkStateJSON(homeDir string) CheckResult {
 				Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'gentle-ai install' to create initial state"),
 			}
 		}
+		var pathErr *os.PathError
+		if errors.Is(err, os.ErrPermission) || errors.As(err, &pathErr) {
+			guidance := "Inspect the file and parent directory for access or filesystem problems at " + statePath
+			if errors.Is(err, os.ErrPermission) {
+				guidance = "Inspect permissions and ownership of " + statePath + " and its parent directory"
+			}
+			return CheckResult{
+				Name:   id,
+				Status: CheckStatusFail,
+				Detail: "failed to read " + statePath + ": " + err.Error(),
+				Remedy: doctor.NewRemedy(doctor.RemedyInspectStateAccess, guidance+", then re-run 'gentle-ai doctor'; keep the existing state file"),
+			}
+		}
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusFail,
 			Detail: "failed to parse " + statePath + ": " + err.Error(),
-			Remedy: doctor.NewRemedy(doctor.RemedyRepairState, "Delete or repair "+statePath+", then re-run 'gentle-ai install'"),
+			Remedy: doctor.NewRemedy(doctor.RemedyRepairState, "Restore a valid backup or repair "+statePath+" while preserving your installation settings, then re-run 'gentle-ai doctor'"),
 		}
 	}
 
@@ -407,8 +560,14 @@ func checkStateJSON(homeDir string) CheckResult {
 
 	var missing []string
 	var dangling []string
+	var unknown []string
 	for _, agentID := range s.InstalledAgents {
-		if dir := agentConfigDir(homeDir, agentID); dir != "" {
+		dir, err := agentConfigDir(homeDir, agentID)
+		if err != nil {
+			unknown = append(unknown, agentID)
+			continue
+		}
+		if dir != "" {
 			info, lstatErr := os.Lstat(dir)
 			if os.IsNotExist(lstatErr) {
 				// A missing final path is only genuinely missing when its
@@ -452,7 +611,20 @@ func checkStateJSON(homeDir string) CheckResult {
 		if len(missing) > 0 {
 			detail += "; genuinely absent config dirs: " + strings.Join(missing, ", ")
 		}
+		if len(unknown) > 0 {
+			detail += "; unrecognized agent IDs: " + strings.Join(unknown, ", ")
+		}
 		return CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
+	}
+
+	if len(unknown) > 0 {
+		detail := fmt.Sprintf("state lists unrecognized agent IDs: %s; inspect or repair the state file, then re-run 'gentle-ai doctor'", strings.Join(unknown, ", "))
+		result := CheckResult{Name: id, Status: CheckStatusWarn, Detail: detail}
+		if len(missing) > 0 {
+			result.Detail += "; config dirs are missing: " + strings.Join(missing, ", ")
+			result.Remedy = doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore missing config files")
+		}
+		return result
 	}
 
 	if len(missing) > 0 {
@@ -509,27 +681,17 @@ func danglingAncestor(homeDir, path string) (string, error) {
 	return "", nil
 }
 
-// agentConfigDir returns the expected config directory for a known agent ID.
-func agentConfigDir(homeDir, agentID string) string {
-	cfgBase := filepath.Join(homeDir, ".config")
-	switch agentID {
-	case "claude-code":
-		return filepath.Join(homeDir, ".claude")
-	case "opencode":
-		return filepath.Join(cfgBase, "opencode")
-	case "cursor":
-		return filepath.Join(homeDir, ".cursor")
-	case "windsurf":
-		return filepath.Join(homeDir, ".codeium", "windsurf")
-	case "vscode":
-		return filepath.Join(cfgBase, "Code")
-	case "codex":
-		return filepath.Join(homeDir, ".codex")
-	case "kiro":
-		return filepath.Join(homeDir, ".kiro")
-	default:
-		return ""
+// agentConfigDir uses the same adapter paths as installation and sync. An
+// empty path means a known detection-only agent, not an unrecognized ID.
+func agentConfigDir(homeDir, agentID string) (string, error) {
+	adapter, err := agents.NewAdapter(model.AgentID(agentID))
+	if err != nil {
+		return "", err
 	}
+	if !adapter.SupportsSkills() && !adapter.SupportsSystemPrompt() && !adapter.SupportsMCP() {
+		return "", nil
+	}
+	return adapter.GlobalConfigDir(homeDir), nil
 }
 
 // checkEngramReachable probes the configured Engram transport. An explicit
@@ -553,6 +715,16 @@ func checkEngramReachable(ctx context.Context, homeDir string, installedAgents [
 		}
 	}
 	if len(commands) == 0 {
+		// Engram on Pi runs through gentle-engram's native tools, not an MCP
+		// server, so a Pi-only host has no Engram MCP entry by design and
+		// 'gentle-ai sync' would never create one.
+		if onlyNativeEngramAgents(installedAgents) {
+			return CheckResult{
+				Name:   id,
+				Status: CheckStatusPass,
+				Detail: "engram MCP not applicable: Pi uses gentle-engram native memory tools",
+			}
+		}
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusWarn,
@@ -602,6 +774,20 @@ func checkEngramReachable(ctx context.Context, homeDir string, installedAgents [
 		Status: CheckStatusPass,
 		Detail: "engram MCP (stdio) answered the initialize handshake for persisted configuration: " + strings.Join(sources, ", "),
 	}
+}
+
+// onlyNativeEngramAgents reports whether every installed agent reaches Engram
+// through native tools instead of MCP. Pi is the only such agent.
+func onlyNativeEngramAgents(installedAgents []string) bool {
+	if len(installedAgents) == 0 {
+		return false
+	}
+	for _, agentID := range installedAgents {
+		if agentID != "pi" {
+			return false
+		}
+	}
+	return true
 }
 
 // checkEngramHTTP probes the HTTP deployment the user declared via
@@ -719,6 +905,21 @@ func statusIcon(s CheckStatus) string {
 	}
 }
 
+// doctorAssetSyncRemediation keeps the remedy anchored to the build that
+// diagnosed the skew. A bare PATH fallback could sync a different build's
+// assets and leave this warning unchanged (#4782).
+func doctorAssetSyncRemediation() string {
+	invoked, err := osExecutableDoctor()
+	if err != nil || !managedAssetsArgvZeroIdentity(invoked) {
+		return "cannot determine the absolute invoked executable path; run sync using the absolute path of this running build to update installed assets"
+	}
+	remedy := fmt.Sprintf("run `%s sync` to update installed assets", managedAssetsExecutableToken(invoked))
+	if resolved, _, err := resolveDoctorTool("gentle-ai"); err == nil && !doctorSameExecutable(invoked, resolved) {
+		remedy += fmt.Sprintf("; gentle-ai on PATH resolves to %s, which differs from the running executable; use the invoked path above", resolved)
+	}
+	return remedy
+}
+
 func checkInstalledAssetVersion(homeDir string) CheckResult {
 	s, err := state.Read(homeDir)
 	if err != nil {
@@ -736,7 +937,7 @@ func checkInstalledAssetVersion(homeDir string) CheckResult {
 	if s.InstalledBinaryVersion != AppVersion {
 		return CheckResult{
 			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("installed assets were configured by gentle-ai %s, but running binary is %s — run 'gentle-ai sync' to update installed assets", s.InstalledBinaryVersion, AppVersion),
+			Detail: fmt.Sprintf("installed assets were configured by gentle-ai %s, but running binary is %s — %s", s.InstalledBinaryVersion, AppVersion, doctorAssetSyncRemediation()),
 		}
 	}
 	return CheckResult{

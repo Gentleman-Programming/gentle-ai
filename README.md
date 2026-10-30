@@ -12,7 +12,7 @@
 <p>
 <a href="https://github.com/Gentleman-Programming/gentle-ai/releases"><img src="https://img.shields.io/github/v/release/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Release"></a>
 <a href="https://github.com/Gentleman-Programming/gentle-ai/stargazers"><img src="https://img.shields.io/github/stars/Gentleman-Programming/gentle-ai?style=for-the-badge&labelColor=1A1218&color=F095C8" alt="Stars"></a>
-<img src="https://img.shields.io/badge/agents-16-F095C8?style=for-the-badge&labelColor=1A1218" alt="16 agents">
+<img src="https://img.shields.io/badge/agents-18-F095C8?style=for-the-badge&labelColor=1A1218" alt="18 agents">
 <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Platform">
 <a href="LICENSE"><img src="https://img.shields.io/badge/MIT-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
 </p>
@@ -30,6 +30,24 @@
 Your agent writes code, then forgets everything. It has no opinion about your project,
 and no way to prove what it did beyond asking you to read every line.
 <strong>Gentle-AI gives it memory, a workflow, and evidence.</strong>
+</p>
+
+<p>
+ <h3>See it in action</h3>
+
+   <p>
+   One prompt, from idea to reviewed commit: memory, workflow, and evidence in a real session.
+   </p>
+
+https://github.com/user-attachments/assets/fa5c0cfe-06e7-4c0d-bd6e-8ac7cb934339
+
+
+   <p>Prefer Spanish subtitles?</p>
+   
+
+https://github.com/user-attachments/assets/6d2bc422-a4dd-4ecf-a04b-fcd3bea7fea9
+
+
 </p>
 
 <br/>
@@ -85,9 +103,10 @@ and no way to prove what it did beyond asking you to read every line.
 <strong><a href="docs/agents.md#antigravity">Antigravity</a></strong> ·
 <strong><a href="docs/agents.md#windsurf">Windsurf</a></strong> ·
 <strong><a href="docs/agents.md#openclaw">OpenClaw</a></strong> ·
-<strong><a href="docs/agents.md#trae">Trae</a></strong>
+<strong><a href="docs/agents.md#trae">Trae</a></strong> ·
+<strong><a href="docs/agents.md#conductor">Conductor</a></strong>
 
-<sub>16 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
+<sub>17 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
 
 </div>
 
@@ -111,15 +130,53 @@ The cost of a fresh session is not the tokens — it is you, re-explaining the s
 
 <img width="100%" src="docs/assets/diagrams/odd-cycle.svg" alt="ODD authorizes and understands a request. Read-only work ends separately; authorized work stays lightweight when small or keeps a recoverable record when substantial, then is implemented, checked, and closed." />
 
-Small changes should not need a planning pipeline, and larger work should not lose its context between sessions. **Organic Driven Development (ODD)** keeps understood changes lightweight and gives substantial, authorized work one recoverable feature document. The agent explores before changing code, checks the results, and keeps progress current so work can resume without rebuilding the plan.
+Small changes should not need a planning pipeline, and larger work should not lose its context between sessions. **Organic Driven Development (ODD)** keeps understood changes lightweight and gives substantial, authorized work one recoverable feature document. Questions, reviews and proposals stay read-only until you ask for a change. The agent explores before changing code, checks the results, and keeps progress current so work can resume without rebuilding the plan.
+
+Tasks are sized by understanding, risk, and resumability, never by file count. A small task — understood, with contained risk, and resumable from the diff alone — runs inline: no subagents, no task document. Work becomes large only when it can't be resumed from the diff — several sessions, external waits, or requirements too long to survive compaction — never because of its size. The feature document of a large task holds your spec verbatim, and every handoff points at it instead of paraphrasing it.
+
+https://github.com/user-attachments/assets/857a2195-34b8-4720-87af-f71bca3dec92
 
 **[Docs →](docs/usage.md#organic-driven-development-odd)**
 
 ---
 
-### Strict TDD — Prove behavior when enabled
+### Delegate for a reason — Not for size
 
-ODD uses the configured TDD mode and exact test runner. When Strict TDD is enabled, capture a failing behavior test before implementation, make it pass, then refactor while tests stay green. When disabled, run applicable functional checks anyway. The presence of tests alone does not enable Strict TDD.
+A subagent costs a fresh session, uncached reads, and a handoff. So the orchestrator delegates only when it can name the reason:
+
+| Reason | When it applies |
+| :--- | :--- |
+| **Exploration** | Understanding needs more than one inline batch (about 3 calls and 10k tokens) or more than about five sequential lookups; one read-only explorer returns a short map with `path:line` evidence |
+| **Parallel writers** | Two or more independent units of behavior (code, tests, and docs together) with disjoint edit surfaces, each needing several minutes of work: several files or roughly 100+ changed lines, because a subagent spends one to two minutes reading before it writes. A delivery that depends on another is not independent |
+| **Context backstop** | A long session hands its next bounded unit to a fresh worker |
+| **Independent verifier** | A change that names a high-risk item (data, security, shared contracts, concurrency, delivery, or no test that would catch a regression); never a native risk tier alone, an unclear or failed assessment, or the model that wrote the change |
+
+A trigger holds only when its condition truly holds; none holds by default, and when in doubt the parent works inline. Without a reason the parent writes inline, following its feature document. File count, task size, or a model price ratio never decide the route on their own.
+
+https://github.com/user-attachments/assets/ccd96c9e-e0fd-4504-ad94-0302398f13a9
+
+**[Docs →](docs/trigger-rules.md)**
+
+---
+
+### Measured — What proportional routing changed
+
+The routing rules above came from benchmarks, not intuition. These are Gentle Shell runs on a local benchmark with hidden acceptance suites; each cell is a single run (n=1), and cost is API-equivalent.
+
+| Scenario | Before | After |
+| :--- | :--- | :--- |
+| 3-line bug in one function | 335 s · 56 turns · $0.339 | **77 s · 10 turns · $0.105** — inline, no subagents |
+| Bug rooted in shared logic | 479 s · $0.361 | **276 s · $0.207** — one explorer |
+| Data migration (high risk) | 559 s · $0.403 · needed a feedback round | 539 s · $0.555 · **accepted on the first round** — one independent verifier |
+| 73-line spec, 26 hidden checks | Paraphrased handoffs: 13 failing, still 23/26 after two feedback rounds | Spec passed by reference ([gentle-shell#1718](https://github.com/Gentleman-Programming/gentle-shell/pull/1718)) |
+
+Against the same model in Codex CLI, with blind review of every solution, Gentle Shell was accepted on the first round in every cell and ranked higher on the medium (3 of 3 runs) and large tasks; it was close on the small one. The large task still took about three times longer (17.5–17.9 min vs 6.1 min) — that gap is open work. Sources: [gentle-shell#1723](https://github.com/Gentleman-Programming/gentle-shell/pull/1723), [#1794](https://github.com/Gentleman-Programming/gentle-shell/pull/1794), [#1713](https://github.com/Gentleman-Programming/gentle-shell/issues/1713).
+
+---
+
+### Test-first by default — Prove each requested rule
+
+ODD applies test-first development by default when a relevant runnable test and a clear expected outcome exist: capture a failing behavior test before implementation, make it pass, then refactor while tests stay green. Each requested rule gets one RED test, each touched existing command or option gets one test proving its previous behavior still holds, and nothing else is padded in. Without a meaningful runnable test, the agent explains the exception and runs applicable functional checks anyway.
 
 **[Docs →](docs/usage.md#organic-driven-development-odd)**
 
@@ -130,6 +187,10 @@ ODD uses the configured TDD mode and exact test runner. When Strict TDD is enabl
 <img width="100%" src="docs/assets/diagrams/rdd-review.svg" alt="How RDD checks a finished change. The exact change is frozen to a lineage, revision and target, then a read-only risk assessment picks the depth: passive gets a structural readback with zero reviewer lenses, medium gets one focused lens, high gets the canonical 4R — Risk, Resilience, Readability and Reliability. At most one bounded correction is allowed, and one exact acknowledgement closes the transaction. Delivery stays human-owned." />
 
 Receipt-Driven Development (RDD) is on by default and opt-out: run `gentle-ai review mode disable` to turn it off. Explicit global or clone-local OFF choices remain OFF. Its point is that a review cannot drift: the candidate is frozen before anything reads it, so the evidence belongs to the exact version you are about to rely on — not to whatever the worktree looked like a moment later. The depth comes from that frozen candidate rather than from the model's judgment, and the result is informational. Commit, push and release stay your call.
+
+Review is proportionate: an automatic review is due only for a high-risk candidate, and the agent can name the 4R lenses that fit what it touched — with a reason frozen alongside the authority — instead of paying for all four. Verification by risk tier covers the rest.
+
+https://github.com/user-attachments/assets/9d3b176f-6e59-48f3-aba2-1196f20a4a6f
 
 **[Docs →](docs/review-integration.md)**
 
@@ -151,15 +212,17 @@ A model that guesses the next step guesses differently tomorrow, and differently
 
 Gentle Shell is a separate Pi integration package. Gentle AI configures supported agents; Gentle Shell owns its own Pi runtime, agents, and interface. Installing or updating this binary does not itself establish Pi behavior parity.
 
+On a clean machine, the [Gentle Shell installers](https://github.com/Gentleman-Programming/gentle-shell#get-started) set up a self-contained, bundled Gentle Shell with its exact Pi, its pinned Gentle AI, and Engram.
+
 **[Docs →](docs/pi.md)**
 
 ---
 
-### 16 agents — Keep the agent you already use
+### 17 agents — Keep the agent you already use
 
 <img width="100%" src="docs/assets/features/agents.png" alt="The installer configuring multiple agents" />
 
-Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and twelve more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
+Gentle-AI brings its shared workflow to Pi, OpenCode, Claude Code, Codex, and thirteen more agents. Each integration uses that agent's native capabilities, so available features such as delegation and RDD review can differ.
 
 **[Docs →](docs/agents.md)**
 
@@ -194,8 +257,22 @@ brew install gentleman-programming/tap/gentle-ai
 # macOS / Linux (curl)
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 
-# Windows (PowerShell) — source install, needs Go 1.25.10+
-go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest
+# Windows (PowerShell) — source install of the latest release, needs Go 1.25.10+
+go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.1.1
+```
+
+When the install directory is not on your `PATH` yet, `install.sh` adds one marked line (`# gentle-ai installer`) to the startup file your shell reads: `~/.zshrc` for zsh, `~/.bashrc` for bash on Linux, for bash on macOS the first existing of `~/.bash_profile`, `~/.bash_login`, or `~/.profile` (else `~/.bash_profile`), a `conf.d` file for fish, and `~/.profile` otherwise. `install.ps1` adds the directory to your user `Path`. Open a new terminal afterwards, or run the command the installer prints under `Current terminal:` to use `gentle-ai` in the current one. If the startup file is a symlink or cannot be edited, nothing is written and the installer prints the line to add yourself.
+
+`go install` never changes your `PATH`. It puts `gentle-ai` in `$(go env GOBIN)` or, when that is unset, in `$(go env GOPATH)/bin` (usually `~/go/bin`), and Go's Linux and macOS setups do not add that directory for you. If `gentle-ai` is not found after `go install`, add it once and open a new terminal (use your `GOBIN` directory instead when it is set, and `~/.zshrc` for zsh):
+
+```bash
+echo "export PATH=\"$(go env GOPATH)/bin:\$PATH\"" >> ~/.bashrc
+```
+
+To install `main` with the `PATH` set up for you, use `install.sh --channel beta`, which runs `go install` from `main` and then adds its directory as described above:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
 ```
 
 ```bash
@@ -203,9 +280,11 @@ gentle-ai          # pick your agents, components and persona
 gentle-ai doctor   # verify — read-only, changes nothing
 ```
 
+If `doctor` cannot read `state.json`, inspect the reported file and parent directory's access; for permission errors, check permissions and ownership. Keep the existing state file. For invalid JSON, restore a valid backup or repair the content while preserving your installation settings. Then re-run `gentle-ai doctor`; it never changes the file or its permissions.
+
 Then use your agent normally. Your configs are snapshotted before every write, and **Gentle-AI never installs an AI agent for you** — it configures what you already have.
 
-> **Beta channel, signature verification and per-distro prerequisites: [Quickstart →](docs/quickstart.md)**
+> **Beta channel and per-distro prerequisites: [Quickstart →](docs/quickstart.md) · Signature verification: [Release signing →](docs/release-signing.md#user-verification)**
 
 <div align="right"><a href="#top">Back to top</a></div>
 
@@ -217,7 +296,7 @@ Then use your agent normally. Your configs are snapshotted before every write, a
 | :--- | :--- |
 | **[Intended Usage](docs/intended-usage.md)** | The mental model. If you read one page, read this one. |
 | **[Quickstart](docs/quickstart.md)** · **[Usage](docs/usage.md)** | Install, prerequisites, every CLI command and flag |
-| **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 16 |
+| **[Agents](docs/agents.md)** | Feature matrix and per-agent notes for all 17 |
 | **[ODD](docs/usage.md#organic-driven-development-odd)** · **[Routing](docs/trigger-rules.md)** | Everyday direct and delegated work |
 | **[Review](docs/review-integration.md)** · **[Architecture](docs/architecture/organic-rdd.md)** | The RDD contract, lifecycle and threat model |
 | **[Engram](docs/engram.md)** · **[Components](docs/components.md)** | Memory commands, skills, presets and personas |

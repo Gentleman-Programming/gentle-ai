@@ -22,6 +22,10 @@ func issue3043OpenCodeRuntime(sandbox *Sandbox) error {
 		return err
 	}
 	sandbox.PathOverride = path
+	// Readiness is only claimed for a login shell the product can model (#3453):
+	// a POSIX sh reads ~/.profile, where activation persists the launcher PATH.
+	// Without SHELL the truthful status is unknown, not ready.
+	sandbox.LoginShell = "/bin/sh"
 	sandbox.Scratch["issue-3043-opencode"] = launcher
 	return nil
 }
@@ -37,6 +41,10 @@ func issue3043VerifyInstall(sandbox *Sandbox, observation Observation) error {
 	if !strings.Contains(observation.Stdout, "OpenCode background activation status: ready") ||
 		!strings.Contains(observation.Stdout, "OpenCode background restart required: true") {
 		return fmt.Errorf("install omitted ready activation evidence: %s", observation.Stdout)
+	}
+	profile, err := os.ReadFile(filepath.Join(sandbox.Home, ".profile"))
+	if err != nil || !strings.Contains(string(profile), filepath.Join(sandbox.Home, ".gentle-ai", "bin")) {
+		return fmt.Errorf("login profile does not persist the managed launcher directory: %q, %v", profile, err)
 	}
 	if strings.Contains(observation.Stdout, "OPENCODE_EXPERIMENTAL=true") {
 		return fmt.Errorf("install emitted legacy shell mutation guidance: %s", observation.Stdout)

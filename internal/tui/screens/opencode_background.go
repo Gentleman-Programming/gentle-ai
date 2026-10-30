@@ -3,7 +3,7 @@ package screens
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 // OpenCodeBackgroundOptions returns the choices shown when the background
@@ -19,7 +19,7 @@ func RenderOpenCodeBackground(cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("OpenCode Background Subagents"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose how OpenCode should run SDD subagents."))
+	b.WriteString(styles.SubtextStyle.Render("Choose how OpenCode should run delegated subagents."))
 	b.WriteString("\n")
 	b.WriteString(styles.SubtextStyle.Render("Managed activation starts OpenCode with its background-subagent environment."))
 	b.WriteString("\n\n")

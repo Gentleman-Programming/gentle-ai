@@ -3,7 +3,7 @@ package screens
 import (
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 // PiBackgroundOptions returns the choices shown when the Pi background
@@ -19,7 +19,7 @@ func RenderPiBackground(cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Pi Background Subagents"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose how Pi should run SDD subagents."))
+	b.WriteString(styles.SubtextStyle.Render("Choose how Pi should run delegated subagents."))
 	b.WriteString("\n")
 	b.WriteString(styles.SubtextStyle.Render("The resolved policy is projected for the installed pi-subagents extension."))
 	b.WriteString("\n\n")

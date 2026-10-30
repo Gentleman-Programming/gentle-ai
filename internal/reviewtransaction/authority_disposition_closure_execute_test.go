@@ -379,7 +379,7 @@ func TestReadBackAuthorityDispositionRefusesOnAnyClosureMemberReference(t *testi
 			Schema: AuthorityDispositionProofSchema, Closure: []string{"leftover-descendant", "seed-not-actually-present"},
 		},
 	}
-	_, err = readBackAuthorityDisposition(context.Background(), root, record)
+	_, err = readBackAuthorityDisposition(context.Background(), root, record, nil)
 	if err == nil {
 		t.Fatal("readback admitted a retained graph still referencing a non-seed closure member")
 	}

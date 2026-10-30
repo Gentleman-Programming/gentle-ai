@@ -4,8 +4,8 @@ import (
 	"os"
 	"sort"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 // DiscoverCustomAgents returns user-owned agent keys in OpenCode settings, sorted
@@ -33,6 +33,13 @@ func DiscoverCustomAgents(settingsPath string) ([]string, error) {
 		"gentle-orchestrator": true, "sdd-orchestrator": true,
 	}
 	for _, phase := range opencode.ConfigurableAgentPhases() {
+		reserved[phase] = true
+	}
+	// #4471: the ODD parity agents ported from Gentle Shell are managed like
+	// JD/review-lens phases but are not counted as "configurable legacy SDD
+	// identities" (that function also backs the telemetry runtime agent-class
+	// allowlist, which does not need these three names).
+	for _, phase := range opencode.GentleAIODDPhases() {
 		reserved[phase] = true
 	}
 	var custom []string

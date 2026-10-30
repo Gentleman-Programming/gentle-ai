@@ -29,7 +29,7 @@ $GITHUB_OWNER = "Gentleman-Programming"
 $GITHUB_REPO = "gentle-ai"
 $BINARY_NAME = "gentle-ai"
 $WINDOWS_DISTRIBUTION_HOLD = "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced."
-$STABLE_SOURCE_COMMAND = "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest"
+$STABLE_SOURCE_COMMAND = "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest"
 
 function Write-Info    { param([string]$Message) Write-Host "[info]    $Message" -ForegroundColor Blue }
 function Write-Success { param([string]$Message) Write-Host "[ok]      $Message" -ForegroundColor Green }
@@ -90,17 +90,37 @@ function Install-ViaGo {
     param([string]$Channel = "stable")
 
     Write-Step "Installing via go install"
-    $version = if ($Channel -eq "beta") { "main" } else { "latest" }
-    # /v3 is part of the module path, not decoration: Go refuses to resolve a
-    # module whose tags are v3.x unless the import path carries the major
-    # version suffix.
-    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/v3/cmd/$BINARY_NAME@$version"
+    if ($Channel -eq "beta") {
+        $version = "main"
+        # /v4 is part of the module path, not decoration: Go refuses to resolve a
+        # module whose tags are v4.x unless the import path carries the major
+        # version suffix.
+        $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/v4/cmd/$BINARY_NAME@$version"
+    } else {
+        # Stable pins the latest release tag and derives the module path from
+        # its major. Never use @latest: before a v4.x tag exists Go resolves the
+        # /v4 path to an unreleased pseudo-version at the default-branch tip.
+        $releaseUrl = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
+        $tag = ""
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $tag = [string](Invoke-RestMethod -Uri $releaseUrl -UseBasicParsing).tag_name
+        } catch {}
+        if ($tag -notmatch '^v(\d+)\.\d+\.\d+$') {
+            Stop-WithError ("Could not resolve a valid latest release tag from {0}; refusing to install an unreleased version." -f $releaseUrl)
+        }
+        # Go module rule: majors 0 and 1 are unsuffixed, 2+ append /vN.
+        $major = [int]$Matches[1]
+        $module = "github.com/{0}/{1}" -f $GITHUB_OWNER.ToLower(), $GITHUB_REPO
+        if ($major -ge 2) { $module = "{0}/v{1}" -f $module, $major }
+        $goPackage = "{0}/cmd/{1}@{2}" -f $module, $BINARY_NAME, $tag
+    }
     Write-Info "Running: go install $goPackage"
 
     if ($Channel -eq "beta") {
-        Add-GoEnvPattern -Name "GONOSUMDB" -Pattern "github.com/gentleman-programming/gentle-ai/v3"
-        Add-GoEnvPattern -Name "GOPRIVATE" -Pattern "github.com/gentleman-programming/gentle-ai/v3"
-        Add-GoEnvPattern -Name "GONOPROXY" -Pattern "github.com/gentleman-programming/gentle-ai/v3"
+        Add-GoEnvPattern -Name "GONOSUMDB" -Pattern "github.com/gentleman-programming/gentle-ai/v4"
+        Add-GoEnvPattern -Name "GOPRIVATE" -Pattern "github.com/gentleman-programming/gentle-ai/v4"
+        Add-GoEnvPattern -Name "GONOPROXY" -Pattern "github.com/gentleman-programming/gentle-ai/v4"
     }
 
     & go install $goPackage
@@ -113,11 +133,105 @@ function Install-ViaGo {
         $gopath = & go env GOPATH 2>$null
         $gobin = Join-Path $gopath "bin"
     }
-    if ($env:PATH -notlike "*$gobin*") {
-        Write-Warn "$gobin is not in your PATH"
-        Write-Warn "Add it to your PATH environment variable."
-    }
     Write-Success "Installed $BINARY_NAME from source via go install"
+
+    Add-InstallDirToPath -Directory $gobin
+}
+
+# Puts the install dir on PATH for this session and future terminals, and says
+# where. Prints nothing when the session already resolves the directory.
+function Add-InstallDirToPath {
+    param([string]$Directory)
+
+    if ((Add-UserPathEntry -Directory $Directory) -ne "added") { return }
+    Write-Host ""
+    Write-Host ("Current terminal: {0} was added to PATH" -f $Directory)
+    Write-Host "Future terminals: open a new terminal"
+    Write-Success ("PATH was added to the user environment (HKCU\Environment Path): {0}" -f $Directory)
+}
+
+# Reads a user environment variable as stored, keeping %VAR% references
+# unexpanded so writing it back does not flatten them.
+function Get-UserEnv {
+    param([string]$Key)
+
+    $envKey = (Get-Item -Path "HKCU:").OpenSubKey("Environment")
+    if ($null -eq $envKey) { return $null }
+    try {
+        return $envKey.GetValue($Key, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    } finally {
+        $envKey.Close()
+    }
+}
+
+# Writes a user environment variable keeping its registry value kind
+# (REG_EXPAND_SZ stays ExpandString), then tells running programs about it.
+function Set-UserEnv {
+    param([string]$Key, [string]$Value)
+
+    $envKey = (Get-Item -Path "HKCU:").OpenSubKey("Environment", $true)
+    try {
+        $kind = [Microsoft.Win32.RegistryValueKind]::String
+        if ($Value.Contains("%")) {
+            $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
+        } elseif ($null -ne $envKey.GetValue($Key)) {
+            $kind = $envKey.GetValueKind($Key)
+        }
+        $envKey.SetValue($Key, $Value, $kind)
+    } finally {
+        $envKey.Close()
+    }
+
+    Publish-EnvChange
+}
+
+# Broadcasts WM_SETTINGCHANGE ("Environment") so Explorer and terminals opened
+# from now on read the new user PATH without signing out.
+function Publish-EnvChange {
+    if (-not ("Win32.GentleAiNativeMethods" -as [Type])) {
+        Add-Type -Namespace Win32 -Name GentleAiNativeMethods -MemberDefinition @"
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+public static extern IntPtr SendMessageTimeout(
+    IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam,
+    uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+"@
+    }
+
+    $hwndBroadcast = [IntPtr]0xffff
+    $wmSettingChange = 0x1a
+    $result = [UIntPtr]::Zero
+    [Win32.GentleAiNativeMethods]::SendMessageTimeout($hwndBroadcast, $wmSettingChange, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result) | Out-Null
+}
+
+# Puts Directory first on the persisted user PATH (HKCU\Environment) and on this
+# session's PATH. Returns "session" when this session already resolves Directory
+# (Machine PATH, $PROFILE): nothing is written. Returns "present" when only the
+# user PATH held it (the session gains it), and "added" when it was written.
+function Add-UserPathEntry {
+    param([string]$Directory)
+
+    $normalize = {
+        param([string]$Entry)
+        [Environment]::ExpandEnvironmentVariables($Entry.Trim()).TrimEnd("\").ToLowerInvariant()
+    }
+    $wanted = & $normalize $Directory
+
+    $separator = [string][IO.Path]::PathSeparator
+    $session = @($env:PATH -split [regex]::Escape($separator) | Where-Object { $_ })
+    if (@($session | Where-Object { (& $normalize $_) -eq $wanted }).Count -gt 0) { return "session" }
+
+    $current = Get-UserEnv -Key "Path"
+    $entries = @()
+    if ($current) { $entries = @($current -split ";" | Where-Object { $_ }) }
+    $present = @($entries | Where-Object { (& $normalize $_) -eq $wanted }).Count -gt 0
+    if (-not $present) {
+        Set-UserEnv -Key "Path" -Value ((@($Directory) + $entries) -join ";")
+    }
+
+    $env:PATH = ((@($Directory) + $session) -join $separator)
+
+    if ($present) { return "present" }
+    return "added"
 }
 
 function Add-GoEnvPattern {

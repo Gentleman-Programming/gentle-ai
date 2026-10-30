@@ -1,0 +1,13 @@
+# Main SDK integration keeps the complete confirmed selection
+
+This block retains the complete051–065 source, custody, stock-binding, composition, runtime, selection and worker chain, including all qualification tests, negative controls and documentation.066 follows the real worker rather than introducing an inert SDKSource field. The mode is **SDK Main + stock provider**, never intact Main: original stock installer/resolver/native/dependency pins remain authoritative.
+
+The original full experience remains confirmation-bound and reaches the actual worker unchanged. Main's preparer validates the real platform/mode/combination, writes its canonical base preferences through the existing native writer, and leaves runtime composition to the authentic acquired-source worker. It does not copy the profile and clear SDKSource to bypass a generic refusal. Generic preference writers still reject Main. Historical nil/stable behavior remains stock.
+
+Complete source qualification controls remain. Two convenience aliases that only named qualification actions live in `_test.go`; those tests still call the real owned action and retain every full-Main rejection and SDK+stock acceptance assertion. The production worker consumes that actual action directly; there is no dummy caller, deadcode waiver or ignored result. The existing0700 fixture helper qualifies Main's positive stage parent without weakening physical admission.
+
+Parent regressions for cancellation/deadline causes, body-close failure, complete-profile staging and Shared refusal are authored before production integration. New response/directory close results remain owned by their actual caller. All synthetic ZIP/HTTP data remains parser/settlement evidence, not TLS, publisher, installed or native acceptance.
+
+The hardened253→293 PTY population is extended rather than replaced by the upstream181-line baseline. Original confirm/Escape/Ctrl-C and stalled-child controls, timeouts, NONBLOCK, kill/wait, joins and termios assertions remain; Main and Main-edit add complete profile and fresh physical-consent checks. The full131-line SDK selector test population is retained with qualified fixture parents.
+
+No local Go/SDK/Node/CLI/PTY qualification, build, installation or guest execution is performed by this integration. Earlier source Guest RED/GREEN records retain their historical scope; neither those records nor foundation5585 CI verify this candidate. Fresh whole-candidate assessment, writer/independent verification and applicable functional CI remain required. No merge, release, published-ref update, protected-label grant or native review approval is implied.

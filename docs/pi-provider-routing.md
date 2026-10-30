@@ -1,5 +1,8 @@
 # Configure native Pi review roles
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 Configure `review-refuter` and `review-validator` through gentle-pi's model configuration. Go reads those same saved assignments for native role capture; it never writes configuration or creates another routing format.
 
 ## Resolution

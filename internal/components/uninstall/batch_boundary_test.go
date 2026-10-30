@@ -9,24 +9,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 // TestPartialUninstallCommitsSucceededAgentsWhenAnotherAgentFails reproduces
-// the reporter's batch: two managed agents, one of whose settings files is not
-// JSON, uninstalled in a single invocation. The batch must not abandon the
+// the reporter's batch: two managed agents, one of whose declared-JSON settings
+// files is malformed, uninstalled in a single invocation. The batch must not abandon the
 // remaining agent, and the state file it leaves behind must describe the disk.
 func TestPartialUninstallCommitsSucceededAgentsWhenAnotherAgentFails(t *testing.T) {
 	home := t.TempDir()
 	claudeSettings := filepath.Join(home, ".claude", "settings.json")
-	hermesConfig := filepath.Join(home, ".hermes", "config.yaml")
-	hermesSoul := filepath.Join(home, ".hermes", "SOUL.md")
+	geminiSettings := filepath.Join(home, ".gemini", "settings.json")
+	geminiPrompt := filepath.Join(home, ".gemini", "GEMINI.md")
 
 	writeBatchFile(t, claudeSettings, `{"theme":"gentleman","outputStyle":"gentleman","env":{"MY_VAR":"1"}}`)
-	writeBatchFile(t, hermesConfig, "providers:\n  - name: hermes\n")
-	writeBatchFile(t, hermesSoul, "<!-- gentle-ai:persona -->\nmanaged\n<!-- /gentle-ai:persona -->\n")
-	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"claude-code", "hermes"}}); err != nil {
+	writeBatchFile(t, geminiSettings, `{"theme":"gentleman",`)
+	writeBatchFile(t, geminiPrompt, "<!-- gentle-ai:persona -->\nmanaged\n<!-- /gentle-ai:persona -->\n")
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"claude-code", "gemini-cli"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -36,16 +36,16 @@ func TestPartialUninstallCommitsSucceededAgentsWhenAnotherAgentFails(t *testing.
 	}
 	svc.snapshotter = stubSnapshotter{}
 
-	result, err := svc.PartialUninstall([]model.AgentID{model.AgentClaudeCode, model.AgentHermes}, nil)
+	result, err := svc.PartialUninstall([]model.AgentID{model.AgentClaudeCode, model.AgentGeminiCLI}, nil)
 	if err == nil {
-		t.Fatal("PartialUninstall() error = nil, want the hermes cleanup failure surfaced")
+		t.Fatal("PartialUninstall() error = nil, want the gemini cleanup failure surfaced")
 	}
-	if want := fmt.Sprintf("%q", hermesConfig); !strings.Contains(err.Error(), want) {
+	if want := fmt.Sprintf("%q", geminiSettings); !strings.Contains(err.Error(), want) {
 		t.Fatalf("PartialUninstall() error = %v, want it to name the representation %s", err, want)
 	}
 
-	if !slices.Equal(result.FailedAgents, []model.AgentID{model.AgentHermes}) {
-		t.Fatalf("FailedAgents = %v, want [hermes]", result.FailedAgents)
+	if !slices.Equal(result.FailedAgents, []model.AgentID{model.AgentGeminiCLI}) {
+		t.Fatalf("FailedAgents = %v, want [gemini-cli]", result.FailedAgents)
 	}
 	if !slices.Equal(result.AgentsRemovedFromState, []model.AgentID{model.AgentClaudeCode}) {
 		t.Fatalf("AgentsRemovedFromState = %v, want [claude-code]", result.AgentsRemovedFromState)
@@ -57,7 +57,7 @@ func TestPartialUninstallCommitsSucceededAgentsWhenAnotherAgentFails(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(current.InstalledAgents, []string{"hermes"}) {
+	if !slices.Equal(current.InstalledAgents, []string{"gemini-cli"}) {
 		t.Fatalf("state.json installed_agents = %v, want only the agent that failed", current.InstalledAgents)
 	}
 
@@ -70,7 +70,7 @@ func TestPartialUninstallCommitsSucceededAgentsWhenAnotherAgentFails(t *testing.
 	}
 
 	if !slices.ContainsFunc(result.ManualActions, func(action string) bool {
-		return strings.Contains(action, "hermes") && strings.Contains(action, hermesConfig)
+		return strings.Contains(action, "gemini-cli") && strings.Contains(action, geminiSettings)
 	}) {
 		t.Fatalf("ManualActions = %v, want the failed agent and its path reported", result.ManualActions)
 	}
@@ -198,7 +198,13 @@ func TestBuildPlanAttributesOperationsToTheAgentsThatContributedThem(t *testing.
 	claudeSettings := filepath.Join(home, ".claude", "settings.json")
 	hermesConfig := filepath.Join(home, ".hermes", "config.yaml")
 	assertOperationAgents(t, built, claudeSettings, []model.AgentID{model.AgentClaudeCode})
-	assertOperationAgents(t, built, hermesConfig, []model.AgentID{model.AgentHermes})
+	assertOperationAgents(t, built, filepath.Join(home, ".hermes", "SOUL.md"), []model.AgentID{model.AgentHermes})
+	// Hermes' native YAML settings are not a generic JSON target.
+	for _, op := range built.operations {
+		if op.path == hermesConfig {
+			t.Fatalf("buildPlan() mutates native YAML settings %q", hermesConfig)
+		}
+	}
 }
 
 func assertOperationAgents(t *testing.T, built plan, path string, want []model.AgentID) {

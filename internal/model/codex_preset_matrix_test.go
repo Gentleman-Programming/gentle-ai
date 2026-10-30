@@ -16,24 +16,24 @@ func TestCodexPresetMatrixMatchesTheMaintainerTable(t *testing.T) {
 	}{
 		{
 			preset:       CodexPresetLowCost,
-			orchestrator: CodexCarrilDefault{Model: "gpt-6-luna", Effort: CodexEffortMedium},
-			strong:       CodexCarrilDefault{Model: "gpt-6-sol", Effort: CodexEffortMedium},
-			mid:          CodexCarrilDefault{Model: "gpt-6-luna", Effort: CodexEffortMedium},
-			cheap:        CodexCarrilDefault{Model: "gpt-6-luna", Effort: CodexEffortHigh},
+			orchestrator: CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+			strong:       CodexCarrilDefault{Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+			mid:          CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+			cheap:        CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 		},
 		{
 			preset:       CodexPresetRecommended,
-			orchestrator: CodexCarrilDefault{Model: "gpt-6-sol", Effort: CodexEffortMedium},
-			strong:       CodexCarrilDefault{Model: "gpt-6-sol", Effort: CodexEffortMedium},
-			mid:          CodexCarrilDefault{Model: "gpt-6-luna", Effort: CodexEffortHigh},
-			cheap:        CodexCarrilDefault{Model: "gpt-6-luna", Effort: CodexEffortHigh},
+			orchestrator: CodexCarrilDefault{Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+			strong:       CodexCarrilDefault{Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+			mid:          CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+			cheap:        CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 		},
 		{
 			preset:       CodexPresetPowerful,
-			orchestrator: CodexCarrilDefault{Model: "gpt-6-astra", Effort: CodexEffortMedium},
-			strong:       CodexCarrilDefault{Model: "gpt-6-astra", Effort: CodexEffortXHigh},
-			mid:          CodexCarrilDefault{Model: "gpt-6-sol", Effort: CodexEffortHigh},
-			cheap:        CodexCarrilDefault{Model: "gpt-6-luna", Effort: CodexEffortHigh},
+			orchestrator: CodexCarrilDefault{Model: "gpt-6.1-astra", Effort: CodexEffortMedium},
+			strong:       CodexCarrilDefault{Model: "gpt-6.1-astra", Effort: CodexEffortXHigh},
+			mid:          CodexCarrilDefault{Model: "gpt-6.1-sol", Effort: CodexEffortHigh},
+			cheap:        CodexCarrilDefault{Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 		},
 	} {
 		t.Run(string(testCase.preset), func(t *testing.T) {

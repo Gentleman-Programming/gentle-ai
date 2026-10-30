@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
@@ -97,6 +97,57 @@ func TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew(t *testing.T) {
 	})
 }
 
+// TestPlainReviewVerbsRenderManagedAssetsContinuation pins the plain CLI
+// boundary of the verbs with no negotiated failure envelope (bundle import,
+// abandon): the refusal text itself must carry the executable-anchored sync
+// command while keeping both digests and the typed preflight refusal.
+func TestPlainReviewVerbsRenderManagedAssetsContinuation(t *testing.T) {
+	for name, run := range map[string]func(string, *bytes.Buffer) error{
+		"bundle import": func(repo string, output *bytes.Buffer) error {
+			return RunReviewBundleImport([]string{"--cwd", repo, "--bundle", filepath.Join(t.TempDir(), "bundle.json")}, output)
+		},
+		"abandon": func(repo string, output *bytes.Buffer) error {
+			return RunReviewAbandon([]string{"--cwd", repo, "--lineage", "lineage", "--expected-revision", "revision", "--reason", "reason", "--actor", "actor", "--maintainer-authorization", "authorization"}, output)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+			staleManagedReviewerAssets(t, home)
+
+			var output bytes.Buffer
+			err := run(repo, &output)
+			if err == nil {
+				t.Fatalf("stale managed assets %s succeeded: %s", name, output.String())
+			}
+			command := managedAssetsContinuation("", nil).Command
+			for _, want := range []string{managedAssetProvenanceRefusal, "recorded digest sha256:stale", "this binary embeds ", "continue with: " + command} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("%s refusal = %q, want it to contain %q", name, err.Error(), want)
+				}
+			}
+			var preflight *reviewIntegrationPreflightError
+			if !errors.As(err, &preflight) || preflight.continuation == nil || preflight.continuation.Command != command {
+				t.Fatalf("%s refusal lost the typed continuation: %#v", name, err)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("refused %s wrote output: %s", name, output.String())
+			}
+		})
+	}
+}
+
+// TestPlainReviewContinuationLeavesOtherErrorsUnchanged pins that only a typed
+// refusal carrying a continuation gains the rendered command.
+func TestPlainReviewContinuationLeavesOtherErrorsUnchanged(t *testing.T) {
+	plain := errors.New("plain failure")
+	typed := reviewPreflightRefusal(reviewPreflightManagedAssetsReason, errors.New("typed without continuation"))
+	for _, err := range []error{nil, plain, typed} {
+		if got := withPlainReviewContinuation(err); got != err {
+			t.Fatalf("withPlainReviewContinuation(%v) = %v, want the same error", err, got)
+		}
+	}
+}
+
 func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *testing.T) {
 	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/stale-assets.md", "# Candidate\n", 0o644)
@@ -115,8 +166,10 @@ func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *tes
 		failure.NextAction != "stop" {
 		t.Fatalf("stale managed assets failure = %#v", failure)
 	}
-	if failure.Cause != managedAssetProvenanceRefusal {
-		t.Fatalf("stale managed assets cause = %q, want %q", failure.Cause, managedAssetProvenanceRefusal)
+	embedded, digestErr := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, digestErr)
+	if want := managedAssetProvenanceRefusal + " (recorded digest sha256:stale, this binary embeds " + embedded + ")"; failure.Cause != want {
+		t.Fatalf("stale managed assets cause = %q, want %q", failure.Cause, want)
 	}
 	// #3299, #4170: the failure names the exact candidate-preserving sync
 	// continuation instead of leaving the caller to guess "run sync" from the
@@ -136,6 +189,200 @@ func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *tes
 	malformedFailure.Continuation = &malformedContinuation
 	if err := malformedFailure.Validate(); err == nil {
 		t.Fatal("FAILURE accepted a multiline managed-assets continuation command")
+	}
+}
+
+// TestCaptureResultClassifiesStaleManagedAssetsAsTypedRefusal is the #4379
+// regression. The capture-time gate refused with an untyped error, so the
+// collect capture fell through to operation_outcome_unknown (mutation outcome
+// unknown, retry unsafe) and never named the sync that clears it. It must
+// publish the same not-started managed_assets_outdated refusal START does,
+// with the executable-anchored continuation, and leave authority untouched.
+func TestCaptureResultClassifiesStaleManagedAssetsAsTypedRefusal(t *testing.T) {
+	home := reviewEnabledHome(t)
+	repo, started, _, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	input := filepath.Join(t.TempDir(), "result.json")
+	requireManagedAssetProvenanceNoError(t, os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, lens, 0), 0o600))
+	store, before, err := discoverCompactFacadeReview(t.Context(), repo, started.LineageID, false)
+	requireManagedAssetProvenanceNoError(t, err)
+	staleManagedReviewerAssets(t, home)
+
+	var output bytes.Buffer
+	err = RunReview([]string{
+		"capture-result", "--cwd", repo, "--lineage", started.LineageID,
+		"--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", "0", "--input", input,
+	}, &output)
+	failure := decodeCaptureRefusalEnvelope(t, err, output.Bytes())
+	if failure.Operation != "review.capture-result" || failure.Phase != "preflight" ||
+		failure.Code != "managed_assets_outdated" || failure.MutationOutcome != ReviewMutationNotStarted ||
+		failure.NextAction != "stop" || failure.LineageID != started.LineageID {
+		t.Fatalf("stale managed assets capture envelope = %#v", failure)
+	}
+	if !strings.HasPrefix(failure.Cause, managedAssetProvenanceRefusal) {
+		t.Fatalf("stale managed assets cause = %q, want prefix %q", failure.Cause, managedAssetProvenanceRefusal)
+	}
+	executable, err := os.Executable()
+	requireManagedAssetProvenanceNoError(t, err)
+	if continuation := failure.Continuation; continuation == nil || continuation.Operation != "sync" ||
+		continuation.Command != managedAssetsExecutableToken(executable)+" sync" || continuation.Agent != "" ||
+		!reflect.DeepEqual(continuation.StaleAssets, []string{"sha256:stale"}) {
+		t.Fatalf("stale managed assets capture continuation = %#v", failure.Continuation)
+	}
+	validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, "v2", "failure.schema.json"), output.Bytes())
+	assertOpenCodeRelayAuthorityUnchanged(t, repo, started.LineageID, store, before)
+}
+
+// TestManagedAssetsGateRefusalIsTypedForEveryCaller pins the shared gate
+// itself: whichever verb reaches it, the refusal classifies as the not-started
+// managed_assets_outdated preflight with its sync continuation, never as the
+// operation_outcome_unknown default.
+func TestManagedAssetsGateRefusalIsTypedForEveryCaller(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	staleManagedReviewerAssets(t, home)
+	err := authorizeManagedReviewerAssets()
+	var preflight *reviewIntegrationPreflightError
+	if !errors.As(err, &preflight) {
+		t.Fatalf("managed-asset gate error = %T %v, want a typed preflight refusal", err, err)
+	}
+	// #4379 suggested fix: the refusal names both digests, so a sync run by
+	// a different binary than the one refusing is diagnosable at a glance.
+	embedded, digestErr := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, digestErr)
+	want := managedAssetProvenanceRefusal + " (recorded digest sha256:stale, this binary embeds " + embedded + ")"
+	if err.Error() != want {
+		t.Fatalf("managed-asset gate text = %q, want %q", err.Error(), want)
+	}
+	failure := newReviewIntegrationFailure("review.repair", []string{"--contract", ReviewIntegrationContractV2}, err)
+	if failure.Code != "managed_assets_outdated" || failure.Phase != "preflight" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.Continuation == nil {
+		t.Fatalf("managed-asset gate failure = %#v", failure)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("managed-asset gate failure does not satisfy its contract: %v", err)
+	}
+}
+
+// TestManagedAssetsRefusalHonorsV1FailureSchema pins the contract split: the
+// published v1 failure schema forbids `continuation`, so a managed_assets_outdated
+// refusal negotiated under v1 publishes the typed code alone, while v2 keeps
+// the continuation it requires. Before this, START under v1 emitted an
+// envelope its own published schema rejects, and the shared mutation gate
+// would have extended that to negotiated repair.
+func TestManagedAssetsRefusalHonorsV1FailureSchema(t *testing.T) {
+	v1Schema := compileWholePublishedReviewSchema(t, "v1", "failure.schema.json")
+	t.Run("start", func(t *testing.T) {
+		home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+		writeReviewStartCandidate(t, repo, "docs/stale-assets.md", "# Candidate\n", 0o644)
+		staleManagedReviewerAssets(t, home)
+		var output bytes.Buffer
+		err := RunReview(boundNegotiatedStartArgs(t, []string{
+			"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--agent", "opencode", "--consent", "granted",
+		}), &output)
+		if err == nil {
+			t.Fatalf("stale managed assets START succeeded: %s", output.String())
+		}
+		failure := decodeReviewIntegrationFailure(t, output.Bytes())
+		if failure.Contract != ReviewIntegrationContractV1 || failure.Code != "managed_assets_outdated" ||
+			failure.MutationOutcome != ReviewMutationNotStarted || failure.Continuation != nil {
+			t.Fatalf("v1 stale managed assets failure = %#v", failure)
+		}
+		validatePublishedReviewSchema(t, v1Schema, output.Bytes())
+		requireManagedAssetProvenanceNoError(t, failure.Validate())
+	})
+	t.Run("repair gate", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		staleManagedReviewerAssets(t, home)
+		for _, contract := range []string{ReviewIntegrationContractV1, ReviewIntegrationContractV2} {
+			failure := newReviewIntegrationFailure("review.repair", []string{"--contract", contract}, authorizeManagedReviewerAssets())
+			if failure.Code != "managed_assets_outdated" || (failure.Continuation != nil) != (contract == ReviewIntegrationContractV2) {
+				t.Fatalf("%s repair gate failure = %#v", contract, failure)
+			}
+			requireManagedAssetProvenanceNoError(t, failure.Validate())
+			if contract == ReviewIntegrationContractV1 {
+				var output bytes.Buffer
+				requireManagedAssetProvenanceNoError(t, emitReviewIntegrationFailure(&output, failure))
+				validatePublishedReviewSchema(t, v1Schema, output.Bytes())
+			}
+		}
+	})
+	t.Run("validate rejects a v1 continuation", func(t *testing.T) {
+		failure := newReviewIntegrationPreflightFailure("review.start", "managed_assets_outdated", reviewPreflightManagedAssetsReason.Message)
+		failure.NextAction = reviewPreflightManagedAssetsReason.NextAction
+		failure.Continuation = managedAssetsContinuation("", []string{"sha256:stale"})
+		if err := failure.Validate(); err == nil {
+			t.Fatal("Validate accepted a continuation under the v1 failure contract")
+		}
+	})
+}
+
+// TestManagedAssetsNarrationMatchesTheAgentlessContinuation keeps the human
+// statement for managed_assets_outdated consistent with the continuations the
+// refusal actually carries (#4379 review): mutation verbs carry an agentless
+// `sync`, STATUS and START bind the runtime agent, and the refusal names both
+// asset versions so a sync run by a different binary is diagnosable.
+func TestManagedAssetsNarrationMatchesTheAgentlessContinuation(t *testing.T) {
+	statement := reviewStopReasonNarration["managed_assets_outdated"]
+	for _, want := range []string{
+		"`gentle-ai sync`",
+		"`gentle-ai sync --agent " + reviewUndeclaredRuntimeIdentitySlot + "`",
+		"the one the last sync recorded and the one this binary carries",
+		"still differ after a sync that completed successfully (a failed or partial sync",
+	} {
+		if !strings.Contains(statement, want) {
+			t.Errorf("managed_assets_outdated narration lacks %q: %q", want, statement)
+		}
+	}
+	if strings.HasPrefix(statement, "Run `gentle-ai sync --agent") || strings.Contains(statement, "stops before it starts") {
+		t.Errorf("managed_assets_outdated narration still reads as a START-only refusal: %q", statement)
+	}
+}
+
+// TestCollectCaptureManagedAssetsRefusalPublishesOnlyUnderV2 pins the
+// ordering the classifier relies on (#4379 review): capture verbs carry no
+// --contract flag, so newReviewIntegrationFailure classifies them under v1
+// yet attaches the continuation, an intermediate envelope Validate rejects.
+// Only the collect dispatcher's v2 identity, applied after classification and
+// before emission, makes it publishable. The published-schema shape of the
+// emitted envelope is pinned end to end by
+// TestCaptureResultClassifiesStaleManagedAssetsAsTypedRefusal.
+func TestCollectCaptureManagedAssetsRefusalPublishesOnlyUnderV2(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	staleManagedReviewerAssets(t, home)
+	captures := 0
+	for _, metadata := range reviewIntegrationOperationRegistry {
+		if !metadata.CollectCapture {
+			continue
+		}
+		captures++
+		t.Run(metadata.Command, func(t *testing.T) {
+			classified := newReviewIntegrationFailure(metadata.Operation, nil, authorizeManagedReviewerAssets())
+			if classified.Contract != ReviewIntegrationContractV1 || classified.Code != "managed_assets_outdated" || classified.Continuation == nil {
+				t.Fatalf("classified collect capture failure = %#v, want the v1 intermediate carrying the continuation", classified)
+			}
+			if err := classified.Validate(); err == nil {
+				t.Fatal("Validate accepted the pre-upgrade collect capture envelope; the dispatcher order is no longer load-bearing")
+			}
+			published := reviewCollectCaptureFailureIdentity(classified)
+			if published.Contract != ReviewIntegrationContractV2 || published.Schema != ReviewIntegrationFailureSchemaV2 ||
+				!reflect.DeepEqual(published.Continuation, classified.Continuation) {
+				t.Fatalf("published collect capture failure = %#v", published)
+			}
+			var output bytes.Buffer
+			requireManagedAssetProvenanceNoError(t, emitReviewIntegrationFailure(&output, published))
+			if decoded := decodeReviewIntegrationFailure(t, output.Bytes()); decoded.Contract != ReviewIntegrationContractV2 || decoded.Continuation == nil {
+				t.Fatalf("emitted collect capture failure = %#v", decoded)
+			}
+		})
+	}
+	if captures == 0 {
+		t.Fatal("no CollectCapture rows in reviewIntegrationOperationRegistry; the extraction is stale")
 	}
 }
 

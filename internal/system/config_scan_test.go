@@ -14,6 +14,7 @@ import (
 // every known agent. The shim must enumerate all adapters from the default
 // registry, not just the ones that are installed.
 func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
+	t.Setenv("COPILOT_HOME", "")
 	home := t.TempDir()
 
 	// Create only claude-code config dir — others intentionally absent.
@@ -25,9 +26,9 @@ func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
 	configs := ScanConfigs(home)
 
 	// Must return at least as many entries as the registry has adapters with
-	// a non-empty GlobalConfigDir. Currently 16 agents are supported.
-	if len(configs) < 16 {
-		t.Fatalf("ScanConfigs() returned %d entries, want >= 16; got %v", len(configs), configs)
+	// a non-empty GlobalConfigDir. Currently 18 agents are supported.
+	if len(configs) < 18 {
+		t.Fatalf("ScanConfigs() returned %d entries, want >= 18; got %v", len(configs), configs)
 	}
 
 	// Find claude — must be Exists=true.
@@ -64,6 +65,7 @@ func TestScanConfigs_ReturnsAllKnownAgentsWithExistsFlag(t *testing.T) {
 // in each ConfigState matches the canonical model.AgentID string values used
 // by the TUI and validate.go switch statements.
 func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
+	t.Setenv("COPILOT_HOME", "")
 	home := t.TempDir()
 	configs := ScanConfigs(home)
 
@@ -85,7 +87,9 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 		"pi":             false,
 		"trae-ide":       false,
 		"hermes":         false,
+		"conductor":      false,
 	}
+	knownAgents["github-copilot-cli"] = false
 
 	for _, c := range configs {
 		if _, known := knownAgents[c.Agent]; known {
@@ -174,4 +178,166 @@ func agentNames(configs []ConfigState) []string {
 		names[i] = c.Agent
 	}
 	return names
+}
+
+// TestScanConfigs_KimiPrefersCurrentLayout verifies that the kimi entry
+// resolves to the current kimi-code v0.11+ root ~/.kimi-code when it exists
+// as a directory (issue #782).
+func TestScanConfigs_KimiPrefersCurrentLayout(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".kimi-code"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	var kimi *ConfigState
+	for i := range ScanConfigs(home) {
+		if configs := ScanConfigs(home); configs[i].Agent == "kimi" {
+			kimi = &configs[i]
+			break
+		}
+	}
+	if kimi == nil {
+		t.Fatal("ScanConfigs() missing kimi entry")
+	}
+	if kimi.Path != filepath.Join(home, ".kimi-code") {
+		t.Errorf("kimi Path = %q, want the .kimi-code root", kimi.Path)
+	}
+	if !kimi.Exists || !kimi.IsDirectory {
+		t.Errorf("kimi Exists=%v IsDirectory=%v, want both true", kimi.Exists, kimi.IsDirectory)
+	}
+}
+
+// TestScanConfigs_KimiUnexpectedStatErrorDoesNotSelectLegacy verifies that a
+// stat failure other than absence (ENOENT/ENOTDIR) on the current config root
+// does not silently select the legacy layout: the kimi entry keeps the
+// preferred current root path and is reported as absent because the layout
+// is undeterminable.
+func TestScanConfigs_KimiUnexpectedStatErrorDoesNotSelectLegacy(t *testing.T) {
+	home := t.TempDir()
+	statErr := os.ErrPermission
+
+	original := kimiConfigStat
+	kimiConfigStat = func(string) (os.FileInfo, error) { return nil, statErr }
+	defer func() { kimiConfigStat = original }()
+
+	configs := ScanConfigs(home)
+	var kimi *ConfigState
+	for i, c := range configs {
+		if c.Agent == "kimi" {
+			kimi = &configs[i]
+			break
+		}
+	}
+	if kimi == nil {
+		t.Fatal("ScanConfigs() missing kimi entry")
+	}
+	if kimi.Path != filepath.Join(home, ".kimi-code") {
+		t.Errorf("kimi Path = %q, want the preferred .kimi-code root (not the legacy fallback)", kimi.Path)
+	}
+	if kimi.Exists {
+		t.Error("kimi Exists = true, want false when the layout is undeterminable")
+	}
+}
+
+// TestScanConfigs_KimiCodeFileIsNotCurrentLayout verifies that a plain file
+// named .kimi-code is not treated as the v0.11+ layout: the scan falls back
+// to the legacy ~/.kimi root.
+func TestScanConfigs_KimiCodeFileIsNotCurrentLayout(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".kimi-code"), []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var kimi *ConfigState
+	for i := range ScanConfigs(home) {
+		if ScanConfigs(home)[i].Agent == "kimi" {
+			kimi = &ScanConfigs(home)[i]
+			break
+		}
+	}
+	if kimi == nil {
+		t.Fatal("ScanConfigs() missing kimi entry")
+	}
+	if kimi.Path != filepath.Join(home, ".kimi") {
+		t.Errorf("kimi Path = %q, want the legacy .kimi root", kimi.Path)
+	}
+	if kimi.Exists {
+		t.Errorf("kimi Exists = true, want false (only a .kimi-code file exists)")
+	}
+}
+
+// TestScanConfigs_KimiLegacyFallback verifies that the kimi entry keeps
+// reporting the legacy ~/.kimi root when no .kimi-code directory exists.
+func TestScanConfigs_KimiLegacyFallback(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".kimi"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	var kimi *ConfigState
+	for i := range ScanConfigs(home) {
+		if ScanConfigs(home)[i].Agent == "kimi" {
+			kimi = &ScanConfigs(home)[i]
+			break
+		}
+	}
+	if kimi == nil {
+		t.Fatal("ScanConfigs() missing kimi entry")
+	}
+	if kimi.Path != filepath.Join(home, ".kimi") {
+		t.Errorf("kimi Path = %q, want the legacy .kimi root", kimi.Path)
+	}
+	if !kimi.Exists || !kimi.IsDirectory {
+		t.Errorf("kimi Exists=%v IsDirectory=%v, want both true", kimi.Exists, kimi.IsDirectory)
+	}
+}
+
+func TestScanConfigs_CopilotCLIAndVSCodeDoNotCollide(t *testing.T) {
+	t.Setenv("COPILOT_HOME", "")
+	home := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(home, ".copilot"), 0o755)
+	configs := ScanConfigs(home)
+	cli, vs := configStateFor(t, configs, "github-copilot-cli"), configStateFor(t, configs, "vscode-copilot")
+	want := filepath.Join(home, ".copilot")
+	if cli.Path != want || vs.Path != want || !cli.Exists || vs.Exists {
+		t.Fatalf("cli=(%s, %v), vs=(%s, %v), want %s", cli.Path, cli.Exists, vs.Path, vs.Exists, want)
+	}
+	for _, ext := range []string{"github.copilot-chat-0.12.0", "github.copilot-1.2.3"} {
+		_ = os.MkdirAll(filepath.Join(home, ".vscode", "extensions", ext), 0o755)
+		if !configStateFor(t, ScanConfigs(home), "vscode-copilot").Exists {
+			t.Errorf("vscode-copilot Exists = false, want true for %s", ext)
+		}
+	}
+}
+
+func TestIsCopilotExtensionDir(t *testing.T) {
+	for name, want := range map[string]bool{
+		"github.copilot": true, "github.copilot-1.2.3": true, "github.copilot-chat-0.12.0": true,
+		"github.copilot-nightly": true, "github.copilot-chat": true, "github.copilot_other": false,
+		"github.other": false, "copilot": false, "": false,
+	} {
+		if got := IsCopilotExtensionDir(name); got != want {
+			t.Errorf("IsCopilotExtensionDir(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestScanConfigs_UsesCopilotHome(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "custom-copilot")
+	t.Setenv("COPILOT_HOME", root)
+	_ = os.MkdirAll(root, 0o755)
+	c := configStateFor(t, ScanConfigs(t.TempDir()), "github-copilot-cli")
+	if c.Path != root || !c.Exists || !c.IsDirectory {
+		t.Fatalf("github-copilot-cli = %+v, want %q dir", c, root)
+	}
+}
+
+func configStateFor(t *testing.T, configs []ConfigState, agent string) ConfigState {
+	for _, c := range configs {
+		if c.Agent == agent {
+			return c
+		}
+	}
+	t.Fatalf("ScanConfigs() missing %s entry", agent)
+	return ConfigState{}
 }

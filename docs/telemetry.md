@@ -1,5 +1,8 @@
 # Telemetry
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 Gentle AI sends a small amount of anonymous usage telemetry so the project
 knows how many installs stay alive and how the review pipeline gets used,
 without collecting anything about you, your code, your machine, or your
@@ -24,7 +27,7 @@ never retry or retain failed input. The command itself runs synchronously for on
 bounded stdin read followed by one HTTP attempt and never spawns itself. No `ingest`, `flush`, or `capabilities` route
 remains. Unsupported older binaries must fail closed, not fall back to intake.
 
-The unreleased [aggregate schema](../contracts/telemetry/runtime/v1/schemas/aggregate.schema.json)
+The [aggregate schema](../contracts/telemetry/runtime/v1/schemas/aggregate.schema.json)
 requires exactly `schema`, `registry`, `host`, and `rows`. **Remove `batch_id` from
 Pi's mirrored schema and producer.** No source/session/task/install/user identity
 is accepted. Example single response observation:
@@ -111,7 +114,7 @@ private), and empty input becomes `unknown/unknown`.
 Canonical `agent_class` values are:
 
 - Fixed classes: `orchestrator`, `worker`, `explore`, `verify`, `unknown`
-- SDD agents: `sdd-init`, `sdd-explore`, `sdd-research`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-status`, `sdd-sync`
+- Legacy SDD agents (SDD was retired in v4.0.0; the aggregate schema still accepts these values): `sdd-init`, `sdd-explore`, `sdd-research`, `sdd-propose`, `sdd-spec`, `sdd-design`, `sdd-tasks`, `sdd-apply`, `sdd-verify`, `sdd-archive`, `sdd-onboard`, `sdd-status`, `sdd-sync`
 - Judgment Day agents: `jd-judge-a`, `jd-judge-b`, `jd-fix-agent`
 - Review agents: `review-risk`, `review-readability`, `review-reliability`, `review-resilience`, `review-refuter`, `review-validator`
 
@@ -244,8 +247,12 @@ map to their built-in class. Other non-empty names map to `custom`/`unknown`;
 their raw names never leave native code. Missing names remain `unknown`/`unknown`.
 
 For V1 only, native code reads up to 1 MiB from the local `opencode.json`
-`agent.<name>.model` and `agent.<name>.variant` assignment. A valid contract effort
-becomes `selected_effort`; `effective_effort` remains `unavailable` because OpenCode
+`agent.<name>.model` and `agent.<name>.variant` assignment. When no variant is
+assigned, it falls back to `agent.<name>.reasoningEffort` and then to the
+model's `provider.<p>.models.<m>.options.reasoningEffort`, using the response
+provider/model or, when the response omits it, the assigned model. Only the
+contract values `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` are
+accepted for these `reasoningEffort` fallbacks. A valid contract effort becomes `selected_effort`; `effective_effort` remains `unavailable` because OpenCode
 does not report it. A response provider/model remains authoritative with
 `model_evidence: response`; the assigned model is used with
 `model_evidence: selected` only when the response omits provider/model. Missing,
@@ -254,7 +261,7 @@ and never blocks the send.
 
 Install/sync still reconcile the dedicated `plugins/telemetry-runtime.ts` and
 `.gentle-ai-telemetry-runtime.json` ownership manifest for selected OpenCode,
-independently of SDD and using the existing scope/XDG resolution. These are static
+independently of any workflow and using the existing scope/XDG resolution. These are static
 installation assets, **not metric state**. Managed byte/hash/mode checks, guarded
 rollback, unowned/edited-file preservation, and validated-pair uninstall remain
 unchanged. Each managed plugin asset change must append the immediately previous
@@ -272,8 +279,11 @@ uses the same 16 KiB/500 ms input bound, and sends at most once with no daemon,
 queue, persistence, retry, or filesystem mutation.
 
 For `SubagentStop`, the documented `agent_type` names the subagent frontmatter.
-Names in Gentle AI's runtime agent-class registry become `built_in` observations;
-all other names become `custom`/`unknown` without transmitting the name.
+Names in Gentle AI's runtime agent-class registry become `built_in` observations.
+Claude Code's own built-in subagents map by exact, case-sensitive name:
+`general-purpose` to the built-in `worker` class and `Explore` to the built-in
+`explore` class. All other names become `custom`/`unknown` without transmitting
+the name.
 
 For `SubagentStop`, the adapter reads at most the last 512 KiB of the matching
 agent transcript, from inside the user's home only. It scans backward for the
@@ -308,10 +318,16 @@ is available, the observation falls back to a fresh delivery id, exactly like
 
 For a known named subagent, at most 64 KiB of
 `~/.claude/agents/<agent_type>.md` supplies selected model and selected effort.
-The selected model is used only when no response model exists. The hook contract
-does not expose effective effort, duration, or an error shape: effective effort
-and duration remain unavailable, while successful `Stop`/`SubagentStop` events
-use error category `none` (API failures fire the separate `StopFailure` event).
+The selected model is used only when no response model exists. On `Stop`, the
+hook's common `effort.level` field (`low`, `medium`, `high`, `xhigh`, `max`) is
+the level in effect after fallback and caps, so it becomes `effective_effort`;
+any other value stays `unavailable`. It never becomes `selected_effort`, because
+settings defaults are overridden by `/effort`, `--effort`, and
+`CLAUDE_CODE_EFFORT_LEVEL`, so the orchestrator's `selected_effort` remains
+`unavailable`. `SubagentStop` does not read `effort.level`. The hook contract does
+not expose duration or an error shape: duration remains unavailable, while
+successful `Stop`/`SubagentStop` events use error category `none` (API failures
+fire the separate `StopFailure` event).
 Selected aliases map as `sonnet` to `claude-sonnet-5`, `opus` to
 `claude-opus-5`, and `haiku` to `claude-haiku-4-5`; `inherit`, `default`, and an
 empty selector remain unknown. Transcript release/revision suffixes are reduced
@@ -477,7 +493,9 @@ Every event carries:
   another tool
 - the `gentle-ai` version, `os`, and `arch` (the same values `--version`
   effectively describes)
-- the agents and components you have installed (e.g. `claude-code`, `sdd`)
+- the agents and components you have installed (e.g. `claude-code`, `engram`;
+  a selection persisted before v4.0.0 can still report the legacy `sdd`
+  component)
 - whether receipt-driven development (RDD) is enabled
 - on `heartbeat` only, counters since the previous successful send: `syncs`,
   `sdd_phase_runs`, `reviews_approved`, `reviews_correction`,
@@ -523,7 +541,7 @@ first, and only then opportunistically check whether a heartbeat is due —
 the same 24-hour limit and failure backoff apply, so this adds at most one
 send per day even for a host that finishes many reviews in a
 row. This is what lets a host such as Gentle Pi, which drives gentle-ai only
-through `review ...` and `sdd-attempt ...` and never through
+through `review ...` and never through
 `install`/`update`/`sync`, still send a heartbeat.
 
 Historical `sdd_phase_runs` counters remain readable, but retired attempt commands no longer increment them.
@@ -565,7 +583,7 @@ gentle-ai telemetry trigger [--json]
   check `install`/`update`/`sync` already run internally (enrollment,
   install-once, the 24-hour heartbeat limit, the failure backoff, and every
   kill switch all apply). A host that only ever drives gentle-ai through
-  `review ...` or `sdd-attempt ...` — Gentle Pi, for example — can call this
+  `review ...` — Gentle Pi, for example — can call this
   once per session to still get a heartbeat instead of never sending one.
   Finishing a native review already
   triggers this internally too, so `trigger` mainly matters for a host that

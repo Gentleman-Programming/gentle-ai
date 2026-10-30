@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestCodexEffortValid(t *testing.T) {
@@ -21,7 +21,9 @@ func TestCodexEffortValid(t *testing.T) {
 		{"empty", model.CodexEffort(""), false},
 		{"junk", model.CodexEffort("junk"), false},
 		{"uppercase", model.CodexEffort("HIGH"), false},
-		{"max deferred", model.CodexEffort("max"), false},
+		{"max (runtime-gated by the picker)", model.CodexEffortMax, true},
+		{"ultra (runtime-gated by the picker)", model.CodexEffortUltra, true},
+		{"none is not routable", model.CodexEffort("none"), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -216,14 +218,14 @@ func TestCodexTierGroups_AllPhasesAssigned(t *testing.T) {
 
 func TestDefaultCarrilModels(t *testing.T) {
 	m := model.DefaultCarrilModels()
-	if m["sdd-strong"] != "gpt-6-sol" {
-		t.Errorf("sdd-strong = %q, want gpt-6-sol", m["sdd-strong"])
+	if m["sdd-strong"] != "gpt-6.1-sol" {
+		t.Errorf("sdd-strong = %q, want gpt-6.1-sol", m["sdd-strong"])
 	}
-	if m["sdd-mid"] != "gpt-6-luna" {
-		t.Errorf("sdd-mid = %q, want gpt-6-luna", m["sdd-mid"])
+	if m["sdd-mid"] != "gpt-6.1-luna" {
+		t.Errorf("sdd-mid = %q, want gpt-6.1-luna", m["sdd-mid"])
 	}
-	if m["sdd-cheap"] != "gpt-6-luna" {
-		t.Errorf("sdd-cheap = %q, want gpt-6-luna", m["sdd-cheap"])
+	if m["sdd-cheap"] != "gpt-6.1-luna" {
+		t.Errorf("sdd-cheap = %q, want gpt-6.1-luna", m["sdd-cheap"])
 	}
 	if len(m) != 3 {
 		t.Errorf("DefaultCarrilModels() has %d entries, want 3", len(m))
@@ -259,7 +261,7 @@ func TestMigrateLegacyCodexCarrilDefaults(t *testing.T) {
 
 func TestPresetLowCost_ModelEffortPerCarril(t *testing.T) {
 	m := model.CodexModelPresetLowCost()
-	// Low-cost: Razonamiento=gpt-6-sol/medium, Código=gpt-6-luna/medium, Liviano=gpt-6-luna/high
+	// Low-cost: Razonamiento=gpt-6.1-sol/medium, Código=gpt-6.1-luna/medium, Liviano=gpt-6.1-luna/high
 	// Check that propose/design (Razonamiento/sdd-strong) is medium
 	if m["sdd-propose"] != model.CodexEffortMedium {
 		t.Errorf("Low-cost preset sdd-propose = %q, want medium", m["sdd-propose"])
@@ -280,19 +282,19 @@ func TestPresetLowCost_ModelEffortPerCarril(t *testing.T) {
 
 	// Verify Low-cost preset carril models
 	carrilModels := model.CodexCarrilModelsForPreset(string(model.CodexPresetLowCost))
-	if carrilModels["sdd-strong"] != "gpt-6-sol" {
-		t.Errorf("Low-cost preset sdd-strong model = %q, want gpt-6-sol", carrilModels["sdd-strong"])
+	if carrilModels["sdd-strong"] != "gpt-6.1-sol" {
+		t.Errorf("Low-cost preset sdd-strong model = %q, want gpt-6.1-sol", carrilModels["sdd-strong"])
 	}
-	if carrilModels["sdd-mid"] != "gpt-6-luna" {
-		t.Errorf("Low-cost preset sdd-mid model = %q, want gpt-6-luna", carrilModels["sdd-mid"])
+	if carrilModels["sdd-mid"] != "gpt-6.1-luna" {
+		t.Errorf("Low-cost preset sdd-mid model = %q, want gpt-6.1-luna", carrilModels["sdd-mid"])
 	}
-	if carrilModels["sdd-cheap"] != "gpt-6-luna" {
-		t.Errorf("Low-cost preset sdd-cheap model = %q, want gpt-6-luna", carrilModels["sdd-cheap"])
+	if carrilModels["sdd-cheap"] != "gpt-6.1-luna" {
+		t.Errorf("Low-cost preset sdd-cheap model = %q, want gpt-6.1-luna", carrilModels["sdd-cheap"])
 	}
 }
 
 func TestPresetRecommended_ModelEffortPerCarril(t *testing.T) {
-	// Recommended: Razonamiento=gpt-6-sol/medium, Código=gpt-6-luna/high, Liviano=gpt-6-luna/high
+	// Recommended: Razonamiento=gpt-6.1-sol/medium, Código=gpt-6.1-luna/high, Liviano=gpt-6.1-luna/high
 	m := model.CodexModelPresetRecommended()
 	if m["sdd-propose"] != model.CodexEffortMedium {
 		t.Errorf("Recommended preset sdd-propose = %q, want medium", m["sdd-propose"])
@@ -305,19 +307,19 @@ func TestPresetRecommended_ModelEffortPerCarril(t *testing.T) {
 	}
 
 	carrilModels := model.CodexCarrilModelsForPreset(string(model.CodexPresetRecommended))
-	if carrilModels["sdd-strong"] != "gpt-6-sol" {
-		t.Errorf("Recommended preset sdd-strong model = %q, want gpt-6-sol", carrilModels["sdd-strong"])
+	if carrilModels["sdd-strong"] != "gpt-6.1-sol" {
+		t.Errorf("Recommended preset sdd-strong model = %q, want gpt-6.1-sol", carrilModels["sdd-strong"])
 	}
-	if carrilModels["sdd-mid"] != "gpt-6-luna" {
-		t.Errorf("Recommended preset sdd-mid model = %q, want gpt-6-luna", carrilModels["sdd-mid"])
+	if carrilModels["sdd-mid"] != "gpt-6.1-luna" {
+		t.Errorf("Recommended preset sdd-mid model = %q, want gpt-6.1-luna", carrilModels["sdd-mid"])
 	}
-	if carrilModels["sdd-cheap"] != "gpt-6-luna" {
-		t.Errorf("Recommended preset sdd-cheap model = %q, want gpt-6-luna", carrilModels["sdd-cheap"])
+	if carrilModels["sdd-cheap"] != "gpt-6.1-luna" {
+		t.Errorf("Recommended preset sdd-cheap model = %q, want gpt-6.1-luna", carrilModels["sdd-cheap"])
 	}
 }
 
 func TestPresetPowerful_ModelEffortPerCarril(t *testing.T) {
-	// Powerful: Razonamiento=gpt-6-astra/xhigh, Código=gpt-6-sol/high, Liviano=gpt-6-luna/high
+	// Powerful: Razonamiento=gpt-6.1-astra/xhigh, Código=gpt-6.1-sol/high, Liviano=gpt-6.1-luna/high
 	m := model.CodexModelPresetPowerful()
 	if m["sdd-propose"] != model.CodexEffortXHigh {
 		t.Errorf("Powerful preset sdd-propose = %q, want xhigh", m["sdd-propose"])
@@ -327,14 +329,14 @@ func TestPresetPowerful_ModelEffortPerCarril(t *testing.T) {
 	}
 
 	carrilModels := model.CodexCarrilModelsForPreset(string(model.CodexPresetPowerful))
-	if carrilModels["sdd-strong"] != "gpt-6-astra" {
-		t.Errorf("Powerful preset sdd-strong model = %q, want gpt-6-astra", carrilModels["sdd-strong"])
+	if carrilModels["sdd-strong"] != "gpt-6.1-astra" {
+		t.Errorf("Powerful preset sdd-strong model = %q, want gpt-6.1-astra", carrilModels["sdd-strong"])
 	}
-	if carrilModels["sdd-mid"] != "gpt-6-sol" {
-		t.Errorf("Powerful preset sdd-mid model = %q, want gpt-6-sol", carrilModels["sdd-mid"])
+	if carrilModels["sdd-mid"] != "gpt-6.1-sol" {
+		t.Errorf("Powerful preset sdd-mid model = %q, want gpt-6.1-sol", carrilModels["sdd-mid"])
 	}
-	if carrilModels["sdd-cheap"] != "gpt-6-luna" {
-		t.Errorf("Powerful preset sdd-cheap model = %q, want gpt-6-luna", carrilModels["sdd-cheap"])
+	if carrilModels["sdd-cheap"] != "gpt-6.1-luna" {
+		t.Errorf("Powerful preset sdd-cheap model = %q, want gpt-6.1-luna", carrilModels["sdd-cheap"])
 	}
 }
 
@@ -380,7 +382,7 @@ func TestRenderCodexPhaseEfforts_ModelColumn(t *testing.T) {
 	if !strings.Contains(out, "Model") {
 		t.Errorf("RenderCodexPhaseEfforts: table header missing 'Model' column; got:\n%s", out)
 	}
-	for _, want := range []string{"gpt-6-sol", "gpt-6-luna"} {
+	for _, want := range []string{"gpt-6.1-sol", "gpt-6.1-luna"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("RenderCodexPhaseEfforts: expected %s in output; got:\n%s", want, out)
 		}
@@ -390,9 +392,9 @@ func TestRenderCodexPhaseEfforts_ModelColumn(t *testing.T) {
 func TestRenderCodexPhaseEfforts_NilCarrilModels(t *testing.T) {
 	assignments := model.CodexModelPresetRecommended()
 	out := model.RenderCodexPhaseEfforts(assignments, nil)
-	// nil carrilModels: defaults apply; sdd-cheap row must show gpt-6-luna
-	if !strings.Contains(out, "gpt-6-luna") {
-		t.Errorf("RenderCodexPhaseEfforts(nil): sdd-cheap should show gpt-6-luna; got:\n%s", out)
+	// nil carrilModels: defaults apply; sdd-cheap row must show gpt-6.1-luna
+	if !strings.Contains(out, "gpt-6.1-luna") {
+		t.Errorf("RenderCodexPhaseEfforts(nil): sdd-cheap should show gpt-6.1-luna; got:\n%s", out)
 	}
 }
 
@@ -422,20 +424,20 @@ func TestCodexODDPresetsRetainEffortPolicyWithoutSDDPhaseKeys(t *testing.T) {
 		rows   []string
 	}{
 		{"low cost", model.CodexModelPresetLowCost, []string{
-			"| `odd-explorer` | `gpt-6-luna` | `high` |",
-			"| `odd-worker` | `gpt-6-luna` | `medium` |",
-			"| `odd-verify` | `gpt-6-sol` | `medium` |",
+			"| `odd-explorer` | `gpt-6.1-luna` | `high` |",
+			"| `odd-worker` | `gpt-6.1-luna` | `medium` |",
+			"| `odd-verify` | `gpt-6.1-sol` | `medium` |",
 		}},
 		{"powerful", model.CodexModelPresetPowerful, []string{
-			"| `odd-explorer` | `gpt-6-luna` | `high` |",
-			"| `odd-worker` | `gpt-6-sol` | `high` |",
-			"| `odd-verify` | `gpt-6-astra` | `xhigh` |",
+			"| `odd-explorer` | `gpt-6.1-luna` | `high` |",
+			"| `odd-worker` | `gpt-6.1-sol` | `high` |",
+			"| `odd-verify` | `gpt-6.1-astra` | `xhigh` |",
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			models := map[string]string{"odd-verify": "gpt-6-sol"}
+			models := map[string]string{"odd-verify": "gpt-6.1-sol"}
 			if tc.name == "powerful" {
-				models["odd-verify"] = "gpt-6-astra"
+				models["odd-verify"] = "gpt-6.1-astra"
 			}
 			preset := map[string]string{"low cost": "low-cost", "powerful": "powerful"}[tc.name]
 			for _, efforts := range []map[string]model.CodexEffort{
@@ -460,14 +462,14 @@ func TestCodexODDPresetCarrilModelAndEffortMatrix(t *testing.T) {
 		rows   []string
 	}{
 		{"low cost", model.CodexPresetLowCost, []string{
-			"| `odd-explorer` | `gpt-6-luna` | `high` |",
-			"| `odd-worker` | `gpt-6-luna` | `medium` |",
-			"| `odd-verify` | `gpt-6-sol` | `medium` |",
+			"| `odd-explorer` | `gpt-6.1-luna` | `high` |",
+			"| `odd-worker` | `gpt-6.1-luna` | `medium` |",
+			"| `odd-verify` | `gpt-6.1-sol` | `medium` |",
 		}},
 		{"powerful", model.CodexPresetPowerful, []string{
-			"| `odd-explorer` | `gpt-6-luna` | `high` |",
-			"| `odd-worker` | `gpt-6-sol` | `high` |",
-			"| `odd-verify` | `gpt-6-astra` | `xhigh` |",
+			"| `odd-explorer` | `gpt-6.1-luna` | `high` |",
+			"| `odd-worker` | `gpt-6.1-sol` | `high` |",
+			"| `odd-verify` | `gpt-6.1-astra` | `xhigh` |",
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -489,7 +491,7 @@ func TestCodexODDEffortFallbackIgnoresUnrelatedSDDEffort(t *testing.T) {
 			efforts["odd-worker"] = effort
 		}
 		out := model.RenderCodexODDAssignments(nil, efforts, nil)
-		if !strings.Contains(out, "| `odd-worker` | `gpt-6-luna` | `high` |") {
+		if !strings.Contains(out, "| `odd-worker` | `gpt-6.1-luna` | `high` |") {
 			t.Errorf("missing/invalid role effort %q inherited unrelated SDD effort: %s", effort, out)
 		}
 	}
@@ -504,16 +506,16 @@ func TestCodexODDAssignmentsDefaultsAndOverrides(t *testing.T) {
 		rows    []string
 	}{
 		{"recommended fallback", nil, nil, nil, []string{
-			"| `odd-explorer` | `gpt-6-luna` | `high` |",
-			"| `odd-worker` | `gpt-6-luna` | `high` |",
-			"| `odd-verify` | `gpt-6-sol` | `medium` |",
+			"| `odd-explorer` | `gpt-6.1-luna` | `high` |",
+			"| `odd-worker` | `gpt-6.1-luna` | `high` |",
+			"| `odd-verify` | `gpt-6.1-sol` | `medium` |",
 		}},
-		{"custom overrides", map[string]string{"odd-worker": "gpt-6-astra", "rdd-risk": "gpt-6-astra"},
+		{"custom overrides", map[string]string{"odd-worker": "gpt-6.1-astra", "rdd-risk": "gpt-6.1-astra"},
 			map[string]model.CodexEffort{"odd-worker": model.CodexEffortXHigh},
-			map[string]string{"sdd-cheap": "gpt-6-luna", "sdd-mid": "gpt-6-sol", "sdd-strong": "gpt-6-astra"}, []string{
-				"| `odd-explorer` | `gpt-6-luna` | `high` |",
-				"| `odd-worker` | `gpt-6-astra` | `xhigh` |",
-				"| `odd-verify` | `gpt-6-astra` | `medium` |",
+			map[string]string{"sdd-cheap": "gpt-6.1-luna", "sdd-mid": "gpt-6.1-sol", "sdd-strong": "gpt-6.1-astra"}, []string{
+				"| `odd-explorer` | `gpt-6.1-luna` | `high` |",
+				"| `odd-worker` | `gpt-6.1-astra` | `xhigh` |",
+				"| `odd-verify` | `gpt-6.1-astra` | `medium` |",
 			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -532,7 +534,7 @@ func TestCodexODDAssignmentsDefaultsAndOverrides(t *testing.T) {
 
 func TestCodexAvailableModels_Contents(t *testing.T) {
 	models := model.CodexAvailableModels()
-	want := []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2-codex"}
+	want := []string{"gpt-6.1-astra", "gpt-6.1-sol", "gpt-6.1-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2-codex"}
 	if len(models) != len(want) {
 		t.Fatalf("CodexAvailableModels() len = %d, want %d", len(models), len(want))
 	}
@@ -660,9 +662,9 @@ func checkCarrilRowModel(t *testing.T, table string, profile string, wantModel s
 // in the strong lanes, where the reasoning actually pays.
 func TestCodexPresetOrchestratorAssignment_MediumEffortWithPerPresetModel(t *testing.T) {
 	wantModel := map[model.CodexPresetKey]string{
-		model.CodexPresetLowCost:     "gpt-6-luna",
-		model.CodexPresetRecommended: "gpt-6-sol",
-		model.CodexPresetPowerful:    "gpt-6-astra",
+		model.CodexPresetLowCost:     "gpt-6.1-luna",
+		model.CodexPresetRecommended: "gpt-6.1-sol",
+		model.CodexPresetPowerful:    "gpt-6.1-astra",
 	}
 	for preset, want := range wantModel {
 		a := model.CodexPresetOrchestratorAssignment(string(preset))

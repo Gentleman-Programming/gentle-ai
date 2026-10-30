@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 const ReviewIntegrationStatusSchemaV1 = "gentle-ai.review-integration.status/v1"
@@ -115,6 +115,19 @@ type ReviewTargetStatusResult struct {
 	// object the derived snapshot froze), letting the caller see and override
 	// the offered scope.
 	committedRangeBaseRef string
+	// startOptions are the START options this STATUS preflighted. Both the
+	// emitted fresh START and its exact validator render them through
+	// reviewStartArguments, so neither can drift from the other.
+	startOptions reviewStartPreflightOptions
+	// passiveDeltaAfterAcknowledgement marks an authority-free STOP for a
+	// committed range that only adds passive content to an acknowledged
+	// candidate (#4739). It selects the STOP reason, never authority.
+	passiveDeltaAfterAcknowledgement bool
+	// acknowledgedBoundaryReachesHead marks an authority-free STOP for the
+	// #5638 outcome where every commit since the acknowledged boundary was
+	// empty: the reviewed boundary reaches HEAD, so nothing unreviewed remains
+	// between it and the live candidate.
+	acknowledgedBoundaryReachesHead bool
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -272,7 +285,7 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenInputsUnavailable
 	case reviewtransaction.TargetStatusActionRecover:
 		allowed.Action, allowed.Disposition = "review.recover", status.ActionDisposition
-		allowed.RequiredInputs = []string{"predecessor_lineage", "expected_predecessor_revision", "successor_lineage", "disposition", "reason", "actor", "maintainer_authorization"}
+		allowed.RequiredInputs = []string{"predecessor_lineage", "expected_predecessor_revision", "successor_lineage", "disposition"}
 		allowed.ReasonCode = reviewActionEligibleRecovery
 		if status.ActionDisposition == reviewtransaction.RecoveryEscalated {
 			allowed.ReasonCode = reviewActionEligibleEscalatedRecovery
@@ -815,7 +828,7 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			return nil
 		}
 		if result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityNotReplayable {
-			if result.Authority != nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "target_already_acknowledged" {
+			if result.Authority != nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != reviewConsumedStopReason(result) {
 				return errors.New("consumed target lacks an authority-free terminal STOP") // refusal:by-design world-action: only a provider code fix can reconcile an internally inconsistent consumed-target envelope
 			}
 			return nil
@@ -1486,12 +1499,21 @@ func (submission ReviewTransitionSubmission) Validate() error {
 
 func (submission ReviewTransitionSubmission) validateIntendedUntrackedSelection() error {
 	value, tokens := submission.Value, submission.ArgumentTokens
-	agent, hasAgent := "", false
-	if len(tokens) == 5 {
+	agent, hasAgent, selectorValid := "", false, false
+	if len(tokens) == 5 || len(tokens) == 6 {
 		agent, hasAgent = strings.CutPrefix(tokens[2], "--agent=")
+		// The selector replays the STATUS target: workspace current-changes,
+		// or an exact base tree with its committed-only or overlay scope.
+		selector := tokens[3 : len(tokens)-1]
+		baseTree, hasBase := "", false
+		if len(selector) == 2 {
+			baseTree, hasBase = strings.CutPrefix(selector[0], "--base-ref=")
+		}
+		selectorValid = len(selector) == 1 && selector[0] == "--projection=workspace" ||
+			hasBase && reviewTargetEvidenceTreePattern.MatchString(baseTree) && (selector[1] == "--committed-only=true" || selector[1] == "--workspace-overlay=true")
 	}
-	if value == nil || len(submission.Values) != 0 || value.Slot != "intended_untracked_selection" || value.Domain != "schema_bound_json" || value.Schema != reviewIntendedUntrackedSelectionSchema || value.SubstitutionLocation != 4 || len(value.AllowedValues) != 0 || value.Minimum != 0 || value.Maximum != 0 ||
-		len(tokens) != 5 || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !hasAgent || tokens[3] != "--projection=workspace" || tokens[4] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
+	if value == nil || len(submission.Values) != 0 || value.Slot != "intended_untracked_selection" || value.Domain != "schema_bound_json" || value.Schema != reviewIntendedUntrackedSelectionSchema || value.SubstitutionLocation != len(tokens)-1 || len(value.AllowedValues) != 0 || value.Minimum != 0 || value.Maximum != 0 ||
+		!selectorValid || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !hasAgent || tokens[len(tokens)-1] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
 		// refusal:by-design world-action: the provider-generated intended-untracked submission descriptor requires a provider code fix.
 		return errors.New("intended-untracked submission descriptor is invalid")
 	}
@@ -1746,7 +1768,11 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
 			return errors.New("review recover transition selectors are invalid")
 		}
-		required := []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}
+		required := []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition"}
+		_, hasAuthorization := arguments["maintainer-authorization"]
+		if hasAuthorization {
+			required = append(required, "reason", "actor", "maintainer-authorization")
+		}
 		requiredPresent := true
 		for _, name := range required {
 			if _, present := arguments[name]; !present {
@@ -1778,7 +1804,7 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		untrackedScope, hasUntrackedScope := arguments["untracked-scope"]
 		inventory, hasInventory := arguments["expected-untracked-inventory"]
 		hasIntended := distinctSelectors["intended-untracked"]
-		if arguments["maintainer-authorization"] != wantAuthorization ||
+		if hasAuthorization && (strings.TrimSpace(arguments["reason"]) == "" || strings.TrimSpace(arguments["actor"]) == "" || arguments["maintainer-authorization"] != wantAuthorization) ||
 			hasBase && !validReviewTransitionSelector(base) ||
 			hasCommitted && (!hasBase || committed != "true") ||
 			hasProjection && projection != string(reviewtransaction.ProjectionWorkspace) &&
@@ -1916,4 +1942,18 @@ func validReviewGitTree(value string) bool {
 		}
 	}
 	return true
+}
+
+// reviewConsumedStopReason names the authority-free terminal STOP for an
+// unrelated target STATUS will not offer: the exact target was acknowledged,
+// it only adds passive content to an acknowledged candidate (#4739), or the
+// acknowledged boundary reaches HEAD (#5638).
+func reviewConsumedStopReason(status ReviewTargetStatusResult) string {
+	if status.passiveDeltaAfterAcknowledgement {
+		return "acknowledged_predecessor_passive_delta"
+	}
+	if status.acknowledgedBoundaryReachesHead {
+		return "acknowledged_boundary_reaches_head"
+	}
+	return "target_already_acknowledged"
 }

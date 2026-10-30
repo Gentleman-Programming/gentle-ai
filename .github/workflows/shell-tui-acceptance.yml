@@ -1,0 +1,134 @@
+name: Gentle Shell TUI acceptance
+
+# Real Gentle Shell installs driven through the gentle-ai TUI with tmux
+# keystrokes, on a real Linux amd64 host with a delegated systemd user manager
+# and on native macOS arm64. Dispatch only: every fix branch proves itself with
+#   gh workflow run shell-tui-acceptance.yml --ref <branch>
+# See docs/gentle-shell-tui-acceptance.md.
+on:
+  workflow_dispatch:
+    inputs:
+      scenarios:
+        description: 'Scenario letters to run, e.g. "A,B,E" (empty runs A-G)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shell-tui-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tui-acceptance:
+    name: TUI acceptance (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # Seven scenarios, each with at least one real install; D runs two updates.
+    timeout-minutes: 150
+    steps:
+      - name: Check out the dispatched ref
+        timeout-minutes: 3
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        timeout-minutes: 3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check driver helpers
+        timeout-minutes: 2
+        run: |
+          python3 -I -m py_compile e2e/shell-tui-acceptance.py
+          python3 -I e2e/shell-tui-acceptance.test.py
+
+      - name: Install tmux
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo -n apt-get update -qq
+            sudo -n apt-get install -y -qq tmux
+          elif ! command -v tmux >/dev/null; then
+            brew install tmux
+          fi
+          tmux -V
+
+      - name: Build candidate gentle-ai
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build -mod=readonly -o "$RUNNER_TEMP/gentle-ai" ./cmd/gentle-ai
+          printf 'candidate %s on %s/%s\n' "$GITHUB_SHA" "$(uname -s)" "$(uname -m)"
+
+      # Privileged preparation is limited to this fresh hosted VM: it gives the
+      # non-root runner user the delegated user manager a real login has. The
+      # installer itself never runs as root.
+      - name: Provide the delegated systemd user manager (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          test "$uid" != 0
+          test "$(uname -m)" = x86_64
+          test "$(cat /proc/1/comm)" = systemd
+          dropin="/etc/systemd/system/user@${uid}.service.d"
+          sudo -n install -d "$dropin"
+          printf '[Service]\nDelegate=cpu memory pids\n' | sudo -n tee "$dropin/gentle-shell-acceptance.conf" >/dev/null
+          sudo -n systemctl daemon-reload
+          sudo -n loginctl enable-linger "$(id -un)"
+          sudo -n systemctl restart "user@${uid}.service"
+          for _ in $(seq 1 60); do
+            test -S "/run/user/${uid}/bus" && break
+            sleep 1
+          done
+          test -S "/run/user/${uid}/bus"
+          stat -c 'runtime=%n mode=%a uid=%u' "/run/user/${uid}"
+          sudo -n systemctl show "user@${uid}.service" --no-pager -p ActiveState -p SubState -p Delegate -p DelegateControllers
+          cat "/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/cgroup.subtree_control" || echo "subtree_control unreadable"
+          XDG_RUNTIME_DIR="/run/user/${uid}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" \
+            systemctl --user show --property=Version --value
+          {
+            printf 'XDG_RUNTIME_DIR=/run/user/%s\n' "$uid"
+            printf 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%s/bus\n' "$uid"
+          } >> "$GITHUB_ENV"
+
+      - name: Run TUI acceptance scenarios
+        id: acceptance
+        timeout-minutes: 130
+        shell: bash
+        env:
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          set -euo pipefail
+          test "$(id -u)" != 0
+          work="$(cd -P "$(mktemp -d "$RUNNER_TEMP/gsa-work.XXXXXX")" && pwd)"
+          python3 -I e2e/shell-tui-acceptance.py \
+            --gentle-ai "$RUNNER_TEMP/gentle-ai" \
+            --evidence "$RUNNER_TEMP/tui-acceptance" \
+            --work "$work" \
+            --scenarios "$SCENARIOS" \
+            --cleanup
+
+      - name: Upload acceptance evidence
+        if: always() && steps.acceptance.outcome != 'skipped'
+        timeout-minutes: 3
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # same pin as shell-windows-crosscheck.yml
+        with:
+          name: shell-tui-acceptance-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/tui-acceptance
+          retention-days: 14
+          if-no-files-found: error

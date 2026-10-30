@@ -1,10 +1,13 @@
 # Review Authority Threat Model
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ## Outcome
 
 The compact review store protects valid review authority from accidental corruption and concurrent writers. It does not claim to authenticate state against a malicious local actor with the same user and filesystem access: without an external trust anchor, that actor can rewrite the state, receipt, Git repository, or binary.
 
-Review authority governs review lifecycle continuation and recovery only. Receipts, candidate identity, gate/context results, and shadow output are review-context evidence; ordinary repository policy governs delivery; SDD archive preserves actual state without a verification certificate.
+Review authority governs review lifecycle continuation and recovery only. Receipts, candidate identity, gate/context results, and shadow output are review-context evidence; ordinary repository policy governs delivery.
 
 ## Scope
 
@@ -14,7 +17,7 @@ Review authority governs review lifecycle continuation and recovery only. Receip
 | Interrupted replacement | Yes | Atomic replacement and filesystem synchronization preserve either the old or new valid record where practical. |
 | Concurrent or stale writer | Yes | A lock plus expected revision rejects stale transitions; an exact retry is idempotent. |
 | STATUS overlaps terminal receipt publication | Yes | A bounded double-collect rechecks state revision and snapshot identities, then requires matching receipt and journal existence, raw identity, and canonical content around that state observation; continuing churn returns a concurrency error. |
-| Repository changes after review | Yes | Review-context evaluation re-derives evidence from live Git and reports incompatible scope or identity changes for review repair; ordinary delivery and SDD archive remain independently governed. |
+| Repository changes after review | Yes | Review-context evaluation re-derives evidence from live Git and reports incompatible scope or identity changes for review repair; ordinary delivery remains independently governed. |
 | Historical intended path becomes tracked or disappears | Yes | Read-only status treats frozen membership as receipt-bound history; healthy authority and receipt bytes remain unchanged. |
 | Terminal escalation needs another review | Yes | Generic `review recover` requires its existing scope/state predicates. Escalation remains receiptless and recoverable, while predecessor authority bytes remain immutable. |
 | Malicious same-user local actor | No | No authenticity or tamper-resistance claim is made. |
@@ -71,6 +74,16 @@ Execution uses the same public verb with the provider-owned inputs echoed exactl
 From that validated request the execution derives the inner exact LF-only eight-line binding with schema `gentle-ai.review-legacy-alias-repair-authorization/v1`, followed by `repository`, `lineage`, `revision`, `diagnostic`, `disposition`, `actor`, and `reason`; the maintainer supplies only the nine-line `gentle-ai.review-repair-authorization/v1` binding above, never the inner one. The operation refuses unknown aliases, semantic corruption, mixed v1/v2 lineage identity, malformed authorization, stale revisions, and active or shared-maintenance-lock contention.
 
 On success it moves the complete immutable lineage into `review-transactions/quarantine/`, writes a prepared then committed audit record with the re-derived chain identity and alias-event revisions, and reads the inventory back. It does not delete or rewrite authority. The status becomes complete/authoritative only if the remaining inventory is independently clean; unrelated invalid, incomplete, compact-v2, or graph authority continues to fail closed.
+
+## Rejected Validator Terminal Disposition
+
+A canonical rejected targeted-validator verdict is valid authority, not corruption. An unchanged candidate still stops, and ordinary abandonment and recovery restrictions remain in force. For an isolated terminal with a consumed correction and no recovery dependencies, `gentle-ai review repair --preflight` offers an exact successor-only selector, not permission to mutate.
+
+1. Select the exact entry by repeating preflight with its returned `--successor-lineage` and `--successor-revision`.
+2. Review the disposition plan and supply actor, reason, and its exact digest/inventory-bound `gentle-ai.review-disposition-authorization/v1` binding through the existing repair execution inputs.
+3. Execution rederives eligibility under the maintenance lock, validates authorization and revisions, and retains byte-identical rejected authority with an audit proof. Exact replay converges on that proof.
+
+The class is `rejected_targeted_validator_terminal`. Disposition releases only the active governing claim: it does not approve the candidate, replace the historical verdict, restore a correction attempt, disable RDD, or automatically launch another review. It is not delivery permission. Missing canonical evidence, stale or forged bindings, non-rejected terminals, incomplete inspection, and retained recovery dependencies fail closed. Unrelated historical and content-mismatch repair behavior is unchanged.
 
 ## Historical Complete-Fix Scope Quarantine
 

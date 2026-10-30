@@ -6,10 +6,10 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/verify"
 )
 
 const OpenCodeBackgroundSubagentsEnv = "GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS"
@@ -172,7 +172,11 @@ func withOpenCodeBackgroundPending(report verify.Report, resolution OpenCodeBack
 	case opencodeactivation.CapabilityUnknown:
 		report.FinalNote += fmt.Sprintf(" OpenCode background activation status is unknown (%s); execution stays foreground.", capability.Reason)
 	default:
-		report.FinalNote += " OpenCode background policy is prepared but runtime activation remains pending; execution stays foreground until managed activation succeeds."
+		report.FinalNote += " OpenCode background policy is prepared but runtime activation remains pending"
+		if reason := resolution.Activation.ActivationReason; reason != "" {
+			report.FinalNote += " (" + reason + ")"
+		}
+		report.FinalNote += "; execution stays foreground until managed activation succeeds."
 	}
 	return report
 }
@@ -192,11 +196,22 @@ func reportWithNote(report verify.Report, note string) verify.Report {
 	return report
 }
 
+// renderOpenCodeBackgroundRuntime separates the written background policy from
+// the effective runtime: a shadowed, pending, or unverified launcher is not a
+// ready runtime even when the policy is enabled.
+func renderOpenCodeBackgroundRuntime(resolution OpenCodeBackgroundResolution, policyEnabled bool) string {
+	ready := policyEnabled && resolution.Activation.ResolvedStatus() == opencodeactivation.ActivationStatusReady
+	return fmt.Sprintf("OpenCode background policy enabled: %t\nOpenCode background runtime ready: %t", policyEnabled, ready)
+}
+
+// renderOpenCodeBackgroundActivation reports the effective activation status:
+// whether new shells run the managed launcher, not only whether the runtime
+// version supports it.
 func renderOpenCodeBackgroundActivation(resolution OpenCodeBackgroundResolution) string {
 	activation := resolution.Activation
-	status := string(activation.Capability.Status)
-	if status == "" {
-		status = "unknown"
+	status := string(activation.ResolvedStatus())
+	if activation.ResolvedStatus() == opencodeactivation.ActivationStatusUnknown && activation.Capability.Ready() {
+		status += " (informational: the managed launcher is configured, but which opencode new shells run could not be verified)"
 	}
 	paths := "none"
 	if len(activation.LauncherPaths) > 0 {
@@ -207,7 +222,10 @@ func renderOpenCodeBackgroundActivation(resolution OpenCodeBackgroundResolution)
 		restart = "true"
 	}
 	lines := fmt.Sprintf("OpenCode background activation status: %s\nOpenCode background launcher paths: %s\nOpenCode background restart required: %s", status, paths, restart)
-	if activation.Capability.Reason != "" {
+	if activation.ActivationReason != "" {
+		lines += "\nOpenCode background activation reason: " + activation.ActivationReason
+	}
+	if activation.Capability.Reason != "" && activation.Capability.Reason != activation.ActivationReason {
 		lines += "\nOpenCode background capability reason: " + activation.Capability.Reason
 	}
 	if activation.Capability.RestartGuidance != "" {

@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
@@ -96,6 +100,211 @@ func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
 	}
 	if root.Theme != "gentleman" {
 		t.Fatalf("theme = %q, want gentleman", root.Theme)
+	}
+}
+
+// TestInjectLeavesNonJSONNativeSettingsUntouched covers #1829: valid native
+// TOML/YAML settings are not JSON targets, so Inject neither rewrites them nor
+// creates a JSON fixture when they are missing.
+func TestInjectLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
+	tests := []struct {
+		name     string
+		adapter  agents.Adapter
+		settings string
+		content  string
+	}{
+		{name: "kimi legacy", adapter: kimi.NewAdapter(), settings: ".kimi/config.toml", content: "default_model = \"k2\"\n"},
+		{name: "kimi current", adapter: kimi.NewAdapter(), settings: ".kimi-code/config.toml", content: "[models.k2]\nprovider = \"moonshot\"\n"},
+		{name: "hermes", adapter: hermes.NewAdapter(), settings: ".hermes/config.yaml", content: "providers:\n  - name: hermes\n"},
+		{name: "hermes missing", adapter: hermes.NewAdapter(), settings: ".hermes/config.yaml"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, tt.settings)
+			if tt.content != "" {
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(settingsPath, []byte(tt.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			result, err := Inject(home, tt.adapter)
+			if err != nil || result.Changed || len(result.Files) != 0 {
+				t.Fatalf("Inject() = %#v, %v; want a no-op without reported files", result, err)
+			}
+			if tt.content == "" {
+				if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+					t.Fatalf("Inject() created %s; stat error = %v", settingsPath, err)
+				}
+				return
+			}
+			got, err := os.ReadFile(settingsPath)
+			if err != nil || string(got) != tt.content {
+				t.Fatalf("native settings = %q, %v; want bytes preserved", got, err)
+			}
+			wantMode := os.FileMode(0o600)
+			if runtime.GOOS == "windows" {
+				wantMode = 0o666 // Windows reports only the read-only attribute.
+			}
+			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != wantMode {
+				t.Fatalf("native settings mode = %v, %v; want %v", info, err, wantMode)
+			}
+		})
+	}
+}
+
+func TestInjectAtPathAcceptsCustomSelectedFilename(t *testing.T) {
+	selected := filepath.Join(t.TempDir(), "custom-opencode-settings")
+	if err := os.WriteFile(selected, []byte(`{"custom":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := InjectAtPath(selected)
+	if err != nil || !result.Changed || len(result.Files) != 1 || result.Files[0] != selected {
+		t.Fatalf("InjectAtPath() = %#v, %v; want the selected file written", result, err)
+	}
+	got, err := os.ReadFile(selected)
+	if err != nil || !bytes.Contains(got, []byte(`"theme": "gentleman"`)) || !bytes.Contains(got, []byte(`"custom": true`)) {
+		t.Fatalf("selected settings = %s, %v", got, err)
+	}
+}
+
+func TestInjectAtPathPreservesSelectedJSONCAndLeavesDecoy(t *testing.T) {
+	root := t.TempDir()
+	selected := filepath.Join(root, "opencode.jsonc")
+	decoy := filepath.Join(root, "opencode.json")
+	before := []byte("// selected\n{\"theme\":\"old\",\"custom\":true}\n")
+	if err := os.WriteFile(selected, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(decoy, []byte(`{"theme":"mine"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := InjectAtPath(selected)
+	if err != nil || !first.Changed || len(first.Files) != 1 || first.Files[0] != selected {
+		t.Fatalf("first injection = %#v, %v", first, err)
+	}
+	second, err := InjectAtPath(selected)
+	if err != nil || second.Changed {
+		t.Fatalf("second injection = %#v, %v", second, err)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(selected)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("selected JSONC mode = %v, %v; want 0600", info, err)
+		}
+	}
+	got, err := os.ReadFile(selected)
+	if err != nil || !bytes.Contains(got, []byte(`"theme":"gentleman"`)) || !bytes.Contains(got, []byte(`"custom":true`)) || !bytes.Contains(got, []byte("// selected")) {
+		t.Fatalf("selected JSONC = %s, %v", got, err)
+	}
+	got, err = os.ReadFile(decoy)
+	if err != nil || string(got) != `{"theme":"mine"}` {
+		t.Fatalf("decoy JSON = %s, %v", got, err)
+	}
+}
+
+func TestInjectAtPathRejectsZeroPermissionSettingsWithoutChangingThem(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits are not supported on Windows")
+	}
+
+	path := filepath.Join(t.TempDir(), "opencode.jsonc")
+	before := []byte("// private settings\n{\"theme\":\"old\"}\n")
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Skipf("cannot set file mode 0000: %v", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode().Perm() != 0 {
+		t.Skipf("cannot verify file mode 0000: %v, %v", info, err)
+	}
+
+	result, err := InjectAtPath(path)
+	if err == nil || !strings.Contains(err.Error(), "0000") || !strings.Contains(err.Error(), "permissions") {
+		t.Errorf("InjectAtPath() = %#v, %v; want actionable mode 0000 error", result, err)
+	}
+	if result.Changed || len(result.Files) != 0 {
+		t.Errorf("InjectAtPath() = %#v; want no changed files", result)
+	}
+	info, err = os.Lstat(path)
+	if err != nil || info.Mode().Perm() != 0 {
+		t.Fatalf("settings mode after injection = %v, %v; want 0000", info, err)
+	}
+	// Restore access only to inspect bytes, then leave the file locked down.
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := os.ReadFile(path)
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	if readErr != nil || !bytes.Equal(got, before) {
+		t.Fatalf("settings bytes after injection = %q, %v; want %q", got, readErr, before)
+	}
+}
+
+func TestInjectAtPathRefusesSymlinkWithoutChangingLinkOrTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "user.jsonc")
+	selected := filepath.Join(dir, "opencode.jsonc")
+	before := []byte("// private settings\n{\"theme\":\"old\"}\n")
+	if err := os.WriteFile(target, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, selected); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if result, err := InjectAtPath(selected); err == nil || !strings.Contains(err.Error(), "select a regular settings file") || result.Changed {
+		t.Fatalf("InjectAtPath() = %#v, %v; want symlink refusal", result, err)
+	}
+	if link, err := os.Readlink(selected); err != nil || link != target {
+		t.Fatalf("selected symlink changed: %q, %v", link, err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || !bytes.Equal(got, before) {
+		t.Fatalf("target bytes = %q, %v; want %q", got, err, before)
+	}
+	if info, err := os.Stat(target); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
+		t.Fatalf("target mode changed: %v, %v", info, err)
+	}
+}
+
+// The selected-settings refusal is OpenCode-only; other agents keep the base
+// writer behavior for a dotfiles-managed (symlinked) settings file.
+func TestInjectNonOpenCodeSymlinkedSettingsKeepBaseWriterBehavior(t *testing.T) {
+	home := t.TempDir()
+	adapter := claudeAdapter()
+	settings := adapter.SettingsPath(home)
+	target := filepath.Join(home, "dotfiles", "settings.json")
+	before := []byte("{\"theme\":\"old\"}\n")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, settings); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	result, err := Inject(home, adapter)
+	if err == nil || !strings.Contains(err.Error(), "refusing to read symlink") || strings.Contains(err.Error(), "select a regular settings file") {
+		t.Fatalf("Inject() = %#v, %v; want base writer symlink error, not the OpenCode refusal", result, err)
+	}
+	if link, err := os.Readlink(settings); err != nil || link != target {
+		t.Fatalf("settings symlink changed: %q, %v", link, err)
+	}
+	if got, err := os.ReadFile(target); err != nil || !bytes.Equal(got, before) {
+		t.Fatalf("target bytes = %q, %v; want %q", got, err, before)
 	}
 }
 

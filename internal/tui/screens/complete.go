@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 const maxErrorLines = 15
@@ -66,7 +66,7 @@ func renderCompleteSuccess(data CompletePayload) string {
 	b.WriteString("\n")
 	b.WriteString(styles.UnselectedStyle.Render("  2. Run your selected agent"))
 	b.WriteString("\n")
-	b.WriteString(styles.UnselectedStyle.Render("  3. Try /sdd-new my-feature"))
+	b.WriteString(styles.UnselectedStyle.Render("  3. Describe a change; ODD keeps small work small"))
 	b.WriteString("\n\n")
 
 	if data.GGAInstalled {

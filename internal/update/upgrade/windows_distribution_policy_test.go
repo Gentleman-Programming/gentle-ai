@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 func TestGentleAIWindowsUpgradeFailsClosedToSourceInstall(t *testing.T) {
@@ -88,7 +88,7 @@ func TestWindowsBetaSourceRecoveryIsPinned(t *testing.T) {
 func TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget(t *testing.T) {
 	const (
 		mainSHA = "972997650b51abcdef0123456789abcdef012345"
-		module  = "github.com/gentleman-programming/gentle-ai/v3"
+		module  = "github.com/gentleman-programming/gentle-ai/v4"
 	)
 
 	var tool update.ToolInfo

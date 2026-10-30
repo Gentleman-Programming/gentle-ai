@@ -6,9 +6,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agentbuilder"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // ─── Helper: set up a model on the agent builder engine screen ───────────────
@@ -43,16 +43,16 @@ func TestAgentBuilder_WelcomeCreateAgentEnter_NavigatesToEngine(t *testing.T) {
 	}
 }
 
-// ─── T-28.2: Esc from ScreenAgentBuilderEngine → back to Welcome ─────────────
+// ─── T-28.2: Esc from ScreenAgentBuilderEngine → back to Custom Agents ─────
 
-func TestAgentBuilder_EscFromEngine_ReturnsToWelcome(t *testing.T) {
+func TestAgentBuilder_EscFromEngine_ReturnsToCustomAgents(t *testing.T) {
 	m := modelOnAgentBuilderEngine(t)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenWelcome {
-		t.Fatalf("screen = %v, want ScreenWelcome", state.Screen)
+	if state.Screen != ScreenCustomAgents {
+		t.Fatalf("screen = %v, want ScreenCustomAgents", state.Screen)
 	}
 }
 
@@ -190,31 +190,31 @@ func TestAgentBuilder_InstallDoneMsg_MovesToComplete(t *testing.T) {
 	}
 }
 
-// ─── T-28.13: Enter on Complete → back to Welcome ────────────────────────────
+// ─── T-28.13: Enter on Complete → back to Custom Agents ────────────────────
 
-func TestAgentBuilder_EnterOnComplete_ReturnsToWelcome(t *testing.T) {
+func TestAgentBuilder_EnterOnComplete_ReturnsToCustomAgents(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgentBuilderComplete
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenWelcome {
-		t.Fatalf("screen = %v, want ScreenWelcome", state.Screen)
+	if state.Screen != ScreenCustomAgents {
+		t.Fatalf("screen = %v, want ScreenCustomAgents", state.Screen)
 	}
 }
 
-// ─── T-28.14: Esc from Complete → back to Welcome ────────────────────────────
+// ─── T-28.14: Esc from Complete → back to Custom Agents ────────────────────
 
-func TestAgentBuilder_EscFromComplete_ReturnsToWelcome(t *testing.T) {
+func TestAgentBuilder_EscFromComplete_ReturnsToCustomAgents(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgentBuilderComplete
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenWelcome {
-		t.Fatalf("screen = %v, want ScreenWelcome", state.Screen)
+	if state.Screen != ScreenCustomAgents {
+		t.Fatalf("screen = %v, want ScreenCustomAgents", state.Screen)
 	}
 }
 

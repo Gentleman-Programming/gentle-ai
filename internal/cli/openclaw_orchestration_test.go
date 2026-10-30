@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestComponentApplyStepOpenClawWorkspaceScopedInjections(t *testing.T) {
@@ -213,7 +213,7 @@ func testGlobalArtifactRoots(t *testing.T, sync bool) {
 				cmdLookPath = func(name string) (string, error) { return filepath.Join(home, "bin", name), nil }
 			}
 			if sync {
-				rt, err := newSyncRuntime(home, selection)
+				rt, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -248,7 +248,7 @@ func testGlobalArtifactRoots(t *testing.T, sync bool) {
 					t.Errorf("ambient content changed: %q", got)
 				}
 			}
-			assertOpenClawRoutingAndReview(t, home)
+			assertOpenClawRouting(t, home)
 			for _, path := range []string{"AGENTS.md", "SOUL.md", ".openclaw/skills/go-testing/SKILL.md", ".codeium/windsurf/memories/global_rules.md", ".codeium/windsurf/skills/go-testing/SKILL.md", ".pi/gentle-ai/persona.json"} {
 				if _, err := os.Stat(filepath.Join(home, path)); err != nil {
 					t.Errorf("missing global artifact %s: %v", path, err)
@@ -274,7 +274,7 @@ func TestExplicitWorkspaceInstallOverridesOpenClawConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	runInstallInjectionSteps(t, rt)
-	assertOpenClawRoutingAndReview(t, workspace)
+	assertOpenClawRouting(t, workspace)
 	for _, path := range []string{"AGENTS.md", "SOUL.md", ".openclaw/skills/go-testing/SKILL.md", ".codeium/windsurf/memories/global_rules.md", ".pi/gentle-ai/persona.json"} {
 		if _, err := os.Stat(filepath.Join(workspace, path)); err != nil {
 			t.Errorf("missing workspace artifact %s: %v", path, err)
@@ -299,7 +299,7 @@ func TestOpenClawConfigDoesNotRedirectProjectToolRuntimeCwd(t *testing.T) {
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
 	}
 	install := newTestInstallRuntime(t, home, selection)
-	sync, err := newSyncRuntime(home, selection)
+	sync, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func quoteJSON(value string) string {
 
 func assertOpenClawInstructionsInWorkspace(t *testing.T, workspace string) {
 	t.Helper()
-	assertOpenClawRoutingAndReview(t, workspace)
+	assertOpenClawRouting(t, workspace)
 	agentsText := readOpenClawTestFile(t, filepath.Join(workspace, "AGENTS.md"))
 	if !strings.Contains(agentsText, "gentle-ai:engram-protocol") {
 		t.Fatalf("active workspace AGENTS.md missing Engram protocol")
@@ -398,12 +398,19 @@ func assertOpenClawInstructionsInWorkspace(t *testing.T, workspace string) {
 	}
 }
 
-func assertOpenClawRoutingAndReview(t *testing.T, root string) {
+// assertOpenClawRouting checks the ODD routing OpenClaw receives. OpenClaw is
+// not a receipt-driven development runtime, so its guidance names no RDD switch.
+func assertOpenClawRouting(t *testing.T, root string) {
 	t.Helper()
 	agentsText := readOpenClawTestFile(t, filepath.Join(root, "AGENTS.md"))
-	for _, want := range []string{"gentle-ai:agent-routing", "Organic Driven Development (ODD)", "Receipt-driven development is user-owned"} {
+	for _, want := range []string{"gentle-ai:agent-routing", "Organic Driven Development (ODD)", "### ODD protocol"} {
 		if !strings.Contains(agentsText, want) {
 			t.Fatalf("AGENTS.md at %s missing %q", root, want)
+		}
+	}
+	for _, forbidden := range []string{"Receipt-driven development is user-owned", "gentle-ai review"} {
+		if strings.Contains(agentsText, forbidden) {
+			t.Fatalf("AGENTS.md at %s carries RDD content %q", root, forbidden)
 		}
 	}
 	if strings.Contains(agentsText, "<!-- gentle-ai:sdd-orchestrator -->") {

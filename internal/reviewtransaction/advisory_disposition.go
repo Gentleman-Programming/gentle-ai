@@ -20,7 +20,7 @@ const (
 	// outside the frozen candidate (pre-existing or base-only). It is recorded
 	// as a follow-up for separate later work and never reopens this review.
 	AdvisoryFollowUp AdvisoryDisposition = "follow_up"
-	// AdvisoryRefuted is a severe inferential finding the refuter knocked
+	// AdvisoryRefuted is a severe finding the refuter knocked
 	// down. It carries no residual obligation at all.
 	AdvisoryRefuted AdvisoryDisposition = "refuted"
 )

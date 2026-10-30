@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/skillregistry"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/skillregistry"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
@@ -62,8 +62,8 @@ func TestInjectWritesSkillFilesForOpenCode(t *testing.T) {
 		t.Fatalf("Inject() first changed = false")
 	}
 
-	if len(result.Files) != 2 {
-		t.Fatalf("Inject() files len = %d, want SKILL.md plus local reference", len(result.Files))
+	if len(skillFiles(result.Files)) != 2 {
+		t.Fatalf("Inject() files len = %d, want SKILL.md plus local reference", len(skillFiles(result.Files)))
 	}
 
 	path := filepath.Join(home, ".config", "opencode", "skills", "skill-creator", "SKILL.md")
@@ -157,8 +157,8 @@ func TestInjectSkipsSddSkills(t *testing.T) {
 	}
 
 	// Only the non-SDD skill (skill-creator) should be written, including its local references.
-	if len(result.Files) != 2 {
-		t.Fatalf("Inject() files len = %d, want 2 (skill-creator plus local reference)", len(result.Files))
+	if len(skillFiles(result.Files)) != 2 {
+		t.Fatalf("Inject() files len = %d, want 2 (skill-creator plus local reference)", len(skillFiles(result.Files)))
 	}
 
 	// No retired skill files may be created.
@@ -181,8 +181,8 @@ func TestInjectSkipsUnknownSkillGracefully(t *testing.T) {
 		t.Fatalf("Inject() error = %v", err)
 	}
 
-	if len(result.Files) != 2 {
-		t.Fatalf("Inject() files len = %d, want 2", len(result.Files))
+	if len(skillFiles(result.Files)) != 2 {
+		t.Fatalf("Inject() files len = %d, want 2", len(skillFiles(result.Files)))
 	}
 
 	if len(result.Skipped) != 1 {
@@ -257,8 +257,8 @@ func TestInjectVSCodeWritesSkillFiles(t *testing.T) {
 	if !result.Changed {
 		t.Fatalf("Inject(vscode) changed = false")
 	}
-	if len(result.Files) != 2 {
-		t.Fatalf("Inject(vscode) files len = %d, want 2", len(result.Files))
+	if len(skillFiles(result.Files)) != 2 {
+		t.Fatalf("Inject(vscode) files len = %d, want 2", len(skillFiles(result.Files)))
 	}
 
 	path := filepath.Join(home, ".copilot", "skills", "skill-creator", "SKILL.md")
@@ -464,8 +464,8 @@ func TestInjectWithCapability_WritesNonSDDSkillsRegardlessOfCapability(t *testin
 	if err != nil {
 		t.Fatalf("InjectWithCapability() error = %v", err)
 	}
-	if len(result.Files) != 2 {
-		t.Fatalf("InjectWithCapability() files len = %d, want 2", len(result.Files))
+	if len(skillFiles(result.Files)) != 2 {
+		t.Fatalf("InjectWithCapability() files len = %d, want 2", len(skillFiles(result.Files)))
 	}
 	if len(result.Skipped) != 0 {
 		t.Fatalf("InjectWithCapability() skipped len = %d, want 0", len(result.Skipped))

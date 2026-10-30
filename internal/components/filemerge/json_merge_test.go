@@ -1,10 +1,188 @@
 package filemerge
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestJSONCTouchedValueCommentGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name, base, overlay string
+		refuse              bool
+	}{
+		{"permission nested line", `{"permission":{"bash":{// note
+"*":"deny"}}}`, `{"permission":{"read":{"*":"allow"}}}`, true},
+		{"mcp nested block", `{"mcp":{"other":{/* keep */"type":"remote"}}}`, `{"mcp":{"context7":{"type":"remote"}}}`, true},
+		{"untouched subtree", `{"agent":{/* keep */"custom":{}},"mcp":{}}`, `{"mcp":{"context7":{}}}`, false},
+		{"comment in string", `{"mcp":{"other":{"url":"https://example.com"}}}`, `{"mcp":{"context7":{}}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := MergeJSONObjectsForPath("opencode.jsonc", []byte(tc.base), []byte(tc.overlay))
+			if (err != nil) != tc.refuse {
+				t.Fatalf("merge error = %v, want refusal %t", err, tc.refuse)
+			}
+		})
+	}
+}
+
+func TestJSONCMergesRefuseDuplicateKeysBeforeMapRewrite(t *testing.T) {
+	for _, tc := range []struct {
+		name, base, overlay string
+	}{
+		{"nested permission", `{"permission":{"bash":{"ssh":"deny","ssh":"allow"}}}`, `{"permission":{"bash":{"*":"ask"}}}`},
+		{"nested mcp", `{"mcp":{"other":{"type":"local","type":"remote"}}}`, `{"mcp":{"context7":{"type":"remote"}}}`},
+		{"escaped touched top-level duplicate", `{"mcp":{},"m\u0063p":{"other":true}}`, `{"mcp":{"context7":{}}}`},
+		{"escaped touched top-level only", `{"m\u0063p":{"other":true}}`, `{"mcp":{"context7":{}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := []byte(tc.base)
+			for _, merge := range []struct {
+				name string
+				fn   func(string, []byte, []byte) ([]byte, error)
+			}{
+				{"overlay", MergeJSONObjectsForPath},
+				{"defaults", MergeOpenCodeJSONDefaultsForPath},
+			} {
+				t.Run(merge.name, func(t *testing.T) {
+					got, err := merge.fn("opencode.jsonc", base, []byte(tc.overlay))
+					if err == nil || !strings.Contains(err.Error(), "refuse") {
+						t.Fatalf("want actionable refusal; got %q, %v", got, err)
+					}
+					if got != nil && string(got) != string(base) {
+						t.Fatalf("refusal changed bytes: %q", got)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRemoveLegacyOpenCodeAgentMarkers(t *testing.T) {
+	for _, path := range []string{"opencode.json", "opencode.jsonc"} {
+		t.Run(path, func(t *testing.T) {
+			raw := []byte(`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd","prompt":"keep"},"custom":{"__managed_by":"gentle-ai/sdd"},"sdd-apply":{"__managed_by":"other"}},"theme":"keep"}`)
+			got, err := RemoveLegacyOpenCodeAgentMarkers(path, raw, []string{"gentle-orchestrator", "sdd-apply"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := UnmarshalJSONObject(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			agents := root["agent"].(map[string]any)
+			if _, ok := agents["gentle-orchestrator"].(map[string]any)["__managed_by"]; ok {
+				t.Fatalf("marker retained: %s", got)
+			}
+			if agents["gentle-orchestrator"].(map[string]any)["prompt"] != "keep" || agents["custom"].(map[string]any)["__managed_by"] != "gentle-ai/sdd" || agents["sdd-apply"].(map[string]any)["__managed_by"] != "other" {
+				t.Fatalf("user data changed: %s", got)
+			}
+			again, err := RemoveLegacyOpenCodeAgentMarkers(path, got, []string{"gentle-orchestrator", "sdd-apply"})
+			if err != nil || string(again) != string(got) {
+				t.Fatalf("not idempotent: %s %v", again, err)
+			}
+			if path == "opencode.jsonc" && !strings.Contains(string(got), `"theme":"keep"`) {
+				t.Fatal("lost unrelated formatting")
+			}
+		})
+	}
+}
+
+func TestRemoveLegacyOpenCodeAgentMarkersJSONCCommentsAndRefusals(t *testing.T) {
+	raw := []byte(`{
+ // outside
+ "agent": {
+   "gentle-orchestrator": {
+     // retain prompt note
+     "prompt": "keep",
+     "__managed_by": "gentle-ai/sdd",
+   },
+   "custom": {"__managed_by": "gentle-ai/sdd"},
+ },
+}`)
+	got, err := RemoveLegacyOpenCodeAgentMarkers("opencode.jsonc", raw, []string{"gentle-orchestrator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"// outside", "// retain prompt note", `"custom": {"__managed_by": "gentle-ai/sdd"}`} {
+		if !strings.Contains(string(got), part) {
+			t.Fatalf("lost %q: %s", part, got)
+		}
+	}
+	if _, err := UnmarshalJSONObject(got); err != nil {
+		t.Fatalf("invalid output: %v", err)
+	}
+	for _, bad := range []string{`{"agent":`, `{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd"}},"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd"}}}`} {
+		result, err := RemoveLegacyOpenCodeAgentMarkers("opencode.jsonc", []byte(bad), []string{"gentle-orchestrator"})
+		if err == nil || string(result) != bad {
+			t.Fatalf("unsafe rewrite of %q: %s %v", bad, result, err)
+		}
+	}
+}
+
+func TestRemoveLegacyOpenCodeAgentMarkersPreservesInlineCommentByRefusal(t *testing.T) {
+	for _, raw := range []string{
+		`{"agent":{"gentle-orchestrator":{"__managed_by" /* user note */ : "gentle-ai/sdd","prompt":"keep"}}}`,
+		`{"agent":{"gentle-orchestrator":{"__managed_by" // user note
+ : "gentle-ai/sdd","prompt":"keep"}}}`,
+		`{"agent":{"gentle-orchestrator":{/* user note */ "__managed_by":"gentle-ai/sdd","prompt":"keep"}}}`,
+		`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd" /* user's note */,"prompt":"keep"}}}`,
+		`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd" // user's note
+  ,"prompt":"keep"}}}`,
+	} {
+		got, err := RemoveLegacyOpenCodeAgentMarkers("opencode.jsonc", []byte(raw), []string{"gentle-orchestrator"})
+		if err == nil || string(got) != raw {
+			t.Fatalf("inline comment must be preserved by refusal: %s, %v", got, err)
+		}
+	}
+}
+
+func TestRemoveLegacyOpenCodeAgentMarkersAcceptsEmptySettings(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		raw  []byte
+	}{
+		{name: "zero bytes", path: "opencode.json", raw: nil},
+		{name: "whitespace", path: "opencode.json", raw: []byte(" \t\r\n ")},
+		{name: "whitespace JSONC", path: "opencode.jsonc", raw: []byte(" \n ")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := RemoveLegacyOpenCodeAgentMarkers(tc.path, tc.raw, []string{"gentle-orchestrator"})
+			if err != nil || string(got) != string(tc.raw) {
+				t.Fatalf("empty settings must remain unchanged without error: got %q, err %v", got, err)
+			}
+		})
+	}
+}
+
+func TestRemoveLegacyOpenCodeAgentMarkersRejectsCommentOnlyJSONC(t *testing.T) {
+	raw := []byte("// user note\n")
+	got, err := RemoveLegacyOpenCodeAgentMarkers("opencode.jsonc", raw, []string{"gentle-orchestrator"})
+	if err == nil || string(got) != string(raw) {
+		t.Fatalf("comment-only settings must be refused unchanged: got %q, err %v", got, err)
+	}
+}
+
+func TestRemoveLegacyOpenCodeAgentMarkersRejectsDuplicateKeys(t *testing.T) {
+	cases := []string{
+		`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd"}},"agent":{"custom":true}}`,
+		`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd"},"gentle-orchestrator":{"prompt":"user"}}}`,
+		`{"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd","__managed_by":"other"}}}`,
+		`{"theme":1,"theme":2,"agent":{"gentle-orchestrator":{"__managed_by":"gentle-ai/sdd"}}}`,
+	}
+	for _, path := range []string{"opencode.json", "opencode.jsonc"} {
+		for _, raw := range cases {
+			t.Run(path+raw, func(t *testing.T) {
+				got, err := RemoveLegacyOpenCodeAgentMarkers(path, []byte(raw), []string{"gentle-orchestrator"})
+				if err == nil || string(got) != raw {
+					t.Fatalf("duplicate key must fail closed: %s %v", got, err)
+				}
+			})
+		}
+	}
+}
 
 func TestPermissionOverlayNewWildcardCannotOverrideExistingDeny(t *testing.T) {
 	got, err := MergeJSONObjects([]byte(`{"permission":{"bash":{"ssh*":"deny"}}}`), []byte(`{"permission":{"bash":{"*":"allow"}}}`))
@@ -134,7 +312,7 @@ func TestMergeJSONObjectsSupportsJSONCBase(t *testing.T) {
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCKeepsCommentsAndTrailingCommas(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsKeepsCommentsAndTrailingCommas(t *testing.T) {
 	base := []byte(`{
   // user provider note
   "provider": {
@@ -147,9 +325,9 @@ func TestMergeJSONObjectsPreserveJSONCKeepsCommentsAndTrailingCommas(t *testing.
 }`)
 	overlay := []byte(`{"mcp":{"context7":{"type":"remote","enabled":true}}}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err != nil {
-		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+		t.Fatalf("MergeOpenCodeJSONCObjects() error = %v", err)
 	}
 	text := string(merged)
 	for _, want := range []string{"// user provider note", `"m": {},`, "// managed server note"} {
@@ -170,15 +348,15 @@ func TestMergeJSONObjectsPreserveJSONCKeepsCommentsAndTrailingCommas(t *testing.
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCInsertsMissingKeyAndUnwrapsSentinel(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsInsertsMissingKeyAndUnwrapsSentinel(t *testing.T) {
 	base := []byte(`{
   "provider": {"local": {}} // keep provider note
 }`)
 	overlay := []byte(`{"mcp":{"engram":{"__replace__":{"command":["engram","mcp"],"type":"local"}}}}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err != nil {
-		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+		t.Fatalf("MergeOpenCodeJSONCObjects() error = %v", err)
 	}
 	text := string(merged)
 	if strings.Contains(text, "__replace__") {
@@ -198,7 +376,7 @@ func TestMergeJSONObjectsPreserveJSONCInsertsMissingKeyAndUnwrapsSentinel(t *tes
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCInsertionIgnoresClosingBraceComments(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsInsertionIgnoresClosingBraceComments(t *testing.T) {
 	base := []byte(`{
   "provider": {"local": {}} // keep provider note
 }
@@ -206,9 +384,9 @@ func TestMergeJSONObjectsPreserveJSONCInsertionIgnoresClosingBraceComments(t *te
 `)
 	overlay := []byte(`{"mcp":{"context7":{"type":"remote"}}}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err != nil {
-		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+		t.Fatalf("MergeOpenCodeJSONCObjects() error = %v", err)
 	}
 	if _, err := UnmarshalJSONObject(merged); err != nil {
 		t.Fatalf("merged JSONC no longer parses: %v\n%s", err, string(merged))
@@ -218,37 +396,37 @@ func TestMergeJSONObjectsPreserveJSONCInsertionIgnoresClosingBraceComments(t *te
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCExistingFinalMemberIdempotent(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsExistingFinalMemberIdempotent(t *testing.T) {
 	base := []byte("{\n  \"theme\": \"default\"  \n}\n")
 	overlay := []byte(`{"theme":"gentleman"}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err != nil {
-		t.Fatalf("MergeJSONObjectsPreserveJSONC() error = %v", err)
+		t.Fatalf("MergeOpenCodeJSONCObjects() error = %v", err)
 	}
-	mergedAgain, err := MergeJSONObjectsPreserveJSONC(merged, overlay)
+	mergedAgain, err := MergeOpenCodeJSONCObjects(merged, overlay)
 	if err != nil {
-		t.Fatalf("MergeJSONObjectsPreserveJSONC() second merge error = %v", err)
+		t.Fatalf("MergeOpenCodeJSONCObjects() second merge error = %v", err)
 	}
 	if string(mergedAgain) != string(merged) {
 		t.Fatalf("repeated merge changed bytes:\nfirst:\n%s\nsecond:\n%s", string(merged), string(mergedAgain))
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCRejectsMalformedInputWithoutReplacingBytes(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsRejectsMalformedInputWithoutReplacingBytes(t *testing.T) {
 	base := []byte("// interrupted user edit\n{\n  \"mcp\": {\n")
 	overlay := []byte(`{"mcp":{"context7":{"type":"remote"}}}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err == nil {
-		t.Fatal("MergeJSONObjectsPreserveJSONC() error = nil, want refusal for malformed JSONC")
+		t.Fatal("MergeOpenCodeJSONCObjects() error = nil, want refusal for malformed JSONC")
 	}
 	if string(merged) != string(base) {
 		t.Fatalf("malformed JSONC was replaced:\n got: %q\nwant: %q", merged, base)
 	}
 }
 
-func TestMergeJSONObjectsPreserveJSONCRejectsDuplicateTouchedTopLevelKey(t *testing.T) {
+func TestMergeOpenCodeJSONCObjectsRejectsDuplicateTouchedTopLevelKey(t *testing.T) {
 	base := []byte(`{
   "agent": {"effective": "stale"},
   "agent": {"effective": "current"}
@@ -256,9 +434,9 @@ func TestMergeJSONObjectsPreserveJSONCRejectsDuplicateTouchedTopLevelKey(t *test
 `)
 	overlay := []byte(`{"agent":{"managed":true}}`)
 
-	merged, err := MergeJSONObjectsPreserveJSONC(base, overlay)
+	merged, err := MergeOpenCodeJSONCObjects(base, overlay)
 	if err == nil {
-		t.Fatal("MergeJSONObjectsPreserveJSONC() error = nil, want refusal for duplicate touched top-level key")
+		t.Fatal("MergeOpenCodeJSONCObjects() error = nil, want refusal for duplicate touched top-level key")
 	}
 	if string(merged) != string(base) {
 		t.Fatalf("duplicate-key JSONC was modified on refusal:\n got: %q\nwant: %q", merged, base)
@@ -596,4 +774,139 @@ func TestMergeJSONObjects_Issue278_ReplaceSentinelFixesWildcard(t *testing.T) {
 	}
 
 	t.Logf("CONFIRMED: __replace__ produces exactly %d task keys (no wildcard)", len(task))
+}
+
+func TestSharedJSONMergesKeepBaseBehaviorWithoutOpenCodeOptIn(t *testing.T) {
+	kilocodeDefaults := func(base, overlay []byte) ([]byte, error) {
+		return MergeJSONDefaultsForPath("opencode.json", base, overlay)
+	}
+	kilocodeOverlay := func(base, overlay []byte) ([]byte, error) {
+		return MergeJSONObjectsForPath("opencode.json", base, overlay)
+	}
+	for _, tc := range []struct {
+		name, base, overlay string
+		merge               func([]byte, []byte) ([]byte, error)
+	}{
+		{"defaults over duplicate keys", `{"permission":{"bash":{"ssh":"deny","ssh":"allow"}}}`, `{"permission":{"read":{"*":"allow"}}}`, kilocodeDefaults},
+		{"json overlay over duplicate keys", "{\n  // note\n  \"mcp\":{\"a\":1,\"a\":2}\n}\n", `{"theme":"x"}`, kilocodeOverlay},
+		{"json overlay over nested comments", "{\n  \"agent\":{/* keep */\"custom\":{}}\n}\n", `{"agent":{"gentleman":{}}}`, kilocodeOverlay},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.merge([]byte(tc.base), []byte(tc.overlay))
+			if err != nil {
+				t.Fatalf("shared merge must keep base behavior without the OpenCode opt-in; got %v", err)
+			}
+			if _, err := UnmarshalJSONObject(got); err != nil {
+				t.Fatalf("merged output is not a JSON object: %v\n%s", err, got)
+			}
+		})
+	}
+}
+
+func TestJSONCTopLevelKeyIsEscaped(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		want      bool
+	}{
+		{"escaped touched key", "{\n  // note\n  \"\\u0061gent\": {}\n}\n", true},
+		{"plain key", "{\n  // note\n  \"agent\": {}\n}\n", false},
+		{"absent key", `{"theme":"x"}`, false},
+		{"escaped nested key only", `{"agent":{"\u0067entleman":{}}}`, false},
+		{"unparseable document", `{"\u0061gent":`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := JSONCTopLevelKeyIsEscaped([]byte(tc.raw), "agent"); got != tc.want {
+				t.Fatalf("JSONCTopLevelKeyIsEscaped() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// exactNumberSettings holds number tokens that float64 decoding would round,
+// reformat or reject (#1672); every rewrite must keep them verbatim.
+const exactNumberSettings = `{"agent":{"gentleman":{"tools":{},"__managed_by":"gentle-ai/sdd"}},` +
+	`"big":9007199254740993,"neg":-9007199254740995,"max":9223372036854775807,` +
+	`"nested":{"list":[1.10,6.02214076e23,1E+2,{"min":-9223372036854775808}]},"huge":1e999}`
+
+// assertExactNumbers re-decodes encoded independently of the code under test
+// and checks every exactNumberSettings token at its own JSON path.
+func assertExactNumbers(t *testing.T, encoded []byte) {
+	t.Helper()
+	var root map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(normalizeJSON(encoded)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil {
+		t.Fatalf("decode rewritten JSON error = %v:\n%s", err, encoded)
+	}
+	nested, _ := root["nested"].(map[string]any)
+	list, _ := nested["list"].([]any)
+	if len(list) != 4 {
+		t.Fatalf("nested.list = %#v, want 4 entries:\n%s", nested["list"], encoded)
+	}
+	last, _ := list[3].(map[string]any)
+	got := []any{root["big"], root["neg"], root["max"], list[0], list[1], list[2], last["min"], root["huge"]}
+	want := []string{"9007199254740993", "-9007199254740995", "9223372036854775807",
+		"1.10", "6.02214076e23", "1E+2", "-9223372036854775808", "1e999"}
+	for i := range want {
+		if number, ok := got[i].(json.Number); !ok || number.String() != want[i] {
+			t.Fatalf("number %d = %#v, want exact %s:\n%s", i, got[i], want[i], encoded)
+		}
+	}
+}
+
+func TestJSONRewritesPreserveExactNumberTokens(t *testing.T) {
+	base := []byte(exactNumberSettings)
+	jsonc := []byte("// user note\n" + strings.TrimSuffix(exactNumberSettings, "}") + ",}")
+	for _, tc := range []struct {
+		name    string
+		rewrite func() ([]byte, error)
+	}{
+		{"merge", func() ([]byte, error) { return MergeJSONObjects(base, []byte(`{"added":true}`)) }},
+		{"merge normalized jsonc", func() ([]byte, error) { return MergeJSONObjects(jsonc, []byte(`{"added":true}`)) }},
+		{"merge jsonc touched value", func() ([]byte, error) {
+			return MergeJSONObjectsForPath("opencode.jsonc", base, []byte(`{"nested":{"added":true}}`))
+		}},
+		{"defaults", func() ([]byte, error) { return MergeJSONDefaultsForPath("x.json", base, []byte(`{"added":true}`)) }},
+		{"defaults jsonc touched value", func() ([]byte, error) {
+			return MergeOpenCodeJSONDefaultsForPath("x.jsonc", base, []byte(`{"nested":{"added":true}}`))
+		}},
+		{"remove agent tools", func() ([]byte, error) { return RemoveJSONAgentTools(base, "gentleman") }},
+		{"remove legacy markers", func() ([]byte, error) {
+			return RemoveLegacyOpenCodeAgentMarkers("x.json", base, []string{"gentleman"})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.rewrite()
+			if err != nil {
+				t.Fatalf("rewrite error = %v", err)
+			}
+			if string(got) == string(base) {
+				t.Fatalf("rewrite left the document unchanged; the test must exercise a re-encode")
+			}
+			assertExactNumbers(t, got)
+		})
+	}
+
+	root, err := UnmarshalJSONObject(base)
+	if err != nil || root["big"] != json.Number("9007199254740993") {
+		t.Fatalf("UnmarshalJSONObject() big = %#v (err %v), want exact json.Number", root["big"], err)
+	}
+}
+
+func TestUnmarshalJSONObjectKeepsStrictSingleDocument(t *testing.T) {
+	for _, tc := range []struct{ name, raw, wantErr string }{
+		{"second document", `{"a":1}{"b":2}`, "after top-level value"},
+		{"trailing text", `{"a":1} trailing`, "after top-level value"},
+		{"truncated", `{"a":`, "unexpected end of JSON input"},
+		{"non-object", `[1]`, "cannot unmarshal array"},
+		{"blank", "  \n", ""},
+		{"jsonc", "// note\n{\"a\":1,}", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := UnmarshalJSONObject([]byte(tc.raw))
+			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("UnmarshalJSONObject(%q) error = %v, want %q", tc.raw, err, tc.wantErr)
+			}
+		})
+	}
 }

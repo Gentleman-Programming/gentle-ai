@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/consentenvelope"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/consentenvelope"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 const ReviewIntegrationConsentSchema = "gentle-ai.review-integration.consent/v1"
@@ -158,6 +158,10 @@ func reviewConsentSpanishEvidenceSubject(reason reviewtransaction.RiskReason) st
 		return "scripts de shell"
 	case reviewtransaction.RiskReasonProcessBoundary, reviewtransaction.RiskReasonProcessScanLimit:
 		return "código que inicia otros procesos"
+	case reviewtransaction.RiskReasonDangerousSink:
+		return "un patrón de código peligroso"
+	case reviewtransaction.RiskReasonAgentEscalation:
+		return "el agente que hizo este cambio lo marcó como de alto riesgo"
 	case reviewtransaction.RiskReasonExecutableMode:
 		return "un cambio de permiso ejecutable"
 	case reviewtransaction.RiskReasonExecutableChange:

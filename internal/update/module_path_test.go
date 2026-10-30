@@ -5,12 +5,11 @@ import "testing"
 // TestModulePathForVersion pins the helper's contract for issue #4687:
 // derive the Go module /vN suffix from the version being installed, not
 // from the running binary's own major. The seam runningGoMajor is pinned to
-// 3 (the running binary's major in this repository) so every unparseable
-// version falls back to /v3.
+// 4 (the current binary major) so every unparseable version falls back to /v4.
 func TestModulePathForVersion(t *testing.T) {
 	origRunning := runningGoMajor
 	t.Cleanup(func() { runningGoMajor = origRunning })
-	runningGoMajor = func() int { return 3 }
+	runningGoMajor = func() int { return 4 }
 
 	const base = "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai"
 	const repo = "gentle-ai"
@@ -65,25 +64,25 @@ func TestModulePathForVersion(t *testing.T) {
 			want:    base,
 		},
 		{
-			name:    "unparseable 'latest' falls back to running major /v3",
+			name:    "unparseable 'latest' falls back to running major /v4",
 			base:    base,
 			repo:    repo,
 			version: "latest",
-			want:    "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai",
+			want:    "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai",
 		},
 		{
-			name:    "unparseable 'main@abc' falls back to running major /v3",
+			name:    "unparseable 'main@abc' falls back to running major /v4",
 			base:    base,
 			repo:    repo,
 			version: "main@abc",
-			want:    "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai",
+			want:    "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai",
 		},
 		{
-			name:    "empty version falls back to running major /v3",
+			name:    "empty version falls back to running major /v4",
 			base:    base,
 			repo:    repo,
 			version: "",
-			want:    "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai",
+			want:    "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai",
 		},
 		{
 			name:    "base without subpath appends /vN",
@@ -148,15 +147,16 @@ func TestParseMajorVersion(t *testing.T) {
 }
 
 // TestParseMajorFromModulePath covers the running-binary's module-path
-// parser. The repo's own path is .../gentle-ai/v3 → 3; an unsuffixed path
+// parser. The repo's own path is .../gentle-ai/v4 → 4; an unsuffixed path
 // returns 0.
 func TestParseMajorFromModulePath(t *testing.T) {
 	tests := []struct {
 		path string
 		want int
 	}{
+		{"github.com/gentleman-programming/gentle-ai/v4", 4},
+		{"github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai", 4},
 		{"github.com/gentleman-programming/gentle-ai/v3", 3},
-		{"github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai", 3},
 		{"github.com/gentleman-programming/gentle-ai/v10/cmd/x", 10},
 		{"github.com/gentleman-programming/gentle-ai", 0},
 		{"github.com/gentleman-programming/gentle-ai/cmd/x", 0},

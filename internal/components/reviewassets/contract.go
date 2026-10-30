@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
 )
 
 const identityPlaceholder = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
@@ -52,7 +52,7 @@ func ContractFor(agent model.AgentID) string {
 	case agent == model.AgentOpenCode:
 		rendered := contract + "\n\n" + openCodeGroup
 		if major, err := opencode.DetectRuntimeMajor(context.Background()); err == nil && major == opencode.RuntimeV2 {
-			rendered = "OpenCode V2 review transport is unavailable pending organic runtime conformance. Do not start a review or launch reviewer subagents on V2. The following contract is staged reference, not capability authorization.\n\n" + strings.NewReplacer("`task`", "`subagent`", "`subagent_type`", "`agent`").Replace(rendered)
+			rendered = strings.NewReplacer("`task`", "`subagent`", "`subagent_type`", "`agent`").Replace(rendered)
 		}
 		return rendered
 	case reviewerprovider.RegisteredRuntime(agent):

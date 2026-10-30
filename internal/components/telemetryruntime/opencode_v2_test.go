@@ -16,7 +16,7 @@ func TestReadOpenCodeNativeAssignment(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "opencode.json"), []byte(`{"agent":{"worker":{"model":"old/model"}},"agents":{"worker":{"model":"native/coder#high"}}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	got := readOpenCodeAssignment(home, "worker")
+	got := openCodeAssignment(readOpenCodeConfig(home), "worker")
 	if got.ProviderID != "native" || got.ModelID != "coder" || got.Effort != "high" {
 		t.Fatalf("assignment = %+v", got)
 	}

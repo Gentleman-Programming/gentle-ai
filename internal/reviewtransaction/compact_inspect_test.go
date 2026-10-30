@@ -305,3 +305,109 @@ func inspectNoError(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+// TestSanctionedExitsDecoupleHistoricalExitsFromDispositionSeed pins the
+// CodeRabbit follow-up hardening on SanctionedCompactRecoveryExits: the
+// historical per-entry exits and the selectorless disposition-seed
+// derivation are independent computations. The derivation now runs
+// unconditionally — it must never append a second repair exit for a
+// historical-class plan historicalDispositionExitLineages already covered,
+// and it must still feed dispositionSeed when the admitted plan is
+// non-historical. Derivation errors stay unpropagated in every case.
+func TestSanctionedExitsDecoupleHistoricalExitsFromDispositionSeed(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("all-historical N=2 store keeps exactly one repair exit per entry", func(t *testing.T) {
+		repo, _ := issue2995StageFixtureStore(t, issue2995ApprovedFixtureName, issue2995EscalatedFixtureName)
+		report, err := InspectCompactRecoveryEdges(ctx, repo)
+		inspectNoError(t, err)
+		exits, err := SanctionedCompactRecoveryExits(ctx, repo, report)
+		inspectNoError(t, err)
+		// The unconditional selectorless derivation refuses this store (two
+		// diagnostics), so dispositionSeed stays empty and the exits are
+		// exactly the two historical per-entry repair exits — the independence
+		// pin: no derivation-driven extra exit may appear next to them.
+		if len(exits) != 2 || exits[0].SuccessorLineageID != issue2995EscalatedLineage || exits[1].SuccessorLineageID != issue2995ApprovedLineage {
+			t.Fatalf("all-historical N=2 exits = %+v, want exactly the two per-entry repair exits in lineage order", exits)
+		}
+		for _, exit := range exits {
+			if exit.Operation != CompactRecoveryEdgeExitRepair || exit.Blocked != "" {
+				t.Fatalf("historical exit for %q = %#v, want an unblocked repair", exit.SuccessorLineageID, exit)
+			}
+		}
+	})
+
+	t.Run("all-historical N=1 store keeps exactly one repair exit", func(t *testing.T) {
+		repo, _ := issue2995StageFixtureStore(t, issue2995ApprovedFixtureName)
+		report, err := InspectCompactRecoveryEdges(ctx, repo)
+		inspectNoError(t, err)
+		exits, err := SanctionedCompactRecoveryExits(ctx, repo, report)
+		inspectNoError(t, err)
+		// Here the unconditional derivation DOES close (the N=1 selectorless
+		// historical plan) and must not append a duplicate repair exit for the
+		// lineage historicalDispositionExitLineages already covered.
+		if len(exits) != 1 || exits[0].SuccessorLineageID != issue2995ApprovedLineage || exits[0].Operation != CompactRecoveryEdgeExitRepair {
+			t.Fatalf("all-historical N=1 exits = %+v, want exactly one unduplicated repair exit", exits)
+		}
+	})
+
+	t.Run("non-historical admitted plan still seeds a blocked content-mismatch edge without historical exits", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		_, successor, _ := forgedRecoveryPair(t, repo, "seedpin", "forged seed pin target\n")
+		// A valid recovery from the forged successor makes it INTERIOR, so
+		// abandon's own prediction refuses it and the seed path is the only
+		// reachable repair advertisement for its content-mismatch edge.
+		interiorSuccessor, _ := inspectRecoverySuccessor(t, repo, successor, "seedpin-interior", "")
+		report, err := InspectCompactRecoveryEdges(ctx, repo)
+		inspectNoError(t, err)
+		if len(report.historical) != 0 {
+			t.Fatalf("fixture store unexpectedly carries historical entries: %d", len(report.historical))
+		}
+		exits, err := SanctionedCompactRecoveryExits(ctx, repo, report)
+		inspectNoError(t, err)
+		var successorExit *CompactRecoverySanctionedExit
+		for index := range exits {
+			if exits[index].SuccessorLineageID == successor.State.LineageID {
+				successorExit = &exits[index]
+			}
+		}
+		if successorExit == nil || successorExit.Operation != CompactRecoveryEdgeExitRepair || successorExit.Blocked != "" {
+			t.Fatalf("interior forged successor exit = %#v, want the disposition-seed repair for %q", successorExit, interiorSuccessor.State.LineageID)
+		}
+	})
+
+	t.Run("historical exits do not suppress the disposition seed for a non-historical admitted plan", func(t *testing.T) {
+		// The reachability probe for the decoupled branch: one forensic
+		// historical entry (the only diagnostic, so historicalExits is
+		// non-empty) alongside a loaded content-mismatch pair. The selectorless
+		// derivation closes on the EDGE plan (non-historical), and its seed
+		// must still drive the interior successor's repair exit.
+		repo, _ := issue2995StageFixtureStore(t, issue2995ApprovedFixtureName)
+		_, successor, _ := forgedRecoveryPair(t, repo, "mixedseed", "forged mixed seed target\n")
+		inspectRecoverySuccessor(t, repo, successor, "mixedseed-interior", "")
+		report, err := InspectCompactRecoveryEdges(ctx, repo)
+		inspectNoError(t, err)
+		if len(report.historical) != 1 || len(report.EntryDiagnostics) != 1 {
+			t.Fatalf("mixed store = %d historical / %d diagnostics, want 1/1", len(report.historical), len(report.EntryDiagnostics))
+		}
+		exits, err := SanctionedCompactRecoveryExits(ctx, repo, report)
+		inspectNoError(t, err)
+		seen := map[string]int{}
+		sawHistoricalExit, sawSeedRepair := false, false
+		for _, exit := range exits {
+			seen[exit.SuccessorLineageID]++
+			switch exit.SuccessorLineageID {
+			case issue2995ApprovedLineage:
+				sawHistoricalExit = exit.Operation == CompactRecoveryEdgeExitRepair && exit.Blocked == ""
+			case successor.State.LineageID:
+				sawSeedRepair = exit.Operation == CompactRecoveryEdgeExitRepair && exit.Blocked == ""
+			}
+		}
+		// The interior's own (leaf, unchanged-target) edge keeps its
+		// pre-existing abandon exit; the pin is that the seeded repair appears
+		// alongside the historical per-entry exit, once per lineage.
+		if !sawHistoricalExit || !sawSeedRepair || seen[issue2995ApprovedLineage] != 1 || seen[successor.State.LineageID] != 1 {
+			t.Fatalf("mixed-store exits = %+v, want the historical repair exit and the seeded interior repair exit, once per lineage", exits)
+		}
+	})
+}

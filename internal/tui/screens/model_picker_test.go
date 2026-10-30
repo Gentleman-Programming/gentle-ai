@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 func pickerTestState(index int) *ModelPickerState {
@@ -36,7 +36,7 @@ func pickerRowIndex(t *testing.T, state ModelPickerState, agent string) int {
 
 func TestModelPickerRowsOfferInstalledAgentsWithoutRetiredSDD(t *testing.T) {
 	rows := ModelPickerRows()
-	want := []string{"gentle-orchestrator", "--- Judgment Day ---", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "--- Review agents ---", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator", "--- OpenCode native agents ---", "general", "explore"}
+	want := []string{"gentle-orchestrator", "--- Gentle AI agents ---", "gentle-ai-explore", "gentle-ai-verify", "gentle-ai-worker", "--- Judgment Day ---", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "--- Review agents ---", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator", "--- OpenCode native agents ---", "general", "explore"}
 	if !reflect.DeepEqual(rows, want) {
 		t.Fatalf("active OpenCode rows = %v, want %v", rows, want)
 	}
@@ -45,8 +45,8 @@ func TestModelPickerRowsOfferInstalledAgentsWithoutRetiredSDD(t *testing.T) {
 			t.Errorf("inactive or prompt-only role offered: %q", row)
 		}
 	}
-	if SeparatorRowIdx() != 1 {
-		t.Fatalf("Judgment Day separator index = %d, want 1", SeparatorRowIdx())
+	if want := 1 + 1 + len(opencode.GentleAIODDPhases()); SeparatorRowIdx() != want {
+		t.Fatalf("Judgment Day separator index = %d, want %d", SeparatorRowIdx(), want)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestRenderModelPickerScrollsToReviewAgents(t *testing.T) {
 	if !strings.Contains(output, "review-refuter") {
 		t.Fatalf("review row not visible at cursor %d: %s", cursor, output)
 	}
-	if len(rows) > maxVisiblePhaseRows && !strings.Contains(output, "↑ more assignments") {
+	if len(rows) > maxVisiblePhaseRows && !strings.Contains(output, "more assignments") {
 		t.Fatalf("windowing omitted scroll indicator: %s", output)
 	}
 }
@@ -749,6 +749,54 @@ func TestRuntimeCatalogDiscoveryFailureKeepsConfiguredProvider(t *testing.T) {
 	}
 	if got := state.SDDModels["configured"]; len(got) != 1 || got[0].ID != "configured/model" {
 		t.Fatalf("configured model = %+v", got)
+	}
+}
+
+// TestRenderModelPickerWarnsOnDegradedConfiguredFallback pins the issue #5833
+// contract: when runtime discovery fails but configured tool-capable models
+// keep the picker usable, both the phase list and the provider selector must
+// say plainly that the list is the configured subset and incomplete, instead
+// of presenting it as the full OpenCode catalog. A successful discovery must
+// not warn.
+func TestRenderModelPickerWarnsOnDegradedConfiguredFallback(t *testing.T) {
+	configured := map[string]opencode.Provider{"configured": {
+		ID: "configured", Name: "Configured", Models: map[string]opencode.Model{"configured/model": {ID: "configured/model", ToolCall: true}},
+	}}
+	state := NewRuntimeModelPickerStateWithDiscoverer(filepath.Join(t.TempDir(), "missing.json"), nil)
+	state.ConfiguredProviders = configured
+	state = state.Update(RuntimeCatalogDiscoveryMsg{Err: &opencode.CatalogError{Kind: opencode.CatalogErrorMalformed}})
+	if state.CatalogStatus != RuntimeCatalogReady || state.CatalogError == nil {
+		t.Fatalf("degraded fallback state = status %d, err %v; want ready with recorded error", state.CatalogStatus, state.CatalogError)
+	}
+
+	phaseList := RenderModelPicker(nil, state, 0)
+	for _, fragment := range []string{
+		"Could not parse models from OpenCode.",
+		"Showing configured models only; some OpenCode providers and models may be missing.",
+	} {
+		if !strings.Contains(phaseList, fragment) {
+			t.Errorf("phase list missing degraded fallback warning %q: %s", fragment, phaseList)
+		}
+	}
+
+	state.Mode = ModeProviderSelect
+	providerSelect := RenderModelPicker(nil, state, 0)
+	if !strings.Contains(providerSelect, "Showing configured models only") {
+		t.Errorf("provider select missing degraded fallback warning: %s", providerSelect)
+	}
+
+	// A successful discovery clears the error and must render without the
+	// degraded warning in both screens.
+	state = state.Update(RuntimeCatalogDiscoveryMsg{Providers: configured})
+	state.Mode = ModePhaseList
+	if state.CatalogError != nil {
+		t.Fatalf("successful discovery kept CatalogError: %v", state.CatalogError)
+	}
+	for _, mode := range []ModelPickerMode{ModePhaseList, ModeProviderSelect} {
+		state.Mode = mode
+		if got := RenderModelPicker(nil, state, 0); strings.Contains(got, "Showing configured models only") {
+			t.Errorf("successful discovery still renders degraded warning in mode %d: %s", mode, got)
+		}
 	}
 }
 

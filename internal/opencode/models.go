@@ -115,6 +115,17 @@ func JDPhases() []string {
 	}
 }
 
+// GentleAIODDPhases returns the ordered list of the generic ODD subagents
+// ported from Gentle Shell's global agents (#4471). They support independent
+// model configuration like JD and the review lenses.
+func GentleAIODDPhases() []string {
+	return []string{
+		"gentle-ai-explore",
+		"gentle-ai-verify",
+		"gentle-ai-worker",
+	}
+}
+
 const (
 	ReviewRefuterAgent   = "review-refuter"
 	ReviewValidatorAgent = "review-validator"

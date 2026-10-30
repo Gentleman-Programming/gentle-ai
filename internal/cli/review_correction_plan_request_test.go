@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) {
@@ -71,6 +71,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
 				t.Fatal(err)
 			}
+			corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 			if tt.forecast > 0 {
 				captureCorrectionPlanFromCurrentStatus(t, repo, started.LineageID, tt.forecast)
 			}
@@ -277,6 +278,14 @@ func captureCorrectionPlanFromCurrentStatus(t *testing.T, cwd, lineage string, c
 	if err != nil {
 		t.Fatalf("discover correction authority for STATUS: %v", err)
 	}
+	if record.State.State == reviewtransaction.StateReviewing {
+		// A severe finding still awaits its refuter batch (L20); the host
+		// captures it before STATUS offers the correction plan.
+		corroborateRefuterClaimsForTest(t, root, lineage)
+		if _, record, err = discoverCompactFacadeReview(context.Background(), root, lineage, false); err != nil {
+			t.Fatalf("discover corroborated correction authority: %v", err)
+		}
+	}
 	args := []string{
 		"status", "--cwd", cwd, "--contract", ReviewIntegrationContractV2,
 		"--next-transition", "--lineage", lineage,
@@ -360,7 +369,7 @@ func TestNegotiatedStatusRoutesCorrectionRequiredDriftCorrectly(t *testing.T) {
 		status := negotiatedReviewStatusForLineage(t, repo, lineage)
 		if status.Action != reviewtransaction.TargetStatusActionRecover || status.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
 			status.Authority == nil || status.Authority.LineageID != lineage || status.NextTransition == nil ||
-			status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "recovery_authorization_required" {
+			status.NextTransition.Kind != reviewNextTransitionExecute || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.recover" {
 			t.Fatalf("out-of-manifest drift status = %#v", status)
 		}
 	})
@@ -413,6 +422,7 @@ func closeReviewLineageIntoCorrectionRequired(t *testing.T, repo, lineage string
 	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
 		t.Fatal(err)
 	}
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 	return started.LineageID
 }
 

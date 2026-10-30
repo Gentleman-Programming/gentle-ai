@@ -263,30 +263,123 @@ install_brew() {
 }
 
 # ============================================================================
+# Module path derivation
+#
+# The go.mod at the resolved git ref (latest release tag for stable, main
+# commit SHA for beta) declares the module's import path. Reading it there
+# is the only way to stay correct across future major versions: a /v3
+# installer hard-codes the answer and breaks the day the repo bumps to /v4.
+# The helpers below fail closed on every signal — non-200, empty body, or
+# no `module` line — so a transient ref-mismatch aborts the installer
+# instead of silently installing from the wrong path.
+# ============================================================================
+
+get_main_commit_sha() {
+    local url="https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/commits/main"
+
+    info "Resolving main commit SHA from GitHub..."
+
+    local response
+    response="$(curl -sL -w "\n%{http_code}" "$url")" || fatal "Failed to fetch main commit"
+
+    local http_code body
+    http_code="$(printf '%s\n' "$response" | tail -n1)"
+    body="$(printf '%s\n' "$response" | sed '$d')"
+
+    if [ "$http_code" != "200" ]; then
+        fatal "GitHub API returned HTTP $http_code resolving main commit"
+    fi
+
+    # Parse "sha":"<hex>" — first match wins, identical style to
+    # get_latest_version's tag_name extraction below.
+    local sha
+    sha="$(printf '%s\n' "$body" | sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+
+    if [ -z "$sha" ]; then
+        fatal "Could not parse commit SHA from GitHub API response"
+    fi
+
+    printf '%s\n' "$sha"
+}
+
+resolve_module_path() {
+    local ref="$1"
+    local url="https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${ref}/go.mod"
+
+    info "Resolving module path from go.mod at ${ref}..."
+
+    local response
+    response="$(curl -sL -w "\n%{http_code}" "$url")" || fatal "Failed to fetch go.mod at ${ref}"
+
+    local http_code body
+    http_code="$(printf '%s\n' "$response" | tail -n1)"
+    body="$(printf '%s\n' "$response" | sed '$d')"
+
+    if [ "$http_code" != "200" ]; then
+        fatal "go.mod fetch returned HTTP $http_code for ref ${ref}"
+    fi
+
+    if [ -z "$body" ]; then
+        fatal "Empty go.mod body at ref ${ref}"
+    fi
+
+    # First `module ...` line — Go modules accept only one.
+    MODULE_PATH="$(printf '%s\n' "$body" | sed -n 's/^module \(.*\)$/\1/p' | head -1)"
+
+    if [ -z "$MODULE_PATH" ]; then
+        fatal "Could not parse module declaration from go.mod at ref ${ref}"
+    fi
+}
+
+# ============================================================================
 # Install via go install
 # ============================================================================
 
 install_go() {
     step "Installing via go install"
 
-    local version="latest"
-    if [ "${CHANNEL}" = "beta" ]; then
-        version="main"
-    fi
     # Lowercase the owner portably: ${var,,} needs bash 4+, but macOS ships
-    # bash 3.2, so piping `| bash` would fail with "bad substitution".
+    # bash 3.2, so piping `| bash` would fail with "bad substitution". Kept
+    # in place (per the D1 design intent: owner_lc stays available to
+    # compose the env pattern) even though the current implementation
+    # derives the pattern from ${module} directly — the previous code
+    # hard-coded "github.com/gentleman-programming/..." here, which the
+    # D1 forbids.
     local owner_lc
     owner_lc="$(printf '%s' "$GITHUB_OWNER" | tr '[:upper:]' '[:lower:]')"
-    # /v3 is part of the module path, not decoration: Go refuses to resolve a
-    # module whose tags are v3.x unless the import path carries the major
-    # version suffix.
-    local go_package="github.com/${owner_lc}/${GITHUB_REPO}/v3/cmd/${BINARY_NAME}@${version}"
+
+    # Resolve the ref first (release tag for stable, main SHA for beta), then
+    # derive the module path from go.mod at that ref. The result replaces the
+    # previous hard-coded "/v3" — a future /v4 source must keep working
+    # without touching this script.
+    local module ref
+    if [ "${CHANNEL}" = "beta" ]; then
+        ref="$(get_main_commit_sha)"
+    else
+        get_latest_version
+        ref="${LATEST_VERSION}"
+    fi
+
+    resolve_module_path "$ref"
+    module="${MODULE_PATH}"
+
+    # /vN is part of the module path, not decoration: Go refuses to resolve
+    # a module whose tags are vN.x unless the import path carries the major
+    # version suffix. The path is now derived from go.mod at ${ref}, so the
+    # suffix travels with whatever the repo actually declares.
+    local go_package="${module}/cmd/${BINARY_NAME}@${ref}"
 
     info "Running: go install ${go_package}"
     if [ "${CHANNEL}" = "beta" ]; then
-        prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai/v3
-        prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai/v3
-        prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai/v3
+        # Use the derived module path (whatever major version go.mod at
+        # ${ref} declares, e.g. github.com/<owner>/<repo>/vN) so the
+        # pattern tracks the source and never embeds the old hard-coded
+        # "/v3" literal. owner_lc above stays available for any future
+        # composition that needs the bare repo without the version.
+        local env_pattern="${module}"
+        prepend_go_env_pattern GONOSUMDB "${env_pattern}"
+        prepend_go_env_pattern GOPRIVATE "${env_pattern}"
+        prepend_go_env_pattern GONOPROXY "${env_pattern}"
         export GONOSUMDB GOPRIVATE GONOPROXY
 
         if ! go install "$go_package"; then
@@ -303,12 +396,9 @@ install_go() {
         gobin="$(go env GOPATH)/bin"
     fi
 
-    if [[ ":$PATH:" != *":$gobin:"* ]]; then
-        warn "${gobin} is not in your PATH"
-        warn "Add this to your shell profile: export PATH=\"\$PATH:${gobin}\""
-    fi
-
     success "Installed ${BINARY_NAME} via go install"
+
+    ensure_install_dir_on_path "$gobin"
 }
 
 prepend_go_env_pattern() {
@@ -478,14 +568,216 @@ install_binary() {
 
     success "Installed ${BINARY_NAME} to ${final}"
 
-    # Check if install dir is in PATH
-    if [[ ":$PATH:" != *":${install_dir}:"* ]]; then
-        warn "${install_dir} is not in your PATH"
-        echo ""
-        warn "Add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
-        echo -e "  ${DIM}export PATH=\"\$PATH:${install_dir}\"${NC}"
-        echo ""
+    ensure_install_dir_on_path "$install_dir"
+}
+
+# ============================================================================
+# Shell PATH setup
+#
+# Mirrors the Gentle Shell web installer (gentle-pi scripts/bundled-install.mjs
+# profileFor/profileState/pathEntryPlan): when the install dir is not on the
+# terminal's PATH, append one marked line to the startup file the user's shell
+# reads for new terminals. The line is never duplicated and never written
+# through a symlink (stow, chezmoi and home-manager lay dotfiles out as links).
+# ============================================================================
+
+PATH_SETUP_MARK="# gentle-ai installer"
+
+# Whether dir is an entry of the current PATH (trailing slashes ignored).
+path_has_dir() {
+    local dir="${1%/}" entry
+    local IFS=:
+    for entry in $PATH; do
+        [ "${entry%/}" = "$dir" ] && return 0
+    done
+    return 1
+}
+
+# The startup file the user's shell reads for the terminals they open:
+# - zsh: $ZDOTDIR/.zshrc (or ~/.zshrc);
+# - bash on macOS, where terminals start login shells: the first existing of
+#   ~/.bash_profile, ~/.bash_login and ~/.profile (login bash reads exactly
+#   one), else ~/.bash_profile;
+# - bash elsewhere: ~/.bashrc, read by interactive non-login bash;
+# - fish: our own conf.d file; anything else: ~/.profile.
+shell_profile_for() {
+    local shell os name config
+    shell="$(basename -- "${SHELL:-}")"
+    os="${OS:-}"
+    if [ -z "$os" ]; then
+        case "$(uname -s)" in
+            Darwin) os="darwin" ;;
+            *) os="linux" ;;
+        esac
     fi
+
+    case "$shell" in
+        zsh)
+            case "${ZDOTDIR:-}" in
+                /*) printf '%s\n' "${ZDOTDIR%/}/.zshrc" ;;
+                *) printf '%s\n' "${HOME}/.zshrc" ;;
+            esac
+            ;;
+        bash)
+            if [ "$os" = "darwin" ]; then
+                for name in .bash_profile .bash_login .profile; do
+                    if [ -e "${HOME}/${name}" ] || [ -L "${HOME}/${name}" ]; then
+                        printf '%s\n' "${HOME}/${name}"
+                        return
+                    fi
+                done
+                printf '%s\n' "${HOME}/.bash_profile"
+            else
+                printf '%s\n' "${HOME}/.bashrc"
+            fi
+            ;;
+        fish)
+            case "${XDG_CONFIG_HOME:-}" in
+                /*) config="${XDG_CONFIG_HOME%/}" ;;
+                *) config="${HOME}/.config" ;;
+            esac
+            printf '%s\n' "${config}/fish/conf.d/${BINARY_NAME}.fish"
+            ;;
+        *)
+            printf '%s\n' "${HOME}/.profile"
+            ;;
+    esac
+}
+
+# Whether folder (an existing directory) is reached without symlinks below HOME.
+profile_folder_is_real() {
+    local folder="$1" relative real_home real_folder
+    case "$folder" in
+        "$HOME") relative="" ;;
+        "$HOME"/*) relative="${folder#"$HOME"}" ;;
+        *) return 0 ;;
+    esac
+    real_home="$(cd -- "$HOME" && pwd -P)" || return 1
+    real_folder="$(cd -- "$folder" && pwd -P)" || return 1
+    [ "$real_folder" = "${real_home}${relative}" ]
+}
+
+# Whether the installer may edit file: "file" (a writable regular file in real
+# folders) or "absent" (creatable inside real, writable folders); otherwise why
+# not: "symlink", "not-a-file" or "not-writable".
+profile_state() {
+    local file="$1" folder
+    if [ -L "$file" ]; then
+        echo "symlink"; return
+    fi
+    if [ -e "$file" ]; then
+        if [ ! -f "$file" ]; then echo "not-a-file"; return; fi
+        if ! profile_folder_is_real "$(dirname -- "$file")"; then echo "symlink"; return; fi
+        if [ -w "$file" ]; then echo "file"; else echo "not-writable"; fi
+        return
+    fi
+
+    folder="$(dirname -- "$file")"
+    while [ ! -e "$folder" ] && [ ! -L "$folder" ]; do
+        if [ "$(dirname -- "$folder")" = "$folder" ]; then echo "not-a-file"; return; fi
+        folder="$(dirname -- "$folder")"
+    done
+    if [ -L "$folder" ]; then echo "symlink"; return; fi
+    if [ ! -d "$folder" ]; then echo "not-a-file"; return; fi
+    if ! profile_folder_is_real "$folder"; then echo "symlink"; return; fi
+    if [ -w "$folder" ]; then echo "absent"; else echo "not-writable"; fi
+}
+
+# Quotes value for a single-quoted shell word: POSIX sh closes and reopens the
+# quotes around a ', fish escapes ' and \ inside them.
+shell_single_quote() {
+    local style="$1" value="$2" quoted="" ch i
+    for ((i = 0; i < ${#value}; i++)); do
+        ch="${value:i:1}"
+        case "$style:$ch" in
+            "sh:'") quoted+="'\\''" ;;
+            "fish:'"|"fish:\\") quoted+="\\${ch}" ;;
+            *) quoted+="$ch" ;;
+        esac
+    done
+    printf "'%s'" "$quoted"
+}
+
+# Puts dir on PATH for future terminals by appending one marked line to the
+# shell startup file. Writes nothing when dir is already on PATH. A dir that
+# cannot be written verbatim (quotes, $, backticks) is only printed, quoted.
+ensure_install_dir_on_path() {
+    local dir="${1%/}"
+    [ -n "$dir" ] || return 0
+    path_has_dir "$dir" && return 0
+
+    local profile command reason=""
+    profile="$(shell_profile_for)"
+    case "$profile" in
+        *.fish)
+            case "$dir" in
+                *"'"*|*"\\"*|*$'\n'*)
+                    reason="unsafe path"
+                    command="set -gx PATH $(shell_single_quote fish "$dir") \$PATH"
+                    ;;
+                *) command="set -gx PATH '${dir}' \$PATH" ;;
+            esac
+            ;;
+        *)
+            case "$dir" in
+                *'"'*|*"\\"*|*'$'*|*'`'*|*$'\n'*)
+                    reason="unsafe path"
+                    command="export PATH=$(shell_single_quote sh "$dir"):\"\$PATH\""
+                    ;;
+                *) command="export PATH=\"${dir}:\$PATH\"" ;;
+            esac
+            ;;
+    esac
+    local line="${command} ${PATH_SETUP_MARK}"
+
+    echo ""
+    printf 'Current terminal: %b%s%b\n' "$BOLD" "$command" "$NC"
+
+    # Let verify_installation find the binary in this process.
+    export PATH="${dir}:${PATH}"
+
+    if [ -z "$reason" ] && [ -f "$profile" ] && grep -Fxq -- "$line" "$profile" 2>/dev/null; then
+        echo "Future terminals: open a new terminal"
+        info "PATH is already configured in ${profile}"
+        echo ""
+        return 0
+    fi
+
+    if [ -z "$reason" ]; then
+        case "$(profile_state "$profile")" in
+            absent)
+                # noclobber: never write through a file or link created meanwhile.
+                if mkdir -p -- "$(dirname -- "$profile")" && (set -C; printf '%s\n' "$line" > "$profile") 2>/dev/null; then
+                    echo "Future terminals: open a new terminal"
+                    success "PATH was added to ${profile}"
+                    echo ""
+                    return 0
+                fi
+                reason="could not create it"
+                ;;
+            file)
+                local separator=""
+                if [ -s "$profile" ] && [ -n "$(tail -c 1 -- "$profile")" ]; then
+                    separator=$'\n'
+                fi
+                if [ ! -L "$profile" ] && printf '%s%s\n' "$separator" "$line" >> "$profile"; then
+                    echo "Future terminals: open a new terminal"
+                    success "PATH was added to ${profile}"
+                    echo ""
+                    return 0
+                fi
+                reason="could not edit it"
+                ;;
+            *)
+                reason="$(profile_state "$profile")"
+                ;;
+        esac
+    fi
+
+    warn "${profile} was not edited (${reason})."
+    echo "Add this line to ${profile}, then open a new terminal:"
+    printf '  %s\n' "$line"
+    echo ""
 }
 
 # ============================================================================
@@ -628,4 +920,18 @@ main() {
     print_next_steps
 }
 
-main "$@"
+# ============================================================================
+# Execution guard: run main when this script is executed, skip when sourced.
+#
+# Two execution paths must reach main:
+#   1. `bash install.sh ...` / `./install.sh ...` — BASH_SOURCE[0] equals $0.
+#   2. `curl -sL .../install.sh | bash` — bash reads the program from stdin,
+#      so BASH_SOURCE[0] is EMPTY and $0 is "bash". Skipping main here would
+#      silently no-op the installer's documented primary invocation, so the
+#      empty-BASH_SOURCE case must also run main.
+# Sourcing (tests) never matches: BASH_SOURCE[0] is this file's path while $0
+# is the sourcing shell's program, and the two differ.
+# ============================================================================
+if [ -z "${BASH_SOURCE[0]:-}" ] || [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

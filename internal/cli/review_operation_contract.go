@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 const ReviewIntegrationOperationSchema = "gentle-ai.review-integration.operation/v1"
@@ -108,8 +108,8 @@ var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	// take, and metadata nothing exercises is metadata nothing keeps honest.
 	{Command: "recover", Operation: "review.recover", Label: "Review RECOVER"},
 	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", Negotiated: true, ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
-	{Command: "start", Operation: "review.start", Label: "Review START", Negotiated: true, ValueFlags: []string{"cwd", "agent", "target", "target-evidence", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
-	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay", "action-eligibility", "next-transition"}},
+	{Command: "start", Operation: "review.start", Label: "Review START", Negotiated: true, ValueFlags: []string{"cwd", "agent", "target", "target-evidence", "lineage", "policy", "request-context", "escalate-item", "escalate-reason", "lenses", "lenses-reason", "focus", "base-ref", "projection", "trace", "consent", "locale", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
+	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization", "untracked-scope", "intended-untracked", "expected-untracked-inventory", "request-context", "escalate-item", "escalate-reason", "lenses", "lenses-reason"}, BoolFlags: []string{"committed-only", "workspace-overlay", "action-eligibility", "next-transition", "phase-timings"}},
 	{Command: "validate", Operation: ReviewIntegrationOperationValidate, Label: "Review VALIDATE", Negotiated: true, ValueFlags: []string{"cwd", "lineage", "gate", "base-ref", "pre-pr-ci-attestation", "policy", "release-configuration", "release-generated", "release-provenance", "release-publication-boundary", "release-evidence-freshness"}},
 }
 
@@ -983,7 +983,13 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			preflightFailure.RetrySafe = false
 		}
 		preflightFailure.Cause = reviewIntegrationFailureCause(preflight)
-		preflightFailure.Continuation = preflight.continuation
+		// The published v1 failure schema forbids `continuation`; only v2
+		// defines it (#4379). A v1 caller still gets the typed code. Collect
+		// captures publish only v2 (their dispatcher upgrades the identity
+		// after this classifier), so they keep it too.
+		if metadata, _ := reviewIntegrationOperationByName(operation); preflightFailure.Contract == ReviewIntegrationContractV2 || metadata.CollectCapture {
+			preflightFailure.Continuation = preflight.continuation
+		}
 		return preflightFailure
 	}
 	var legacy *reviewtransaction.LegacyReadOnlyError
@@ -1510,7 +1516,10 @@ func (failure ReviewIntegrationFailure) Validate() error {
 			return errors.New("exact negotiated review repair replay is incomplete")
 		}
 	}
-	if (failure.Code == "managed_assets_outdated") != (failure.Continuation != nil) {
+	if legacyContract && failure.Continuation != nil {
+		return errors.New("v1 negotiated review failures carry no continuation") // refusal:by-design world-action: the published v1 failure schema forbids continuation, so attaching one is a construction bug that requires a code fix, not an operator command
+	}
+	if nativeGitContract && (failure.Code == "managed_assets_outdated") != (failure.Continuation != nil) {
 		return errors.New("managed_assets_outdated failures must carry exactly the sync continuation") // refusal:by-design world-action: a producer that pairs this code with no continuation, or attaches one to any other code, built a malformed envelope and requires a code fix, not an operator command
 	}
 	if continuation := failure.Continuation; continuation != nil {

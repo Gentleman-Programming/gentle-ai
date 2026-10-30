@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // TestWriteReconciledAcceptsDesiredStateVisibleAfterWriteError verifies that
@@ -70,6 +71,7 @@ func fullyPopulatedInstallState() InstallState {
 			"sdd-verify": "high",
 		},
 		CodexOrchestratorAssignment: &CodexOrchestratorAssignmentState{Model: "gpt-5.6-luna", Effort: "high"},
+		CodexServiceTier:            "priority",
 		CodexCarrilModelAssignments: map[string]string{
 			"sdd-strong": "gpt-5.6-luna",
 			"sdd-cheap":  "gpt-5.4-mini",
@@ -384,6 +386,118 @@ func TestPersonaPresenceDistinguishesOmittedAndExplicitEmpty(t *testing.T) {
 				t.Fatalf("PersonaPresent = %t, want %t", got.PersonaPresent, tc.wantPresent)
 			}
 		})
+	}
+}
+
+// TestReadRejectsAmbiguousPersistedPersona verifies that state shapes which
+// would silently collapse to a different persona fail closed instead.
+func TestReadRejectsAmbiguousPersistedPersona(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		stateJSON string
+		wantErr   string
+	}{
+		{name: "null document", stateJSON: "null", wantErr: "must contain a JSON object"},
+		{name: "padded null document", stateJSON: " \n null \n", wantErr: "must contain a JSON object"},
+		{name: "duplicate unknown then neutral", stateJSON: `{"persona":"unknown","persona":"neutral"}`, wantErr: `duplicate "persona" keys`},
+		{name: "duplicate neutral then unknown", stateJSON: `{"persona":"neutral","persona":"unknown"}`, wantErr: `duplicate "persona" keys`},
+		{name: "duplicate valid values", stateJSON: `{"persona":"neutral","persona":"gentleman"}`, wantErr: `duplicate "persona" keys`},
+		{name: "duplicate via unicode escape", stateJSON: `{"persona":"unknown","pers\u006fna":"neutral"}`, wantErr: `duplicate "persona" keys`},
+		{name: "case variant alone", stateJSON: `{"installed_agents":["pi"],"Persona":""}`, wantErr: `"Persona" must be spelled "persona"`},
+		{name: "case variant before canonical", stateJSON: `{"PERSONA":"unknown","persona":"neutral"}`, wantErr: `"PERSONA" must be spelled "persona"`},
+		{name: "case variant after canonical", stateJSON: `{"persona":"unknown","Persona":"neutral"}`, wantErr: `"Persona" must be spelled "persona"`},
+		{name: "unicode fold variant", stateJSON: `{"persona":"unknown","per\u017fona":"neutral"}`, wantErr: "must be spelled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if err := os.WriteFile(Path(home), []byte(tc.stateJSON), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			got, err := Read(home)
+			if err == nil {
+				t.Fatalf("Read() = %+v, want error containing %q", got, tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Read() error = %q, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// An empty object would drop installation settings and the persona, so the
+// null refusal must point at restoring the intended state instead.
+func TestReadNullStateAdvisesRestoreNotReset(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(Path(home), []byte("null"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Read(home)
+	if err == nil {
+		t.Fatal("Read() error = nil, want null state refusal")
+	}
+	if msg := err.Error(); strings.Contains(msg, "{}") || !strings.Contains(msg, "restore a valid state file from a backup that keeps your intended persona and installation settings") {
+		t.Fatalf("Read() error = %q, want restore advice without an empty-object reset", msg)
+	}
+}
+
+// TestReadAcceptsUnambiguousPersistedPersona pins the shapes that must keep
+// decoding unchanged next to the ambiguity guard.
+func TestReadAcceptsUnambiguousPersistedPersona(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		stateJSON   string
+		wantPersona string
+		wantPresent bool
+	}{
+		{name: "canonical", stateJSON: `{"installed_agents":["pi"],"persona":"neutral"}`, wantPersona: "neutral", wantPresent: true},
+		{name: "canonical escaped", stateJSON: `{"pers\u006fna":"custom"}`, wantPersona: "custom", wantPresent: true},
+		{name: "missing legacy field", stateJSON: `{"installed_agents":["pi"]}`},
+		{name: "empty object", stateJSON: `{}`},
+		{name: "explicit null value", stateJSON: `{"persona":null}`, wantPresent: true},
+		{name: "nested persona keys", stateJSON: `{"claude_model_assignments":{"persona":"a","Persona":"b"},"persona":"gentleman"}`, wantPersona: "gentleman", wantPresent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if err := os.WriteFile(Path(home), []byte(tc.stateJSON), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			got, err := Read(home)
+			if err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			if got.Persona != tc.wantPersona || got.PersonaPresent != tc.wantPresent {
+				t.Fatalf("Persona = %q (present %t), want %q (present %t)", got.Persona, got.PersonaPresent, tc.wantPersona, tc.wantPresent)
+			}
+		})
+	}
+}
+
+// TestReadKeepsRejectingNonObjectAndTrailingDocuments pins existing strict
+// decoding for shapes the persona guard must not relax.
+func TestReadKeepsRejectingNonObjectAndTrailingDocuments(t *testing.T) {
+	for _, stateJSON := range []string{`[]`, `"persona"`, `1`, `{} {}`, `{"persona":"neutral"} null`, `{"persona":`} {
+		home := t.TempDir()
+		if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(Path(home), []byte(stateJSON), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		if got, err := Read(home); err == nil {
+			t.Fatalf("Read(%q) = %+v, want error", stateJSON, got)
+		}
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/telemetry"
 )
 
 func TestTelemetryPolicyReadOnly(t *testing.T) {
@@ -110,7 +110,7 @@ func TestTelemetryPolicyFlagsAndHelp(t *testing.T) {
 func TestTelemetryContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "telemetry", "v1", "schemas")
 	want := map[string]string{
-		"event.schema.json":   "4246d49c1806bf967b1f1ce5ba38bf287f8d1d74c5b20149c787c7153d5baa0f",
+		"event.schema.json":   "fa0aafba3314fea4b9a17a7df75fa53559c43f42963bd7a1783884c51caec20d",
 		"status.schema.json":  "1ae7ee2f80b1cc51e66093e2a3ab6f10a85a940966c1e84451b44e9456dca822",
 		"trigger.schema.json": "0e810811c5a673bc21f06a9fb0c5ce03841d46e3b35fc436b25860c2f0fded58",
 	}
