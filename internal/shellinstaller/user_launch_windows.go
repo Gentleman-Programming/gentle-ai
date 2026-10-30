@@ -195,7 +195,7 @@ func userWindowsLaunch(ctx context.Context, root, product string, args []string,
 	if cause != nil {
 		return cause
 	}
-	env, err := userWindowsEnvironment(root)
+	env, err := userWindowsLaunchEnvironment(root)
 	if err != nil {
 		return err
 	}
@@ -301,6 +301,14 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 			// no caller PATH, credentials or configuration are forwarded.
 			if candidate := userWindowsSystemGoCandidate(); candidate != "" {
 				command.Env = append(command.Env, userWindowsSystemGoCandidateEnv+"="+candidate)
+			}
+		}
+		if args[0] == "launch" {
+			// The single caller context item for Git: the absolute git.exe
+			// resolved on the original process PATH, revalidated by the worker
+			// on every launch before only its directory joins the owned PATH.
+			if candidate := userWindowsSystemGitCandidate(); candidate != "" {
+				command.Env = append(command.Env, userWindowsSystemGitCandidateEnv+"="+candidate)
 			}
 		}
 		grace := 2 * time.Second
