@@ -42,10 +42,13 @@ PROBE_SECONDS = 90
 TAIL_BYTES = 1024
 OUTPUT_BOUND = 1 << 20
 
-# Darwin arm64 pins; e2e/shell-macos-ci-contract.test.py keeps them equal to
-# internal/shellinstaller/user_pins_darwin.go.
+# Darwin arm64 pins; e2e/shell-macos-ci-contract.test.py keeps NODE_PIN equal to
+# internal/shellinstaller/user_pins_darwin.go. The native member the gentle-pi
+# installer builds is derived from that authenticated installer's own asset
+# row (pinned_member below): since the reviewed list provisions gentle-pi
+# 4.5.x, its installer pins gentle-ai 4.3.1 and the member no longer matches
+# the supervisor's own build pin.
 NODE_PIN = ('ee6fb0e015284d83a91e8ec5213f43a157f8a392b58555301682892ba928c04a', 120965360)
-GENTLE_AI_PIN = ('8ea490287ef796848b0d305cf2b26265e360d3f400efc016972844498fb87097', 17462210)
 TOOL_PINS = {
     'fd': ('b67e1836c468e42e411984b56e52fa7abec08c2bd22c867398e7cc134aac5e12', 1334374, 'fd-v10.5.0-aarch64-apple-darwin/fd', 'fd 10.5.0'),
     'rg': ('3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4', 1764284, 'ripgrep-15.2.0-aarch64-apple-darwin/rg', 'ripgrep 15.2.0'),
@@ -57,7 +60,7 @@ NODE_VERSION = 'v24.18.0'
 REVIEWED_SUPPLIERS = json.loads((pathlib.Path(__file__).resolve().parents[1] / 'scripts/gentle-pi-suppliers.json').read_text())['releases']
 GENTLE_PI_VERSION = max(REVIEWED_SUPPLIERS, key=lambda version: tuple(int(part) for part in version.split('.')))
 CODING_AGENT = 'lib/node_modules/@earendil-works/pi-coding-agent/package.json'
-GENTLE_AI_MEMBER = 'lib/node_modules/gentle-pi/.gentle-ai/v4.2.0/gentle-ai'
+MEMBER_ROW = re.compile(r'"darwin/arm64": asset\("gentle-ai_(\d+\.\d+\.\d+)_darwin_arm64\.tar\.gz", "([0-9a-f]{64})", "([0-9a-f]{64})", "gentle-ai"\)')
 RESIDUE_PREFIXES = ('.gentle-node-stage.', '.gentle-shell-stage.', '.gentle-user-', '.gentle-go-', '.gentle-native-', '.gentle-unit-')
 # Real-HOME locations a leaked HOME would make the installer, npm, Node or Pi touch.
 REAL_HOME_WATCH = ('.pi', '.pi/agent', '.npm', '.npmrc', '.gentle-ai', '.gentle-shell', '.node_repl_history',
@@ -227,6 +230,21 @@ def install(context, label, target, shared=None):
     reached(label + '-confirm', installSeconds=round(time.monotonic() - started, 1))
     return manifest
 
+
+def pinned_member(prefix):
+	"""Authenticate the installed native member against the reviewed
+	installer's own asset row and the installation's integrity.json."""
+	row = MEMBER_ROW.search((prefix / 'lib/node_modules/gentle-pi/scripts/gentle-ai-installer.mjs').read_text())
+	require(row is not None, 'installer darwin/arm64 member manifest row differs')
+	version, asset_sha, binary_sha = row.group(1), row.group(2), row.group(3)
+	bundle = prefix / 'lib/node_modules/gentle-pi/.gentle-ai' / ('v' + version)
+	manifest = json.loads((bundle / 'integrity.json').read_text())
+	require(manifest.get('version') == version and manifest.get('asset') == 'gentle-ai_%s_darwin_arm64.tar.gz' % version
+			and manifest.get('assetSha256') == asset_sha and manifest.get('binarySha256') == binary_sha,
+			'installed member integrity.json differs from the authenticated installer')
+	observed = {'sha256': sha256_file(bundle / 'gentle-ai'), 'bytes': os.path.getsize(bundle / 'gentle-ai')}
+	require(observed['sha256'] == binary_sha, 'native member differs from the authenticated installer pin')
+	return observed
 
 def pinned(path, pin):
     observed = {'sha256': sha256_file(path), 'bytes': os.path.getsize(path)}
@@ -451,7 +469,7 @@ def qualify(context):
         require(json.loads(handle.read()).get('version') == GENTLE_PI_VERSION, 'Gentle package version differs')
     artifacts = {
         'node': pinned(os.path.join(separate, 'runtime/node/bin/node'), NODE_PIN),
-        'gentleAi': pinned(os.path.join(prefix, GENTLE_AI_MEMBER), GENTLE_AI_PIN),
+        'gentleAi': pinned_member(prefix),
     }
     artifacts.update(tool_evidence(context, separate, agent, 'separate'))
     RECEIPT['separate'] = {'versions': dict(versions, gentlePi=GENTLE_PI_VERSION), 'artifacts': artifacts}
@@ -495,7 +513,7 @@ def qualify(context):
     checkpoint('shared-artifacts')
     shared_artifacts = {
         'node': pinned(os.path.join(shared, 'runtime/node/bin/node'), NODE_PIN),
-        'gentleAi': pinned(os.path.join(shared_prefix, GENTLE_AI_MEMBER), GENTLE_AI_PIN),
+        'gentleAi': pinned_member(shared_prefix),
     }
     shared_artifacts.update(tool_evidence(context, shared, shared_agent, 'shared'))
     RECEIPT['shared'] = {'versions': shared_versions, 'artifacts': shared_artifacts}
