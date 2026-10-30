@@ -60,8 +60,9 @@ func TestShellInstallArgumentsCarrySupervisorScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("worker entry refused the detection scope: %v", err)
 	}
-	if !reflect.DeepEqual(parsed, selection.Request) {
-		t.Fatalf("worker entry changed the confirmed request: got %+v, want %+v", parsed, selection.Request)
+	want := wantParsedRequest(t, selection.Request, profile.SDKSource)
+	if !reflect.DeepEqual(parsed, want) {
+		t.Fatalf("worker entry changed the confirmed request: got %+v, want %+v", parsed, want)
 	}
 }
 

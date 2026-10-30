@@ -40,14 +40,10 @@ func TestCodexMutationsValidateHome(t *testing.T) {
 				override := filepath.Join(root, "override")
 				switch scenario {
 				case "relative missing":
-					cwd, err := os.Getwd()
-					if err != nil {
-						t.Fatal(err)
-					}
-					override, err = filepath.Rel(cwd, override)
-					if err != nil {
-						t.Fatal(err)
-					}
+					// Relative to a cwd on the same volume: on Windows the temp
+					// dir and the checkout can sit on different drives.
+					t.Chdir(root)
+					override = "override"
 				case "file":
 					if err := os.WriteFile(override, []byte("not a directory\n"), 0o600); err != nil {
 						t.Fatal(err)
