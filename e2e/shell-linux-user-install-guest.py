@@ -150,6 +150,9 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
         COMMAND_FAILURE = {**evidence, 'nulBytes': raw.count(b'\0'),
                            'stdoutBytes': len(out), 'stdoutSHA256': hashlib.sha256(out).hexdigest(),
                            'stderrBytes': len(error), 'stderrSHA256': hashlib.sha256(error).hexdigest()}
+        if b'\0' not in raw:
+            COMMAND_FAILURE.update(stdoutTailBase64=base64.b64encode(out[-600:]).decode('ascii'),
+                                   stderrTailBase64=base64.b64encode(error[-600:]).decode('ascii'))
         raise RuntimeError('whole raw command output withheld: byte/NUL bound')
     text = raw.decode('utf-8', 'strict')
     if (child.returncode == 0) != good:
