@@ -45,7 +45,10 @@ to `AGENT\bin\engram.exe`. Memory is shared like the bundled install: a
 launch reuses a verified Engram server on `127.0.0.1:7437`, or starts one on
 your real `~/.engram` store, so every agent sees the same memory. If a piece
 is missing or cannot be verified, the install still succeeds and Shell runs
-without memory.
+without memory. On Windows both channels provision this stock composition
+before any Main overlay, so Stable and Main preview installs both get Engram
+memory. Windows installs are Separate only, so there is no Shared or
+"On my existing Pi" variant to receive Engram.
 
 ## Launch custody: artefacts versus runtime state
 

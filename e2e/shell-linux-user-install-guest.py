@@ -938,7 +938,6 @@ def alan_pnpm_backend_probe():
         '@earendil-works/pi-tui': ('1.3.0', 'sha512-AlKvEwEWyVtnuw7SVb4N/mUhlfIohyFslUNWarZVdLHHSdt3ca5EhMLwTzblBpDpaofSz+f+tAHie6CfxVrWKA=='),
         '@heyhuynhgiabuu/pi-pretty': ('0.7.1', 'sha512-8cjOVRJHBvaHGnaNmYBRjmRWMd5V8fj4DvpTQHJWaEuLxdVJmL4dQqBSGODzhMbpaMKpeS394gNoK27Z1zT+uA=='),
         'typebox': ('1.4.2', 'sha512-eSoZzgSIyOKDtTH9MI7XMAxMaiXq7UiSFWarysN1ka66baTLDxAVdQ6WkWn6qDqsJFVrcjzvuP+CqHo9yrlQpg=='),
-        'gentle-engram': ('0.4.2', 'sha512-yD6QczF+sE6Qroe/oIp1L+cKOvtzgjqx7HMKCEIjJXoj6ryAr5kr4TlgfqttEMTLTD4EY0e852/p99Orlh0klA=='),
     }
     run([str(wrapper), 'add', '-g', '--ignore-scripts', '--config.minimumReleaseAge=0', '--registry=https://registry.npmjs.org/'] + [f'{name}@{pin[0]}' for name, pin in modern.items()], extra=env, timeout=remaining())
     pins.update(modern)

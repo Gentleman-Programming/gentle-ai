@@ -21,7 +21,8 @@ function newestReviewedListVersion(table) {
 }
 const targetVersion = newestReviewedListVersion(reviewed);
 const rootNames = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
-const companionPin = JSON.parse(fs.readFileSync(path.join(scripts, 'user-locks/modern/package-lock.json'))).packages['node_modules/gentle-engram'].version;
+// The stand-in listed gentle-pi pins its companion like gentle-pi 4.1.0+.
+const companionPin = '0.4.2';
 function fixture(t, mode = 'separate', scenario = '') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'frozen-global-'));
   fs.chmodSync(root, 0o700);
@@ -61,6 +62,7 @@ function fixture(t, mode = 'separate', scenario = '') {
   const child = 'node_modules/@earendil-works/pi-coding-agent/node_modules/fixture-child';
   for (const [relative, name, version] of [
     ...Object.entries(dependencies).map(([name, version]) => [`node_modules/${name}`, name, version]),
+    ['node_modules/gentle-engram', 'gentle-engram', companionPin],
     [child, 'fixture-child', '1.0.0'],
   ]) {
     // The generated lock pins gentle-pi at the newest listed release.
@@ -68,7 +70,7 @@ function fixture(t, mode = 'separate', scenario = '') {
     lock.packages[relative] = { version: effectiveVersion, resolved: `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-${effectiveVersion}.tgz`, integrity: name === 'gentle-pi' ? listedIntegrity : `sha512-${Buffer.alloc(64).toString('base64')}` };
     const directory = path.join(root, 'template', relative);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const command = name === 'gentle-pi' ? 'gentle-shell' : name === '@earendil-works/pi-coding-agent' ? 'pi' : name === 'fixture-child' ? 'fixture-child' : undefined;
+    const command = name === 'gentle-pi' ? 'gentle-shell' : name === '@earendil-works/pi-coding-agent' ? 'pi' : name === 'fixture-child' ? 'fixture-child' : name === 'gentle-engram' ? 'pi-engram' : undefined;
     const metadata = { name, version: effectiveVersion, ...(command ? { bin: { [command]: 'cli.js' } } : {}),
       scripts: { install: 'node -e "require(\'node:fs\').writeFileSync(process.env.HOME+\'/hook-ran\',\'unexpected\')"' },
       ...(name === '@earendil-works/pi-coding-agent' ? { dependencies: { 'fixture-child': '1.0.0' } } : {}),
@@ -93,6 +95,8 @@ function fixture(t, mode = 'separate', scenario = '') {
   if (mode === 'shared') {
     fs.mkdirSync(path.join(prefix, 'lib'), { recursive: true, mode: 0o700 });
     fs.cpSync(path.join(root, 'template/node_modules'), path.join(prefix, 'lib/node_modules'), copy);
+    // The selected Shared prefix predates the companion: stock roots only.
+    fs.rmSync(path.join(prefix, 'lib/node_modules/gentle-engram'), { recursive: true });
     fs.mkdirSync(path.join(prefix, 'lib/node_modules/gentle-pi/.gentle-ai'), { mode: 0o700 });
   }
   // CI uses a tiny controlled graph. Rebuild delegates to REAL stock npm offline;
@@ -107,14 +111,17 @@ if (args[0] === 'pack') {
   fs.copyFileSync(${JSON.stringify(packed)}, path.join(destination, 'gentle-pi-' + args[1].split('@')[1] + '.tgz'));
   process.exit(0);
 }
+const declared = () => JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'))).dependencies;
 if (args[0] === 'ci') {
   fs.cpSync(path.join(root,'template/node_modules'), path.join(process.cwd(),'node_modules'), ${JSON.stringify(copy)});
+  if (!declared()['gentle-engram']) fs.rmSync(path.join(process.cwd(),'node_modules/gentle-engram'), { recursive: true });
   if (${JSON.stringify(scenario)} === 'escaping-source') fs.symlinkSync(path.join(root,'agent/settings.json'), path.join(process.cwd(),'node_modules/gentle-pi/escape'));
   process.exit(0);
 }
 if (args[0] === 'install') {
   const lock = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(root, 'user-locks/modern/package-lock.json'))}));
-  lock.packages[''].dependencies = ${JSON.stringify({ ...Object.fromEntries(rootNames.map(name => [name, name === 'gentle-pi' ? targetVersion : 'latest'])), 'gentle-engram': companionPin })};
+  lock.packages[''].dependencies = declared();
+  if (!lock.packages[''].dependencies['gentle-engram']) delete lock.packages['node_modules/gentle-engram'];
   const gentle = lock.packages['node_modules/gentle-pi'];
   gentle.version = ${JSON.stringify(targetVersion)};
   gentle.resolved = 'https://registry.npmjs.org/gentle-pi/-/gentle-pi-' + gentle.version + '.tgz';
@@ -139,11 +146,21 @@ process.exit(73);
 for (const mode of ['separate', 'shared']) {
   test(`${mode} materializes the frozen tree and stock offline bins without hooks`, rebuildProof, t => {
     const f = fixture(t, mode);
-    assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install', 'ci', 'rebuild'], f.result.stderr);
-    assert.ok(f.calls[1].includes('--package-lock-only') && f.calls[1].includes('--min-release-age=0'));
-    assert.ok(f.calls[3].includes('--global') && f.calls[3].includes('--offline') && f.calls[3].includes('--ignore-scripts'));
-    // The companion is acquired as an authenticated root of the composition.
-    assert.equal(JSON.parse(fs.readFileSync(path.join(f.modules, 'gentle-engram/package.json'))).version, companionPin);
+    const calls = f.calls.filter(args => args[0] !== 'pack');
+    assert.deepEqual(calls.map(args => args[0]), ['install', 'ci', 'rebuild'], f.result.stderr);
+    assert.ok(calls[0].includes('--package-lock-only') && calls[0].includes('--min-release-age=0'));
+    assert.ok(calls[2].includes('--global') && calls[2].includes('--offline') && calls[2].includes('--ignore-scripts'));
+    // Separate acquires the companion as an authenticated root; Shared leaves
+    // the selected prefix without a new package or command (B1).
+    if (mode === 'separate') {
+      assert.equal(JSON.parse(fs.readFileSync(path.join(f.modules, 'gentle-engram/package.json'))).version, companionPin);
+      assert.equal(fs.realpathSync(path.join(f.prefix, 'bin/pi-engram')), path.join(f.modules, 'gentle-engram/cli.js'));
+    } else {
+      assert.deepEqual(f.calls.map(args => args[0]), ['install', 'ci', 'rebuild'], 'Shared never packs gentle-pi for a companion pin');
+      assert.equal(fs.existsSync(path.join(f.modules, 'gentle-engram')), false);
+      assert.equal(fs.existsSync(path.join(f.prefix, 'bin/pi-engram')), false);
+      assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(path.join(f.root, 'runtime/project/package.json'))).dependencies, 'gentle-engram'), false);
+    }
     const stock = JSON.parse(fs.readFileSync(path.join(f.root, 'stock-status.json')));
     assert.equal(stock.status, 0, stock.output);
     assert.match(f.result.stderr, /stock npm rebuild failed; status=73/);
@@ -180,7 +197,7 @@ test('escaping source refuses before deployment or rebuild', rebuildProof, t => 
 
 test('rebuild failure retains old, new and confirmed recovery evidence', rebuildProof, t => {
   const f = fixture(t, 'shared', 'rebuild-failure');
-  assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install', 'ci', 'rebuild'], f.result.stderr);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'ci', 'rebuild'], f.result.stderr);
   assert.match(f.result.stderr, /stock npm rebuild failed; status=74/);
   const retained = fs.readdirSync(path.join(f.prefix, 'lib')).filter(name => name.startsWith('.gentle-shell-previous-'));
   assert.equal(retained.length, 1);

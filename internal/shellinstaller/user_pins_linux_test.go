@@ -143,13 +143,7 @@ func TestUserFrozenRootPinParity(t *testing.T) {
 			if err := json.Unmarshal(files["user-locks/"+profile+"/package-lock.json"], &lock); err != nil {
 				t.Fatal(err)
 			}
-			// The modern lock carries the gentle-engram companion as its sixth
-			// root; the prior lock predates it.
-			roots := 5
-			if profile == "modern" {
-				roots = 6
-			}
-			if len(lock.Packages[""].Dependencies) != roots {
+			if len(lock.Packages[""].Dependencies) != 5 {
 				t.Fatal("live root declarations absent")
 			}
 			for name, version := range lock.Packages[""].Dependencies {

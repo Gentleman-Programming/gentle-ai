@@ -64,7 +64,7 @@ function extract(name) {
 function sandbox() {
   const context = vm.createContext({ fs, path, crypto, Buffer, console, pathToFileURL, uid: process.getuid(), rootNames: JSON.parse(declared('rootNames').replaceAll("'", '"')),
     companionName: JSON.parse(declared('companionName').replaceAll("'", '"')), reviewedSeed: Function(`return ${declared('reviewedSeed')}`)(), reject: message => { throw Error(`global provision refused: ${message}`); } });
-  for (const name of ['physical', 'read', 'absent', 'sync', 'writeExclusive', 'lockRoots', 'rootDeclaration', 'companionPin', 'companionDeclaration', 'publishEngramCore']) {
+  for (const name of ['physical', 'read', 'absent', 'sync', 'writeExclusive', 'lockRoots', 'rootDeclaration', 'companionPin', 'companionDeclaration', 'publishEngramCore', 'engramMemory']) {
     vm.runInContext(extract(name), context, { filename: `${name}.vm.js`, importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER });
   }
   return (code, ...args) => vm.runInContext(code, context)(...args);
@@ -134,17 +134,44 @@ test('the companion is declared only when pin, lock and installed version agree'
   // Prior gentle-pi 4.0.0 pins none and its lock has no companion: silent, no companion.
   assert.equal(gate(null, undefined, undefined), null);
   assert.equal(errors.length, 3);
-  assert.match(source, /const declaration = companionDeclaration\(companion, pins\[companionName\]\?\.\[0\], installed\);\n      if \(declaration && !\(settings\.packages \?\? \[\]\)\.includes\(declaration\)\) declarations\.push\(declaration\);/);
 });
 
-test('the prior frozen lock carries no companion and its gentle-pi pins none', () => {
-  const prior = JSON.parse(fs.readFileSync(fileURLToPath(new URL('./user-locks/prior/package-lock.json', import.meta.url))));
-  assert.equal(Object.hasOwn(prior.packages[''].dependencies, 'gentle-engram'), false);
-  assert.equal(prior.packages['node_modules/gentle-engram'], undefined);
-  const run = sandbox();
-  assert.deepEqual([...run('d => lockRoots(d)', prior.packages[''].dependencies)], Object.keys(prior.packages[''].dependencies).sort());
+// The frozen locks keep their base five roots: the companion joins only the
+// generated Stable Separate route (B1), so their SDK digest never moves.
+test('neither frozen lock carries the companion', () => {
+  for (const profile of ['prior', 'modern']) {
+    const lock = JSON.parse(fs.readFileSync(fileURLToPath(new URL(`./user-locks/${profile}/package-lock.json`, import.meta.url))));
+    assert.equal(Object.hasOwn(lock.packages[''].dependencies, 'gentle-engram'), false, profile);
+    assert.equal(lock.packages['node_modules/gentle-engram'], undefined, profile);
+  }
+});
+
+// Memory is the companion and the core together: a frozen Separate install
+// (Main preview, base lock, gentle-pi 4.3.0 pinning 0.4.2) declares neither,
+// publishes no core and succeeds with one note.
+test('a frozen Separate install without a locked companion publishes no core', async t => {
+  const root = scratch(t), run = sandbox();
+  const errors = [], requested = [];
+  t.mock.method(console, 'error', message => errors.push(message));
   const modern = JSON.parse(fs.readFileSync(fileURLToPath(new URL('./user-locks/modern/package-lock.json', import.meta.url))));
-  assert.equal(modern.packages[''].dependencies['gentle-engram'], modern.packages['node_modules/gentle-engram'].version);
+  const locked = modern.packages['node_modules/gentle-engram']?.version;
+  const bin = path.join(root, 'agent/bin');
+  fs.mkdirSync(path.dirname(bin), { mode: 0o700 });
+  const adapters = { download: async descriptor => { requested.push(descriptor); return Buffer.from('pinned:archive'); } };
+  assert.equal(await run('(...args) => engramMemory(...args)', '0.4.2', locked, undefined, gentlePi(root), bin, 'engram', 'linux', 'x64', adapters), null);
+  assert.equal(fs.existsSync(bin), false, 'no core without a declared companion');
+  assert.deepEqual(requested, [], 'nothing is downloaded for no client');
+  assert.deepEqual(errors, ['Engram companion not declared: gentle-pi pins 0.4.2, lock none, installed none; Shell stays usable without memory']);
+});
+
+test('a generated Separate install with the agreed companion declares it and publishes the core', async t => {
+  const root = scratch(t), run = sandbox();
+  const bin = path.join(root, 'agent/bin');
+  fs.mkdirSync(path.dirname(bin), { mode: 0o700 });
+  const adapters = { download: async () => Buffer.from('pinned:archive') };
+  assert.equal(await run('(...args) => engramMemory(...args)', '0.4.2', '0.4.2', '0.4.2', gentlePi(root), bin, 'engram', 'linux', 'x64', adapters), 'npm:gentle-engram@0.4.2');
+  assert.equal(fs.lstatSync(path.join(bin, 'engram')).mode & 0o7777, 0o700);
+  assert.match(source, /const declaration = await engramMemory\(companion, pins\[companionName\]\?\.\[0\], installed, supplier, path\.join\(agent, 'bin'\), 'engram', process\.platform, process\.arch\);/);
 });
 
 test('the verified Engram core is published at <agent>/bin/engram with mode 0700', async t => {

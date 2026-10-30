@@ -18,7 +18,8 @@ function newestReviewedListVersion(table) {
 }
 const targetVersion = newestReviewedListVersion(reviewed);
 const rootNames = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
-const companionPin = JSON.parse(fs.readFileSync(path.join(scripts, 'user-locks/modern/package-lock.json'))).packages['node_modules/gentle-engram'].version;
+// The stand-in listed gentle-pi pins its companion like gentle-pi 4.1.0+.
+const companionPin = '0.4.2';
 // A stand-in for the listed gentle-pi tarball stock npm packs before the lock
 // is generated; the staged list binds its SRI like the real reviewed entry.
 function packedGentlePi(t, pinned) {
@@ -46,7 +47,7 @@ function fixture(t, profile = 'modern', change, options = {}) {
   // Stop at the real child-process boundary: this is not npm-install qualification.
   const stagedLock = path.join(root, `user-locks/${profile}/package-lock.json`);
   const generatedLock = path.join(root, 'runtime/project/package-lock.json');
-  const pinned = options.companion !== false;
+  const pinned = options.companion !== false && (options.mode ?? 'separate') === 'separate';
   const declaration = { ...Object.fromEntries(rootNames.map(name => [name, name === 'gentle-pi' ? targetVersion : 'latest'])), ...(pinned ? { 'gentle-engram': companionPin } : {}) };
   const packed = packedGentlePi(t, pinned);
   const listedIntegrity = options.listedIntegrity ?? packed.integrity;
@@ -61,6 +62,10 @@ function fixture(t, profile = 'modern', change, options = {}) {
 if (args[0] === 'install') {
   const lock = JSON.parse(require('node:fs').readFileSync(${JSON.stringify(stagedLock)}));
   lock.packages[''].dependencies = ${JSON.stringify(declaration)};
+  if (lock.packages[''].dependencies['gentle-engram']) lock.packages['node_modules/gentle-engram'] = {
+    version: ${JSON.stringify(companionPin)}, resolved: 'https://registry.npmjs.org/gentle-engram/-/gentle-engram-${companionPin}.tgz',
+    integrity: 'sha512-' + Buffer.alloc(64).toString('base64'),
+  };
   const gentle = lock.packages['node_modules/gentle-pi'];
   gentle.version = ${JSON.stringify(generatedVersion)};
   gentle.resolved = 'https://registry.npmjs.org/gentle-pi/-/gentle-pi-' + gentle.version + '.tgz';
@@ -94,7 +99,7 @@ ${npmBody}`, { mode: 0o600 });
     fs.writeFileSync(path.join(root, 'state/prior-global-graph.json'), '[]', { mode: 0o600 });
   }
   const result = spawnSync(process.execPath, [path.join(scripts, 'provision-gentle-shell-private-global.mjs'),
-    root, prefix, path.join(root, 'agent'), prefix, root, 'separate', 'install'], {
+    root, prefix, path.join(root, 'agent'), prefix, root, options.mode ?? 'separate', 'install'], {
     env: { HOME: path.join(root, 'home'), PATH: '/usr/bin:/bin' }, timeout: 10000, encoding: 'utf8', maxBuffer: 8192,
   });
   const calls = fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
@@ -139,6 +144,15 @@ test('modern acquisition declares the newest listed gentle-pi and generates the 
 test('a listed gentle-pi that pins no companion declares the five roots without failing', t => {
   const f = fixture(t, 'modern', undefined, { companion: false });
   assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install', 'ci'], f.result.stderr);
+  const manifest = JSON.parse(fs.readFileSync(path.join(f.source, 'package.json')));
+  assert.deepEqual(manifest.dependencies, Object.fromEntries(rootNames.map(name => [name, name === 'gentle-pi' ? targetVersion : 'latest'])));
+});
+
+// B1: the companion belongs to Separate only. An agent install keeps its
+// private prefix exactly the five stock roots: no pack, no companion root.
+test('an agent install declares the five roots without packing a companion pin', t => {
+  const f = fixture(t, 'modern', undefined, { mode: 'agent' });
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'ci'], f.result.stderr);
   const manifest = JSON.parse(fs.readFileSync(path.join(f.source, 'package.json')));
   assert.deepEqual(manifest.dependencies, Object.fromEntries(rootNames.map(name => [name, name === 'gentle-pi' ? targetVersion : 'latest'])));
 });

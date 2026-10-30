@@ -26,8 +26,9 @@ const reject = message => { throw Error(`global provision refused: ${message}`);
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 const rootNames = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
-// The Engram companion is an optional sixth root: present only when the
-// provisioned gentle-pi pins it (a gentle-pi before 4.1.0 pins none).
+// The Engram companion is an optional sixth root of the generated Stable
+// Separate lock only, present when the listed gentle-pi pins it (a gentle-pi
+// before 4.1.0 pins none). The frozen locks keep their five roots.
 const companionName = 'gentle-engram';
 function lockRoots(dependencies) {
   const names = Object.keys(dependencies ?? {}).sort();
@@ -85,6 +86,13 @@ async function publishEngramCore(gentle, bin, name, platform, arch, adapters = {
     console.error(`Engram core skipped: ${error.message}; Shell stays usable without memory`);
     return false;
   }
+}
+// Memory is the companion and the core together: the core is published only
+// for a declared companion, so no Engram runs for no client.
+async function engramMemory(pin, locked, installed, gentle, bin, name, platform, arch, adapters = {}) {
+  const declaration = companionDeclaration(pin, locked, installed);
+  if (declaration) await publishEngramCore(gentle, bin, name, platform, arch, adapters);
+  return declaration;
 }
 // The staged reviewed supplier list (gentle-pi-suppliers.json, schema
 // gentle-shell-reviewed-suppliers/v1) is written by the Go worker from the
@@ -358,10 +366,10 @@ if (action === 'restore') {
     seed = lock.packages?.[''];
     if (lock.lockfileVersion !== 3 || !lock.packages || Array.isArray(lock.packages) || !seed?.dependencies ||
         lock.name !== seed.name || lock.version !== seed.version || typeof seed.name !== 'string' || !packageName.test(seed.name) ||
-        !lockRoots(seed.dependencies)) reject('frozen source lock');
+        JSON.stringify(Object.keys(seed.dependencies).sort()) !== JSON.stringify([...rootNames].sort())) reject('frozen source lock');
     if (typeof seed.version !== 'string' || !versionPattern.test(seed.version)) reject('frozen seed version');
     assertCanonicalPackages(lock, 'frozen');
-    pins = Object.fromEntries(lockRoots(seed.dependencies).map(name => {
+    pins = Object.fromEntries(rootNames.map(name => {
       const entry = lock.packages[`node_modules/${name}`];
       if (!entry || seed.dependencies[name] !== entry.version) reject('frozen root declaration');
       return [name, [entry.version, entry.integrity]];
@@ -392,18 +400,21 @@ if (action === 'restore') {
         absent(directory);
         fs.mkdirSync(directory, { mode: 0o700 });
       }
-      // The companion pin is read once, before the lock exists, from the
-      // listed tarball stock npm fetches into the private cache (npm ci reuses
-      // it), only after its bytes match the reviewed SRI.
-      const packed = path.join(root, 'tmp', `gentle-pi-${crypto.randomUUID()}`);
-      fs.mkdirSync(packed, { mode: 0o700 });
-      stockNpm(['pack', `gentle-pi@${target}`, `--pack-destination=${packed}`, '--ignore-scripts', '--registry=https://registry.npmjs.org/']);
-      const tarball = read(path.join(packed, `gentle-pi-${target}.tgz`));
-      if (`sha512-${crypto.createHash('sha512').update(tarball).digest('base64')}` !== reviewed[target].integrity) reject('stock supplier pin');
-      const member = spawnSync('/usr/bin/tar', ['-xOzf', '-', 'package/runtime/gentle-shell-bundled.mjs'], { input: tarball, env, shell: false, timeout: 60000, maxBuffer: 8388608, encoding: 'utf8' });
-      companion = member.status === 0 ? companionPin(member.stdout) : null;
-      fs.unlinkSync(path.join(packed, `gentle-pi-${target}.tgz`));
-      fs.rmdirSync(packed);
+      // Separate only (B1): Shared and agent installs keep the five stock
+      // roots. The companion pin is read once, before the lock exists, from
+      // the listed tarball stock npm fetches into the private cache (npm ci
+      // reuses it), only after its bytes match the reviewed SRI.
+      if (mode === 'separate') {
+        const packed = path.join(root, 'tmp', `gentle-pi-${crypto.randomUUID()}`);
+        fs.mkdirSync(packed, { mode: 0o700 });
+        stockNpm(['pack', `gentle-pi@${target}`, `--pack-destination=${packed}`, '--ignore-scripts', '--registry=https://registry.npmjs.org/']);
+        const tarball = read(path.join(packed, `gentle-pi-${target}.tgz`));
+        if (`sha512-${crypto.createHash('sha512').update(tarball).digest('base64')}` !== reviewed[target].integrity) reject('stock supplier pin');
+        const member = spawnSync('/usr/bin/tar', ['-xOzf', '-', 'package/runtime/gentle-shell-bundled.mjs'], { input: tarball, env, shell: false, timeout: 60000, maxBuffer: 8388608, encoding: 'utf8' });
+        companion = member.status === 0 ? companionPin(member.stdout) : null;
+        fs.unlinkSync(path.join(packed, `gentle-pi-${target}.tgz`));
+        fs.rmdirSync(packed);
+      }
       writeExclusive(path.join(source, 'package.json'), `${JSON.stringify(rootDeclaration(target, companion))}\n`);
       stockNpm(['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
       const { completeFile } = await import(pathToFileURL(path.join(root, 'complete-generated-lock-sri.mjs')).href);
@@ -738,16 +749,16 @@ if (action === 'restore') {
     if (Boolean(fresh) !== Boolean(priorSettings) || (fresh && !fresh.equals(priorSettings))) reject('settings changed');
     const declarations = [packageRoot];
     if (mode === 'separate') {
-      // Engram (S1) for Separate only: the frozen route reads the pin from
-      // the authenticated stock gentle-pi; the generated route read it above.
+      // Engram (S1) for Separate only: the generated route read the pin above.
+      // The frozen locks carry no companion, so the frozen route reads the
+      // authenticated stock pin only to report why memory stays off.
       if (frozenLock) {
         try { companion = companionPin(read(path.join(supplier, 'runtime/gentle-shell-bundled.mjs')).toString()); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
       const installed = observed.find(record => record.directory === path.join('lib/node_modules', companionName))?.version;
-      const declaration = companionDeclaration(companion, pins[companionName]?.[0], installed);
+      const declaration = await engramMemory(companion, pins[companionName]?.[0], installed, supplier, path.join(agent, 'bin'), 'engram', process.platform, process.arch);
       if (declaration && !(settings.packages ?? []).includes(declaration)) declarations.push(declaration);
-      await publishEngramCore(supplier, path.join(agent, 'bin'), 'engram', process.platform, process.arch);
     }
     settings.packages = [...(settings.packages ?? []), ...declarations];
     settings.npmCommand = [path.join(finalRoot, 'runtime/node/bin/node'), path.join(finalRoot, 'runtime/node/lib/node_modules/npm/bin/npm-cli.js'), '--prefix', finalPrefix];

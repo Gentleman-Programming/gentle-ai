@@ -309,6 +309,9 @@ scenario('companion-gate-agreement', () => {
   } finally { console.error = original; }
   assert.equal(errors.length, 2);
   assert.match(errors[0], /^Engram companion not declared: gentle-pi pins 0\.5\.0, lock 0\.4\.2, installed 0\.4\.2; Shell stays usable without memory$/);
+  // Memory is the companion and the core together: the core follows the gate.
+  assert.ok(source.includes("if (action === 'install' && declaredCompanion) await publishEngramCore(gentle, path.join(agent, 'bin'), 'engram.exe', 'win32', 'x64');"), 'core published only for a declared companion');
+  assert.ok(!source.includes("if (action === 'install') await publishEngramCore("), 'no ungated core publication');
   // Verify admits the owned declaration with or without exactly the locked companion.
   assert.ok(source.includes("if (lockedCompanion && JSON.stringify(observedSettings?.packages) === JSON.stringify([...settings.packages, lockedCompanion])) settings.packages.push(lockedCompanion);"));
 });

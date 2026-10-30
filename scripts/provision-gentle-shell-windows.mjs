@@ -487,5 +487,6 @@ if (observedSettings === null || typeof observedSettings !== 'object' || Array.i
   reject('owned package/settings bindings changed');
 }
 if (!read(lockPath).equals(lockBytes)) reject('source lock changed');
-if (action === 'install') await publishEngramCore(gentle, path.join(agent, 'bin'), 'engram.exe', 'win32', 'x64');
+// Memory is the companion and the core together: no core for no client.
+if (action === 'install' && declaredCompanion) await publishEngramCore(gentle, path.join(agent, 'bin'), 'engram.exe', 'win32', 'x64');
 console.log(`Windows stock composition verified; packages=${count}; registration and full Ready remain unqualified`);
