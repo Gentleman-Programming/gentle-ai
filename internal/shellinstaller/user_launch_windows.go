@@ -303,6 +303,14 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 				command.Env = append(command.Env, userWindowsSystemGoCandidateEnv+"="+candidate)
 			}
 		}
+		if args[0] == "launch" {
+			// The single caller context item for Git: the absolute git.exe
+			// resolved on the original process PATH, revalidated by the worker
+			// on every launch before only its directory joins the owned PATH.
+			if candidate := userWindowsSystemGitCandidate(); candidate != "" {
+				command.Env = append(command.Env, userWindowsSystemGitCandidateEnv+"="+candidate)
+			}
+		}
 		grace := 2 * time.Second
 		if args[0] == "install" {
 			grace = 120 * time.Second // Quiesce owned descendants and remove the owned stage.
