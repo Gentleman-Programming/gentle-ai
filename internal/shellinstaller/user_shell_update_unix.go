@@ -51,7 +51,7 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 			changed[UserComponentSDK] = true
 			update.Detail = "Main SDK is not installed in this tree yet"
 		} else {
-			latest, _, err := userMainSnapshot(ctx)
+			latest, _, err := userMainSnapshotFunc(ctx)
 			if err != nil {
 				return update, err
 			}
@@ -70,19 +70,6 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 			update.Scope = []string{UserComponentSDK}
 			update.Detail = "Main SDK is installed; the stable channel preference wants the stock composition"
 			return update, nil
-		}
-		// userExecutable names the physical executable spelling on darwin; the
-		// supervisor provenance guard requires the canonical path.
-		self, err := userExecutable()
-		if err != nil {
-			return update, err
-		}
-		supervisor, err := userSupervisorSHA(ctx, self)
-		if err != nil {
-			return update, err
-		}
-		if supervisor != manifest.SupervisorSHA {
-			changed[UserComponentSupervisor] = true
 		}
 		if manifest.NodeSHA != privateNativeNodeSHA {
 			changed[UserComponentNode] = true
@@ -113,6 +100,22 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 				changed[UserComponentSDK] = true
 			}
 		}
+	}
+	// The supervisor is checked on every channel: a Main preview install runs
+	// the same stock supervisor, so a newer build is offered there too instead
+	// of keeping an older supervisor until another component updates.
+	// userExecutable names the physical executable spelling on darwin; the
+	// supervisor provenance guard requires the canonical path.
+	self, err := userExecutable()
+	if err != nil {
+		return update, err
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		return update, err
+	}
+	if supervisor != manifest.SupervisorSHA {
+		changed[UserComponentSupervisor] = true
 	}
 	// The pinned agent tools are part of the SDK component on every channel:
 	// a reused agent whose bound binaries no longer match this build would
