@@ -234,6 +234,7 @@ def install(context, label, target, shared=None):
 def pinned_member(prefix):
 	"""Authenticate the installed native member against the reviewed
 	installer's own asset row and the installation's integrity.json."""
+	prefix = pathlib.Path(prefix)
 	row = MEMBER_ROW.search((prefix / 'lib/node_modules/gentle-pi/scripts/gentle-ai-installer.mjs').read_text())
 	require(row is not None, 'installer darwin/arm64 member manifest row differs')
 	version, asset_sha, binary_sha = row.group(1), row.group(2), row.group(3)
