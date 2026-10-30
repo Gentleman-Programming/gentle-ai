@@ -260,8 +260,12 @@ class MacOSQualificationContract(unittest.TestCase):
         _, constants = script_constants()
         node = re.search(r'privateNativeNodeSize int64 = (\d+)\nconst privateNativeNodeSHA = "([0-9a-f]{64})"', go)
         self.assertEqual(constants['NODE_PIN'], (node.group(2), int(node.group(1))))
-        binary = re.search(r'userBinarySize int64 = (\d+)\nconst userBinarySHA = "([0-9a-f]{64})"', go)
-        self.assertEqual(constants['GENTLE_AI_PIN'], (binary.group(2), int(binary.group(1))))
+        # The native member the gentle-pi installer builds is no longer the
+        # supervisor's own build pin: the reviewed list provisions gentle-pi
+        # 4.5.x, whose installer pins a newer gentle-ai. The harness derives
+        # the member from the authenticated installer's asset row instead.
+        self.assertNotIn('GENTLE_AI_PIN', constants)
+        self.assertIn("MEMBER_ROW = re.compile(r'\"darwin/arm64\": asset", SCRIPT.read_text())
         rows = re.findall(r'\{"(\w+)", "[\w/]+", "v?[\d.]+", "([\w.-]+)", "([0-9a-f]{64})", (\d+)\}', go)
         tools = {name: (sha, int(size), stem + '/' + name) for name, stem, sha, size in rows}
         self.assertEqual(set(tools), {'fd', 'rg'})
