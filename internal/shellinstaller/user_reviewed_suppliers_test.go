@@ -77,10 +77,10 @@ func TestUserEmbeddedReviewedList(t *testing.T) {
 	if list.Schema != userReviewedListSchema {
 		t.Fatalf("embedded schema differs: %q", list.Schema)
 	}
-	if len(list.Releases) != 3 {
+	if len(list.Releases) != 4 {
 		t.Fatalf("embedded release set differs: %v", list.Releases)
 	}
-	if newest := list.newestReviewedRelease(); newest != "4.5.0" {
+	if newest := list.newestReviewedRelease(); newest != "4.5.1" {
 		t.Fatalf("newest reviewed release differs: %q", newest)
 	}
 	entry, ok := list.Releases["4.3.0"]
@@ -88,6 +88,12 @@ func TestUserEmbeddedReviewedList(t *testing.T) {
 		entry.Binary != "61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80" ||
 		!userReviewedListSRI(entry.Integrity) {
 		t.Fatalf("embedded 4.3.0 supplier entry differs: %+v", entry)
+	}
+	entry, ok = list.Releases["4.5.1"]
+	if !ok || entry.Integrity != "sha512-yJvj3GdkAYao0w1qvmbMXugR5s/IjgedTavRsT8212M9mk7dko/p8v4t2x09IvRClP94arXaMTK2/3WkNXkxqg==" ||
+		entry.Installer != "37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed" ||
+		entry.Binary != "61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80" {
+		t.Fatalf("embedded 4.5.1 supplier entry differs: %+v", entry)
 	}
 	file, err := os.ReadFile("../../scripts/gentle-pi-suppliers.json")
 	if err != nil {
@@ -235,7 +241,11 @@ func TestUserSelectedReviewedListFallsBack(t *testing.T) {
 		if !bytes.Equal(selected, embedded) {
 			t.Fatalf("%s fetch did not fall back to the embedded bytes", name)
 		}
-		if newest := list.newestReviewedRelease(); newest != "4.5.0" {
+		embeddedList, parseErr := userParseReviewedList(embedded)
+		if parseErr != nil {
+			t.Fatalf("%s embedded fallback parse differs: %v", name, parseErr)
+		}
+		if newest := list.newestReviewedRelease(); newest != embeddedList.newestReviewedRelease() {
 			t.Fatalf("%s fallback target differs: %q", name, newest)
 		}
 	}
@@ -287,7 +297,11 @@ func TestUserSelectedReviewedListDeadlineFallsBack(t *testing.T) {
 	if !bytes.Equal(selected, embedded) {
 		t.Fatal("caller deadline did not fall back to the embedded bytes")
 	}
-	if newest := list.newestReviewedRelease(); newest != "4.5.0" {
+	embeddedList, parseErr := userParseReviewedList(embedded)
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	if newest := list.newestReviewedRelease(); newest != embeddedList.newestReviewedRelease() {
 		t.Fatalf("deadline fallback target differs: %q", newest)
 	}
 }
