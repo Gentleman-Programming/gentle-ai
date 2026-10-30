@@ -454,6 +454,21 @@ def prepare(arguments):
     return context
 
 
+def drop_separate_companion(prefix):
+    """Only Separate carries the Engram companion; a stock shared prefix never has it."""
+    shutil.rmtree(os.path.join(prefix, 'lib/node_modules/gentle-engram'), ignore_errors=True)
+    for link in ('bin/pi-engram', 'lib/node_modules/.bin/pi-engram'):
+        if os.path.lexists(os.path.join(prefix, link)):
+            os.unlink(os.path.join(prefix, link))
+    hidden = os.path.join(prefix, 'lib/node_modules/.package-lock.json')
+    if os.path.isfile(hidden):
+        with open(hidden, 'rb') as handle:
+            lock = json.loads(handle.read())
+        if lock.get('packages', {}).pop('node_modules/gentle-engram', None) is not None:
+            with open(hidden, 'w') as handle:
+                handle.write(json.dumps(lock, indent=2) + '\n')
+
+
 def qualify(context):
     real_home = pwd.getpwuid(os.getuid()).pw_dir
     home_before = real_home_snapshot(real_home)
@@ -481,6 +496,7 @@ def qualify(context):
     shared_agent = os.path.join(context.work, 'shared-agent')
     conflict_agent = os.path.join(context.work, 'conflict-agent')
     shutil.copytree(prefix, shared_prefix, symlinks=True)
+    drop_separate_companion(shared_prefix)
     os.chmod(shared_prefix, 0o700)
     for directory in (shared_agent, conflict_agent, os.path.join(conflict_agent, 'bin')):
         os.mkdir(directory, 0o700)

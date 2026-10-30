@@ -301,6 +301,54 @@ func TestUserEngramForwardedCarriesOnlyEngramLaunchKeys(t *testing.T) {
 	}
 }
 
+// userEngramObserveDecisions replaces the platform's launch decision with a
+// recorder of the roots it ran for.
+func userEngramObserveDecisions(t *testing.T) *[]string {
+	t.Helper()
+	original := userEngramLaunchEnv
+	t.Cleanup(func() { userEngramLaunchEnv = original })
+	roots := &[]string{}
+	userEngramLaunchEnv = func(_ context.Context, root string) []string {
+		*roots = append(*roots, root)
+		return []string{"ENGRAM_URL=decided"}
+	}
+	return roots
+}
+
+// Pi arguments of a version or help run, and of runs that still decide.
+var (
+	userEngramQuietArgs    = [][]string{{"--version"}, {"-v"}, {"--help"}, {"-h"}, {"--model", "x", "-v"}, {"-p", "hi", "--help"}, {"--continue", "-h"}}
+	userEngramDecidingArgs = [][]string{nil, {"--model", "-v"}, {"--", "--version"}, {"-e", "--help"}, {"-p", "hi"}, {"--versions"}, {"--version=1"}}
+)
+
+// Shell's piVersionOrHelpRequested (lib/gentle-shell-bundled.ts): a version
+// or help token in flag position, before Pi's own "--", and not the value of
+// one of Pi 1.1.0's value options.
+func TestUserEngramVersionOrHelpPortsShellsTokenRule(t *testing.T) {
+	for _, args := range userEngramQuietArgs {
+		if !userEngramVersionOrHelp(args) {
+			t.Errorf("%q is a version or help run", args)
+		}
+	}
+	for _, args := range userEngramDecidingArgs {
+		if userEngramVersionOrHelp(args) {
+			t.Errorf("%q is not a version or help run", args)
+		}
+	}
+	for _, option := range []string{"--provider", "--model", "--api-key", "--system-prompt", "--append-system-prompt", "--name", "-n", "--session",
+		"--session-id", "--fork", "--session-dir", "--models", "--tools", "-t", "--exclude-tools", "-xt", "--thinking", "--export", "--extension", "-e",
+		"--skill", "--prompt-template", "--theme"} {
+		if userEngramVersionOrHelp([]string{option, "--version"}) || !userEngramVersionOrHelp([]string{option, "value", "--version"}) {
+			t.Errorf("%s must take exactly the next token as its value", option)
+		}
+	}
+	for _, option := range []string{"--print", "-p", "--continue", "-c", "--resume", "-r", "--no-tools", "--offline"} {
+		if !userEngramVersionOrHelp([]string{option, "-h"}) {
+			t.Errorf("%s takes no value, so a following -h is still a help run", option)
+		}
+	}
+}
+
 func TestUserEngramLaunchContext(t *testing.T) {
 	if got := userEngramContextEnv(context.Background()); got != nil {
 		t.Fatalf("a context without a launch decision forwarded %q", got)

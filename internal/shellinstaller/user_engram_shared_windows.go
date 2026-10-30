@@ -36,7 +36,12 @@ func userEngramWindowsWorkerEnv(ctx context.Context, args []string) []string {
 	if len(args) < 2 || args[0] != "launch" {
 		return nil
 	}
-	return userEngramLaunchEnv(ctx, args[1])
+	// args[2] is the product; the rest are its arguments.
+	var productArgs []string
+	if len(args) > 3 {
+		productArgs = args[3:]
+	}
+	return userEngramLaunchDecision(ctx, args[1], productArgs)
 }
 
 // userEngramWindowsLaunch is the outer entry decision for a launch of root.

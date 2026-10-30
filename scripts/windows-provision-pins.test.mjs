@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const provision = process.argv[2] ?? fileURLToPath(new URL('./provision-gentle-shell-windows.mjs', import.meta.url));
 const source = fs.readFileSync(provision, 'utf8');
@@ -26,9 +26,10 @@ assert.ok(source.includes("exclusive(path.join(source, 'package.json'), rootDecl
 
 function extract(name) {
   const begin = `function ${name}(`;
-  const start = source.indexOf(begin);
+  const found = source.indexOf(begin);
+  const start = source.slice(found - 6, found) === 'async ' ? found - 6 : found;
   assert.ok(start >= 0, `${name} helper present`);
-  assert.equal(source.indexOf(begin, start + 1), -1, `${name} helper unique`);
+  assert.equal(source.indexOf(begin, found + 1), -1, `${name} helper unique`);
   const end = source.indexOf('\n}', start);
   assert.ok(end > start, `${name} helper terminated`);
   return source.slice(start, end + 2);
@@ -43,9 +44,10 @@ const listPath = path.join(listFixtureRoot, 'gentle-pi-suppliers.json');
 fs.copyFileSync(fileURLToPath(new URL('./gentle-pi-suppliers.json', import.meta.url)), listPath);
 sandbox.root = listFixtureRoot;
 sandbox.digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+Object.assign(sandbox, { crypto, pathToFileURL, companionName: 'gentle-engram' });
 vm.createContext(sandbox);
-for (const name of ['exclusive', 'rootDeclaration', 'rewriteSupplierDeclaration', 'rootAuthorities', 'reviewedSuppliers', 'newestReviewedSupplier', 'supplierFallbackVersion', 'reviewedSupplierEntry', 'reviewedSupplierLock', 'stockNativeDirectory', 'stockNativeIntegrity', 'reviewedSupplierSources']) {
-  vm.runInContext(extract(name), sandbox, { filename: `${name}.vm.js` });
+for (const name of ['absent', 'companionPin', 'companionDeclaration', 'publishEngramCore', 'exclusive', 'rootDeclaration', 'rewriteSupplierDeclaration', 'rootAuthorities', 'reviewedSuppliers', 'newestReviewedSupplier', 'supplierFallbackVersion', 'reviewedSupplierEntry', 'reviewedSupplierLock', 'stockNativeDirectory', 'stockNativeIntegrity', 'reviewedSupplierSources']) {
+  vm.runInContext(extract(name), sandbox, { filename: `${name}.vm.js`, importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER });
 }
 const run = (code, ...args) => vm.runInContext(code, sandbox, { filename: 'call.vm.js' })(...args);
 
@@ -268,6 +270,52 @@ scenario('fallback-rewrite-pins-gentle-pi-and-discards-lock', () => {
   assert.equal(fs.existsSync(path.join(directory, 'package-lock.json')), false, 'generated lock discarded before re-resolution');
 });
 
+scenario('companion-declared-at-exact-pin', () => {
+  const manifest = JSON.parse(run('(names, gentlePi, companion) => rootDeclaration(names, gentlePi, companion)', names, '4.5.1', '0.4.2'));
+  assert.deepEqual(manifest.dependencies, { ...Object.fromEntries(names.map(name => [name, name === 'gentle-pi' ? '4.5.1' : 'latest'])), 'gentle-engram': '0.4.2' },
+    'the companion is pinned to the gentle-pi pin, never latest');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-'));
+  fs.writeFileSync(path.join(directory, 'package.json'), run('(names) => rootDeclaration(names)', names));
+  fs.writeFileSync(path.join(directory, 'package-lock.json'), '{"lockfileVersion":3}');
+  run('(directory, names, version, companion) => rewriteSupplierDeclaration(directory, names, version, companion)', directory, names, '4.5.1', '0.4.2');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8')).dependencies, manifest.dependencies);
+  assert.equal(fs.existsSync(path.join(directory, 'package-lock.json')), false, 'companion re-resolution discards the first lock');
+  // The companion root joins the closed root set only as the sixth root.
+  const lock = lockFixture({}, { 'node_modules/gentle-engram': record('gentle-engram', '0.4.2', sri('gentle-engram')) });
+  lock.packages[''].dependencies['gentle-engram'] = '0.4.2';
+  assert.equal(run('(lock, list) => rootAuthorities(lock, list)', lock, [...names, 'gentle-engram'])['gentle-engram'], '0.4.2');
+  assert.throws(() => run('(lock, list) => rootAuthorities(lock, list)', lock, names), /Windows provision refused: root package set/, 'an undeclared extra root stays refused');
+  assert.ok(source.includes("const roots = Object.hasOwn(lock?.packages?.['']?.dependencies ?? {}, companionName) ? [...pins, companionName] : pins;"), 'root set admits only the companion');
+});
+
+scenario('companion-pin-exact-only', () => {
+  assert.equal(run('text => companionPin(text)', 'x\nexport const ENGRAM_COMPANION_SOURCE = "npm:gentle-engram@0.4.2";\ny'), '0.4.2');
+  for (const text of ['export const ENGRAM_COMPANION_SOURCE = "npm:gentle-engram@latest";', 'export const ENGRAM_COMPANION_SOURCE = "npm:gentle-engram@~0.4.2";', '']) {
+    assert.equal(run('text => companionPin(text)', text), null, `${text} refused as a pin`);
+  }
+});
+
+scenario('companion-gate-agreement', () => {
+  const errors = [], original = console.error;
+  console.error = message => errors.push(message);
+  try {
+    const gate = (...args) => run('(pin, locked, installed) => companionDeclaration(pin, locked, installed)', ...args);
+    assert.equal(gate('0.4.2', '0.4.2', '0.4.2'), 'npm:gentle-engram@0.4.2');
+    // A lock/pin mismatch declares nothing and never refuses the install.
+    assert.equal(gate('0.5.0', '0.4.2', '0.4.2'), null);
+    assert.equal(gate('0.4.2', '0.4.2', '0.5.0'), null);
+    // A gentle-pi that pins none (4.0.0) and a lock without the root: no companion, no note.
+    assert.equal(gate(null, undefined, undefined), null);
+  } finally { console.error = original; }
+  assert.equal(errors.length, 2);
+  assert.match(errors[0], /^Engram companion not declared: gentle-pi pins 0\.5\.0, lock 0\.4\.2, installed 0\.4\.2; Shell stays usable without memory$/);
+  // Memory is the companion and the core together: the core follows the gate.
+  assert.ok(source.includes("if (action === 'install' && declaredCompanion) await publishEngramCore(gentle, path.join(agent, 'bin'), 'engram.exe', 'win32', 'x64');"), 'core published only for a declared companion');
+  assert.ok(!source.includes("if (action === 'install') await publishEngramCore("), 'no ungated core publication');
+  // Verify admits the owned declaration with or without exactly the locked companion.
+  assert.ok(source.includes("if (lockedCompanion && JSON.stringify(observedSettings?.packages) === JSON.stringify([...settings.packages, lockedCompanion])) settings.packages.push(lockedCompanion);"));
+});
+
 scenario('installer-mismatch-with-matching-binary-refused', () => {
   const gentle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-')), 'gentle-pi');
   fs.mkdirSync(path.join(gentle, 'scripts'), { recursive: true });
@@ -387,6 +435,53 @@ scenario('latest-resolution-live', () => {
     assert.match(resolved[name], /^\d+\.\d+\.\d+$/, `${name} resolved to an exact version`);
     assert.notEqual(resolved[name], name === 'gentle-pi' ? '4.0.0' : '1.0.0', `${name} is not the retired static pin`);
   }
+});
+
+// The Engram core at the contract path <agent>\\bin\\engram.exe, published
+// from a stand-in gentle-pi with the stock export names through injected
+// adapters: no network, no Windows host required.
+const scenarioAsync = async (name, body) => {
+  total++;
+  try { await body(); } catch (error) { failures.push(`${name}: ${error.message}`); }
+};
+function standInGentlePi(exports = true) {
+  const gentle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-')), 'gentle-pi');
+  fs.mkdirSync(path.join(gentle, 'scripts'), { recursive: true });
+  if (exports) {
+    fs.writeFileSync(path.join(gentle, 'scripts/installer-downloads.mjs'), `
+export function artifactFor(name, platform, arch) { return { name, platform, arch, url: 'https://example.invalid/engram_' + platform + '_' + arch + '.zip' }; }
+export async function verifiedDownload(name, adapters = {}, platform, arch) {
+  const bytes = await adapters.download((adapters.artifact ?? artifactFor)(name, platform, arch));
+  if (!bytes.toString().startsWith('pinned:')) throw new Error('Download integrity mismatch');
+  return bytes;
+}`);
+    fs.writeFileSync(path.join(gentle, 'scripts/bundled-install.mjs'), `
+export function engramExecutable(bytes, descriptor) { return Buffer.from('exe<' + bytes + '>' + descriptor.url); }`);
+  }
+  return gentle;
+}
+const publish = (...args) => run('(...args) => publishEngramCore(...args)', ...args);
+await scenarioAsync('engram-core-published', async () => {
+  const gentle = standInGentlePi(), bin = path.join(path.dirname(gentle), 'agent/bin');
+  fs.mkdirSync(bin, { recursive: true });
+  assert.equal(await publish(gentle, bin, 'engram.exe', 'win32', 'x64', { download: async () => Buffer.from('pinned:zip') }), true);
+  assert.equal(fs.readFileSync(path.join(bin, 'engram.exe'), 'utf8'), 'exe<pinned:zip>https://example.invalid/engram_win32_x64.zip');
+  assert.deepEqual(fs.readdirSync(bin), ['engram.exe'], 'atomic publication leaves no stage file');
+});
+await scenarioAsync('engram-core-skipped-without-exports-or-verification', async () => {
+  const errors = [], original = console.error;
+  console.error = message => errors.push(message);
+  try {
+    const bare = standInGentlePi(false), bin = path.join(path.dirname(bare), 'agent/bin');
+    assert.equal(await publish(bare, bin, 'engram.exe', 'win32', 'x64', {}), false);
+    assert.equal(fs.existsSync(bin), false);
+    const gentle = standInGentlePi(), verifiedBin = path.join(path.dirname(gentle), 'agent/bin');
+    fs.mkdirSync(verifiedBin, { recursive: true });
+    assert.equal(await publish(gentle, verifiedBin, 'engram.exe', 'win32', 'x64', { download: async () => Buffer.from('tampered') }), false);
+    assert.deepEqual(fs.readdirSync(verifiedBin), []);
+  } finally { console.error = original; }
+  assert.deepEqual(errors, ['Engram core skipped: the installed gentle-pi pins no Engram core; Shell stays usable without memory',
+    'Engram core skipped: Download integrity mismatch; Shell stays usable without memory']);
 });
 
 console.log(`windows-provision-pins: ${total - failures.length}/${total} scenarios passed`);

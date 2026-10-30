@@ -58,6 +58,24 @@ Separate publishes `~/.local/bin/gentle-shell` and `~/.local/bin/gs`. When `~/.l
 
 "On my existing Pi" reuses your Pi agent (`~/.pi/agent`, `0755` as Pi creates it) and follows the same agent checks and rollback as on Linux. See [On my existing Pi](gentle-shell-linux-install.md#on-my-existing-pi-agent-checks-and-rollback). Pi's own `bin/fd` and `bin/rg` are set aside inside the installation, replaced by the pinned builds below, and restored by uninstall. A failure before publication restores them with the rest of the agent. Uninstall restores `settings.json` and `mcp.json` with their original bytes and modes, and removes an `mcp.json` that did not exist before. Every refusal happens before any write, and a failure after the first write restores the agent exactly.
 
+## Persistent memory (Engram)
+
+Separate provisions Engram from the gentle-pi it installs, never from a second version list. The `gentle-engram` companion joins the verified npm composition at that gentle-pi's exact pin and is declared in the private agent's `settings.json` exactly as bundled Gentle Shell declares it (`npm:gentle-engram@<version>`). The SHA-256-pinned Engram core is published to `AGENT/bin/engram` (mode `0700`). Memory is shared like the bundled install: a launch reuses a verified Engram server on `127.0.0.1:7437`, or starts one on your real `~/.engram` store, so every agent sees the same memory. If a piece is missing or cannot be verified, the install still succeeds and Shell runs without memory. Engram memory comes with the Stable channel's Separate install; a Main preview install runs without it until its frozen composition includes the companion. Shared and "On my existing Pi" get nothing new: no `gentle-engram` package, no `pi-engram` command, no Engram core and no settings change, so they keep their existing memory setup.
+
+### How each launch decides memory
+
+A Separate installation shares your global Engram memory, the same way the bundled Gentle Shell and your other agents do. Each launch decides memory once, in the supervisor before it starts the launched Pi's process group, and never fails the launch because memory is unavailable:
+
+- **Version and help runs never probe or start a server**: a launch with `--version`, `-v`, `--help` or `-h` runs with `ENGRAM_STARTUP_POLICY=disabled` and no notice, as in the bundled Gentle Shell.
+- **You already chose Engram settings.** If your environment sets `ENGRAM_BIN`, `ENGRAM_URL`, `ENGRAM_DATA_DIR`, `ENGRAM_PORT`, `ENGRAM_SOCKET`, `ENGRAM_DATABASE_URL` or `ENGRAM_SERVER_MODE` (or an `ENGRAM_STARTUP_POLICY` other than `allow`), those exact values are passed to the session unchanged, nothing is probed or started, and memory runs disabled for that launch, as in the bundled Gentle Shell. An explicit `ENGRAM_BIN` or `ENGRAM_URL` is never replaced; without your own `ENGRAM_BIN`, the session gets the installation's verified core instead of any `engram` on `PATH`.
+- **A verified server is running.** A server on `127.0.0.1:7437` whose `/compatibility` answer proves a startup-verified store is reused through `ENGRAM_URL=http://127.0.0.1:7437`.
+- **Nothing is listening.** The installation's verified Engram core (`AGENT/bin/engram`) starts `engram serve` in its own session (`setsid`), outside the owned group, with your real home, so the store is your usual `~/.engram`. This store is the only thing a Separate installation writes outside its own folder; the server keeps running after the session ends, like any shared Engram server.
+- **Anything else disables memory for that launch.** A listener that does not prove compatibility, a store migrated by a newer Engram than the installation's core, a missing core, or a server that does not report ready within about 10 seconds starts nothing. The session starts with `ENGRAM_STARTUP_POLICY=disabled` and a one-line notice explaining why. Gentle Shell never stops or replaces a server already listening on `127.0.0.1:7437`, and rechecks on every launch.
+
+Shared and agent installations keep their existing memory setup; this decision applies to Separate only. Apart from your own Engram selections, your `PATH`, tokens and other settings are never passed to the session or the server.
+
+See also: [Gentle Shell on Linux](gentle-shell-linux-install.md) and [Gentle Shell on Windows](gentle-shell-windows-install.md).
+
 ## Undo Shared changes
 
 Use the **actual installed TARGET**, never a prefix or agent:
@@ -122,16 +140,3 @@ Do not reinstall into a damaged target. Keep it, its agent data and evidence; in
 ## Safety limits
 
 Stock Pi's updater is retained. Readback accepts only complete known graphs; unknown versions, bytes or placement fail closed and keep evidence. Package lifecycle scripts stay disabled. Never delete uncertain roots, stages or evidence to retry.
-
-## Memory
-
-A Separate installation shares your global Engram memory, the same way the bundled Gentle Shell and your other agents do. Each launch decides memory once, in the supervisor before it starts the launched Pi's process group, and never fails the launch because memory is unavailable:
-
-- **You already chose Engram settings.** If your environment sets `ENGRAM_BIN`, `ENGRAM_URL`, `ENGRAM_DATA_DIR`, `ENGRAM_PORT`, `ENGRAM_SOCKET`, `ENGRAM_DATABASE_URL` or `ENGRAM_SERVER_MODE` (or an `ENGRAM_STARTUP_POLICY` other than `allow`), those exact values are passed to the session unchanged, nothing is probed or started, and memory runs disabled for that launch, as in the bundled Gentle Shell. An explicit `ENGRAM_BIN` or `ENGRAM_URL` is never replaced; without your own `ENGRAM_BIN`, the session gets the installation's verified core instead of any `engram` on `PATH`.
-- **A verified server is running.** A server on `127.0.0.1:7437` whose `/compatibility` answer proves a startup-verified store is reused through `ENGRAM_URL=http://127.0.0.1:7437`.
-- **Nothing is listening.** The installation's verified Engram core (`AGENT/bin/engram`) starts `engram serve` in its own session (`setsid`), outside the owned group, with your real home, so the store is your usual `~/.engram`. This store is the only thing a Separate installation writes outside its own folder; the server keeps running after the session ends, like any shared Engram server.
-- **Anything else disables memory for that launch.** A listener that does not prove compatibility, a store migrated by a newer Engram than the installation's core, a missing core, or a server that does not report ready within about 10 seconds starts nothing. The session starts with `ENGRAM_STARTUP_POLICY=disabled` and a one-line notice explaining why. Gentle Shell never stops or replaces a server already listening on `127.0.0.1:7437`, and rechecks on every launch.
-
-Shared and agent installations keep their existing memory setup; this decision applies to Separate only. Apart from your own Engram selections, your `PATH`, tokens and other settings are never passed to the session or the server.
-
-See also: [Gentle Shell on Linux](gentle-shell-linux-install.md) and [Gentle Shell on Windows](gentle-shell-windows-install.md).

@@ -34,6 +34,34 @@ already contains this unreleased installer.
 | Processes | Suspended child bound before resume; Job Object CPU/memory/process readback, inherited console, bounded cleanup |
 | Preservation | Isolated HOME/agent/config, caller CWD inherited; console modes saved/restored; personal PATH unchanged |
 
+## Persistent memory (Engram)
+
+Separate provisions Engram from the gentle-pi it installs, never from a
+second version list. The `gentle-engram` companion joins the verified npm
+composition at that gentle-pi's exact pin and is declared in the private
+agent's `settings.json` exactly as bundled Gentle Shell declares it
+(`npm:gentle-engram@<version>`). The SHA-256-pinned Engram core is published
+to `AGENT\bin\engram.exe`. Memory is shared like the bundled install: a
+launch reuses a verified Engram server on `127.0.0.1:7437`, or starts one on
+your real `~/.engram` store, so every agent sees the same memory. If a piece
+is missing or cannot be verified, the install still succeeds and Shell runs
+without memory. On Windows both channels provision this stock composition
+before any Main overlay, so Stable and Main preview installs both get Engram
+memory. Windows installs are Separate only, so there is no Shared or
+"On my existing Pi" variant to receive Engram.
+
+### How each launch decides memory
+
+A Separate installation shares your global Engram memory, the same way the bundled Gentle Shell and your other agents do. Each launch decides memory once, in the entry process before the owned Job Object starts, and never fails the launch because memory is unavailable:
+
+- **Version and help runs never probe or start a server**: a launch with `--version`, `-v`, `--help` or `-h` runs with `ENGRAM_STARTUP_POLICY=disabled` and no notice, as in the bundled Gentle Shell.
+- **You already chose Engram settings.** If your environment sets `ENGRAM_BIN`, `ENGRAM_URL`, `ENGRAM_DATA_DIR`, `ENGRAM_PORT`, `ENGRAM_SOCKET`, `ENGRAM_DATABASE_URL` or `ENGRAM_SERVER_MODE` (or an `ENGRAM_STARTUP_POLICY` other than `allow`), those exact values are passed to the session unchanged, nothing is probed or started, and memory runs disabled for that launch, as in the bundled Gentle Shell. An explicit `ENGRAM_BIN` or `ENGRAM_URL` is never replaced; without your own `ENGRAM_BIN`, the session gets the installation's verified core instead of any `engram` on `PATH`.
+- **A verified server is running.** A server on `127.0.0.1:7437` whose `/compatibility` answer proves a startup-verified store is reused through `ENGRAM_URL=http://127.0.0.1:7437`.
+- **Nothing is listening.** The installation's verified Engram core (`AGENT\bin\engram.exe`) starts `engram serve` detached in its own process group, outside the Job Object, with your real home, so the store is your usual `%USERPROFILE%\.engram`. This store is the only thing a Separate installation writes outside its own folder; the server keeps running after the session ends, like any shared Engram server.
+- **Anything else disables memory for that launch.** A listener that does not prove compatibility, a store migrated by a newer Engram than the installation's core, a missing core, or a server that does not report ready within about 10 seconds starts nothing. The session starts with `ENGRAM_STARTUP_POLICY=disabled` and a one-line notice explaining why. Gentle Shell never stops or replaces a server already listening on `127.0.0.1:7437`, and rechecks on every launch.
+
+Shared and agent installations keep their existing memory setup; this decision applies to Separate only. Apart from your own Engram selections, your `PATH`, tokens and other settings are never passed to the session or the server.
+
 ## Launch custody: artefacts versus runtime state
 
 Every launch re-walks the **installed artefacts** with the complete per-file
@@ -110,14 +138,3 @@ helper, tests, documentation and static-check workflow together. It does not
 remove a user's existing Pi, project, personal configuration or installed data.
 Delivery leaf: #5271 under canonical cross-platform tracker #4935. No Main
 merge, release or issue closure is authorized by this candidate.
-
-## Memory
-
-A Separate installation shares your global Engram memory, the same way the bundled Gentle Shell and your other agents do. Each launch decides memory once, in the entry process before the owned Job Object starts, and never fails the launch because memory is unavailable:
-
-- **You already chose Engram settings.** If your environment sets `ENGRAM_BIN`, `ENGRAM_URL`, `ENGRAM_DATA_DIR`, `ENGRAM_PORT`, `ENGRAM_SOCKET`, `ENGRAM_DATABASE_URL` or `ENGRAM_SERVER_MODE` (or an `ENGRAM_STARTUP_POLICY` other than `allow`), those exact values are passed to the session unchanged, nothing is probed or started, and memory runs disabled for that launch, as in the bundled Gentle Shell. An explicit `ENGRAM_BIN` or `ENGRAM_URL` is never replaced; without your own `ENGRAM_BIN`, the session gets the installation's verified core instead of any `engram` on `PATH`.
-- **A verified server is running.** A server on `127.0.0.1:7437` whose `/compatibility` answer proves a startup-verified store is reused through `ENGRAM_URL=http://127.0.0.1:7437`.
-- **Nothing is listening.** The installation's verified Engram core (`AGENT\bin\engram.exe`) starts `engram serve` detached in its own process group, outside the Job Object, with your real home, so the store is your usual `%USERPROFILE%\.engram`. This store is the only thing a Separate installation writes outside its own folder; the server keeps running after the session ends, like any shared Engram server.
-- **Anything else disables memory for that launch.** A listener that does not prove compatibility, a store migrated by a newer Engram than the installation's core, a missing core, or a server that does not report ready within about 10 seconds starts nothing. The session starts with `ENGRAM_STARTUP_POLICY=disabled` and a one-line notice explaining why. Gentle Shell never stops or replaces a server already listening on `127.0.0.1:7437`, and rechecks on every launch.
-
-Shared and agent installations keep their existing memory setup; this decision applies to Separate only. Apart from your own Engram selections, your `PATH`, tokens and other settings are never passed to the session or the server.

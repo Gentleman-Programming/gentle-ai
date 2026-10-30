@@ -35,6 +35,28 @@ func TestUserEngramWindowsWorkerEnvOnlyForLaunch(t *testing.T) {
 	}
 }
 
+// The outer entry decides for the arguments the product receives: a version
+// or help run of pi or gentle-shell never reaches the decision, so it never
+// probes or starts a server, and its worker gets memory disabled without a
+// notice.
+func TestUserEngramWindowsVersionAndHelpLaunchesNeverDecide(t *testing.T) {
+	roots := userEngramObserveDecisions(t)
+	for _, product := range []string{"pi", "gentle-shell"} {
+		for _, args := range userEngramQuietArgs {
+			env := userEngramWindowsWorkerEnv(context.Background(), append([]string{"launch", `C:\owned`, product}, args...))
+			if !reflect.DeepEqual(env, userEngramQuiet) || len(*roots) != 0 {
+				t.Fatalf("%s %q forwarded %q after deciding for %q", product, args, env, *roots)
+			}
+		}
+	}
+	for i, args := range userEngramDecidingArgs {
+		env := userEngramWindowsWorkerEnv(context.Background(), append([]string{"launch", `C:\owned`, "pi"}, args...))
+		if !reflect.DeepEqual(env, []string{"ENGRAM_URL=decided"}) || len(*roots) != i+1 {
+			t.Fatalf("%q forwarded %q after deciding for %q", args, env, *roots)
+		}
+	}
+}
+
 // The owned launch environment gains exactly the worker's Engram entries, or
 // a disabled policy when the outer entry forwarded no decision; provision
 // keeps its environment byte for byte.

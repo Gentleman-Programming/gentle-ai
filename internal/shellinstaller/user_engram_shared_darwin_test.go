@@ -9,21 +9,30 @@ import (
 	"testing"
 )
 
-func userEngramObserveDecisions(t *testing.T) *[]string {
-	t.Helper()
-	original := userEngramLaunchEnv
-	t.Cleanup(func() { userEngramLaunchEnv = original })
-	roots := &[]string{}
-	userEngramLaunchEnv = func(_ context.Context, root string) []string {
-		*roots = append(*roots, root)
-		return []string{"ENGRAM_URL=decided"}
+func userEngramEntryEnv(ctx context.Context, root string, args []string) []string {
+	return userEngramContextEnv(userEngramLaunchScope(ctx, root, args))
+}
+
+// The supervisor that verifies a darwin launch decides for its Pi arguments:
+// a version or help run never reaches the decision, so it never probes or
+// starts a server, and gets memory disabled without a notice.
+func TestUserEngramDarwinVersionAndHelpLaunchesNeverDecide(t *testing.T) {
+	roots := userEngramObserveDecisions(t)
+	for _, args := range userEngramQuietArgs {
+		if env := userEngramEntryEnv(context.Background(), "/owned", args); !reflect.DeepEqual(env, userEngramQuiet) || len(*roots) != 0 {
+			t.Fatalf("%q forwarded %q after deciding for %q", args, env, *roots)
+		}
 	}
-	return roots
+	for i, args := range userEngramDecidingArgs {
+		if env := userEngramEntryEnv(context.Background(), "/owned", args); !reflect.DeepEqual(env, []string{"ENGRAM_URL=decided"}) || len(*roots) != i+1 {
+			t.Fatalf("%q forwarded %q after deciding for %q", args, env, *roots)
+		}
+	}
 }
 
 func TestUserEngramDarwinLaunchScopeDecidesLazilyForItsRoot(t *testing.T) {
 	roots := userEngramObserveDecisions(t)
-	ctx := userEngramLaunchScope(context.Background(), "/owned")
+	ctx := userEngramLaunchScope(context.Background(), "/owned", []string{"--flag"})
 	if len(*roots) != 0 {
 		t.Fatal("the decision ran before the launch environment was built")
 	}

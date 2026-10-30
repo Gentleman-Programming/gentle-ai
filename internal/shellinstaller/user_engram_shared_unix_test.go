@@ -296,6 +296,30 @@ func TestUserEngramUnixLaunchNeverStartsBesideAnotherDecision(t *testing.T) {
 	}
 }
 
+// With nothing listening a launch would start the verified core; a version or
+// help run through the platform's launch entry starts nothing, leaves the
+// real HOME without a store and gets memory disabled without a notice.
+func TestUserEngramVersionAndHelpLaunchesStartNoServer(t *testing.T) {
+	for _, args := range [][]string{{"--version"}, {"--help"}} {
+		t.Run(args[0], func(t *testing.T) {
+			userEngramClearEnv(t)
+			home := userEngramPrivateDir(t)
+			t.Setenv("HOME", home)
+			root, _ := userEngramSeparateFixture(t, "separate")
+			userEngramUseProbeBase(t, "http://"+userEngramFreePort(t))
+			if env := userEngramEntryEnv(context.Background(), root, args); !reflect.DeepEqual(env, userEngramQuiet) {
+				t.Fatalf("launch entries = %q, want %q", env, userEngramQuiet)
+			}
+			if _, started := userEngramWaitPID(t, home, 200*time.Millisecond); started {
+				t.Fatal("a server was started")
+			}
+			if _, err := os.Lstat(filepath.Join(home, ".engram")); !os.IsNotExist(err) {
+				t.Fatalf("the real HOME gained a store: %v", err)
+			}
+		})
+	}
+}
+
 func TestUserLaunchCommandAddsOnlyTheEngramDecision(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "shell")
 	t.Setenv("ENGRAM_URL", "http://caller.invalid")

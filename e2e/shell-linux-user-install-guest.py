@@ -987,6 +987,21 @@ def home_preservation_violations(before_entries, after_entries, original_profile
     return violations
 
 
+def drop_separate_companion(prefix):
+    """Only Separate carries the Engram companion; a stock shared prefix never has it."""
+    shutil.rmtree(os.path.join(prefix, 'lib/node_modules/gentle-engram'), ignore_errors=True)
+    for link in ('bin/pi-engram', 'lib/node_modules/.bin/pi-engram'):
+        if os.path.lexists(os.path.join(prefix, link)):
+            os.unlink(os.path.join(prefix, link))
+    hidden = os.path.join(prefix, 'lib/node_modules/.package-lock.json')
+    if os.path.isfile(hidden):
+        with open(hidden, 'rb') as handle:
+            lock = json.loads(handle.read())
+        if lock.get('packages', {}).pop('node_modules/gentle-engram', None) is not None:
+            with open(hidden, 'w') as handle:
+                handle.write(json.dumps(lock, indent=2) + '\n')
+
+
 def mvp_smoke(personal):
     source = os.environ.get('GENTLE_GUEST_SOURCE_SHA', '')
     require(len(source) == 40 and all(c in '0123456789abcdef' for c in source), 'exact candidate source revision missing')
@@ -1154,6 +1169,7 @@ def main():
         REPORT['upgradeRecovery'] = 'actual unknown cohort refused, full saved trees restored and authenticated retry observed'
         shared_prefix, shared_agent = WORK / 'shared-prefix', WORK / 'shared-agent'
         shutil.copytree(manifest['Prefix'], shared_prefix, symlinks=True)
+        drop_separate_companion(shared_prefix)
         shared_agent.mkdir(mode=0o700)
         (shared_agent / 'settings.json').write_text('{}\n')
         os.chmod(shared_prefix, 0o700)

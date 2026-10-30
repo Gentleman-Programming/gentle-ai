@@ -290,6 +290,44 @@ func userEngramReadHeader(path string) (uint32, bool) {
 	return userEngramHeaderVersion(header, opened.Size())
 }
 
+// userEngramQuiet is a version or help run's launch environment: memory
+// disabled without a notice, as bundled Shell forwards for those runs.
+var userEngramQuiet = []string{userEngramPolicyEnv + "=disabled"}
+
+// Pi 1.1.0 options that always take the next token as their value (Shell's
+// PI_VALUE_OPTIONS); options that skip a dash-led next token never hide a
+// version or help flag.
+var userEngramPiValueOptions = []string{"--provider", "--model", "--api-key", "--system-prompt", "--append-system-prompt", "--name", "-n", "--session",
+	"--session-id", "--fork", "--session-dir", "--models", "--tools", "-t", "--exclude-tools", "-xt", "--thinking", "--export", "--extension", "-e",
+	"--skill", "--prompt-template", "--theme"}
+
+// userEngramVersionOrHelp is Shell's piVersionOrHelpRequested: a version or
+// help token in flag position, before Pi's own "--" and not as another
+// option's value. Shell's own --version is the same token.
+func userEngramVersionOrHelp(argv []string) bool {
+	for i := 0; i < len(argv); i++ {
+		switch arg := argv[i]; {
+		case arg == "--":
+			return false
+		case arg == "--version" || arg == "-v" || arg == "--help" || arg == "-h":
+			return true
+		case slices.Contains(userEngramPiValueOptions, arg):
+			i++
+		}
+	}
+	return false
+}
+
+// userEngramLaunchDecision is the entry decision for a launch of root with
+// args: like bundled Shell, a version or help run never probes Engram, starts
+// a server or prints a notice.
+func userEngramLaunchDecision(ctx context.Context, root string, args []string) []string {
+	if userEngramVersionOrHelp(args) {
+		return userEngramQuiet
+	}
+	return userEngramLaunchEnv(ctx, root)
+}
+
 type userEngramLaunchKey struct{}
 
 // userEngramWithLaunch carries the launch's Engram entries, computed by

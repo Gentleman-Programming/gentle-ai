@@ -35,6 +35,50 @@ if (selection.Channel === 'main') {
 // (see reviewedSuppliers): an unreviewed `latest` falls back once to the newest
 // reviewed release, and every listed-version deviation fails closed.
 const pins = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
+// The Engram companion is an optional sixth root, declared at the exact pin
+// of the resolved gentle-pi (never `latest`) and only when that pins one.
+const companionName = 'gentle-engram';
+// gentle-pi pins its companion as bundled Shell declares it
+// (runtime/gentle-shell-bundled.mjs ENGRAM_COMPANION_SOURCE).
+function companionPin(text) {
+  const match = /^export const ENGRAM_COMPANION_SOURCE = "npm:gentle-engram@((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))";$/m.exec(text ?? '');
+  return match ? match[1] : null;
+}
+// The companion is declared exactly as bundled Shell declares it, and only
+// when the gentle-pi pin, the lock root and the installed package agree. Any
+// disagreement keeps the install and leaves Shell usable without memory.
+function companionDeclaration(pin, locked, installed) {
+  if (pin && locked === pin && installed === pin) return `npm:${companionName}@${pin}`;
+  if (pin || locked || installed) console.error(`Engram companion not declared: gentle-pi pins ${pin ?? 'none'}, lock ${locked ?? 'none'}, installed ${installed ?? 'none'}; Shell stays usable without memory`);
+  return null;
+}
+// The verified Engram core at the contract path <agent>\bin\engram.exe. Its
+// pin, download, digest and archive reading belong to the provisioned
+// gentle-pi; one without them, or any failure, skips memory instead of the install.
+async function publishEngramCore(gentle, bin, name, platform, arch, adapters = {}) {
+  let downloads, bundled;
+  try {
+    downloads = await import(pathToFileURL(path.join(gentle, 'scripts/installer-downloads.mjs')).href);
+    bundled = await import(pathToFileURL(path.join(gentle, 'scripts/bundled-install.mjs')).href);
+  } catch { /* An older gentle-pi ships neither module. */ }
+  if (typeof downloads?.artifactFor !== 'function' || typeof downloads.verifiedDownload !== 'function' || typeof bundled?.engramExecutable !== 'function') {
+    console.error('Engram core skipped: the installed gentle-pi pins no Engram core; Shell stays usable without memory');
+    return false;
+  }
+  try {
+    const descriptor = (adapters.artifact ?? downloads.artifactFor)('engram', platform, arch);
+    const executable = bundled.engramExecutable(await downloads.verifiedDownload('engram', adapters, platform, arch), descriptor);
+    if (!fs.existsSync(bin)) fs.mkdirSync(bin, { mode: 0o700 });
+    const target = path.join(bin, name), stage = path.join(bin, `.${name}-${crypto.randomUUID()}`);
+    absent(target);
+    exclusive(stage, executable);
+    fs.renameSync(stage, target);
+    return true;
+  } catch (error) {
+    console.error(`Engram core skipped: ${error.message}; Shell stays usable without memory`);
+    return false;
+  }
+}
 // Reviewed gentle-pi releases for the Windows stock lane, loaded from the
 // stage list the Go worker writes (gentle-pi-suppliers.json, schema
 // gentle-shell-reviewed-suppliers/v1): the live repository copy when its
@@ -230,19 +274,36 @@ function npmCommand(args, timeout = NPM_NETWORK_TIMEOUT) {
   }
 }
 const lockPath = path.join(source, 'package-lock.json');
+let companion = null;
 const lockInstall = ['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/'];
 // Root declaration: every stock root at `latest`, except a reviewed gentle-pi
 // fallback, which is pinned to its exact version.
-function rootDeclaration(names, gentlePi = 'latest') {
+function rootDeclaration(names, gentlePi = 'latest', companion = null) {
   const dependencies = Object.fromEntries(names.map(name => [name, name === 'gentle-pi' ? gentlePi : 'latest']));
+  if (companion) dependencies[companionName] = companion;
   return JSON.stringify({ name: 'gentle-shell-windows-private', private: true, version: '1.0.0', dependencies });
 }
 // Fallback rewrite before the single re-resolution: exclusive() writes with wx,
 // so the declaration is removed first, and the generated lock is discarded.
-function rewriteSupplierDeclaration(directory, names, fallback) {
+function rewriteSupplierDeclaration(directory, names, fallback, companion = null) {
   fs.unlinkSync(path.join(directory, 'package.json'));
   fs.unlinkSync(path.join(directory, 'package-lock.json'));
-  exclusive(path.join(directory, 'package.json'), rootDeclaration(names, fallback));
+  exclusive(path.join(directory, 'package.json'), rootDeclaration(names, fallback, companion));
+}
+// The companion pin is read once, from the resolved reviewed gentle-pi tarball
+// stock npm fetches into the private cache (npm ci reuses it), only after its
+// bytes match the locked SRI.
+function packedCompanionPin(version, integrity) {
+  const packed = path.join(root, 'tmp', `gentle-pi-${crypto.randomUUID()}`);
+  fs.mkdirSync(packed);
+  npmCommand(['pack', `gentle-pi@${version}`, `--pack-destination=${packed}`, '--ignore-scripts', '--registry=https://registry.npmjs.org/']);
+  const tarball = path.join(packed, `gentle-pi-${version}.tgz`), bytes = read(tarball);
+  if (`sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}` !== integrity) reject('stock native supplier source pin');
+  const member = spawnSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-xOzf', '-', 'package/runtime/gentle-shell-bundled.mjs'],
+    { input: bytes, env: process.env, shell: false, timeout: 60000, maxBuffer: 8388608, encoding: 'utf8', windowsHide: true });
+  fs.unlinkSync(tarball);
+  fs.rmdirSync(packed);
+  return member.status === 0 ? companionPin(member.stdout) : null;
 }
 if (action === 'install') {
   console.error('Windows install phase: provision-lock');
@@ -262,9 +323,22 @@ if (action === 'install') {
     npmCommand(lockInstall);
     await completeFile(lockPath);
   }
+  // Companion: a reviewed gentle-pi that pins one is re-resolved once at its
+  // exact version with the companion at that exact pin.
+  const locked = JSON.parse(read(lockPath)).packages['node_modules/gentle-pi'];
+  if (reviewedSupplierEntry(locked.version, locked.integrity, reviewedSuppliers())) {
+    companion = packedCompanionPin(locked.version, locked.integrity);
+    if (companion) {
+      console.error(`Windows install phase: provision-companion ${companionName}@${companion}`);
+      rewriteSupplierDeclaration(source, pins, locked.version, companion);
+      npmCommand(lockInstall);
+      await completeFile(lockPath);
+    }
+  }
 }
 const lockBytes = read(lockPath), lock = JSON.parse(lockBytes);
-const resolved = rootAuthorities(lock, pins);
+const roots = Object.hasOwn(lock?.packages?.['']?.dependencies ?? {}, companionName) ? [...pins, companionName] : pins;
+const resolved = rootAuthorities(lock, roots);
 // A listed version whose integrity differs from the reviewed entry never falls back.
 reviewedSupplierLock(action, mainOverlay, resolved['gentle-pi'], lock.packages['node_modules/gentle-pi'].integrity, reviewedSuppliers());
 for (const [relative, record] of Object.entries(lock.packages)) {
@@ -358,6 +432,13 @@ const gentleMetadata = JSON.parse(read(path.join(gentle, 'package.json')));
 if (piMetadata.bin?.pi !== 'dist/bundle/cli.js' || gentleMetadata.bin?.['gentle-shell'] !== 'bin/gentle-shell.mjs') reject('stock role bin metadata');
 read(path.join(modules, '@earendil-works/pi-coding-agent/dist/bundle/cli.js'));
 read(path.join(gentle, 'bin/gentle-shell.mjs'));
+// Engram companion (S1): the owned settings may carry exactly the locked
+// companion. Install declares it only through the agreement gate; verify
+// admits the owned declaration with or without it.
+const lockedCompanion = resolved[companionName] ? `npm:${companionName}@${resolved[companionName]}` : null;
+const declaredCompanion = action === 'install'
+  ? companionDeclaration(companion, resolved[companionName], lockedCompanion ? JSON.parse(read(path.join(modules, companionName, 'package.json'))).version : undefined)
+  : null;
 // Stock supplier pins authorize installation; Main source is bound by the frozen ZIP.
 if (action === 'install' || !mainOverlay) reviewedSupplierSources(gentle, resolved['gentle-pi'], reviewedSuppliers());
 if (action === 'install') {
@@ -381,8 +462,10 @@ if (config?.home !== 'isolated' || Object.keys(config).sort().join(',') !== 'hom
     !Number.isFinite(Date.parse(entry.at))) reject('owned Shell provisioning binding changed');
 const settingsPath = path.join(agent, 'settings.json');
 const settings = { packages: [path.join(finalRoot, 'prefix/node_modules/gentle-pi')], npmCommand: [path.join(finalRoot, 'runtime/node/node.exe'), path.join(finalRoot, 'runtime/node/node_modules/npm/bin/npm-cli.js'), '--prefix', path.join(finalRoot, 'prefix')] };
+if (declaredCompanion) settings.packages.push(declaredCompanion);
 if (action === 'install') exclusive(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 const observedSettings = JSON.parse(read(settingsPath));
+if (lockedCompanion && JSON.stringify(observedSettings?.packages) === JSON.stringify([...settings.packages, lockedCompanion])) settings.packages.push(lockedCompanion);
 // The stable Pi SettingsManager writes these typed scalars from changelog, model,
 // thinking-level and theme selection. A theme is a name lookup, never a path.
 // Packages, commands, resources, trust, redirection and telemetry stay refused.
@@ -404,4 +487,6 @@ if (observedSettings === null || typeof observedSettings !== 'object' || Array.i
   reject('owned package/settings bindings changed');
 }
 if (!read(lockPath).equals(lockBytes)) reject('source lock changed');
+// Memory is the companion and the core together: no core for no client.
+if (action === 'install' && declaredCompanion) await publishEngramCore(gentle, path.join(agent, 'bin'), 'engram.exe', 'win32', 'x64');
 console.log(`Windows stock composition verified; packages=${count}; registration and full Ready remain unqualified`);
