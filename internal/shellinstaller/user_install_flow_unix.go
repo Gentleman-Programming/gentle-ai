@@ -1299,7 +1299,7 @@ func userRootRiskBannerUID(stderr io.Writer, uid int) {
 
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	userRootRiskBanner(stderr)
-	ctx = userEngramLaunchScope(ctx, root)
+	ctx = userEngramLaunchScope(ctx, root, args)
 	manifest, err := userReadManifest(ctx, root)
 	if err != nil {
 		return err

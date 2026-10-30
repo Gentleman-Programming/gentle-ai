@@ -11,6 +11,27 @@ import (
 	"time"
 )
 
+func userEngramEntryEnv(ctx context.Context, root string, args []string) []string {
+	return userEngramContextEnv(userEngramLaunchContext(ctx, append([]string{"launch", root}, args...)))
+}
+
+// The outer entry decides for the Pi arguments of the launch: a version or
+// help run never reaches the decision, so it never probes or starts a
+// server, and its unit gets memory disabled without a notice.
+func TestUserEngramLinuxVersionAndHelpLaunchesNeverDecide(t *testing.T) {
+	roots := userEngramObserveDecisions(t)
+	for _, args := range userEngramQuietArgs {
+		if env := userEngramEntryEnv(context.Background(), "/owned", args); !reflect.DeepEqual(env, userEngramQuiet) || len(*roots) != 0 {
+			t.Fatalf("%q forwarded %q after deciding for %q", args, env, *roots)
+		}
+	}
+	for i, args := range userEngramDecidingArgs {
+		if env := userEngramEntryEnv(context.Background(), "/owned", args); !reflect.DeepEqual(env, []string{"ENGRAM_URL=decided"}) || len(*roots) != i+1 {
+			t.Fatalf("%q forwarded %q after deciding for %q", args, env, *roots)
+		}
+	}
+}
+
 func TestUserEngramLaunchContextOnlyForLaunch(t *testing.T) {
 	original := userEngramLaunchEnv
 	t.Cleanup(func() { userEngramLaunchEnv = original })
@@ -41,7 +62,7 @@ func TestUserEngramLinuxWorkerForwardsOnlyEngramEntries(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "shell")
 	manifest := userManifest{Mode: "separate", Prefix: filepath.Join(root, "prefix"), Agent: filepath.Join(root, "agent")}
 	baseline := append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0")
-	got := userLaunchCommand(userEngramLaunchScope(context.Background(), root), root, manifest, "/not-executed/cli.js", nil).Env
+	got := userLaunchCommand(userEngramLaunchScope(context.Background(), root, nil), root, manifest, "/not-executed/cli.js", nil).Env
 	if want := append(append([]string{}, baseline...), "ENGRAM_URL="+userEngramDefaultURL, "ENGRAM_STARTUP_POLICY=allow"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("worker launch env = %q, want %q", got, want)
 	}
@@ -108,7 +129,7 @@ func TestUserEngramLinuxWorkerWithoutDecisionDisablesSeparateMemory(t *testing.T
 	userEngramClearEnv(t)
 	root := filepath.Join(t.TempDir(), "shell")
 	manifest := userManifest{Mode: "separate", Prefix: filepath.Join(root, "prefix"), Agent: filepath.Join(root, "agent")}
-	env := userLaunchCommand(userEngramLaunchScope(context.Background(), root), root, manifest, "/not-executed/cli.js", nil).Env
+	env := userLaunchCommand(userEngramLaunchScope(context.Background(), root, nil), root, manifest, "/not-executed/cli.js", nil).Env
 	if userEngramPolicy(env) != "disabled" {
 		t.Fatalf("worker env without a decision = %q, want policy disabled", env)
 	}

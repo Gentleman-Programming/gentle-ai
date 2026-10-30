@@ -16,8 +16,8 @@ func userEngramLaunchContext(ctx context.Context, args []string) context.Context
 	if len(args) < 2 || args[0] != "launch" {
 		return ctx
 	}
-	root := args[1]
-	return userEngramWithLaunch(ctx, func() []string { return userEngramUnitSafe(userEngramLaunchEnv(ctx, root)) })
+	root, pi := args[1], args[2:]
+	return userEngramWithLaunch(ctx, func() []string { return userEngramUnitSafe(userEngramLaunchDecision(ctx, root, pi)) })
 }
 
 // userEngramUnitSafe keeps credentials off the systemd-run command line,
@@ -50,6 +50,6 @@ func userEngramArgvNotice(key string) string {
 // userEngramLaunchScope is the worker side: inside the unit the environment
 // is exactly the list the outer entry built, so its Engram entries are the
 // outer decision (or the user's own selection) and nothing else.
-func userEngramLaunchScope(ctx context.Context, _ string) context.Context {
+func userEngramLaunchScope(ctx context.Context, _ string, _ []string) context.Context {
 	return userEngramWithLaunch(ctx, func() []string { return userEngramForwarded(os.LookupEnv) })
 }
