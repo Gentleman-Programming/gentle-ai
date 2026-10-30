@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -52,6 +53,66 @@ func indentedJSON(t *testing.T, value any) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func TestIssue5182SyncPreservesUnownedNativeProfiles(t *testing.T) {
+	for _, extension := range []string{"json", "jsonc"} {
+		t.Run(extension, func(t *testing.T) {
+			home := t.TempDir()
+			setSyncTestHome(t, home)
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			t.Setenv("OPENCODE_CONFIG_DIR", "")
+			stubOpenCodeRuntimeVersion(t, home, "1.18.30")
+			released := releasedSDDRender(t, "opencode-prompt-sdd-apply.md")
+			t.Chdir(t.TempDir())
+			settings := filepath.Join(opencodeagent.ConfigPath(home), "opencode."+extension)
+			document := []byte("{\n  \"agents\": {\"jd-reviewer\": {\"permissions\": {\"task\": \"deny\"}, \"system\": \"User profile\"}}\n}\n")
+			mustWriteFile(t, settings, document)
+			prompt := filepath.Join(opencodeagent.ConfigPath(home), "prompts", "sdd", "sdd-apply.md")
+			mustWriteFile(t, prompt, released)
+			configFiles := func() map[string]string {
+				t.Helper()
+				files := map[string]string{}
+				err := filepath.WalkDir(opencodeagent.ConfigPath(home), func(path string, entry os.DirEntry, err error) error {
+					if err != nil {
+						return err
+					}
+					if !entry.IsDir() {
+						files[path] = readTextFile(t, path)
+					}
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return files
+			}
+			before := configFiles()
+			result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
+			if err == nil {
+				t.Error("expected compatibility refusal for unowned native agents on V1")
+			} else {
+				for _, part := range []string{fmt.Sprintf("%q", settings), "OpenCode V1", "agents", "manual", "unchanged"} {
+					if !strings.Contains(err.Error(), part) {
+						t.Errorf("diagnostic %q missing %q", err, part)
+					}
+				}
+			}
+			if got := readTextFile(t, settings); got != string(document) {
+				t.Error("refusal changed stored configuration bytes")
+			}
+			if got, err := os.ReadFile(prompt); err != nil || string(got) != string(released) {
+				t.Errorf("refusal changed owned prompt: %v", err)
+			}
+			if !reflect.DeepEqual(configFiles(), before) {
+				t.Error("refusal mutated OpenCode config files")
+			}
+			if len(result.ChangedFiles) != 0 {
+				t.Errorf("refusal reported mutations: %v", result.ChangedFiles)
+			}
+		})
+	}
 }
 
 var userSDDInit = map[string]any{"mode": "subagent", "description": "My own init", "prompt": "Initialize the way I like."}
