@@ -156,6 +156,61 @@ func TestUserWindowsAcquireStoresVerifiedCacheAndHitsIt(t *testing.T) {
 	}
 }
 
+// TestUserWindowsAcquireBypassesSeededCacheForOverlappingDestination pins that
+// acquire forwards the installation destination to the cache lookup: when the
+// destination contains the cache, a verified seeded entry must not be served
+// and the acquire must reach the network instead.
+func TestUserWindowsAcquireBypassesSeededCacheForOverlappingDestination(t *testing.T) {
+	cache := userWindowsCacheFixture(t)
+	// %LOCALAPPDATA%\gentle-shell: the destination that contains the cache.
+	destination := filepath.Dir(filepath.Dir(cache))
+	data, _ := userWindowsZipFixture(t, "fixture/fd.exe")
+	artifact := userWindowsCacheArtifact(data, "https://127.0.0.1:1/fixture.zip") // Refused instantly when the bypass holds.
+	userWindowsCacheSeed(t, cache, artifact, data)
+	target := filepath.Join(t.TempDir(), "fixture.zip")
+	if _, err := userWindowsAcquire(context.Background(), artifact, target, destination); err == nil {
+		t.Fatal("verified cache entry was served for an overlapping destination")
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("bypassed acquire wrote the target: %v", err)
+	}
+	if seeded, err := os.ReadFile(filepath.Join(cache, artifact.Archive)); err != nil || !bytes.Equal(seeded, data) {
+		t.Fatalf("bypass modified the seeded cache entry: %v", err)
+	}
+}
+
+// TestUserWindowsAcquireDoesNotStoreForOverlappingDestination pins that acquire
+// forwards the installation destination to the cache store: a fresh download
+// for an overlapping destination must succeed without creating the cache, so a
+// destination the cache would have created stays absent for the mandatory
+// pre-publication re-inspection.
+func TestUserWindowsAcquireDoesNotStoreForOverlappingDestination(t *testing.T) {
+	cache := userWindowsCacheFixture(t)
+	// %LOCALAPPDATA%\gentle-shell: the destination that contains the cache.
+	destination := filepath.Dir(filepath.Dir(cache))
+	data, _ := userWindowsZipFixture(t, "fixture/fd.exe")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if _, err := w.Write(data); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	artifact := userWindowsCacheArtifact(data, server.URL+"/fixture.zip")
+	target := filepath.Join(t.TempDir(), "fixture.zip")
+	got, err := userWindowsAcquire(context.Background(), artifact, target, destination)
+	if err != nil || !bytes.Equal(got, data) || requests != 1 {
+		t.Fatalf("download for an overlapping destination failed: requests=%d err=%v", requests, err)
+	}
+	if written, err := os.ReadFile(target); err != nil || !bytes.Equal(written, data) {
+		t.Fatalf("download did not write the requested target: %v", err)
+	}
+	if _, err := os.Lstat(cache); !os.IsNotExist(err) {
+		t.Fatalf("acquire created the cache under an overlapping destination: %v", err)
+	}
+}
+
 func TestUserWindowsAcquireSurvivesHostileCachePath(t *testing.T) {
 	// A regular file occupies the cache directory path: cache custody is
 	// bad, so caching must be bypassed entirely while the install itself
