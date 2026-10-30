@@ -18,7 +18,7 @@ func TestWithPostInstallNotesNamesARunnableRetryCommandOnFailure(t *testing.T) {
 	report := verify.Report{Ready: false, FinalNote: verify.VerificationIssuesMessage}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}}
 
-	updated := withPostInstallNotes(report, resolved)
+	updated := withPostInstallNotes(report, resolved, false)
 
 	if strings.Contains(updated.FinalNote, "repair") {
 		t.Fatalf("FinalNote still names the nonexistent repair command: %q", updated.FinalNote)
@@ -36,7 +36,7 @@ func TestWithPostInstallNotesFailureFallsBackWithoutAgents(t *testing.T) {
 	report := verify.Report{Ready: false, FinalNote: verify.VerificationIssuesMessage}
 	resolved := planner.ResolvedPlan{}
 
-	updated := withPostInstallNotes(report, resolved)
+	updated := withPostInstallNotes(report, resolved, false)
 	if updated.FinalNote != verify.VerificationIssuesMessage {
 		t.Fatalf("FinalNote = %q, want unchanged generic fallback", updated.FinalNote)
 	}
@@ -50,7 +50,7 @@ func TestWithPostInstallNotesDoesNotOverrideACustomizedFailureNote(t *testing.T)
 	report := verify.Report{Ready: false, FinalNote: "custom failure text"}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentClaudeCode}}
 
-	updated := withPostInstallNotes(report, resolved)
+	updated := withPostInstallNotes(report, resolved, false)
 	if updated.FinalNote != "custom failure text" {
 		t.Fatalf("FinalNote changed unexpectedly: %q", updated.FinalNote)
 	}
