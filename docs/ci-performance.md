@@ -1,13 +1,15 @@
-# CI benchmark parallelism
+# CI resilience without weaker checks
 
-The required **Unit Tests** status aggregates Go formatting, root unit tests and benchmark evidence. Root tests and benchmark checks start independently; the aggregate fails unless all three jobs succeed, including when a prerequisite is skipped or cancelled.
+CI keeps its original job topology, required names, unit/dead-code checks and complete benchmark evidence. No native, race, fresh-install or benchmark assertions are removed.
 
-The benchmark job builds its binaries from the exact event candidate and retains the module build, vet, tests and journey evidence assertions. No artifact from another run is used. Other required platform and distribution jobs are unchanged.
+## Avoid obsolete work and bound stalled setup
 
-The benchmark change targets the critical path without changing coverage or cache keys/trust. Its actual impact and hosted-run behavior require exact-commit CI comparisons; local checks alone do not prove a speedup or delivery readiness.
+Only superseded `pull_request` runs cancel. The group includes workflow, event and PR number; non-PR events use unique run IDs, so main, scheduled and manual runs do not replace each other.
 
-## Superseded PRs and bounded setup
+Cache segments have a two-minute download limit. Every Go setup step has a four-minute fail-closed limit. A cache miss never skips tests, and there is no failure tolerance. These bounds limit failure feedback; they do not prove that the upstream egress/cache stall is fixed or that successful CI is faster. Cache identity, publication policy, pins and permission scopes stay unchanged.
 
-Only a newer run of the same pull request cancels its predecessor. Push, schedule and manual runs have unique concurrency groups and are not cancelled by this policy.
+## Measured experiment, not delivered
 
-Cache segments use the supported two-minute download timeout. Each Go setup step has a four-minute hard limit and does not tolerate failure: unavailable setup cannot turn unexecuted tests green. These limits bound failure feedback; they neither diagnose the previously unexplained silent interval nor count a failed run as a performance improvement.
+An isolated benchmark-job trial passed all checks but did not establish a successful-CI speedup: fresh baseline 600 seconds; parallel candidates 581 and 617 seconds (mean 599). Root-test variability was substantial. The added jobs and aggregate were therefore removed before merge; all original benchmark commands and assertions remain in `Unit Tests`.
+
+Observed cancellation, independent checks and exact-head hosted CI are recorded in the pull request. Cancelled or failed runs are not successful timing samples. Future acceleration needs representative measurements, not a shorter aggregate-only job.

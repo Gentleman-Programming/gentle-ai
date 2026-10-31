@@ -47,9 +47,8 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 		"        if: needs.go-format.result != 'success'\n" +
 		"        run: exit 1\n"
 
-	// Unit Tests uses an aggregate rather than this step guard; its format
-	// failure behavior is exercised by TestCIAggregateFailsClosedForEveryBranchOutcome.
 	jobs := []struct{ id, next string }{
+		{id: "unit-tests", next: "windows-runtime"},
 		// The sharded Windows full suite is deliberately NOT here: it lives in
 		// its own workflow while the pre-existing Windows failures it exposed
 		// are paid down, so it is not one of ci.yml's required checks and owes
