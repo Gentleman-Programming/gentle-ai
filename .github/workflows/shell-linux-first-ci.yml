@@ -198,3 +198,23 @@ jobs:
           print('GUEST-RAW-BASE64:'+base64.b64encode(raw).decode('ascii'))
           raise SystemExit(int(sys.argv[2]))
           PY
+      # Failure diagnosis: the bounded log keeps only tails, so retain the whole
+      # raw worker outputs as artifacts when the lane fails. Never uploaded on
+      # success; short retention keeps them bounded in time.
+      - name: Retain raw worker outputs for failure diagnosis
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -m 700 qualification-raw
+          for raw in user-build.raw primitives.raw user-guest.raw; do
+            test -e "$RUNNER_TEMP/$raw" && cp "$RUNNER_TEMP/$raw" qualification-raw/ || true
+          done
+      - name: Upload raw worker outputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-qualification-raw-outputs
+          path: qualification-raw/
+          if-no-files-found: ignore
+          retention-days: 7
