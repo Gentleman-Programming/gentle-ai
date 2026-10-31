@@ -127,6 +127,10 @@ case "${1:-}" in
     printf 'engram e2e-shim\n'
     exit 0
     ;;
+  instance-id)
+    printf 'e2e-shim-instance-id\n'
+    exit 0
+    ;;
   *)
     exit 0
     ;;
