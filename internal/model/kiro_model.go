@@ -21,24 +21,21 @@ const (
 // in the `model:` field of a custom agent frontmatter.
 //
 // Kiro model IDs do not include a provider prefix — they are passed directly
-// as the `model` key in ~/.kiro/agents/*.md frontmatter. The opus and sonnet
-// aliases track the newest Claude generation Kiro offers.
+// as the `model` key in ~/.kiro/agents/*.md frontmatter. Every non-auto ID
+// below appears in `kiro-cli chat --list-models` (kiro-cli 2.34.2).
+//
+// Kiro rejects an agent whose pinned model is unknown or unavailable instead
+// of falling back, so an alias without a verified ID resolves to auto. That
+// covers opus, sonnet, luna, terra, and sol (Claude Opus 5.5, Claude Sonnet
+// 5.5, and GPT-5.6 Luna, Terra, and Sol): Kiro publishes only their display
+// names, and --list-models shows them only to paid plans. Unknown aliases
+// resolve to auto as well.
 //
 // References: https://kiro.dev/docs/models/
 func KiroModelID(alias KiroModelAlias) string {
 	switch alias {
-	case KiroModelAuto:
-		return "auto"
-	case KiroModelOpus:
-		return "claude-opus-5.5"
 	case KiroModelHaiku:
 		return "claude-haiku-4.5"
-	case KiroModelLuna:
-		return "gpt-5.6-luna"
-	case KiroModelTerra:
-		return "gpt-5.6-terra"
-	case KiroModelSol:
-		return "gpt-5.6-sol"
 	case KiroModelMiniMax:
 		return "minimax-m2.5"
 	case KiroModelGLM:
@@ -48,10 +45,13 @@ func KiroModelID(alias KiroModelAlias) string {
 	case KiroModelQwen:
 		return "qwen3-coder-next"
 	default:
-		return "claude-sonnet-5.5"
+		return "auto"
 	}
 }
 
+// Presets name the models they are designed for, even while KiroModelID
+// still resolves some of them to auto.
+//
 // Presets never assign GPT-5.6 Sol or Terra: Sol is among Kiro's most
 // expensive models and Terra costs more than Opus 5.5 while trailing it.
 // Both stay selectable in the custom picker.

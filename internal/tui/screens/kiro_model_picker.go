@@ -259,9 +259,14 @@ func kiroAliasCycle() string {
 }
 
 // kiroAliasTag shows the Kiro model ID the alias resolves to, highlighting
-// the highest-credit models.
+// the highest-credit models and aliases that fall back to auto until their
+// model ID is verified.
 func kiroAliasTag(alias model.KiroModelAlias) string {
-	tag := "[" + model.KiroModelID(alias) + "]"
+	id := model.KiroModelID(alias)
+	if id == string(model.KiroModelAuto) && alias != model.KiroModelAuto {
+		return styles.SubtextStyle.Render("[auto: ID pending]")
+	}
+	tag := "[" + id + "]"
 	switch alias {
 	case model.KiroModelOpus, model.KiroModelTerra, model.KiroModelSol:
 		return styles.WarningStyle.Render(tag)

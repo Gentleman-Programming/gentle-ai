@@ -8,18 +8,19 @@ func TestKiroModelID(t *testing.T) {
 		want  string
 	}{
 		{KiroModelAuto, "auto"},
-		{KiroModelOpus, "claude-opus-5.5"},
-		{KiroModelSonnet, "claude-sonnet-5.5"},
 		{KiroModelHaiku, "claude-haiku-4.5"},
-		{KiroModelLuna, "gpt-5.6-luna"},
-		{KiroModelTerra, "gpt-5.6-terra"},
-		{KiroModelSol, "gpt-5.6-sol"},
 		{KiroModelMiniMax, "minimax-m2.5"},
 		{KiroModelGLM, "glm-5"},
 		{KiroModelDeepSeek, "deepseek-3.2"},
 		{KiroModelQwen, "qwen3-coder-next"},
-		{"unknown", "claude-sonnet-5.5"},
-		{"", "claude-sonnet-5.5"},
+		// Paid-plan models without a verified Kiro model ID resolve to auto.
+		{KiroModelOpus, "auto"},
+		{KiroModelSonnet, "auto"},
+		{KiroModelLuna, "auto"},
+		{KiroModelTerra, "auto"},
+		{KiroModelSol, "auto"},
+		{"unknown", "auto"},
+		{"", "auto"},
 	}
 	for _, tt := range tests {
 		if got := KiroModelID(tt.alias); got != tt.want {

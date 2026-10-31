@@ -112,13 +112,13 @@ func TestHandleKiroModelPickerNav_CustomCyclesAcrossKiroOptions(t *testing.T) {
 func TestRenderKiroCustomPicker_ShowsKiroModelIDs(t *testing.T) {
 	state := NewKiroModelPickerState()
 	HandleKiroModelPickerNav("enter", &state, 4)
-	state.CustomAssignments["odd-explorer"] = model.KiroModelTerra
+	state.CustomAssignments["odd-explorer"] = model.KiroModelGLM
 	out := RenderKiroModelPicker(state, 0)
 
 	if !strings.Contains(out, "auto → opus → sonnet → haiku → luna → terra → sol → minimax → glm → deepseek → qwen") {
 		t.Fatalf("expected full Kiro cycle in help text, got:\n%s", out)
 	}
-	for _, want := range []string{"[gpt-5.6-luna]", "[claude-sonnet-5.5]", "[gpt-5.6-terra]"} {
+	for _, want := range []string{"[glm-5]", "[auto]", "[auto: ID pending]"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected model tag %q in output, got:\n%s", want, out)
 		}

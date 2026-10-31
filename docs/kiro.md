@@ -83,16 +83,18 @@ The `model` value is injected during sync from Kiro model assignments, keyed by 
 | Alias | Kiro model ID |
 |-------|---------------|
 | `auto` | `auto` |
-| `opus` | `claude-opus-5.5` |
-| `sonnet` | `claude-sonnet-5.5` |
 | `haiku` | `claude-haiku-4.5` |
-| `luna` | `gpt-5.6-luna` |
-| `terra` | `gpt-5.6-terra` |
-| `sol` | `gpt-5.6-sol` |
 | `minimax` | `minimax-m2.5` |
 | `glm` | `glm-5` |
 | `deepseek` | `deepseek-3.2` |
 | `qwen` | `qwen3-coder-next` |
+| `opus` | `auto` (Claude Opus 5.5; ID pending) |
+| `sonnet` | `auto` (Claude Sonnet 5.5; ID pending) |
+| `luna` | `auto` (GPT-5.6 Luna; ID pending) |
+| `terra` | `auto` (GPT-5.6 Terra; ID pending) |
+| `sol` | `auto` (GPT-5.6 Sol; ID pending) |
+
+Every model ID in this table comes from `kiro-cli chat --list-models`. Kiro publishes only display names for Claude Opus 5.5, Claude Sonnet 5.5, and the GPT-5.6 tiers, and lists them only for paid plans. Kiro does not fall back when an agent pins a model that is unknown or unavailable: the agent's prompt fails. So those aliases write `model: auto` until their IDs are confirmed from a paid-plan listing. The picker marks them `[auto: ID pending]`. Unknown aliases also resolve to `auto`.
 
 The model presets never assign GPT-5.6 Sol or Terra; both stay available in the custom picker.
 
@@ -103,7 +105,7 @@ The model presets never assign GPT-5.6 Sol or Terra; both stay available in the 
 | `economy` | Luna / Luna | Luna | Luna |
 | `open-weight` | GLM-5 / Qwen3 Coder Next | Qwen3 Coder Next | Qwen3 Coder Next |
 
-`balanced`, `performance`, and `economy` assign models that require a paid Kiro plan (Claude Opus 5.5, Claude Sonnet 5.5, and GPT-5.6 Luna). On Kiro Free, use `open-weight`, or use `custom` with Free-plan models (`auto`, `minimax`, `glm`, `deepseek`, `qwen`). See [Kiro models](https://kiro.dev/docs/models/) for current plan availability.
+The preset table names the models each preset is designed for. `balanced`, `performance`, and `economy` are built around models that require a paid Kiro plan (Claude Opus 5.5, Claude Sonnet 5.5, and GPT-5.6 Luna), so those roles currently resolve to `auto`. For pinned models on Kiro Free, use `open-weight`, or use `custom` with Free-plan models (`auto`, `haiku`, `minimax`, `glm`, `deepseek`, `qwen`). See [Kiro models](https://kiro.dev/docs/models/) for current plan availability.
 
 ---
 

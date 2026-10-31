@@ -244,8 +244,8 @@ func TestAdapter_EmbeddedSubAgentsDir(t *testing.T) {
 
 func TestAdapter_KiroModelID(t *testing.T) {
 	// The alias-to-ID table is owned by model.KiroModelID; the adapter only delegates.
-	if got := NewAdapter().KiroModelID(model.KiroModelLuna); got != "gpt-5.6-luna" {
-		t.Errorf("KiroModelID(luna) = %q, want gpt-5.6-luna", got)
+	if got := NewAdapter().KiroModelID(model.KiroModelGLM); got != "glm-5" {
+		t.Errorf("KiroModelID(glm) = %q, want glm-5", got)
 	}
 }
 
