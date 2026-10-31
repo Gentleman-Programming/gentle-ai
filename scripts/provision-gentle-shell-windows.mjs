@@ -379,6 +379,67 @@ for (const [relative, record] of Object.entries(lock.packages)) {
   if (previous && (!previous.bytes.equals(bytes) || previous.integrity !== record.integrity)) reject('ambiguous acquired source');
   authority.set(key, { directory: path.dirname(metadata), bytes, integrity: record.integrity });
 }
+// Main overlay composition: every expectation is read from the frozen
+// publisher snapshot's own metadata, never embedded in this installer. A
+// snapshot released after this build therefore installs unchanged, and any
+// refusal names the exact expected and staged values.
+// Minimal, fail-closed range satisfaction: `*` and `>=x.y.z` only. Any other
+// range shape is reported as unsupported instead of guessed.
+function satisfiesVersionRange(version, range) {
+  if (range === '*') return true;
+  const required = /^>=\s*(\d+)\.(\d+)\.(\d+)$/.exec(String(range));
+  if (!required) return undefined;
+  const actual = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(version));
+  if (!actual) return undefined;
+  for (let index = 0; index < 3; ++index) {
+    const left = Number(actual[index + 1]), right = Number(required[index + 1]);
+    if (left !== right) return left > right;
+  }
+  return true;
+}
+// Staged-graph peer lookup: top-level hoisted packages only, a scoped peer at
+// its two-component directory. Absent resolves to null; a malformed name
+// resolves to undefined so the caller refuses explicitly.
+function stagedPeerVersion(fs, path, read, modules, name) {
+  const segments = String(name).split('/');
+  if (segments.length > 2 || segments.some(segment => segment === '' || segment === '.' || segment === '..') ||
+      (segments.length === 2) !== name.startsWith('@')) return undefined;
+  const metadata = path.join(modules, ...segments, 'package.json');
+  if (!fs.existsSync(metadata)) return null;
+  return JSON.parse(read(metadata)).version;
+}
+// The staged overlay must carry the frozen snapshot's own metadata and every
+// peer the snapshot declares must be present and satisfied in the staged graph
+// (optional peers per peerDependenciesMeta may be absent). Version identity
+// with the locked reviewed gentle-pi keeps the overlay bound to the reviewed
+// stock resolution.
+function mainOverlayComposition(record, frozen, lockVersion, peers, reject) {
+  if (record?.name !== 'gentle-pi' || record.version !== frozen.version || record.engines?.node !== frozen.engines?.node ||
+      JSON.stringify(record.dependencies) !== JSON.stringify(frozen.dependencies))
+    return reject(`Main overlay metadata differs from the frozen snapshot (staged ${record?.version}, frozen ${frozen.version}, lock ${lockVersion})`);
+  if (record.version !== lockVersion) return reject(`Main overlay version ${record.version} is not the locked reviewed gentle-pi ${lockVersion}`);
+  const optional = frozen.peerDependenciesMeta ?? {};
+  for (const [name, range] of Object.entries(frozen.peerDependencies ?? {})) {
+    const installed = peers(name);
+    if (installed === null && optional[name]?.optional === true) continue;
+    if (installed === null) return reject(`Main overlay peer ${name}@${range} is absent from the staged graph`);
+    const satisfied = satisfiesVersionRange(installed, range);
+    if (satisfied === undefined) return reject(`Main overlay peer ${name}@${JSON.stringify(range)} declares an unsupported range (staged ${name}@${installed})`);
+    if (!satisfied) return reject(`Main overlay peer ${name}@${range} is unsatisfied by the staged ${name}@${installed}`);
+  }
+}
+// Fail fast: the frozen snapshot must run on the node runtime this installer
+// ships, before any further overlay work. Unknown engines shapes refuse
+// explicitly instead of guessing.
+if (mainOverlay) {
+  const staged = authority.get(`gentle-pi@${resolved['gentle-pi']}`);
+  if (staged) {
+    const required = JSON.parse(staged.bytes).engines?.node;
+    const satisfied = required === undefined ? true : satisfiesVersionRange(process.versions.node, required);
+    if (satisfied === undefined) reject(`Main snapshot engine ${JSON.stringify(required)} is unsupported by this installer (node ${process.versions.node})`);
+    if (!satisfied) reject(`Main snapshot requires node ${required}; this installer ships node ${process.versions.node}`);
+  }
+}
 let count = 0, compared = 0, bytes = 0;
 function compare(actual, original, gentle = false) {
   const names = directory => fs.readdirSync(directory).filter(name => name !== 'node_modules' && !(gentle && name === '.gentle-ai')).sort();
@@ -410,10 +471,9 @@ function packages(directory) {
     if (mainOverlay && absolute === path.join(modules, 'gentle-pi')) {
       // Go has compared every Main source member/set against the retained ZIP.
       // Its authority is the frozen publisher snapshot, not this npm SRI record.
-      const peers = { '@earendil-works/pi-coding-agent': '>=0.99.1', '@earendil-works/pi-ai': '*', '@earendil-works/pi-tui': '*', typebox: '*' };
-      if (!acquired || record.name !== 'gentle-pi' || record.version !== resolved['gentle-pi'] || record.engines?.node !== '>=22.19.0' ||
-          JSON.stringify(record.dependencies) !== JSON.stringify(JSON.parse(acquired.bytes).dependencies) ||
-          Object.keys(record.peerDependencies ?? {}).length !== 4 || Object.entries(peers).some(([name, range]) => record.peerDependencies?.[name] !== range)) reject('unsupported Main dependency/native composition');
+      if (!acquired) reject(`Main overlay identity (staged ${record.name}@${record.version} is not the locked reviewed gentle-pi ${resolved['gentle-pi']})`);
+      mainOverlayComposition(record, JSON.parse(acquired.bytes), resolved['gentle-pi'],
+        name => stagedPeerVersion(fs, path, read, modules, name), reject);
     } else {
       if (!acquired || !metadata.equals(acquired.bytes)) reject('global unauthenticated metadata');
       // A successful materializeGlobal already proved the copied tree equals
