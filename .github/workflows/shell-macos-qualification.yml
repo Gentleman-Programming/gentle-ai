@@ -9,6 +9,7 @@ on:
     paths:
       - 'internal/shellinstaller/**'
       - 'internal/cli/shell_install*'
+      - 'internal/tui/**'
       - 'scripts/bootstrap-gentle-shell-private-node.sh'
       - 'scripts/provision-gentle-shell-private-global.mjs'
       - 'scripts/runtime_helpers.go'
@@ -29,6 +30,7 @@ on:
     paths:
       - 'internal/shellinstaller/**'
       - 'internal/cli/shell_install*'
+      - 'internal/tui/**'
       - 'scripts/bootstrap-gentle-shell-private-node.sh'
       - 'scripts/provision-gentle-shell-private-global.mjs'
       - 'scripts/runtime_helpers.go'
@@ -101,6 +103,10 @@ jobs:
       - name: Run native CLI shell tests
         timeout-minutes: 4
         run: go test ./internal/cli -run Shell -count=1
+
+      - name: Run native TUI tests
+        timeout-minutes: 4
+        run: go test ./internal/tui/... -count=1
 
       - name: Check qualification workflow contract
         timeout-minutes: 1

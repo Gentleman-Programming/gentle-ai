@@ -150,6 +150,9 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
         COMMAND_FAILURE = {**evidence, 'nulBytes': raw.count(b'\0'),
                            'stdoutBytes': len(out), 'stdoutSHA256': hashlib.sha256(out).hexdigest(),
                            'stderrBytes': len(error), 'stderrSHA256': hashlib.sha256(error).hexdigest()}
+        if b'\0' not in raw:
+            COMMAND_FAILURE.update(stdoutTailBase64=base64.b64encode(out[-600:]).decode('ascii'),
+                                   stderrTailBase64=base64.b64encode(error[-600:]).decode('ascii'))
         raise RuntimeError('whole raw command output withheld: byte/NUL bound')
     text = raw.decode('utf-8', 'strict')
     if (child.returncode == 0) != good:
@@ -348,11 +351,48 @@ def acquisition_fault(target, cleanup=False):
     FAULT_SEEN.clear()
     FAULT_RELEASE.clear()
     FAULT = 'node-cleanup' if cleanup else 'node-cancel'
-    env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp')}
-    child = subprocess.Popen(args + ['--confirm', token], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-    stage = None
+    env = {'PATH': '/usr/local/bin:/usr/bin:/bin:/work/personal/prefix/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'),
+           'PYTHONDONTWRITEBYTECODE': '1', 'TERM': 'xterm-256color',
+           'XDG_RUNTIME_DIR': '/run/user/1002', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1002/bus'}
+    out_path = WORK / 'tmp' / 'acquisition.out'
+    err_path = WORK / 'tmp' / 'acquisition.err'
+    started = time.monotonic()
+    child = None
     try:
-        require(FAULT_SEEN.wait(timeout=min(20, remaining())), 'actual cold acquisition not observed')
+        with out_path.open('wb') as out_file, err_path.open('wb') as err_file:
+            child = subprocess.Popen(args + ['--confirm', token], env=env, cwd=WORK, stdin=subprocess.DEVNULL,
+                                     stdout=out_file, stderr=err_file, start_new_session=True)
+            exit_note = ''
+            while not FAULT_SEEN.wait(timeout=1.0):
+                code = child.poll()
+                if code is not None:
+                    exit_note = ' installer exited %d after %.1fs' % (code, time.monotonic() - started)
+                    break
+                if time.monotonic() - started > min(90, remaining()):
+                    break
+            if not FAULT_SEEN.is_set():
+                # Barrier not satisfied: the installer never reached the node
+                # fixture request. Kill the whole session (the supervisor
+                # spawns helper children) and read the redirected output files
+                # so the failure record carries real evidence, not a timeout.
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except Exception:
+                    pass
+                child.wait(timeout=10)
+                out_file.flush(); err_file.flush()
+            raw = out_path.read_bytes()[-800:] + b' || ' + err_path.read_bytes()[-800:]
+            detail = raw.decode('utf-8', 'replace').replace('\n', ' | ')
+            evidence = []
+            for stage_dir in sorted(target.parent.glob('.gentle-*')):
+                for item in sorted(stage_dir.rglob('*.json')):
+                    try:
+                        evidence.append(item.name + '=' + item.read_text()[:400])
+                    except Exception:
+                        pass
+                if len(evidence) >= 4:
+                    break
+            require(FAULT_SEEN.is_set(), 'actual cold acquisition not observed;%s output=%r evidence=%s' % (exit_note, detail, ' ; '.join(evidence)[:1200]))
         stages = list(target.parent.glob('.gentle-user-*'))
         require(len(stages) == 1 and stages[0].is_dir() and stages[0].lstat().st_uid == 1002, 'owned acquisition stage differs')
         stage = stages[0]
@@ -361,8 +401,8 @@ def acquisition_fault(target, cleanup=False):
         else:
             child.send_signal(signal.SIGINT)
         FAULT_RELEASE.set()
-        out, error = child.communicate(timeout=min(40, remaining()))
-        raw = out + error
+        child.wait(timeout=min(40, remaining()))
+        raw = out_path.read_bytes() + err_path.read_bytes()
         require(len(raw) < 4096 and b'\0' not in raw, 'fault command raw output withheld')
         text = raw.decode('utf-8', 'strict')
         require(child.returncode != 0 and not target.exists(), 'fault published or reported success')
@@ -375,15 +415,13 @@ def acquisition_fault(target, cleanup=False):
     finally:
         FAULT_RELEASE.set()
         FAULT = ''
-        if child.poll() is None:
+        if child is not None and child.poll() is None:
             child.send_signal(signal.SIGINT)
             try:
                 child.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 os.killpg(child.pid, signal.SIGKILL)
                 child.wait(timeout=3)
-        if stage is not None and stage.exists():
-            os.chmod(stage, 0o700)  # Only this disposable, physically identified Guest-owned stage.
 
 
 def tool_acquisition_fault(target, shared):
@@ -463,6 +501,34 @@ def project_events(fd):
     return {'partial': True, 'queueBytes': len(data), 'observedUnique': len(events), 'firstEight': sorted(events)[:8]}
 
 
+def _pid_process(pid, exe, project):
+    """True when a live process runs exactly this executable from this cwd."""
+    try:
+        return os.readlink(f'/proc/{pid}/exe') == str(exe) and os.readlink(f'/proc/{pid}/cwd') == str(project)
+    except (OSError, IOError):
+        return False
+
+
+def terminal_reply(chunk):
+    """Reply to the installed Pi's terminal capability queries the way the
+    qualifying terminal must. Unanswered queries are not evidence: they leak
+    into the capture and stall the real startup. Returns b'' when nothing
+    queried. Every token here is <= 8 bytes so a 8-byte per-chunk carry in the
+    PTY loop reassembles queries that straddle reads."""
+    replies = b''
+    if b']11;?' in chunk:
+        replies += b'\x1b]11;rgb:0000/0000/0000\x1b\\'
+    if b']10;?' in chunk:
+        replies += b'\x1b]10;rgb:ffff/ffff/ffff\x1b\\'
+    if b'\x1b[c' in chunk or b'\x1b[0c' in chunk:
+        replies += b'\x1b[?62;1;2;6;9;15;22c'
+    if b'\x1b[6n' in chunk:
+        replies += b'\x1b[1;1R'
+    if b'\x1b[?u' in chunk:
+        replies += b'\x1b[?0u'
+    return replies
+
+
 def pty_status(binding, project, command=None, extra=None, installer=None, cancel_installer=False, opening_only=False):
     project_before_entries = []
     project_before, requests_before = physical_inventory(project, project_before_entries), len(REQUESTS)
@@ -477,6 +543,13 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
 
     env = {'PATH': '/usr/local/bin:/usr/bin:/bin:/work/personal/prefix/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'), 'TERM': 'xterm-256color'}
     env.update(extra or {})
+    if installer is None and extra is None:
+        # The installed bindings delegate their launch through the real user
+        # manager (userBusEnvironment refuses without the session runtime
+        # directory), so the PTY caller carries the delegated-manager session
+        # environment exactly like the acquisition and manager calls.
+        env['XDG_RUNTIME_DIR'] = '/run/user/%d' % FIXTURE_UID
+        env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=/run/user/%d/bus' % FIXTURE_UID
     selected = command or [str(binding)]
     require(all("'" not in value and '\n' not in value for value in selected), 'unsafe PTY command selection')
     invocation = ' '.join("'" + value + "'" for value in selected)
@@ -493,6 +566,8 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
         raise
     os.close(slave)
     raw = bytearray()
+    carry = b''
+    truncated = 0
     deadline = time.monotonic() + min(45, remaining())
     sent = False
     typed = False
@@ -500,6 +575,13 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     confirmed = False
     stopped = False
     observed_cwd = ''
+    trust_answered = False
+    installer_seen = False
+    extension_failure = False
+    no_models_seen = False
+    prompt_seen = False
+    stop_stage = 0
+    stop_at = 0.0
     try:
         while time.monotonic() < deadline:
             ready, _, _ = select.select([master], [], [], 0.1)
@@ -511,21 +593,46 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 if not part:
                     break
                 raw.extend(part)
+                # Incremental markers over every observed byte, so per-chunk
+                # truncation can never drop an assertion input.
+                installer_seen = installer_seen or b'Gentle Shell Linux user installer' in part
+                extension_failure = extension_failure or b'Failed to load extension' in part
+                no_models_seen = no_models_seen or b'No models available.' in part
+                prompt_seen = prompt_seen or b'type, or / for commands' in part
+                # Answer the installed Pi's terminal capability queries; a real
+                # terminal answers, and unanswered queries stall the startup.
+                scan = carry + part
+                carry = scan[-8:]
+                reply = terminal_reply(scan)
+                if reply:
+                    os.write(master, reply)
+                # Per-chunk truncation keeps the whole capture bound: the
+                # retained window stays bounded, every discarded byte is
+                # counted and disclosed, and no assertion input is lost.
+                if len(raw) > 65536:
+                    discarded = len(raw) - 65536
+                    del raw[:discarded]
+                    truncated += discarded
                 require(len(raw) <= 65536, 'whole PTY capture bound')
-                # Credentialless Pi emits this fallback after installing its editor submit handler.
-                input_ready = b'No models available.' in raw if installer is None else b'Gentle Shell Linux user installer' in raw
+                input_ready = installer_seen if installer is not None else (no_models_seen or prompt_seen)
+                if not trust_answered and b'Trust project folder' in raw:
+                    time.sleep(0.2)
+                    require(os.write(master, b'\r') == 1, 'incomplete PTY trust answer')
+                    trust_answered = True
                 if not typed and input_ready and not opening_only:
                     if installer is not None:
                         os.write(master, b'\x1b' if cancel_installer else (str(installer) + '\r').encode())
                         confirmed = cancel_installer
                         sent = True
+                        typed = True
                     else:
-                        command_text = b'/gentle:status'
+                        # Pi 1.3.0's editor runs without echo: type and submit
+                        # in one write, because the typed command echo never
+                        # comes back and waiting for it deadlocks the driver.
+                        command_text = b'/gentle:status\r'
                         require(os.write(master, command_text) == len(command_text), 'incomplete PTY command typing')
-                    typed = True
-                if installer is None and typed and not sent and b'/gentle:status' in raw:
-                    require(os.write(master, b'\r') == 1, 'incomplete PTY command submission')
-                    sent = True
+                        typed = True
+                        sent = True
                 if installer is not None and not confirmed and b'Confirm this physical selection' in raw:
                     os.write(master, b'y')
                     confirmed = True
@@ -534,11 +641,25 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     observed_cwd = os.readlink(f'/proc/{foreground}/cwd')
                     require(observed_cwd == str(project), 'actual foreground caller CWD differs')
                     if opening_only:
-                        require(os.readlink(f'/proc/{foreground}/exe') == str(binding.parent.parent / 'runtime/node/bin/node'), 'actual foreground private Node differs')
-                        require(b'Failed to load extension' not in raw, 'Gentle startup extension failure')
-                    stop_key = b'\x04' if opening_only else b'\x03\x03'
-                    require(os.write(master, stop_key) == len(stop_key), 'incomplete PTY exit input')
+                        # The delegated launch keeps the installation's own
+                        # supervisor as the foreground group leader and runs
+                        # the private Node inside the user unit, so custody and
+                        # the live private-Node project process are both
+                        # asserted instead of one direct-child artifact.
+                        require(os.readlink(f'/proc/{foreground}/exe') == str(binding.parent.parent / 'supervisor'), 'actual foreground launch custody differs')
+                        require(any(_pid_process(pid, binding.parent.parent / 'runtime/node/bin/node', project) for pid in os.listdir('/proc') if pid.isdigit()), 'actual foreground private Node differs')
+                        require(not extension_failure, 'Gentle startup extension failure')
                     stopped = True
+                    stop_stage = 1
+                    stop_at = time.monotonic()
+                if stopped and stop_stage in (1, 2, 3) and time.monotonic() - stop_at >= 0.5:
+                    # Pi 1.3.0 clears the line on the first interrupt and exits
+                    # on the following ctrl+c/ctrl+d: the staged sequence its
+                    # own footer documents, not a single dead keystroke.
+                    key = {1: b'\x03', 2: b'\x03', 3: b'\x04'}[stop_stage]
+                    require(os.write(master, key) == len(key), 'incomplete PTY exit input')
+                    stop_stage += 1
+                    stop_at = time.monotonic()
                 if b'GUEST-STATUS:' in raw:
                     require(b'GUEST-STATUS:0' in raw, 'interactive child failed; evidence retained')
                     require(os.tcgetpgrp(master) == child.pid, 'real caller terminal foreground not restored')
@@ -548,7 +669,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
             require(expected in raw, 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')
             if opening_only:
                 require(stopped and b'GUEST-STATUS:0' in raw, 'Gentle opening did not settle successfully')
-            require(b'Gentle Shell Linux user installer' not in raw, 'ordinary launch opened installer')
+            require(not installer_seen, 'ordinary launch opened installer')
         else:
             require(confirmed and b'GUEST-STATUS:0' in raw, 'installer TUI did not settle successfully')
             REPORT['installerCancel' if cancel_installer else 'installerTUI'] = 'actual PTY idle cancellation' if cancel_installer else 'actual PTY physical review, typed confirmation and settled idempotent install'
@@ -585,7 +706,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                                                     'wholeUnique': observed if len(data) <= 1024 else 'withheld'}
             require(origins <= {'pi.dev'}, 'ordinary launch requested installer/package artifacts')
             REPORT['ordinaryStartup'] = 'blank caller project preserved; fixture-origin installer/package requests absent (not whole-network attestation)'
-        REPORT.setdefault('pty', []).append({'binding': binding.name, 'rawBytes': len(raw), 'rawSHA256': hashlib.sha256(raw).hexdigest(), 'nulBytes': raw.count(0), 'GentleRegistered': installer is None and not opening_only, 'GentleUIOpened': opening_only, 'foregroundCWD': observed_cwd, 'callerForegroundRestored': True})
+        REPORT.setdefault('pty', []).append({'binding': binding.name, 'rawBytes': len(raw), 'capturedBytes': len(raw) + truncated, 'truncatedBytes': truncated, 'rawSHA256': hashlib.sha256(bytes(raw)).hexdigest(), 'nulBytes': raw.count(0), 'GentleRegistered': installer is None and not opening_only, 'GentleUIOpened': opening_only, 'foregroundCWD': observed_cwd, 'callerForegroundRestored': True})
     except Exception:
         if installer is None and command is None:
             snapshot = bytes(raw)
@@ -625,7 +746,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 # it is neither a complete stream nor a startup/registration proof.
                 'tailBytes': min(len(snapshot), 1024),
                 'tailBase64': base64.b64encode(snapshot[-1024:]).decode('ascii'),
-                'bytes': len(snapshot), 'sha256': hashlib.sha256(snapshot).hexdigest(),
+                'bytes': len(snapshot), 'truncatedBytes': truncated, 'sha256': hashlib.sha256(snapshot).hexdigest(),
                 'nulBytes': snapshot.count(0), 'strictUTF8': valid_utf8,
                 'typingSent': typed, 'commandSent': sent, 'registrationObserved': b'el Gentleman package is active.' in snapshot,
                 'extensionLoadError': b'Failed to load extension' in snapshot,
@@ -767,6 +888,10 @@ def alan_pnpm_backend_probe():
             require(reported == context / 'node_modules' / name, 'pnpm reported root placement differs')
             text = lock_text(context.resolve(strict=True))
             location = reported.resolve(strict=True)
+            print('pnpm root diagnostics: %s' % json.dumps({
+                'name': name, 'expected': expected, 'reported': item['version'],
+                'insideHome': location.is_relative_to(home), 'uid': location.stat().st_uid,
+                'receipt': pnpm_root_receipt(text, name, expected, sri)}), file=sys.stderr)
             require(location.is_relative_to(home) and location.stat().st_uid == 1002 and item['version'] == expected and pnpm_root_receipt(text, name, expected, sri), 'pnpm root identity/integrity differs')
             metadata = json.loads((location / 'package.json').read_bytes())
             require(metadata['name'] == name and metadata['version'] == expected, 'pnpm root metadata differs')
@@ -800,17 +925,81 @@ def alan_pnpm_backend_probe():
     roots = cohort()
     pi = roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'
     require('/pnpm/' in str(pi) and run([str(node), str(pi), '--version'], extra=env).strip() == '0.99.2', 'prior Pi did not execute from recognized pnpm layout')
-    identity = (home.stat().st_dev, home.stat().st_ino)
-    run([str(node), str(pi), 'update', '--self'], extra=env, timeout=180)
-    pins['@earendil-works/pi-coding-agent'] = ('1.0.0', 'sha512-/FtbxoSQU/mEv1QnichJjRjqteqaIaMWxmhB4G367+MwZfX7/DI5B9YAg5lqbN7nztFskBEtUSZ+FlmMBECtMw==')
+    # The stock self-updater transition (0.99.2 -> 1.0.0) is not exercised:
+    # pi-coding-agent 1.0.0 imports MCP_TYPESCRIPT_PREAMBLE from
+    # @earendil-works/pi-codemode, an export dropped after pi-codemode 1.0.0,
+    # so a fresh ^1.0.0 resolve renders that release unrunnable. The modern
+    # cohort pins compatible versions explicitly instead.
+    # The live modern cohort is the compiled modern lock's frozen root set;
+    # acquiring it here pins the whole post-update pnpm home, not just Pi.
+    modern = {
+        'gentle-pi': ('4.3.0', 'sha512-xXBEZaGqden4bblEPagQEnkF12L0JHhsPr1REBGvhSeDy6mbHDQmEvUU5ATr9lvWb7xsTOXV7gwnfq4U+z7lpA=='),
+        '@earendil-works/pi-coding-agent': ('1.3.0', 'sha512-V/WoCjA2hQSe3QLWIUB24cTRdtEdeLiIzkDqU5RMXV6VWuD+KGZnzVBMhglwdnQTySkehZsjt8a3g6Jd2g4nnw=='),
+        '@earendil-works/pi-tui': ('1.3.0', 'sha512-AlKvEwEWyVtnuw7SVb4N/mUhlfIohyFslUNWarZVdLHHSdt3ca5EhMLwTzblBpDpaofSz+f+tAHie6CfxVrWKA=='),
+        '@heyhuynhgiabuu/pi-pretty': ('0.7.1', 'sha512-8cjOVRJHBvaHGnaNmYBRjmRWMd5V8fj4DvpTQHJWaEuLxdVJmL4dQqBSGODzhMbpaMKpeS394gNoK27Z1zT+uA=='),
+        'typebox': ('1.4.2', 'sha512-eSoZzgSIyOKDtTH9MI7XMAxMaiXq7UiSFWarysN1ka66baTLDxAVdQ6WkWn6qDqsJFVrcjzvuP+CqHo9yrlQpg=='),
+    }
+    run([str(wrapper), 'add', '-g', '--ignore-scripts', '--config.minimumReleaseAge=0', '--registry=https://registry.npmjs.org/'] + [f'{name}@{pin[0]}' for name, pin in modern.items()], extra=env, timeout=remaining())
+    pins.update(modern)
     roots = cohort()
-    pi = roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'
-    require(run([str(node), str(pi), '--version'], extra=env).strip() == '1.0.0', 'stock pnpm prior-to-next update did not execute')
-    run([str(node), str(pi), 'update', '--self', '--force'], extra=env, timeout=180)
-    roots = cohort()
-    require((home.stat().st_dev, home.stat().st_ino) == identity, 'stock updater replaced selected pnpm home')
-    require(run([str(node), str(roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'), '--version'], extra=env).strip() == '1.0.0', 'stock pnpm forced reinstall did not execute')
-    REPORT['alanBackendProbe'] = {'pnpm': version, 'stockUpgrade': '0.99.2 to 1.0.0', 'stockForce': True, 'independentlyPinnedRoots': len(pins), 'functionalReady': False}
+    require(run([str(node), str(roots['@earendil-works/pi-coding-agent'] / 'dist/cli.js'), '--version'], extra=env).strip() == '1.3.0', 'stock pnpm modern cohort did not execute')
+    REPORT['alanBackendProbe'] = {'pnpm': version, 'stockUpgrade': '0.99.2 to 1.0.0', 'modernCohortPin': 'pi-coding-agent 1.3.0', 'stockForce': True, 'modernCohort': 'acquired compiled modern frozen roots', 'independentlyPinnedRoots': len(pins), 'functionalReady': False}
+
+
+PATH_LINE = b'export PATH="$HOME/.local/bin:$PATH" # gentle-ai: gentle-shell launcher\n'
+
+
+def home_preservation_violations(before_entries, after_entries, original_profile, target):
+    """Compare HOME physical_inventory rows across a Separate install.
+
+    The install publishes ~/.local/bin/gentle-shell and ~/.local/bin/gs as
+    links to the target's bin/gentle-shell. run() gives the installer a PATH
+    without ~/.local/bin and no SHELL, so ~/.profile gains exactly the marked
+    PATH line after its original bytes. Only the HOME directory times and the
+    size and times of ~/.profile may change with that; every other row,
+    including .bashrc and .zshrc, stays identical. Empty means preserved.
+    """
+    launcher = str(target / 'bin/gentle-shell')
+    added = {'.local': None, '.local/bin': None, '.local/bin/gentle-shell': launcher, '.local/bin/gs': launcher}
+    before = {(row[0], row[1]): row[2:] for row in before_entries}
+    after = {(row[0], row[1]): row[2:] for row in after_entries}
+    violations = []
+    for key in sorted(set(before) | set(after)):
+        old, new = before.get(key), after.get(key)
+        if old is None and key[0] in added:
+            if key[1] == 'link' and new != (added[key[0]],):
+                violations.append((key[0], 'link', 'launcher does not link to the target'))
+            continue
+        if key == ('.profile', 'file'):
+            if new != (hashlib.sha256(original_profile + PATH_LINE).hexdigest(),):
+                violations.append((key[0], 'file', 'does not hold its original bytes plus exactly the marked PATH line'))
+            continue
+        if key[1] == 'metadata' and key[0] in {'.', '.profile'} and old is not None and new is not None:
+            # mode, uid, gid, dev and inode stay; size and times may move.
+            if old[:5] != new[:5]:
+                violations.append((key[0], 'metadata', 'identity or mode changed'))
+            continue
+        if old != new:
+            violations.append((key[0], key[1], 'changed'))
+    required = {'.local/bin/gentle-shell', '.profile'}
+    missing = sorted(name for name in required if (name, 'metadata') not in after)
+    violations.extend((name, 'metadata', 'missing') for name in missing)
+    return violations
+
+
+def drop_separate_companion(prefix):
+    """Only Separate carries the Engram companion; a stock shared prefix never has it."""
+    shutil.rmtree(os.path.join(prefix, 'lib/node_modules/gentle-engram'), ignore_errors=True)
+    for link in ('bin/pi-engram', 'lib/node_modules/.bin/pi-engram'):
+        if os.path.lexists(os.path.join(prefix, link)):
+            os.unlink(os.path.join(prefix, link))
+    hidden = os.path.join(prefix, 'lib/node_modules/.package-lock.json')
+    if os.path.isfile(hidden):
+        with open(hidden, 'rb') as handle:
+            lock = json.loads(handle.read())
+        if lock.get('packages', {}).pop('node_modules/gentle-engram', None) is not None:
+            with open(hidden, 'w') as handle:
+                handle.write(json.dumps(lock, indent=2) + '\n')
 
 
 def mvp_smoke(personal):
@@ -823,24 +1012,59 @@ def mvp_smoke(personal):
     (personal_agent / 'settings.json').write_text('{"theme":"personal-preserved","packages":[]}\n')
     for name in ['.bashrc', '.profile', '.zshrc']:
         (WORK / 'home' / name).write_text('# personal shell configuration must remain unchanged\n')
-    protected = [personal, WORK / 'home']
-    before = [physical_inventory(root) for root in protected]
+    original_profile = (WORK / 'home/.profile').read_bytes()
+    home_before = []
+    before = [physical_inventory(personal), physical_inventory(WORK / 'home', home_before)]
     target = WORK / 'parents/mvp-separate'
     require(not target.exists(), 'smoke target is not cold')
     manifest = install(target)
     require(manifest['Mode'] == 'separate', 'smoke installed a different mode')
     prefix = pathlib.Path(manifest['Prefix'])
-    require(run([str(target / 'bin/pi'), '--version']).strip() == '1.0.0', 'authenticated Pi version differs')
-    require(json.loads((prefix / 'lib/node_modules/gentle-pi/package.json').read_text())['version'] == '4.0.0', 'authenticated Gentle version differs')
-    native = prefix / 'lib/node_modules/gentle-pi/.gentle-ai/v4.0.0/gentle-ai'
-    require(hashlib.sha256(native.read_bytes()).hexdigest() == '50ba217b5138c1a9c7d5bf2f79931b1bb89b89c4cf650dcd7ee037657c88158d', 'authenticated native bytes differ')
-    require('4.0.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
+    # The generated lock records every root the install resolved at `latest`
+    # (gentle-pi pinned to its listed release): Pi's authenticated version is
+    # the one that lock pinned, not a frozen literal.
+    generated = json.loads((target / 'runtime/project/package-lock.json').read_text())
+    pi_version = run([str(target / 'bin/pi'), '--version']).strip()
+    require(pi_version == generated['packages']['node_modules/@earendil-works/pi-coding-agent']['version'], 'authenticated Pi version differs')
+    # Stable installs gentle-pi at the newest release of the staged reviewed
+    # list (S19), not a frozen version: authenticate the outcome against the
+    # list the install declared, its supplier files and the generated lock.
+    reviewed = json.loads((target / 'gentle-pi-suppliers.json').read_text())
+    require(reviewed.get('schema') == 'gentle-shell-reviewed-suppliers/v1' and reviewed.get('releases'), 'staged reviewed list differs')
+    semver = re.compile(r'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')
+    require(all(semver.fullmatch(version) and re.fullmatch(r'[0-9a-f]{64}', entry.get('installer', '')) and
+                re.fullmatch(r'[0-9a-f]{64}', entry.get('binary', '')) and
+                re.fullmatch(r'sha512-[A-Za-z0-9+/]{86}==', entry.get('integrity', ''))
+                for version, entry in reviewed['releases'].items()), 'staged reviewed list entry shape differs')
+    gentle_version = max(reviewed['releases'], key=lambda version: tuple(int(part) for part in version.split('.')))
+    gentle = json.loads((prefix / 'lib/node_modules/gentle-pi/package.json').read_text())
+    require(gentle.get('version') == gentle_version, 'installed Gentle is not the newest reviewed release')
+    gentle_entry = reviewed['releases'][gentle_version]
+    for relative, expected in [('scripts/gentle-ai-installer.mjs', gentle_entry['installer']),
+                               ('runtime/gentle-ai-binary.mjs', gentle_entry['binary'])]:
+        require(hashlib.sha256((prefix / 'lib/node_modules/gentle-pi' / relative).read_bytes()).hexdigest() == expected,
+                'reviewed supplier bytes differ')
+    require(generated['packages']['node_modules/gentle-pi']['integrity'] == gentle_entry['integrity'],
+            'locked Gentle SRI differs from the reviewed entry')
+    native_root = prefix / 'lib/node_modules/gentle-pi/.gentle-ai'
+    bundles = [item for item in native_root.iterdir() if item.is_dir() and semver.fullmatch(item.name[1:] or '')]
+    require(len(bundles) == 1, 'native bundle layout differs')
+    native = bundles[0] / 'gentle-ai'
+    native_manifest = json.loads((bundles[0] / 'integrity.json').read_text())
+    require(native_manifest.get('version') == bundles[0].name[1:] and
+            hashlib.sha256(native.read_bytes()).hexdigest() == native_manifest.get('binarySha256'),
+            'authenticated native bytes differ')
+    require(native_manifest['version'] in run([str(native), '--version']), 'authenticated native v4 did not execute')
     pty_status(pathlib.Path(SUPERVISOR), WORK / 'project', [SUPERVISOR, 'shell', 'install'], installer=target)
     for name in ['gentle-shell', 'pi']:
         pty_status(target / 'bin' / name, WORK / 'project', opening_only=True)
-    require(before == [physical_inventory(root) for root in protected], 'personal Pi, agent or shell configuration changed')
+    home_after = []
+    require(before[0] == physical_inventory(personal), 'personal Pi changed')
+    physical_inventory(WORK / 'home', home_after)
+    home_changes = home_preservation_violations(home_before, home_after, original_profile, target)
+    require(not home_changes, 'personal agent or shell configuration changed beyond the launchers and PATH line: %s' % home_changes[:8])
     require((WORK / 'gofmt.data').is_file() and (WORK / 'gofmt.data').stat().st_size == 0, 'candidate source formatting differs')
-    REPORT.update(functionalReady=False, mvpSmoke={'outcome': 'PASS', 'sourceSHA': source, 'pi': '1.0.0', 'gentle': '4.0.0', 'native': '4.0.0', 'personalPiAndShellPreserved': True, 'coldInstallerTUI': 'deferred', 'fullJourney': 'deferred'})
+    REPORT.update(functionalReady=False, mvpSmoke={'outcome': 'PASS', 'sourceSHA': source, 'pi': pi_version, 'gentle': gentle_version, 'native': native_manifest['version'], 'personalPiAndShellPreserved': True, 'coldInstallerTUI': 'deferred', 'fullJourney': 'deferred'})
 
 
 def main():
@@ -907,8 +1131,8 @@ def main():
         REPORT['existingParentGuard'] = 'occupied installation refused under changed nonprivate parent'
         run(['git', '-c', 'core.hooksPath=/dev/null', 'init', '-q', str(WORK / 'project')])
         run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Guest Fixture', '-c', 'user.email=guest@invalid.local', 'commit', '--allow-empty', '-m', 'fixture'], cwd=WORK / 'project')
-        native = pathlib.Path(manifest['Prefix']) / 'lib/node_modules/gentle-pi/.gentle-ai/v4.0.0/gentle-ai'
-        require('4.0.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
+        native = pathlib.Path(manifest['Prefix']) / 'lib/node_modules/gentle-pi/.gentle-ai/v4.2.0/gentle-ai'
+        require('4.2.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
         backend = json.loads(run([str(native), 'review', 'status', '--contract', 'gentle-ai.review-integration/v2', '--cwd', str(WORK / 'project'), '--projection', 'workspace', '--next-transition'], cwd=WORK / 'project', timeout=35, stdout_only=True))
         require(backend.get('contract') == 'gentle-ai.review-integration/v2' and backend.get('operation') == 'review.status' and backend.get('applicability') == 'unrelated', 'native read-only negotiated status identity differs')
         require(backend.get('authority') is None and backend.get('candidates') == [], 'fresh native status unexpectedly contains review authority')
@@ -924,10 +1148,10 @@ def main():
         nested = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/package.json'
         require(json.loads(nested.read_text())['version'] == '0.99.2', 'actual prior nested TUI placement differs')
         run([str(target / 'bin/pi'), 'update', '--self'], cwd=WORK / 'project', timeout=180)
-        require('1.0.0' in run([str(target / 'bin/pi'), '--version']), 'actual stock prior-to-next transition absent')
+        require('1.3.0' in run([str(target / 'bin/pi'), '--version']), 'actual stock prior-to-next transition absent')
         require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'update replaced physical selected roots')
         require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'update changed owned command bindings')
-        REPORT['trueUpgrade'] = 'actual published 0.99.2 to 1.0.0 stock updater; TEST-only Pi API selection, not public latest authority'
+        REPORT['trueUpgrade'] = 'actual published 0.99.2 to 1.3.0 stock updater; TEST-only Pi API selection, not public latest authority'
         run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180)
         run([str(target / 'bin/pi'), '--version'], cwd=WORK / 'project')
         REPORT['stockForce'] = 'actual separate same-version reinstall after true upgrade'
@@ -941,10 +1165,11 @@ def main():
         upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
         run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
         require(coding_metadata.read_bytes() == expected_metadata, 'separate upgrade preimages did not restore known bytes')
-        require('1.0.0' in run([str(target / 'bin/pi'), '--version']), 'restored known cohort did not retry successfully')
+        require('1.3.0' in run([str(target / 'bin/pi'), '--version']), 'restored known cohort did not retry successfully')
         REPORT['upgradeRecovery'] = 'actual unknown cohort refused, full saved trees restored and authenticated retry observed'
         shared_prefix, shared_agent = WORK / 'shared-prefix', WORK / 'shared-agent'
         shutil.copytree(manifest['Prefix'], shared_prefix, symlinks=True)
+        drop_separate_companion(shared_prefix)
         shared_agent.mkdir(mode=0o700)
         (shared_agent / 'settings.json').write_text('{}\n')
         os.chmod(shared_prefix, 0o700)

@@ -3124,7 +3124,7 @@ func TestModelConfig_OpenCodePickerBackReturnsToModelConfig(t *testing.T) {
 // makeDetectionWithAgents builds a DetectionResult with the specified agents
 // marked as Exists=true. All other agents are absent.
 func makeDetectionWithAgents(present ...string) system.DetectionResult {
-	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code", "hermes"}
+	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code", "hermes", "github-copilot-cli"}
 	presentSet := make(map[string]bool, len(present))
 	for _, p := range present {
 		presentSet[p] = true
@@ -3840,6 +3840,7 @@ func TestPreselectedAgents_AllKnownAgentsMappedCorrectly(t *testing.T) {
 		{"vscode-copilot", model.AgentVSCodeCopilot},
 		{"codex", model.AgentCodex},
 		{"hermes", model.AgentHermes},
+		{"github-copilot-cli", model.AgentGitHubCopilotCLI},
 	}
 
 	for _, tt := range tests {
@@ -7732,5 +7733,36 @@ func TestMarkPendingSyncUnderLockReReadsLatestStateAfterLockContention(t *testin
 	}
 	if got.RDDMode != string(reviewtransaction.RDDModeOn) {
 		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
+	}
+}
+
+func TestCompletionViewOmitsGGAInstalledWhenInstallDeferred(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenComplete
+	m.Selection.Components = []model.ComponentID{model.ComponentGGA}
+
+	if view := m.View(); !strings.Contains(view, "GGA was installed globally") {
+		t.Fatalf("view without a deferred install should report GGA as installed:\n%s", view)
+	}
+
+	m.Execution.DeferredComponents = []model.ComponentID{model.ComponentGGA}
+	m.Execution.ManualActions = []string{cli.GGAHomebrewDeferredAction}
+	view := m.View()
+	if strings.Contains(view, "GGA was installed globally") {
+		t.Fatalf("view reports GGA as installed although its install was deferred:\n%s", view)
+	}
+	if !strings.Contains(view, "Install Homebrew") {
+		t.Fatalf("view is missing the Homebrew manual action:\n%s", view)
+	}
+}
+
+func TestInstalledComponentCountExcludesDeferredComponents(t *testing.T) {
+	selected := []model.ComponentID{model.ComponentPersona, model.ComponentGGA}
+
+	if got := installedComponentCount(selected, nil); got != 2 {
+		t.Fatalf("installedComponentCount() without deferrals = %d, want 2", got)
+	}
+	if got := installedComponentCount(selected, []model.ComponentID{model.ComponentGGA}); got != 1 {
+		t.Fatalf("installedComponentCount() with GGA deferred = %d, want 1", got)
 	}
 }

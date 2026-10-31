@@ -37,7 +37,7 @@ func TestUnixPinVersionParity(t *testing.T) {
 	if err := json.Unmarshal([]byte(userNativeManifest), &manifest); err != nil || !strings.HasSuffix(userNativeManifest, "}\n") {
 		t.Fatalf("native manifest is not one JSON line: %v", err)
 	}
-	if manifest.Version != "4.0.0" || manifest.Asset != "gentle-ai_4.0.0_"+platform.release+".tar.gz" || !hex.MatchString(manifest.AssetSha256) || manifest.BinarySha256 != userBinarySHA || !hex.MatchString(userBinarySHA) {
+	if manifest.Version != "4.2.0" || manifest.Asset != "gentle-ai_4.2.0_"+platform.release+".tar.gz" || !hex.MatchString(manifest.AssetSha256) || manifest.BinarySha256 != userBinarySHA || !hex.MatchString(userBinarySHA) {
 		t.Fatalf("gentle-ai release pin differs: %+v", manifest)
 	}
 	want := []userToolSource{

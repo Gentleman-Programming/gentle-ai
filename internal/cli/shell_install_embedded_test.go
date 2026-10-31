@@ -59,6 +59,23 @@ func TestShellInstallEmbeddedConfirmationOnlySelects(t *testing.T) {
 	}
 }
 
+func TestShellInstallArgumentsDoNotDropUnsupportedExperience(t *testing.T) {
+	selection, _ := ShellInstallOutcome(NewShellInstallModel(nil))
+	profile := shellinstaller.UserExperience{Persona: "gentleman", BackgroundSubagents: "on"}
+	profile.StrictTDD = "on"
+	profile.GGA = "on"
+	profile.GGAProvider = "codex"
+	selection.Confirmed, selection.Request.Experience = true, &profile
+	args := ShellInstallArguments(selection)
+	req, err := shellinstaller.UserInstallFromEntry(args[1:])
+	if err != nil || req.Experience == nil || *req.Experience != profile {
+		t.Fatalf("unsupported profile silently becomes legacy arguments: %q, %v", args, err)
+	}
+	if _, err := shellinstaller.InspectUserInstall(req); err == nil {
+		t.Fatal("inert transport admits unqualified effects")
+	}
+}
+
 func TestShellInstallEmbeddedOutcomeRejectsOtherModels(t *testing.T) {
 	if _, err := ShellInstallOutcome(nil); err == nil {
 		t.Fatal("unrelated model accepted as an installation selection")

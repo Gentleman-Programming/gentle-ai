@@ -988,6 +988,13 @@ func artifactRepositoryPathReference(token artifactReferenceToken) (string, bool
 	if separator <= 0 || separator == len(value)-1 {
 		return "", false
 	}
+	// A host:port literal (for example 127.0.0.1:8000) is evidence about a
+	// deployment endpoint, not a file path with a line number. Paths always
+	// contain a separator (/ or \).
+	host := value[:separator]
+	if !strings.Contains(host, "/") && strings.Trim(host, "0123456789.") == "" {
+		return "", false
+	}
 	line := value[separator+1:]
 	nonzero := false
 	for index := range line {

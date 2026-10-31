@@ -3,8 +3,10 @@
 package shellinstaller
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -42,11 +46,26 @@ func userCanonicalRequest(req UserInstallRequest) (UserInstallRequest, error) {
 }
 
 func userValidateInstall(req UserInstallRequest) error {
+	if err := userExperienceSupported(req.Experience); err != nil {
+		return err
+	}
+	if req.Experience != nil && req.Mode != "separate" {
+		switch req.Mode {
+		case "shared":
+			if req.Experience.SDKSource == "main-preview" {
+				return experienceError("Main preview is not available with the retained Shared prefix; use On my existing Pi or Separate")
+			}
+		case "agent":
+			// Every selection is staged privately; the agent is only the settings home.
+		default:
+			return experienceError("explicit experience requires a fresh Separate, Shared or agent-reuse runtime")
+		}
+	}
 	req, err := userCanonicalRequest(req)
 	if err != nil {
 		return err
 	}
-	if !userSelectionPath(req.Destination) || (req.Mode != "separate" && req.Mode != "shared") {
+	if !userSelectionPath(req.Destination) || (req.Mode != "separate" && req.Mode != "shared" && req.Mode != "agent") {
 		return privateError("refused", errors.New("choose separate or shared mode and a canonical absolute target using only ASCII letters, digits, /, _, . or -"))
 	}
 	parent, err := privateDirectory(filepath.Dir(req.Destination))
@@ -54,16 +73,36 @@ func userValidateInstall(req UserInstallRequest) error {
 		return err
 	}
 	fresh := true
+	reconfigure := req.Experience != nil && userReconfigureTarget() == req.Destination
 	if err := privateDestination(req.Destination); err != nil {
+		if req.Experience != nil && !reconfigure {
+			return experienceError("explicit experience requires a new empty target; existing preferences are preserved")
+		}
 		fresh = false
-		manifest, readErr := userReadManifest(context.Background(), req.Destination)
-		if readErr != nil || manifest.Mode != req.Mode || (req.Mode == "shared" && (manifest.Prefix != req.SharedPrefix || manifest.Agent != req.SharedAgent)) {
-			return err
+		if reconfigure {
+			manifest, readErr := userReadInstallationManifest(req.Destination)
+			if readErr != nil || manifest.Mode != req.Mode || (req.Mode == "shared" && (manifest.Prefix != req.SharedPrefix || manifest.Agent != req.SharedAgent)) {
+				return err
+			}
+		} else {
+			manifest, readErr := userReadManifest(context.Background(), req.Destination)
+			if readErr != nil || manifest.Mode != req.Mode || (req.Mode == "shared" && (manifest.Prefix != req.SharedPrefix || manifest.Agent != req.SharedAgent)) {
+				return err
+			}
 		}
 	}
 	if req.Mode == "separate" {
 		if req.SharedPrefix != "" || req.SharedAgent != "" {
 			return privateError("refused", errors.New("separate mode cannot select shared paths"))
+		}
+		return nil
+	}
+	if req.Mode == "agent" {
+		if req.SharedPrefix != "" || req.SharedAgent == "" || !privateHierarchyPath(req.SharedAgent) || userPathsOverlap(req.SharedAgent, req.Destination) {
+			return privateError("refused", errors.New("agent reuse requires one absolute existing agent disjoint from the target"))
+		}
+		if fresh {
+			return userAgentPreflight(req.SharedAgent, req.Destination, req.Experience)
 		}
 		return nil
 	}
@@ -93,6 +132,9 @@ func userValidateInstall(req UserInstallRequest) error {
 }
 
 func userInspectInstall(req UserInstallRequest) (string, error) {
+	if err := userExperienceSupported(req.Experience); err != nil {
+		return "", err
+	}
 	req, err := userCanonicalRequest(req)
 	if err != nil {
 		return "", err
@@ -112,10 +154,14 @@ func userInspectInstall(req UserInstallRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if req.Mode == "shared" {
+	if req.Mode == "shared" || req.Mode == "agent" {
+		paths := []string{req.SharedPrefix, req.SharedAgent}
+		if req.Mode == "agent" {
+			paths = []string{req.SharedAgent}
+		}
 		var stamps []string
 		for pass := 0; pass < 2; pass++ {
-			for index, path := range []string{req.SharedPrefix, req.SharedAgent} {
+			for index, path := range paths {
 				stamp, inspectErr := userTreeStamp(path)
 				if inspectErr != nil {
 					return "", inspectErr
@@ -140,35 +186,129 @@ func userEnvironment(root, prefix, agent string) []string {
 		"NPM_CONFIG_GLOBALCONFIG=" + root + "/config/global.npmrc", "NPM_CONFIG_CACHE=" + root + "/runtime/cache", "NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false", "NODE_USE_SYSTEM_CA=1"}
 }
 
+type userDirectInstallKey struct{}
+
+func userDirectInstall(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	direct, _ := ctx.Value(userDirectInstallKey{}).(bool)
+	return direct
+}
+
+// userUnixNpmNetworkTimeout mirrors NPM_NETWORK_TIMEOUT in
+// scripts/provision-gentle-shell-private-global.mjs (1200000 ms), the helper
+// the Unix flow runs for both global provisioning and verification: the
+// budget one network-bound npm run may take. The .mjs file stays the source
+// of truth; the deadline guard test parses it to keep this mirror honest.
+const userUnixNpmNetworkTimeout = 20 * time.Minute
+
+// userUnixProvisionBound is the external budget a single network-bound
+// provision invocation (global install or verify) may consume.
+const userUnixProvisionBound = userUnixNpmNetworkTimeout
+
+// userUnixInstallBound budgets the whole staged install: global provisioning
+// and the verify readback each may run one network-bound npm composition,
+// with a further invocation of margin for the main channel, plus headroom
+// for bootstrap, extraction and publication. The former 870s bound aligned
+// with the Windows 900s bound that expired after publish in the field
+// (issue #5714).
+const userUnixInstallBound = 3*userUnixProvisionBound + 10*time.Minute
+
 func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserInstallResult, err error) {
 	if ctx == nil || ctx.Err() != nil {
 		return result, privateError("canceled", context.Canceled)
 	}
-	if err = UserKernelCheck(); err != nil {
+	// GGA is retired from the shell installer. Force it inert before any
+	// inspection, staging or manifest recording so an old profile or a crafted
+	// transport cannot silently enable it; such a request then fails its
+	// physical confirmation check below.
+	userForceGGAInert(req.Experience)
+	if userDirectInstall(ctx) {
+		if err = userDirectKernelCheck(); err != nil {
+			return result, err
+		}
+	} else if err = UserKernelCheck(); err != nil {
 		return result, err
 	}
 	if req, err = userCanonicalRequest(req); err != nil {
 		return result, err
 	}
+	userShellStepBegin(ctx, 1, 5, "Validate the selection and target")
+	userShellDetail(ctx, 1, 5, "Checking the destination and private parent")
+	userShellDetail(ctx, 1, 5, "Verifying the inspected selection")
+	userShellStep(ctx, 1, 5, "Selection and target validated")
 	confirmation, err := InspectUserInstall(req)
 	if err != nil || req.Confirmation != confirmation {
 		return result, privateError("refused", errors.Join(err, errors.New("physical selection confirmation differs")))
 	}
-	if _, statErr := os.Lstat(req.Destination); statErr == nil {
+	if _, statErr := os.Lstat(req.Destination); statErr == nil && userReconfigureTarget() != req.Destination {
 		manifest, err := userReadManifest(ctx, req.Destination)
 		if err != nil {
 			return result, err
 		}
-		if err = userVerifyGlobal(ctx, req.Destination, manifest.Prefix, manifest.Agent, manifest.Prefix, req.Destination, req.Mode); err != nil {
+		if manifest.PNPM != nil {
+			return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", ""}, nil
+		}
+		if err = userVerifyInstalledGlobal(ctx, req.Destination, manifest); err != nil {
 			return result, userGraphRepairError(req.Destination, req.Mode, err)
+		}
+		if err = userVerifyRecordedSuppliers(ctx, req.Destination, manifest); err != nil {
+			return result, err
 		}
 		if err = userNativeReadback(ctx, filepath.Join(manifest.Prefix, "lib/node_modules/gentle-pi/.gentle-ai")); err != nil {
 			return result, err
 		}
-		return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled"}, nil
+		return UserInstallResult{req.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", ""}, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 870*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, userUnixInstallBound)
 	defer cancel()
+	// Registered before the workspace finish so it observes the final outcome:
+	// any failure after the first write to the operator's Pi agent restores it.
+	// Once publication commits, the manifest is bound to the agent and the
+	// rollback is disarmed: later failures are reported, never restored.
+	var agentRollback *userAgentRollback
+	ctx, published := userWithPublicationCommit(ctx)
+	defer func() {
+		if agentRollback != nil && err != nil {
+			result, err = UserInstallResult{}, agentRollback.settle(err, *published, filepath.Dir(req.Destination))
+		}
+	}()
+	if _, statErr := os.Lstat(req.Destination); statErr == nil && userReconfigureTarget() == req.Destination {
+		// A reconfigure that only changes the SDK update channel swaps the
+		// installed SDK declaration in place; components, preferences,
+		// runtimes and the supervisor stay untouched. Any other reconfigure
+		// keeps the full retire-and-reinstall below.
+		if result, applied, err := userUnixChannelOverlay(ctx, req); err != nil {
+			return result, err
+		} else if applied {
+			return result, nil
+		}
+	}
+	// A component-scoped update reuses the recorded installation: the scope is
+	// bound to the reconfigure target and the recorded manifest supplies the
+	// trusted prefix/agent/runtime sources. Nothing else may enter reuse.
+	scope, scopeErr := userInstallScopeOf(req)
+	if scopeErr != nil {
+		return result, scopeErr
+	}
+	var existing *userManifest
+	if !scope.full {
+		if userReconfigureTarget() != req.Destination {
+			return result, privateError("refused", errors.New("a component update requires the reconfigure target binding"))
+		}
+		recorded, manifestErr := userReadReusableManifest(ctx, req.Destination, scope)
+		if manifestErr != nil {
+			return result, privateError("refused", fmt.Errorf("component update requires a recorded installation: %w", manifestErr))
+		}
+		existing = &recorded
+	} else if recorded, manifestErr := userReadManifest(ctx, req.Destination); manifestErr == nil {
+		// A full reconfigure of a recorded installation still rebuilds a fresh
+		// stage, so the operator state is carried from the recorded agent.
+		existing = &recorded
+	}
+	userShellStepBegin(ctx, 2, 5, "Prepare the private stage and preferences")
+	userShellDetail(ctx, 2, 5, "Creating the private staging workspace")
 	workspace, err := os.MkdirTemp(filepath.Dir(req.Destination), ".gentle-user-")
 	if err != nil {
 		return result, err
@@ -182,26 +322,44 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	root := filepath.Join(workspace, "installed")
-	if err = os.Mkdir(root, 0700); err != nil {
+	userShellDetail(ctx, 2, 5, "Validating the stage preferences")
+	stageFiles, err := userValidateInstallStage(ctx, req.Mode, req.Experience)
+	if err != nil {
 		return result, err
 	}
-	for _, name := range []string{"home", "tmp", "config", "state", "agent", "project", "bin"} {
-		if err = os.Mkdir(filepath.Join(root, name), 0700); err != nil {
+	userShellDetail(ctx, 2, 5, "Creating the private staging skeleton")
+	if err = userStageSkeleton(root); err != nil {
+		return result, err
+	}
+	if !scope.full {
+		userShellDetail(ctx, 2, 5, "Reusing unchanged components from the installation")
+		if err = userReuseComponents(ctx, root, req, existing, scope); err != nil {
 			return result, err
 		}
 	}
-	for _, name := range []string{"user.npmrc", "global.npmrc"} {
-		if err = os.WriteFile(filepath.Join(root, "config", name), nil, 0600); err != nil {
-			return result, err
+	userShellDetail(ctx, 2, 5, "Writing persona and recommended preferences")
+	if err = userStagePreferences(ctx, root, req.Mode, req.Experience, stageFiles); err != nil {
+		return result, err
+	}
+	userShellStep(ctx, 2, 5, "Private stage and preferences prepared")
+	userShellStepBegin(ctx, 3, 5, "Install the runtime and pinned suppliers")
+	if err = userWriteBootstrapHelpers(root); err != nil {
+		return result, err
+	}
+	if scope.reused[UserComponentNode] {
+		userShellDetail(ctx, 3, 5, "Reusing the installed Node runtime")
+	} else {
+		userShellDetail(ctx, 3, 5, "Downloading Node 24.18.0")
+		if err = userBootstrap(ctx, root, workspace); err != nil {
+			return result, fmt.Errorf("runtime acquisition: %w", err)
 		}
 	}
-	if err = userBootstrap(ctx, root, workspace); err != nil {
-		return result, fmt.Errorf("runtime acquisition: %w", err)
-	}
+	userShellDetail(ctx, 3, 5, "Verifying the pinned Node runtime")
 	node := filepath.Join(root, "runtime/node/bin/node")
 	if _, err = privateNativeFile(ctx, node, 0700, privateNativeNodeSize, privateNativeNodeSHA); err != nil {
 		return result, fmt.Errorf("bootstrap Node readback: %w", err)
 	}
+	userShellDetail(ctx, 3, 5, "Provisioning bundled assets")
 	if err = userProvisionAssets(ctx, root, true); err != nil {
 		return result, err
 	}
@@ -211,43 +369,173 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if req.Mode == "shared" {
 		prefix, agent, finalPrefix, finalAgent = req.SharedPrefix, req.SharedAgent, req.SharedPrefix, req.SharedAgent
 	}
+	if req.Mode == "agent" {
+		agent, finalAgent = req.SharedAgent, req.SharedAgent
+		if err = userSnapshotOwnedAgentSettings(ctx, agent, root); err != nil {
+			return result, fmt.Errorf("agent settings preimage: %w", err)
+		}
+	}
 	// Acquire and verify pinned fd/rg inside the private stage before any
 	// selected Shared object changes; binding into AGENT/bin comes later.
+	userShellDetail(ctx, 3, 5, "Downloading pinned tools")
 	if err = userToolsAcquire(ctx, root); err != nil {
 		return result, fmt.Errorf("pinned tool acquisition: %w", err)
+	}
+	userShellDetail(ctx, 3, 5, "Preparing optional CodeGraph")
+	if scope.reused[UserComponentCodeGraph] && req.Experience != nil && req.Experience.CodeGraph == "on" {
+		userShellDetail(ctx, 3, 5, "Reusing the installed CodeGraph library")
+	} else if err = userCodeGraphProvision(ctx, root, req.Mode, req.Experience); err != nil {
+		return result, fmt.Errorf("optional CodeGraph provisioning: %w", err)
+	}
+	if req.Experience != nil && req.Experience.CodeGraph == "on" {
+		if err = userStageCodeGraphExecutable(ctx, root, req.Destination); err != nil {
+			return result, err
+		}
 	}
 	freshConfirmation, inspectErr := InspectUserInstall(req)
 	if inspectErr != nil || freshConfirmation != req.Confirmation {
 		return result, privateError("preimage", errors.Join(inspectErr, errors.New("selected files changed before global provisioning")))
 	}
-	sharedProvisioningStarted = req.Mode == "shared"
-	cmd := exec.CommandContext(ctx, node, helperPath, root, prefix, agent, finalPrefix, req.Destination, req.Mode, "install")
-	cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, prefix, agent)
-	if output, err := userOwnedRun(ctx, cmd, cancel); err != nil {
-		return result, fmt.Errorf("global provisioning: %w; bounded output: %s", err, output)
-	}
-	pkg := filepath.Join(prefix, "lib/node_modules/gentle-pi")
-	for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", userInstallerSHA}, {"runtime/gentle-ai-binary.mjs", privateNativeResolverSHA}} {
-		if _, err = userSourceFile(ctx, filepath.Join(pkg, source.name), -1, source.pin); err != nil {
-			return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, err)
+	sharedProvisioningStarted = req.Mode == "shared" && !scope.reused[UserComponentSDK]
+	if req.Mode == "agent" {
+		// Global provisioning is the first write to the operator's agent; a
+		// reused agent still receives the Context7 restage, so the rollback
+		// image is taken regardless of the component scope.
+		if agentRollback, err = userBeginAgentRollback(agent); err != nil {
+			return result, fmt.Errorf("agent rollback image: %w", err)
 		}
 	}
-	cmd = exec.CommandContext(ctx, node, "--input-type=module", "-e", privateNativeInvoke)
-	cmd.Dir, cmd.Env = pkg, userEnvironment(root, prefix, agent)
-	if output, err := userOwnedRun(ctx, cmd, cancel); err != nil {
-		return result, fmt.Errorf("native supplier: %w; bounded output: %s", err, output)
+	var list userReviewedList
+	if !scope.reused[UserComponentSDK] {
+		// Only Stable takes the generated reviewed-list route (S23/M4): the
+		// selected list is resolved once and written into the stage so the
+		// provisioner and the supplier check below verify exactly this list;
+		// its newest release is the version the generated lock pins. A Main
+		// preview request stages no list and keeps the frozen modern lock's
+		// stock base, exactly as before the route existed.
+		if list, err = userStageSDKReviewedList(ctx, root, req); err != nil {
+			return result, err
+		}
+		userShellDetail(ctx, 3, 5, "Installing the global runtime")
+		cmd := exec.CommandContext(ctx, node, helperPath, root, prefix, agent, finalPrefix, req.Destination, req.Mode, "install")
+		cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, prefix, agent)
+		if output, err := userOwnedRun(ctx, cmd, cancel); err != nil {
+			return result, fmt.Errorf("global provisioning: %w; bounded output: %s", err, output)
+		}
+	} else {
+		// A reused SDK runs no supplier; its recorded version — or the frozen
+		// lock's for a manifest predating the field (S23/M3) — resolves the
+		// supplier authority below.
+		userShellDetail(ctx, 3, 5, "Reusing the installed global runtime")
+	}
+	pkg := filepath.Join(prefix, "lib/node_modules/gentle-pi")
+	// The supplier files are authenticated against the reviewed list entry for
+	// the gentle-pi version this stage carries. A rebuilt Stable SDK carries
+	// the newest listed release, authenticated against the staged selected
+	// list. A rebuilt Main preview SDK keeps the frozen lock's stock base,
+	// authenticated against the embedded entry like every pre-list install
+	// (S23/M4). A reused SDK carries its recorded version — or the frozen
+	// lock's version for a manifest predating the field (S23/M3) — and runs no
+	// supplier, so an entry is required only when one exists: the selected
+	// list first, then the embedded copy (S23/L1).
+	version := ""
+	var installerSHA, resolverSHA string
+	authenticate := true
+	if scope.reused[UserComponentSDK] {
+		if existing != nil {
+			version = existing.SDKVersion
+		}
+		if version == "" {
+			if version, err = userFrozenLockGentlePiVersion(); err != nil {
+				return result, err
+			}
+		}
+		if installerSHA, resolverSHA, authenticate, err = userReusedSupplierPins(ctx, version); err != nil {
+			return result, err
+		}
+	} else if userMainPreviewRequest(req) {
+		if version, err = userFrozenLockGentlePiVersion(); err != nil {
+			return result, err
+		}
+		if list, _, err = userEmbeddedReviewedList(); err != nil {
+			return result, err
+		}
+		if installerSHA, resolverSHA, err = userStableSupplierPins(list, version); err != nil {
+			return result, err
+		}
+	} else {
+		version = list.newestReviewedRelease()
+		if installerSHA, resolverSHA, err = userStableSupplierPins(list, version); err != nil {
+			return result, err
+		}
+	}
+	if authenticate {
+		for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", installerSHA}, {"runtime/gentle-ai-binary.mjs", resolverSHA}} {
+			if _, err = userSourceFile(ctx, filepath.Join(pkg, source.name), -1, source.pin); err != nil {
+				return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, err)
+			}
+		}
+	}
+	if !scope.reused[UserComponentSDK] {
+		userShellDetail(ctx, 3, 5, "Verifying the native supplier")
+		cmd := exec.CommandContext(ctx, node, "--input-type=module", "-e", privateNativeInvoke)
+		cmd.Dir, cmd.Env = pkg, userEnvironment(root, prefix, agent)
+		if output, err := userOwnedRun(ctx, cmd, cancel); err != nil {
+			return result, fmt.Errorf("native supplier: %w; bounded output: %s", err, output)
+		}
 	}
 	if err = userNativeReadback(ctx, filepath.Join(pkg, ".gentle-ai")); err != nil {
 		return result, fmt.Errorf("native supplier readback: %w", err)
 	}
-	if err = userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode); err != nil {
+	if err = userPostNativeReadback(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode, scope, existing); err != nil {
 		return result, fmt.Errorf("post-native global readback: %w", err)
+	}
+	if req.Mode == "shared" && req.Experience != nil && !scope.reused[UserComponentContext7] {
+		if err = userStageContext7Shared(ctx, req.SharedAgent, req.Experience.Context7); err != nil {
+			return result, fmt.Errorf("shared Context7 staging: %w", err)
+		}
+	}
+	if req.Mode == "agent" && req.Experience != nil && !scope.reused[UserComponentContext7] {
+		if err = userStageOwnedAgentContext7(ctx, agent, req.Experience.Context7, root); err != nil {
+			return result, fmt.Errorf("agent Context7: %w", err)
+		}
+	}
+	userShellStep(ctx, 3, 5, "Runtime and pinned suppliers installed")
+	userShellStepBegin(ctx, 4, 5, "Apply optional runtimes and the SDK channel")
+	userShellDetail(ctx, 4, 5, "Applying the selected SDK channel")
+	var mainSDK *userSnapshotArtifact
+	if scope.reused[UserComponentSDK] {
+		userShellDetail(ctx, 4, 5, "Retaining the installed SDK channel")
+		mainSDK = existing.MainSDK
+	} else if mainSDK, err = userInstallMainSDK(ctx, root, req.Destination, prefix, agent, req.Experience); err != nil {
+		return result, fmt.Errorf("Main SDK + stock provider: %w", err)
+	}
+	if _, statErr := os.Lstat(req.Destination); req.Mode == "agent" && errors.Is(statErr, os.ErrNotExist) {
+		// A fresh agent install sets Pi's own fd/rg aside inside the stage;
+		// the agent rollback restores them on any failure before the commit.
+		userShellDetail(ctx, 4, 5, "Setting Pi's own fd/rg aside inside the installation")
+		if err = userSetAsideAgentTools(ctx, agent, root); err != nil {
+			return result, fmt.Errorf("set aside Pi's fd/rg: %w", err)
+		}
 	}
 	// A bind refusal here follows Shared provisioning: it stays uncertain and
 	// keeps the staged recovery root instead of claiming an atomic rollback.
-	if err = userTools(ctx, root, agent, true); err != nil {
+	userShellDetail(ctx, 4, 5, "Binding pinned tools into the agent")
+	if err = userTools(ctx, root, agent, !scope.reused[UserComponentSDK]); err != nil {
 		return result, privateError("source", err)
 	}
+	if req.Mode == "separate" && !scope.reused[UserComponentSDK] {
+		// A rebuilt agent must not look like a fresh installation to the
+		// operator: provider logins, sessions, project state and user models
+		// survive every update through the recorded installation's agent.
+		if recorded, ok := userRecordedAgent(req.Destination, existing); ok {
+			userShellDetail(ctx, 4, 5, "Carrying the installation's operator state")
+			if err = userCarryAgentState(ctx, recorded, agent); err != nil {
+				return result, fmt.Errorf("operator state carry: %w", err)
+			}
+		}
+	}
+	userShellDetail(ctx, 4, 5, "Recording supervisor provenance")
 	self, err := userExecutable()
 	if err != nil {
 		return result, err
@@ -256,13 +544,82 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil {
 		return result, fmt.Errorf("supervisor provenance: %w", err)
 	}
+	userShellDetail(ctx, 4, 5, "Preparing the installation manifest")
 	manifest := userManifest{Schema: userSchema, Destination: req.Destination, Prefix: finalPrefix, Agent: finalAgent, Mode: req.Mode, SupervisorSHA: selfSHA, NodeSHA: privateNativeNodeSHA}
+	manifest.RootRisk = os.Getuid() == 0
+	manifest.MainSDK = mainSDK
+	// Shell installs never provision or record GGA; the bit stays false.
+	manifest.GGA = false
+	manifest.CodeGraph = req.Experience != nil && req.Experience.CodeGraph == "on"
+	// Component pins: the stock lock governs the stable SDK; a selected Main
+	// snapshot is governed by its own artifact SHA. The CodeGraph and
+	// Context7 pins are the deterministic derivations of this build.
+	if mainSDK == nil {
+		if manifest.SDKLockSHA, err = userSDKLockSHA(); err != nil {
+			return result, err
+		}
+		// Record the exact installed gentle-pi version: the stable update check
+		// compares it against the newest listed release of the selected
+		// reviewed list, which is the version the generated lock just pinned.
+		// A reused-SDK stage never reads a lock, because it may not carry one:
+		// it records the version the supplier check above authenticated — the
+		// recorded manifest's, or the frozen lock's for a manifest predating
+		// the field (S23/M3).
+		if manifest.SDKVersion, err = userRecordedSDKVersion(root, scope.reused[UserComponentSDK], version); err != nil {
+			return result, err
+		}
+	}
+	if manifest.ToolsSHA, err = userToolsPinSHA(); err != nil {
+		return result, err
+	}
+	if manifest.CodeGraph {
+		if manifest.CodeGraphSHA, err = userCodeGraphPinSHA(); err != nil {
+			return result, err
+		}
+	}
+	if req.Experience != nil && req.Experience.Context7 != "" {
+		if manifest.Context7SHA, err = userContext7EntrySHA(req.Experience.Context7); err != nil {
+			return result, err
+		}
+	}
 	manifest.PrefixIdentity, err = userIdentity(prefix)
 	if err == nil {
-		manifest.AgentIdentity, err = userIdentity(agent)
+		manifest.AgentIdentity, err = userSelectedAgentIdentity(req.Mode, agent)
 	}
 	if err != nil {
 		return result, err
+	}
+	userShellStep(ctx, 4, 5, "Optional runtimes and SDK channel applied")
+	if req.Mode == "agent" {
+		if err = userCaptureAgentPostImages(agent, root); err != nil {
+			return result, fmt.Errorf("agent post-image evidence: %w", err)
+		}
+	}
+	userShellStepBegin(ctx, 5, 5, "Publish, verify and register the installation")
+	userShellDetail(ctx, 5, 5, "Publishing the staged installation")
+	result, err = userPublishManifest(ctx, root, prefix, agent, manifest)
+	if err == nil {
+		userShellDetail(ctx, 5, 5, "Registering the published installation")
+		userShellStep(ctx, 5, 5, "Published, verified and registered")
+	}
+	return result, err
+}
+
+// userPublishManifest is the shared publication boundary. A renamed destination
+// is retained on sync/readback failure; success requires final physical readback.
+func userPublishManifest(ctx context.Context, root, prefix, agent string, manifest userManifest) (result UserInstallResult, err error) {
+	backup, replaced, err := userBeginShellReplacement(manifest.Destination)
+	if err != nil {
+		return result, err
+	}
+	switched := false
+	if replaced {
+		manifest.Replaced = backup
+		defer func() {
+			if err != nil && !switched {
+				err = errors.Join(err, userRestoreShellReplacement(manifest.Destination, backup))
+			}
+		}()
 	}
 	data, err := json.Marshal(manifest)
 	if err != nil {
@@ -272,31 +629,56 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	for _, name := range []string{"gentle-shell", "pi"} {
-		binding := userBinding(req.Destination, name)
+		binding := userManifestBinding(manifest.Destination, name, manifest)
 		if err = userToolWrite(filepath.Join(root, "bin", name), []byte(binding), 0700); err != nil {
 			return result, err
 		}
 	}
-	for selected, expected := range map[string]string{prefix: manifest.PrefixIdentity, agent: manifest.AgentIdentity} {
-		fresh, identityErr := userIdentity(selected)
-		if identityErr != nil || fresh != expected {
-			return result, privateError("preimage", identityErr)
-		}
+	freshPrefix, identityErr := userIdentity(prefix)
+	if identityErr != nil || freshPrefix != manifest.PrefixIdentity {
+		return result, privateError("preimage", identityErr)
 	}
-	if err = privateDestination(req.Destination); err != nil || ctx.Err() != nil {
+	if freshAgent, identityErr := userSelectedAgentIdentity(manifest.Mode, agent); identityErr != nil || freshAgent != manifest.AgentIdentity {
+		return result, privateError("preimage", identityErr)
+	}
+	if err = privateDestination(manifest.Destination); err != nil || ctx.Err() != nil {
 		return result, privateError("preimage", errors.Join(err, ctx.Err()))
 	}
-	if err = userRenameNoReplace(root, req.Destination); err != nil {
+	if err = userRenameNoReplace(root, manifest.Destination); err != nil {
 		return result, err
 	}
-	if err = userDirectorySync(filepath.Dir(req.Destination)); err != nil {
+	switched = true
+	userMarkPublicationCommitted(ctx)
+	if err = userDirectorySync(filepath.Dir(manifest.Destination)); err != nil {
 		return result, privateError("uncertain", err)
 	}
-	if _, err = userReadManifest(ctx, req.Destination); err != nil {
+	if _, err = userReadManifest(ctx, manifest.Destination); err != nil {
 		return result, privateError("uncertain", err)
 	}
-	return UserInstallResult{req.Destination, finalPrefix, finalAgent, "ComponentInstalled"}, nil
+	registryErr := userRecordPublishedShell(manifest)
+	launcherNote := ""
+	if manifest.Mode == "separate" {
+		report, err := PublishUserShellLauncher(manifest.Destination)
+		if err != nil {
+			return result, fmt.Errorf("installation published but launcher registration failed: %w", err)
+		}
+		launcherNote = userShellLauncherNote(report)
+	}
+	// Registration is bookkeeping for Manage, never installation authority:
+	// a refusal is reported with the result and never retracts the install.
+	launcherNote = userJoinNote(launcherNote, userRegistryNote(registryErr))
+	// The publication is renamed, read back and registered; drop only the
+	// ephemeral caches. Failure is reported but never retracts the install.
+	if cleanupErr := userPublishEphemeralCleanup(manifest.Destination); cleanupErr != nil {
+		fmt.Fprintf(os.Stderr, "Installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", manifest.Destination, cleanupErr)
+	}
+	return UserInstallResult{manifest.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", launcherNote}, nil
 }
+
+// userPublishEphemeralCleanup drops the installer's ephemeral caches after a
+// verified publication. It is a variable only so tests can observe whether
+// the publish tail calls it; production always uses userInstallEphemeralCleanup.
+var userPublishEphemeralCleanup = userInstallEphemeralCleanup
 
 // userRecover restores the saved Shared preimages of ROOT after a fresh printed
 // confirmation. The restore command runs as an owned installer command:
@@ -385,9 +767,40 @@ func userRecover(ctx context.Context, args []string, stdout io.Writer) error {
 	return err
 }
 
-const userInstallerSHA = "bc2da0585026fa538f0c6ae0cf50463767c175b71d0dfdb582a88cbe894c84ca"
-const privateNativeResolverSHA = "cbdf5deac8b7a85ab1253dbd049953aeb192a7d1f7987f9206916ab449c10a92"
 const privateNativeInvoke = `import {installGentleAi} from './scripts/gentle-ai-installer.mjs'; const packageRoot=process.cwd(); await installGentleAi({packageRoot});`
+
+// userStableSupplierPins returns the reviewed supplier file digests for the
+// given gentle-pi version from the selected reviewed supplier list — the
+// repository's only copy of the reviewed table.
+func userStableSupplierPins(list userReviewedList, version string) (installer, resolver string, err error) {
+	entry, ok := list.Releases[version]
+	if !ok {
+		return "", "", fmt.Errorf("reviewed supplier list has no entry for gentle-pi %s", version)
+	}
+	return entry.Installer, entry.Binary, nil
+}
+
+// userWriteBootstrapHelpers writes the staged provisioning helpers. They are
+// needed by both the fresh Node bootstrap and a component-scoped reuse (the
+// provisioner imports the platform-closure normalizer from the stage root),
+// so the write is idempotent: an earlier 0400 copy from the other call site
+// is removed before rewriting.
+func userWriteBootstrapHelpers(root string) error {
+	for _, name := range []string{"bootstrap-gentle-shell-private-node.sh", "complete-generated-lock-sri.mjs", "normalize-private-optional-platform-closure.mjs"} {
+		data, err := assets.ReadPrivateHelper(name)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(root, name)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.WriteFile(path, data, 0400); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func userBootstrap(ctx context.Context, root, workspace string) error {
 	if err := os.Mkdir(filepath.Join(root, "runtime"), 0700); err != nil {
@@ -402,14 +815,8 @@ func userBootstrap(ctx context.Context, root, workspace string) error {
 	if err := privateColdFetch(ctx, client, archive, privateColdSize, privateColdSHA); err != nil {
 		return err
 	}
-	for _, name := range []string{"bootstrap-gentle-shell-private-node.sh", "complete-generated-lock-sri.mjs", "normalize-private-optional-platform-closure.mjs"} {
-		data, err := assets.ReadPrivateHelper(name)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(root, name), data, 0400); err != nil {
-			return err
-		}
+	if err := userWriteBootstrapHelpers(root); err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
@@ -422,8 +829,10 @@ func userBootstrap(ctx context.Context, root, workspace string) error {
 	return userBootstrapPublish(ctx, output, filepath.Join(root, "runtime/node"))
 }
 
-// Selected personal tools are never replaced. AGENT/bin must be absent or an
+// Selected Shared tools are never replaced. AGENT/bin must be absent or an
 // owned physical 0700/0755 directory without fd or rg; links are not followed.
+// The agent target admits Pi's own fd/rg for its set-aside instead
+// (userAgentToolsAdmit); at bind time both find free slots here.
 func userToolBinAvailable(agent string) error {
 	bin := filepath.Join(agent, "bin")
 	if _, err := os.Lstat(bin); errors.Is(err, os.ErrNotExist) {
@@ -434,10 +843,14 @@ func userToolBinAvailable(agent string) error {
 	if err := privateNativeDirectory(bin); err != nil {
 		return privateError("refused", fmt.Errorf("agent bin %q must be absent or an owned physical 0700/0755 directory: %w", bin, err))
 	}
+	var present []string
 	for _, source := range userToolSources {
 		if _, err := os.Lstat(filepath.Join(bin, source.name)); !errors.Is(err, os.ErrNotExist) {
-			return privateError("refused", errors.Join(fmt.Errorf("agent bin %q already contains %s; move it before Shared installation", bin, source.name), err))
+			present = append(present, fmt.Sprintf("%s (%q)", source.name, filepath.Join(bin, source.name)))
 		}
+	}
+	if len(present) != 0 {
+		return privateError("refused", fmt.Errorf("agent bin %q already contains %s; Gentle Shell never replaces existing tools: move them out of that directory, then retry (Pi downloads its own copies again if they are ever missing)", bin, strings.Join(present, " and ")))
 	}
 	return nil
 }
@@ -579,46 +992,180 @@ func userProvisionAssets(ctx context.Context, root string, stage bool) error {
 	return nil
 }
 
+// userPostNativeReadback verifies the staged global tree after the native
+// supplier step. A reused Main preview SDK carries an agent that already
+// selects runtime/main-sdk, so it verifies that selection exactly as a fresh
+// Main composition does; the stock verify would refuse it with "selected
+// settings bindings changed". Every other stage verifies the stock package.
+func userPostNativeReadback(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string, scope userInstallScope, existing *userManifest) error {
+	if scope.reused[UserComponentSDK] && existing != nil && existing.MainSDK != nil {
+		return userMainSDKAction(ctx, root, finalRoot, prefix, agent, *existing.MainSDK, userMainSDKSelectedAction)
+	}
+	return userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, finalRoot, mode)
+}
+
 func userVerifyGlobal(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string) error {
+	return userVerifyGlobalAction(ctx, root, prefix, agent, finalPrefix, finalRoot, mode, "verify")
+}
+
+func userVerifyGlobalAction(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode, action string) error {
 	if err := userProvisionAssets(ctx, root, false); err != nil {
 		return err
 	}
 	helper := filepath.Join(root, "provision.mjs")
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/bin/node"), helper, root, prefix, agent, finalPrefix, finalRoot, mode, "verify")
+	cmd := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/bin/node"), helper, root, prefix, agent, finalPrefix, finalRoot, mode, action)
 	cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, prefix, agent)
-	_, err := userOwnedRun(ctx, cmd, cancel)
-	return err
-}
-
-func userNativeReadback(ctx context.Context, root string) error {
-	version := filepath.Join(root, "v4.0.0")
-	for _, directory := range []string{root, version} {
-		if _, err := privateDirectory(directory); err != nil {
-			return err
-		}
-	}
-	entries, err := privateNativeEntries(root)
-	if err != nil || len(entries) != 1 || entries[0].Name() != "v4.0.0" {
-		return privateError("readback", err)
-	}
-	binary := filepath.Join(version, "gentle-ai")
-	if _, err := privateNativeFile(ctx, binary, 0700, userBinarySize, userBinarySHA); err != nil {
-		return err
-	}
-	if _, err := privateNativeFile(ctx, filepath.Join(version, "integrity.json"), 0600, int64(len(userNativeManifest)), fmt.Sprintf("%x", sha256.Sum256([]byte(userNativeManifest)))); err != nil {
-		return err
-	}
-	entries, err = privateNativeEntries(version)
-	if err != nil || len(entries) != 2 || !((entries[0].Name() == "gentle-ai" && entries[1].Name() == "integrity.json") || (entries[1].Name() == "gentle-ai" && entries[0].Name() == "integrity.json")) {
-		return privateError("readback", err)
+	output, err := userOwnedRun(ctx, cmd, cancel)
+	if err != nil {
+		return fmt.Errorf("%w; bounded output: %s", err, output)
 	}
 	return nil
 }
 
+func userNativeReadback(ctx context.Context, root string) error {
+	if _, err := privateDirectory(root); err != nil {
+		return err
+	}
+	entries, err := privateNativeEntries(root)
+	if err != nil || len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "v") {
+		return privateError("readback", err)
+	}
+	// The stock installer names the bundle after its own pinned Gentle AI
+	// release; the version is derived from the layout and cross-checked against
+	// the manifest instead of a frozen literal.
+	version := strings.TrimPrefix(entries[0].Name(), "v")
+	if !userNativeSemver(version) {
+		return privateError("readback", nil)
+	}
+	bundle := filepath.Join(root, entries[0].Name())
+	if _, err := privateDirectory(bundle); err != nil {
+		return err
+	}
+	members, err := privateNativeEntries(bundle)
+	if err != nil || len(members) != 2 {
+		return privateError("readback", err)
+	}
+	var manifest struct {
+		Version      string `json:"version"`
+		Asset        string `json:"asset"`
+		AssetSha256  string `json:"assetSha256"`
+		Method       string `json:"method"`
+		BinarySha256 string `json:"binarySha256"`
+	}
+	integrity := filepath.Join(bundle, "integrity.json")
+	if _, err := privateNativeFile(ctx, integrity, 0600, -1, ""); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(integrity)
+	if err != nil || len(data) > 4096 || !strings.HasSuffix(string(data), "}\n") || strings.Contains(strings.TrimSuffix(string(data), "\n"), "\n") || json.Unmarshal(data, &manifest) != nil {
+		return privateError("readback", err)
+	}
+	digest := func(value string) bool {
+		decoded, err := hex.DecodeString(value)
+		return err == nil && len(decoded) == sha256.Size
+	}
+	if manifest.Version != version || !digest(manifest.BinarySha256) {
+		return privateError("readback", nil)
+	}
+	canonical := func(shape any) bool {
+		var buffer bytes.Buffer
+		encoder := json.NewEncoder(&buffer)
+		encoder.SetEscapeHTML(false)
+		return encoder.Encode(shape) == nil && bytes.Equal(data, buffer.Bytes())
+	}
+	if manifest.Method == "" {
+		// Stock signed-release shape: the pinned archive and its extracted
+		// binary, in the installer's exact canonical byte form.
+		release := map[string]string{"linux": "linux_amd64", "darwin": "darwin_arm64"}[runtime.GOOS]
+		canonicalSigned := struct {
+			Version      string `json:"version"`
+			Asset        string `json:"asset"`
+			AssetSha256  string `json:"assetSha256"`
+			BinarySha256 string `json:"binarySha256"`
+		}{manifest.Version, manifest.Asset, manifest.AssetSha256, manifest.BinarySha256}
+		if manifest.Asset != "gentle-ai_"+version+"_"+release+".tar.gz" || !digest(manifest.AssetSha256) || !canonical(canonicalSigned) {
+			return privateError("readback", nil)
+		}
+	} else {
+		// The stock Windows Go SumDB source-build shape is also admitted, again
+		// only in its exact canonical byte form; any other method or field set
+		// is a foreign manifest.
+		var canonicalSource struct {
+			Version        string          `json:"version"`
+			Method         string          `json:"method"`
+			Package        string          `json:"package"`
+			Module         string          `json:"module"`
+			Tag            string          `json:"tag"`
+			Architecture   string          `json:"architecture"`
+			BinarySha256   string          `json:"binarySha256"`
+			ModuleChecksum string          `json:"moduleChecksum"`
+			GoVersion      string          `json:"goVersion"`
+			Goos           string          `json:"goos"`
+			Goarch         string          `json:"goarch"`
+			BuildMode      string          `json:"buildMode"`
+			Compiler       string          `json:"compiler"`
+			CgoEnabled     json.RawMessage `json:"cgoEnabled"`
+		}
+		if manifest.Method != "go-sumdb-source-build" || json.Unmarshal(data, &canonicalSource) != nil || !canonical(canonicalSource) {
+			return privateError("readback", nil)
+		}
+	}
+	if _, err := privateNativeFile(ctx, filepath.Join(bundle, "gentle-ai"), 0700, -1, manifest.BinarySha256); err != nil {
+		return err
+	}
+	return nil
+}
+
+// userNativeSemver admits only canonical stock release versions: three
+// dot-separated unsigned integer components with an optional prerelease,
+// rejecting leading zeros, build metadata and every other spelling.
+func userNativeSemver(version string) bool {
+	const component = "(0|[1-9][0-9]*)"
+	pattern := "^" + component + "\\." + component + "\\." + component + "(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+	matched, err := regexp.MatchString(pattern, version)
+	return err == nil && matched
+}
+
+// userRecordedChecks names the recorded-installation verifications that apply
+// to an update. A component in scope is replaced from the running build, so
+// verifying its recorded bytes would refuse the update that replaces them. The
+// supervisor is never reused either, so only the strict read verifies it.
+type userRecordedChecks struct {
+	node      bool
+	sdk       bool
+	codegraph bool
+}
+
+func userRecordedChecksFor(reuse *userInstallScope) userRecordedChecks {
+	if reuse == nil {
+		return userRecordedChecks{node: true, sdk: true, codegraph: true}
+	}
+	return userRecordedChecks{
+		node:      reuse.reused[UserComponentNode],
+		sdk:       reuse.reused[UserComponentSDK],
+		codegraph: reuse.reused[UserComponentCodeGraph],
+	}
+}
+
 func userReadManifest(ctx context.Context, root string) (userManifest, error) {
+	return userReadRecordedManifest(ctx, root, nil)
+}
+
+// userReadReusableManifest validates the recorded installation a component-
+// scoped update is about to reuse. It proves exactly what the update keeps: the
+// manifest identity, the bin bindings, the custody of the installer-owned
+// inventory, and the pins of the components outside scope. The recorded
+// provisioner is never executed and a component in scope is never pinned,
+// because the stage rebuilds both from the running build.
+func userReadReusableManifest(ctx context.Context, root string, scope userInstallScope) (userManifest, error) {
+	return userReadRecordedManifest(ctx, root, &scope)
+}
+
+func userReadRecordedManifest(ctx context.Context, root string, reuse *userInstallScope) (userManifest, error) {
 	var manifest userManifest
+	checks := userRecordedChecksFor(reuse)
 	if _, err := privateDirectory(filepath.Dir(root)); err != nil {
 		return manifest, err
 	}
@@ -630,33 +1177,98 @@ func userReadManifest(ctx context.Context, root string) (userManifest, error) {
 		return manifest, err
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || len(data) > 4096 || json.Unmarshal(data, &manifest) != nil || manifest.Schema != userSchema || manifest.Destination != root || (manifest.Mode != "separate" && manifest.Mode != "shared") {
+	if err != nil || len(data) > 4096 || json.Unmarshal(data, &manifest) != nil || manifest.Schema != userSchema || manifest.Destination != root || (manifest.Mode != "separate" && manifest.Mode != "shared" && manifest.Mode != "agent") {
 		return manifest, privateError("refused", err)
 	}
+	if manifest.PNPM != nil {
+		return userReadPNPMManifest(ctx, root, manifest)
+	}
+	if manifest.CodeGraph {
+		if manifest.Mode != "separate" && manifest.Mode != "shared" && manifest.Mode != "agent" {
+			return manifest, privateError("refused", errors.New("CodeGraph requires a Separate, Shared or agent manifest"))
+		}
+		if checks.codegraph {
+			if err := userCodeGraphReadback(ctx, root); err != nil {
+				return manifest, fmt.Errorf("CodeGraph retained integrity: %w", err)
+			}
+		}
+	}
 	for _, name := range []string{"gentle-shell", "pi"} {
-		binding := userBinding(root, name)
+		binding := userManifestBinding(root, name, manifest)
 		if _, err := privateNativeFile(ctx, filepath.Join(root, "bin", name), 0700, int64(len(binding)), fmt.Sprintf("%x", sha256.Sum256([]byte(binding)))); err != nil {
 			return manifest, err
 		}
 	}
-	for path, expected := range map[string]string{manifest.Prefix: manifest.PrefixIdentity, manifest.Agent: manifest.AgentIdentity} {
-		actual, err := userIdentity(path)
-		if err != nil || actual != expected {
-			return manifest, privateError("preimage", err)
-		}
+	if actual, err := userIdentity(manifest.Prefix); err != nil || actual != manifest.PrefixIdentity {
+		return manifest, privateError("preimage", err)
 	}
-	for _, source := range []struct{ path, pin string }{{"supervisor", manifest.SupervisorSHA}, {"runtime/node/bin/node", privateNativeNodeSHA}} {
-		if len(source.pin) != 64 {
-			return manifest, privateError("source", nil)
-		}
-		if _, err := privateNativeFile(ctx, filepath.Join(root, source.path), 0700, -1, source.pin); err != nil {
+	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || actual != manifest.AgentIdentity {
+		return manifest, privateError("preimage", err)
+	}
+	if reuse == nil {
+		if err := userRecordedPin(ctx, root, "supervisor", manifest.SupervisorSHA); err != nil {
 			return manifest, err
 		}
 	}
-	if err := userTools(ctx, root, manifest.Agent, false); err != nil {
-		return manifest, privateError("source", err)
+	if checks.node {
+		if err := userRecordedPin(ctx, root, "runtime/node/bin/node", privateNativeNodeSHA); err != nil {
+			return manifest, err
+		}
+	}
+	if checks.sdk {
+		if err := userTools(ctx, root, manifest.Agent, false); err != nil {
+			return manifest, privateError("source", err)
+		}
+	}
+	if reuse == nil {
+		if manifest.MainSDK != nil {
+			if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
+				return manifest, err
+			}
+		}
+	} else if manifest.MainSDK != nil {
+		if err := userVerifyReusableMain(ctx, root, manifest, checks); err != nil {
+			return manifest, err
+		}
 	}
 	return manifest, nil
+}
+
+func userRecordedPin(ctx context.Context, root, relative, pin string) error {
+	if len(pin) != 64 {
+		return privateError("source", nil)
+	}
+	_, err := privateNativeFile(ctx, filepath.Join(root, relative), 0700, -1, pin)
+	return err
+}
+
+// userVerifyReusableMain proves a recorded Main tree can be reused without
+// executing the provisioner it recorded: the stage writes that helper from the
+// running build before it runs anything. A reused SDK is still compared against
+// the snapshot its manifest recorded.
+func userVerifyReusableMain(ctx context.Context, root string, manifest userManifest, checks userRecordedChecks) error {
+	if err := userMainBindingShape(root, manifest); err != nil {
+		return err
+	}
+	if checks.sdk {
+		return userCompareMainSource(ctx, root, *manifest.MainSDK)
+	}
+	return nil
+}
+
+// userRecordedAgent names the agent a rebuilt separate installation carries
+// operator state from. Its destination fixes the agent, so a recorded tree that
+// refused strict verification still contributes its operator state instead of
+// rebuilding the agent as if this were a fresh installation.
+func userRecordedAgent(destination string, recorded *userManifest) (string, bool) {
+	agent := filepath.Join(destination, "agent")
+	if recorded != nil {
+		agent = recorded.Agent
+	}
+	if _, err := os.Lstat(agent); err != nil {
+		return "", false
+	}
+	return agent, true
 }
 
 func userLaunchCommand(ctx context.Context, root string, manifest userManifest, cli string, args []string) *exec.Cmd {
@@ -664,10 +1276,30 @@ func userLaunchCommand(ctx context.Context, root string, manifest userManifest, 
 	// Read-only stock Git probes must not refresh the caller's index. Explicit
 	// Git writes still take their mandatory locks.
 	cmd.Env = append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0")
+	// Shared memory: only the outer entry's Engram decision, never caller env;
+	// a Separate launch without one runs with memory disabled.
+	cmd.Env = append(cmd.Env, userEngramSeparateLaunch(manifest.Mode, userEngramContextEnv(ctx))...)
+	// GGA is retired from the shell installer: no runtime PATH is extended.
+	userCodeGraphLaunchEnv(root, manifest, cmd)
 	return cmd // Empty Dir inherits the caller's project, not the installer stage.
 }
 
+// userRootRiskBanner warns on every launch of an installation running as
+// root: the delegated sandbox guarantees are disabled for that identity.
+func userRootRiskBanner(stderr io.Writer) {
+	userRootRiskBannerUID(stderr, os.Getuid())
+}
+
+func userRootRiskBannerUID(stderr io.Writer, uid int) {
+	if uid != 0 || stderr == nil {
+		return
+	}
+	_, _ = fmt.Fprintln(stderr, "WARNING: running as root; the private installation sandbox (capability drop, NoNewPrivileges, delegated unit limits) is disabled for this root-risk installation")
+}
+
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
+	userRootRiskBanner(stderr)
+	ctx = userEngramLaunchScope(ctx, root, args)
 	manifest, err := userReadManifest(ctx, root)
 	if err != nil {
 		return err
@@ -676,8 +1308,13 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	if _, err := userSourceFile(ctx, cli, -1, ""); err != nil {
 		return userGraphRepairError(root, manifest.Mode, err)
 	}
-	if err := userVerifyGlobal(ctx, root, manifest.Prefix, manifest.Agent, manifest.Prefix, root, manifest.Mode); err != nil {
+	if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
 		return userGraphRepairError(root, manifest.Mode, err)
+	}
+	// S23/M1: a tree without a staged reviewed list keeps its supplier files
+	// authenticated against the embedded entry on every launch.
+	if err := userVerifyRecordedSuppliers(ctx, root, manifest); err != nil {
+		return err
 	}
 	if err := userNativeReadback(ctx, filepath.Join(manifest.Prefix, "lib/node_modules/gentle-pi/.gentle-ai")); err != nil {
 		return err
@@ -696,9 +1333,20 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	return userLaunchGroup(cmd, stdin, func(err error) error {
 		settled = true
-		err = limited(err)
-		if readbackErr := userVerifyGlobal(context.Background(), root, manifest.Prefix, manifest.Agent, manifest.Prefix, root, manifest.Mode); readbackErr != nil {
+		if manifest.CodeGraph {
+			if readbackErr := userCodeGraphReadback(context.Background(), root); readbackErr != nil {
+				failure := privateError("uncertain", errors.Join(err, readbackErr))
+				failure.Workspace, failure.Destination = root, root
+				return failure
+			}
+		}
+		if readbackErr := userVerifyInstalledGlobal(context.Background(), root, manifest); readbackErr != nil {
 			failure := privateError("uncertain", errors.Join(err, readbackErr))
+			failure.Workspace, failure.Destination = root, manifest.Prefix
+			return failure
+		}
+		if supplierErr := userVerifyRecordedSuppliers(context.Background(), root, manifest); supplierErr != nil {
+			failure := privateError("uncertain", errors.Join(err, supplierErr))
 			failure.Workspace, failure.Destination = root, manifest.Prefix
 			return failure
 		}

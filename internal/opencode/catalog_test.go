@@ -341,10 +341,10 @@ func TestDiscoverCatalogRejectsInvalidOutput(t *testing.T) {
 	}
 }
 
-// TestProcessStreamReaderReadSurfacesExitStatusAfterEOF pins the Read
-// contract: once the drained stream is exhausted, Read must reap the child
+// TestCatalogFileReaderReadSurfacesExitStatusAfterEOF pins the Read
+// contract: once the captured stream is exhausted, Read must reap the child
 // and return its exit error, never swallow it as a plain io.EOF.
-func TestProcessStreamReaderReadSurfacesExitStatusAfterEOF(t *testing.T) {
+func TestCatalogFileReaderReadSurfacesExitStatusAfterEOF(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("requires a POSIX exit-status fixture")
 	}
@@ -787,40 +787,86 @@ func main() {
 	}
 }
 
-func TestBoundedPipeBufferPreservesNonEOFReadFailure(t *testing.T) {
-	buf := newBoundedPipeBuffer(1024, nil)
-	buf.append([]byte("hello world"))
-	simulatedErr := errors.New("simulated pipe read failure")
-	buf.finish(simulatedErr)
+// TestCatalogFileReaderCapturesRegularFileAndCleansUp pins the transport
+// contract of issue #5833: the catalog child's stdout must be a regular file
+// (OpenCode V2 truncates its own API response when stdout is a pipe), the
+// reader must serve the complete capture, and Close must remove the temp
+// file.
+func TestCatalogFileReaderCapturesRegularFileAndCleansUp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX /proc stdout fixture")
+	}
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "stdout-kind-helper")
+	source := filepath.Join(dir, "main.go")
+	src := `package main
 
-	chunk := make([]byte, 5)
-	n, err := buf.Read(chunk)
-	if err != nil || n != 5 || string(chunk[:n]) != "hello" {
-		t.Fatalf("Read chunk 1 = (%d, %v, %q), want (5, nil, %q)", n, err, string(chunk[:n]), "hello")
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	info, err := os.Stdout.Stat()
+	if err != nil {
+		os.Exit(3)
+	}
+	switch mode := info.Mode(); {
+	case mode&os.ModeCharDevice != 0:
+		fmt.Println("char-device")
+	case mode&os.ModeNamedPipe != 0:
+		fmt.Println("pipe")
+	case mode.IsRegular():
+		fmt.Println("regular")
+	default:
+		fmt.Println("other")
+	}
+	fmt.Println("tail-marker")
+}
+`
+	if err := os.WriteFile(source, []byte(src), 0o600); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	if err := exec.Command("go", "build", "-o", helper, source).Run(); err != nil {
+		t.Fatalf("build helper: %v", err)
 	}
 
-	rest := make([]byte, 100)
-	n, err = buf.Read(rest)
-	if err != nil || n != 6 || string(rest[:n]) != " world" {
-		t.Fatalf("Read chunk 2 = (%d, %v, %q), want (6, nil, %q)", n, err, string(rest[:n]), " world")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
+	if err != nil {
+		t.Fatalf("runCatalogCommand() error = %v", err)
 	}
-
-	// Buffer drained; next read must return the non-EOF readErr.
-	n, err = buf.Read(rest)
-	if !errors.Is(err, simulatedErr) {
-		t.Fatalf("Read after drain err = %v, want %v", err, simulatedErr)
+	out, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("io.ReadAll() error = %v", readErr)
+	}
+	lines := strings.Fields(string(out))
+	if len(lines) != 2 || lines[0] != "regular" || lines[1] != "tail-marker" {
+		t.Fatalf("helper stdout = %q, want [regular tail-marker] (catalog stdout must be a regular file)", string(out))
+	}
+	if closer, ok := r.(io.Closer); ok {
+		if closeErr := closer.Close(); closeErr != nil {
+			t.Fatalf("Close() error = %v", closeErr)
+		}
+	} else {
+		t.Fatal("runCatalogCommand reader does not implement io.Closer")
+	}
+	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "gentle-ai-opencode-catalog-*"))
+	if len(matches) != 0 {
+		t.Fatalf("catalog capture files left behind: %v", matches)
 	}
 }
 
-// TestProcessStreamReaderWaitErrorJoinsStdoutDrain pins the os/exec pipe
-// lifecycle contract: when parsing fails early while the child is still alive
-// and writing, WaitError must join the stdout drain before reaping the child
-// instead of calling Wait under a concurrent pipe reader. The helper emits a
+// TestCatalogFileReaderWaitErrorJoinsChildBeforeReporting pins the lifecycle
+// contract: when parsing fails early while the child is still alive and
+// writing, WaitError must reap the child before reporting instead of racing
+// a concurrent reaper. The helper emits a
 // malformed record first (so the parse fails fast) and keeps writing noise
 // for ~2s before exiting non-zero; discovery must complete promptly with
 // command_failed (the child's exit wins over the parse classification) and
-// must never panic or deadlock on the pipe.
-func TestProcessStreamReaderWaitErrorJoinsStdoutDrain(t *testing.T) {
+// must never panic or deadlock.
+func TestCatalogFileReaderWaitErrorJoinsChildBeforeReporting(t *testing.T) {
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "earlyfail-helper")
 	if runtime.GOOS == "windows" {
@@ -878,6 +924,69 @@ func main() {
 		}
 	case <-time.After(12 * time.Second):
 		t.Fatal("DiscoverCatalogWithRunner blocked; WaitError did not join the stdout drain before reaping")
+	}
+}
+
+// TestCatalogFileReaderDeliversLargeV2Response pins the issue #5833 symptom:
+// a V2 API response large enough to stress pipe buffering must arrive complete
+// through the file transport and parse into the full catalog.
+func TestCatalogFileReaderDeliversLargeV2Response(t *testing.T) {
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "large-v2-helper")
+	if runtime.GOOS == "windows" {
+		helper += ".exe"
+	}
+	source := filepath.Join(dir, "main.go")
+	src := `package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+func main() {
+	var b strings.Builder
+	b.WriteString("{\"data\":[")
+	for i := 0; i < 4000; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		record := "{\"id\":\"model-%04d\",\"modelID\":\"model-%04d\",\"providerID\":\"prov-%03d\",\"name\":\"Model %04d %s\",\"family\":\"fam\",\"enabled\":true,\"capabilities\":{\"tools\":true,\"reasoning\":true},\"variants\":[{\"id\":\"low\"},{\"id\":\"high\"}],\"limit\":{\"context\":128000},\"cost\":[{\"input\":1,\"output\":2}]}"
+		fmt.Fprintf(&b, record, i, i, i/10, i, strings.Repeat("x", 200))
+	}
+	b.WriteString("]}")
+	fmt.Print(b.String())
+}
+`
+	if err := os.WriteFile(source, []byte(src), 0o600); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	if err := exec.Command("go", "build", "-o", helper, source).Run(); err != nil {
+		t.Fatalf("build helper: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
+	if err != nil {
+		t.Fatalf("runCatalogCommand() error = %v", err)
+	}
+	if closer, ok := r.(io.Closer); ok {
+		defer closer.Close()
+	}
+	providers, parseErr := parseV2ModelAPI(&countingLimitReader{r: r, limit: maxCatalogOutput, cancel: cancel})
+	if parseErr != nil {
+		t.Fatalf("large V2 response failed to parse through file transport: %v", parseErr)
+	}
+	if len(providers) != 400 {
+		t.Fatalf("parsed providers = %d, want 400", len(providers))
+	}
+	if got := len(providers["prov-007"].Models); got != 10 {
+		t.Fatalf("models in prov-007 = %d, want 10", got)
+	}
+	last := providers["prov-399"].Models["model-3999"]
+	if last.ID != "model-3999" || !last.ToolCall {
+		t.Fatalf("final record incomplete: %+v", last)
 	}
 }
 

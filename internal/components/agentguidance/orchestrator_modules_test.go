@@ -350,3 +350,22 @@ func (b orchestratorModuleBundle) reconstruct() (string, error) {
 	out.WriteString(b.core[cursor:])
 	return out.String(), nil
 }
+
+// gentle-ai#5682 follow-up: the ODD gate summarizes the high-risk list, and a
+// literal reader must not find a broader item 1 there than in the routing list.
+func TestOrchestratorODDGateKeepsItemOneRebuildCondition(t *testing.T) {
+	shared, err := assets.Read(sharedOrchestratorSectionsAsset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := sharedOrchestratorSection(shared, "Delegated Verification Gate (MANDATORY)"+oddOnlySectionSuffix)
+	if gate == "" {
+		t.Fatal("ODD-only Delegated Verification Gate section is missing")
+	}
+	if want := "changing or deleting existing stored data that cannot be rebuilt"; !strings.Contains(gate, want) {
+		t.Fatalf("ODD gate high-risk summary is missing %q", want)
+	}
+	if old := "changing or deleting existing stored data or other irreversible effects"; strings.Contains(gate, old) {
+		t.Fatalf("ODD gate keeps the broader summary %q", old)
+	}
+}

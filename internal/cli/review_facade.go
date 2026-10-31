@@ -620,6 +620,11 @@ func RunReview(args []string, stdout io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), reviewFacadeOperationDeadline(operation, args[1:]))
 	defer cancel()
+	var statusTimings *reviewtransaction.StatusPhaseTimings
+	if operation == "review.status" && reviewStatusPhaseTimingsEnabled(args[1:]) {
+		statusTimings = reviewtransaction.NewStatusPhaseTimings()
+		ctx = reviewtransaction.WithStatusPhaseTimings(ctx, statusTimings)
+	}
 	metadata, _ := reviewIntegrationOperationByName(operation)
 	joinOnTimeout := metadata.JoinOnTimeout && reviewIntegrationOperationMutates(metadata, args[1:])
 	var output bytes.Buffer
@@ -641,9 +646,15 @@ func RunReview(args []string, stdout io.Writer) error {
 			runErr = ctx.Err()
 		}
 	}
+	if statusTimings != nil {
+		emitReviewStatusPhaseTimings(statusTimings)
+	}
 	if runErr == nil {
 		_, err := io.Copy(stdout, &output)
 		return err
+	}
+	if statusTimings != nil {
+		runErr = fmt.Errorf("%w (%s)", runErr, statusTimings.Snapshot().FormatSummary())
 	}
 	failure := newReviewIntegrationFailure(operation, args[1:], runErr)
 	// Generate the defect report before emitting the envelope so a stdout
@@ -685,11 +696,7 @@ func runReviewCollectCaptureCommand(operation string, args []string, stdout io.W
 		_, err := io.Copy(stdout, &output)
 		return err
 	}
-	failure := newReviewIntegrationFailure(operation, args[1:], runErr)
-	// The capture verbs exist only in the v2.1 negotiated lifecycle and the
-	// published v1 failure schema does not admit their operation names, so
-	// the envelope publishes under the v2 identity unconditionally.
-	failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+	failure := reviewCollectCaptureFailureIdentity(newReviewIntegrationFailure(operation, args[1:], runErr))
 	// Generate the defect report before emitting the envelope so a stdout
 	// write failure cannot suppress the artifact, exactly as the negotiated
 	// route does.
@@ -708,6 +715,18 @@ func runReviewCollectCaptureCommand(operation string, args []string, stdout io.W
 		return errors.Join(typedFailure, emitErr)
 	}
 	return typedFailure
+}
+
+// reviewCollectCaptureFailureIdentity publishes a classified capture failure
+// under the v2 identity. The capture verbs exist only in the v2.1 negotiated
+// lifecycle and the published v1 failure schema does not admit their operation
+// names, so the envelope publishes under v2 unconditionally. Order matters:
+// the classifier sees no --contract flag on a capture and returns a v1
+// envelope that may already carry a managed_assets_outdated continuation
+// (#4379), which Validate rejects until this identity is applied.
+func reviewCollectCaptureFailureIdentity(failure ReviewIntegrationFailure) ReviewIntegrationFailure {
+	failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+	return failure
 }
 
 func runReviewCommandContext(ctx context.Context, args []string, stdout io.Writer) error {
@@ -806,8 +825,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	escalateReason := flags.String("escalate-reason", "", "preflight review start --escalate-reason and render it into the fresh START next transition")
 	lensSelection := flags.String("lenses", "", "preflight review start --lenses and render it into the fresh START next transition")
 	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason and render it into the fresh START next transition")
+	phaseTimings := flags.Bool("phase-timings", false, "emit opt-in native STATUS phase timing diagnostics")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
+	}
+	if reviewtransaction.StatusPhaseTimingsFromContext(ctx) == nil && (*phaseTimings || reviewStatusPhaseTimingsEnvEnabled()) {
+		timings := reviewtransaction.NewStatusPhaseTimings()
+		ctx = reviewtransaction.WithStatusPhaseTimings(ctx, timings)
+		defer emitReviewStatusPhaseTimings(timings)
 	}
 	if reviewHelpRequested(args) {
 		return nil
@@ -931,10 +956,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
 		hydratedIntendedScope := false
 		// pendingApprovedTerminalTarget carries the exact frozen target kind
-		// and base ref an approved-pending lineage resumed below, so a
-		// selectorless refresh can rebuild the same committed-range
-		// projection instead of silently defaulting to current-changes
-		// (gentle-pi#569).
+		// and base ref an approved-pending or correction-required lineage
+		// resumed below, so a selectorless refresh can rebuild the same
+		// committed-range projection instead of silently defaulting to
+		// current-changes (gentle-pi#569, gentle-shell#2379).
 		var pendingApprovedTerminalTarget *reviewtransaction.Snapshot
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
@@ -960,14 +985,23 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					// plain re-entry dead-ended the correction lineage and bound the
 					// resulting collect input to a different (live, declaration-less)
 					// target identity than the one the authority is bound to (issue
-					// #3849 and #4435). A frozen EXCLUDE declaration (empty selection)
-					// is left alone here because it is indistinguishable on its own from
+					// #3849 and #4435). For a workspace-scoped (current-changes or
+					// overlay) target a frozen EXCLUDE declaration (empty selection) is
+					// left alone here because it is indistinguishable on its own from
 					// "nothing was ever declared"; that path still requires a fresh live
-					// declaration when eligible untracked files exist.
+					// declaration when eligible untracked files exist. A committed-range
+					// (base-diff) target has no such ambiguity: its candidate is the
+					// frozen commit range plus the frozen selection, so even an empty
+					// selection is the immutable decision and resumes as-is
+					// (gentle-shell#2379, #1596).
 					_, pendingApproval := reviewtransaction.PendingApprovedCompactAcknowledgement(record)
 					resumeCorrectionUntracked := false
 					declaredUntracked := record.State.InitialSnapshot.IntendedUntracked
-					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) != 0 {
+					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) == 0 &&
+						record.State.CurrentSnapshot.Kind == reviewtransaction.TargetBaseDiff &&
+						selectedBaseRef == "" && !*workspaceOverlay {
+						resumeCorrectionUntracked = true
+					} else if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) != 0 {
 						inventory, _, inventoryErr := builder.IntendedUntrackedInventory(ctx)
 						if inventoryErr != nil {
 							return reviewPreflightError(inventoryErr)
@@ -1005,7 +1039,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		// Issue gentle-pi#569: a caller-authorized committed-range approval
 		// (base-diff, committed-only) must survive a selectorless STATUS
-		// refresh performed only to reach `review.acknowledge-approved`. The
+		// refresh performed only to reach `review.acknowledge-approved`; the
+		// same holds for a committed-range correction_required lineage
+		// re-entered without a selector (gentle-shell#2379). The
 		// caller supplied no --base-ref/--committed-only/--workspace-overlay
 		// of its own, so nothing above already claimed this target; without
 		// this, the default current-changes target above projects an empty
@@ -1044,6 +1080,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// passiveDeltaIdentity names the fresh target whose START was withheld
 		// because it only adds passive content to an acknowledged candidate.
 		passiveDeltaIdentity := ""
+		// boundaryReachesHead marks the #5638 outcome where every commit since
+		// the acknowledged boundary was empty: nothing unreviewed remains, and
+		// the fresh offer becomes the acknowledged_boundary_reaches_head stop.
+		boundaryReachesHead := false
 		// Issue #3932: a continuation START issued carries the opaque
 		// repository context, so it is a resume of an existing lineage, never
 		// a pre-named fresh START. A process cwd that does not hold that
@@ -1081,10 +1121,19 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// Resolve the effective candidate before acknowledgement discovery or
 			// consumption lookup, so STATUS and START share one identity.
 			if requestedLineage == "" && selectedBaseRef == "" && !*workspaceOverlay {
-				if derived, derivedTarget, ok := reviewDerivedCommittedRangeSnapshot(ctx, root, builder, liveSnapshot, target); ok {
-					liveSnapshot, target = derived, derivedTarget
-					derivedBaseRef = derivedTarget.BaseRef
-					selector = &reviewTransitionSelector{Kind: target.Kind, Projection: liveSnapshot.Projection, BaseRef: derivedBaseRef, PrePRRepresentable: true}
+				if derived, derivedTarget, outcome := reviewDerivedCommittedRangeSnapshot(ctx, root, builder, liveSnapshot, target); outcome != derivedRangeNone {
+					if outcome == derivedRangeCandidate {
+						liveSnapshot, target = derived, derivedTarget
+						derivedBaseRef = derivedTarget.BaseRef
+						selector = &reviewTransitionSelector{Kind: target.Kind, Projection: liveSnapshot.Projection, BaseRef: derivedBaseRef, PrePRRepresentable: true}
+					}
+					if outcome == derivedRangeBoundaryReachesHead {
+						// Issue #5638: nothing unreviewed remains between the
+						// acknowledged boundary and HEAD. The guards below still
+						// evaluate the full-range candidate truthfully; only the
+						// final fresh offer becomes the boundary stop.
+						boundaryReachesHead = true
+					}
 				}
 			}
 			// #3900: a zero-lens START closes approved with a pending
@@ -1150,6 +1199,13 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					if passive, passiveErr := reviewtransaction.AcknowledgedPassivePredecessor(ctx, root, liveSnapshot); passiveErr == nil && passive {
 						native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
 						passiveDeltaIdentity = liveSnapshot.Identity
+					} else if passiveErr == nil && boundaryReachesHead {
+						// Issue #5638: the acknowledged boundary reaches HEAD --
+						// every commit since it was empty, so nothing unreviewed
+						// remains. Same withholding contract as the passive
+						// sibling: no authority, live lineages stay visible, and
+						// any earlier failure kept the offer.
+						native.Action, native.Replayability = reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityNotReplayable
 					}
 				}
 			}
@@ -1182,6 +1238,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		result.committedRangeBaseRef = derivedBaseRef
 		result.startOptions = startOptions
 		result.passiveDeltaAfterAcknowledgement = passiveDeltaIdentity != "" && native.TargetIdentity == passiveDeltaIdentity &&
+			native.Action == reviewtransaction.TargetStatusActionStop
+		result.acknowledgedBoundaryReachesHead = boundaryReachesHead &&
 			native.Action == reviewtransaction.TargetStatusActionStop
 		// Issue #4040: publish the digest once, here, before every path that
 		// could suppress it — the compact-reviewing replacement immediately
@@ -1602,25 +1660,76 @@ func reviewFreshAtomicTargetStatus(target reviewtransaction.Target, snapshot rev
 	}
 }
 
+// reviewDerivedRangeOutcome says what the selectorless committed-range
+// derivation resolved for this fresh workspace.
+type reviewDerivedRangeOutcome int
+
+const (
+	// derivedRangeNone: no derivation happened; the caller keeps the live
+	// current-changes candidate and its base-selection fallback.
+	derivedRangeNone reviewDerivedRangeOutcome = iota
+	// derivedRangeCandidate: snapshot/target hold the effective candidate --
+	// the full committed range, or the delta since the acknowledged boundary
+	// when the boundary walk found one with a non-passive delta (issue #5638).
+	derivedRangeCandidate
+	// derivedRangeBoundaryReachesHead: every commit since the acknowledged
+	// boundary was empty, so nothing unreviewed remains between the boundary
+	// and HEAD. snapshot/target still hold the full-range candidate so the
+	// pending-lineage and occupancy guards keep evaluating truthfully; the
+	// caller turns the fresh offer into the acknowledged_boundary_reaches_head
+	// stop and never hides a live lineage.
+	derivedRangeBoundaryReachesHead
+)
+
 // reviewDerivedCommittedRangeSnapshot resolves an empty selectorless workspace
-// to the remote default branch's unique committed range before classification.
-// The result is the effective STATUS candidate, not a second transition-only
-// identity. Ambiguous or empty ranges retain the existing base-selection fallback.
-func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target) (reviewtransaction.Snapshot, reviewtransaction.Target, bool) {
+// to the unique committed range before classification. The result is the
+// effective STATUS candidate, not a second transition-only identity. Ambiguous
+// or empty ranges retain the existing base-selection fallback. When the
+// acknowledged-boundary walk (issue #5638) finds a consumed first-parent
+// ancestor with a non-passive delta, the effective candidate is the delta
+// since that boundary -- its --base-ref names the boundary commit -- and every
+// walk failure, passive delta, or beyond-window boundary keeps the full-range
+// candidate exactly as before.
+func reviewDerivedCommittedRangeSnapshot(ctx context.Context, root string, builder reviewtransaction.SnapshotBuilder, live reviewtransaction.Snapshot, target reviewtransaction.Target) (reviewtransaction.Snapshot, reviewtransaction.Target, reviewDerivedRangeOutcome) {
 	if live.Kind != reviewtransaction.TargetCurrentChanges || len(live.Paths) != 0 {
-		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, derivedRangeNone
 	}
 	base, err := reviewtransaction.ResolveCommittedRangeBase(ctx, root)
 	if err != nil || base == "" {
-		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, false
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, derivedRangeNone
 	}
 	derivedTarget := reviewtransaction.Target{
 		Kind: reviewtransaction.TargetBaseDiff, BaseRef: base,
 		IntendedUntracked: append([]string{}, target.IntendedUntracked...),
 	}
 	snapshot, err := builder.BuildStoredSnapshot(ctx, derivedTarget)
-	// Empty commits and ambiguous ranges retain the base-selection fallback.
-	return snapshot, derivedTarget, err == nil && len(snapshot.Paths) > 0
+	if err != nil || len(snapshot.Paths) == 0 {
+		// Empty commits and ambiguous ranges retain the base-selection fallback.
+		return reviewtransaction.Snapshot{}, reviewtransaction.Target{}, derivedRangeNone
+	}
+	// Issue #5638: the reviewed boundary advances on acknowledgement. A
+	// non-passive delta from the nearest acknowledged ancestor is the whole
+	// change actually attributable to the session; everything else -- walk
+	// failure, no boundary, passive delta, or beyond-window -- keeps the
+	// full-range candidate and its existing suppression paths.
+	if boundary, ok, boundaryErr := reviewtransaction.AcknowledgedBoundaryCommit(ctx, root, snapshot); boundaryErr == nil && ok {
+		if len(boundary.DeltaPaths) == 0 {
+			return snapshot, derivedTarget, derivedRangeBoundaryReachesHead
+		}
+		if !boundary.Passive {
+			deltaTarget := reviewtransaction.Target{
+				Kind: reviewtransaction.TargetBaseDiff, BaseRef: boundary.Commit,
+				IntendedUntracked: append([]string{}, target.IntendedUntracked...),
+			}
+			deltaSnapshot, deltaErr := builder.BuildStoredSnapshot(ctx, deltaTarget)
+			if deltaErr == nil && len(deltaSnapshot.Paths) > 0 {
+				return deltaSnapshot, deltaTarget, derivedRangeCandidate
+			}
+			// A delta rebuild failure keeps the full-range offer; START's own
+			// gates still decide on it.
+		}
+	}
+	return snapshot, derivedTarget, derivedRangeCandidate
 }
 
 // reviewFreshStatusPreflight makes the fresh, store-free STATUS classification
@@ -1788,7 +1897,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	// overrides inheritance, so the successor target derives from the exact
 	// selection STATUS authorized rather than from the predecessor alone.
 	declaredSelection := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
-	currentChangesSuccessor := !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay
+	currentChangesSuccessor := !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay && !baseDiff
 	if declaredSelection && !currentChangesSuccessor {
 		return errors.New("intended-untracked selection requires a current-changes recovery; rerun `gentle-ai review recover` without --untracked-scope, --intended-untracked, and --expected-untracked-inventory")
 	}
@@ -1823,6 +1932,10 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		if target.BaseRef == "" {
 			target.BaseRef = predecessorRecord.State.InitialSnapshot.BaseTree
 		}
+	} else if baseDiff {
+		// Issues #5038/#5420: a base-diff predecessor recovered without a base
+		// selector keeps its frozen base tree, as an overlay predecessor does.
+		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, predecessorRecord.State.InitialSnapshot.BaseTree
 	}
 	var snapshot reviewtransaction.Snapshot
 	if *releaseScope {

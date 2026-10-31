@@ -8,12 +8,16 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // InstallCodexTelemetry installs runtime stop hooks independently of SDD selection.
 func InstallCodexTelemetry(homeDir string, adapter agents.Adapter) (Result, error) {
 	if adapter.Agent() != model.AgentCodex {
 		return Result{}, nil
+	}
+	if err := system.ValidateCodexHome(homeDir); err != nil {
+		return Result{}, err
 	}
 	hooksPath := filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")
 	var data []byte

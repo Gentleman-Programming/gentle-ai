@@ -3,6 +3,7 @@
 package shellinstaller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 	"unsafe"
@@ -28,9 +30,32 @@ type userWindowsManifest struct {
 	PrefixIdentity, AgentIdentity                     string
 	SelectionSHA                                      string
 	MainCommit, MainArchiveSHA, LockSHA               string
+	// Component pins recorded at install time. An empty pin on an otherwise
+	// valid manifest is the pre-pin legacy layout: the update check then
+	// reports the component as changed so the next update refreshes it.
+	// Every pin is omitempty so a pre-pin manifest still re-serializes to its
+	// exact on-disk bytes, which userWindowsManifestRead requires.
+	SDKLockSHA string `json:",omitempty"`
+	// SDKVersion records the exact gentle-pi version the staged generated lock
+	// resolved: the installed stable SDK version the update check compares
+	// against the newest reviewed release. An empty field is a pre-feature
+	// install reported outdated once. Main installs record the stock lock's
+	// version too; Main detection never reads it.
+	SDKVersion   string `json:",omitempty"`
+	ToolsSHA     string `json:",omitempty"`
+	GoSHA        string `json:",omitempty"`
+	CodeGraph    bool   `json:"codegraph,omitempty"`
+	CodeGraphSHA string `json:",omitempty"`
+	Context7SHA  string `json:",omitempty"`
 }
 
 func UserKernelCheck() error {
+	// UserKernelGate (user_experience_files.go) is the test seam mirroring the
+	// darwin userKernelGate pattern. It is unset in production, so the real
+	// qualification below always runs.
+	if UserKernelGate != nil {
+		return UserKernelGate()
+	}
 	version := windows.RtlGetVersion()
 	var processMachine, nativeMachine uint16
 	if err := windows.IsWow64Process2(windows.CurrentProcess(), &processMachine, &nativeMachine); err != nil {
@@ -69,6 +94,12 @@ func userWindowsJobOwned() error {
 }
 
 func InspectUserInstall(req UserInstallRequest) (string, error) {
+	if req.Experience != nil && req.Experience.SDKSource == "main-preview" {
+		req.Channel = "main"
+	}
+	if err := userExperienceSupported(req.Experience); err != nil {
+		return "", err
+	}
 	channel, err := UserInstallChannel(req.Channel)
 	if err != nil {
 		return "", err
@@ -85,7 +116,11 @@ func InspectUserInstall(req UserInstallRequest) (string, error) {
 		return "", errors.Join(err, errors.New("select an owned canonical Windows installation path"))
 	}
 	identity := "absent"
+	reconfigure := req.Experience != nil && userWindowsReconfigureTarget() == req.Destination
 	if _, err := os.Lstat(req.Destination); err == nil {
+		if req.Experience != nil && !reconfigure {
+			return "", experienceError("explicit experience requires a new empty target; existing preferences are preserved")
+		}
 		selected, err := userWindowsIdentity(req.Destination, true)
 		if err != nil {
 			return "", err
@@ -94,7 +129,15 @@ func InspectUserInstall(req UserInstallRequest) (string, error) {
 		if err != nil || manifest.Identity != selected {
 			return "", errors.Join(err, errors.New("destination is not a completed owned Windows installation; no overwrite or recovery attempted"))
 		}
-		identity = selected
+		// A confirmed reconfigure retires the existing tree to its .replaced-
+		// backup before staging and publishes into the now-absent destination,
+		// so the confirmation binds to the publication-time state instead of
+		// the identity of the tree being replaced; the manifest check above
+		// still gates the retire. Without this, the mandatory pre-publication
+		// re-inspection can never match the wizard-approved token.
+		if !reconfigure {
+			identity = selected
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
@@ -114,9 +157,18 @@ func userWindowsEnvironment(root string) ([]string, error) {
 		return nil, err
 	}
 	env := []string{"SystemRoot=" + system, "WINDIR=" + system, "SystemDrive=" + filepath.VolumeName(system)}
+	// The host announces a managed reconfigure (and its registry home) through
+	// these variables; the sanitized worker environment is built from scratch,
+	// so they must be forwarded explicitly or the managed-update intent is lost.
+	for _, name := range []string{"GENTLE_AI_RECONFIGURE_TARGET", "GENTLE_AI_SHELL_REGISTRY_HOME"} {
+		if value := os.Getenv(name); value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
 	if root == "" {
 		return append(env, "PATH="+filepath.Join(system, "System32")), nil
 	}
+	goBin := userWindowsSystemGoBin(root) // Best-effort: doubt keeps the pinned runtime Go entry.
 	prefix, agent := filepath.Join(root, "prefix"), filepath.Join(root, "agent")
 	return append(env,
 		"HOME="+filepath.Join(root, "home"), "USERPROFILE="+filepath.Join(root, "home"),
@@ -128,10 +180,33 @@ func userWindowsEnvironment(root string) ([]string, error) {
 		// Go's own defaults below the private HOME/LOCALAPPDATA, made explicit
 		// because launch verification classifies them as mutable runtime state.
 		"GOPATH="+filepath.Join(root, "home/go"), "GOMODCACHE="+filepath.Join(root, "home/go/pkg/mod"), "GOCACHE="+filepath.Join(root, "state/go-build"),
-		"PATH="+strings.Join([]string{filepath.Join(root, "runtime/node"), filepath.Join(root, "runtime/go/bin"), filepath.Join(system, "System32")}, string(os.PathListSeparator)),
+		"PATH="+strings.Join([]string{filepath.Join(root, "runtime/node"), goBin, filepath.Join(root, "runtime/codegraph/bin"), filepath.Join(system, "System32")}, string(os.PathListSeparator)),
 		"NPM_CONFIG_PREFIX="+prefix, "NPM_CONFIG_IGNORE_SCRIPTS=true", "NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
 		"NPM_CONFIG_USERCONFIG="+filepath.Join(root, "config/user.npmrc"), "NPM_CONFIG_GLOBALCONFIG="+filepath.Join(root, "config/global.npmrc"),
 		"NPM_CONFIG_CACHE="+filepath.Join(root, "runtime/cache"), "NODE_USE_SYSTEM_CA=1"), nil
+}
+
+// userWindowsExecutable is the running installer image in its long form.
+// GetModuleFileName reports the path as launched, which may use 8.3 short
+// components (for example C:\Users\JOHNSM~1 for a long or spaced user name);
+// the short name is the same directory entry, not an alias. Expansion follows
+// no reparse point and keeps the drive, so the identity check that follows
+// still refuses subst/mapped drives, junctions and symbolic links.
+func userWindowsExecutable() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	short, err := windows.UTF16PtrFromString(self)
+	if err != nil {
+		return "", err
+	}
+	var long [windows.MAX_LONG_PATH]uint16
+	length, err := windows.GetLongPathName(short, &long[0], uint32(len(long)))
+	if err != nil || length == 0 || length >= uint32(len(long)) {
+		return "", errors.Join(err, errors.New("Windows installer image path cannot be expanded"))
+	}
+	return windows.UTF16ToString(long[:length]), nil
 }
 
 func userWindowsBinding(root, product string) []byte {
@@ -139,16 +214,32 @@ func userWindowsBinding(root, product string) []byte {
 }
 
 // Canonical complete JSON rejects missing, duplicate, aliased and unknown fields.
+// The retained selection is the six-field provision ABI: install writes it
+// without the profile, whose preferences live in the staged config/state/mcp
+// files, so a retained Experience is never consumed and is refused.
 func userWindowsSelection(data []byte, root string) (UserInstallRequest, error) {
 	var req UserInstallRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		return UserInstallRequest{}, err
+	}
+	if req.Experience != nil {
+		return UserInstallRequest{}, errors.New("Windows retained selection carries an experience profile; preferences are retained only in the staged configuration")
 	}
 	canonical, _ := json.Marshal(req)
 	if string(data) != string(canonical) || req.Destination != root || req.Mode != "separate" || req.SharedPrefix != "" || req.SharedAgent != "" || (req.Channel != "stable" && req.Channel != "main") {
 		return UserInstallRequest{}, errors.New("Windows retained selection fields/root differ")
 	}
 	return req, nil
+}
+
+// userWindowsReconfigureTarget reports the exact reconfigure target the host
+// selected for a managed update. Empty when this is a fresh install.
+func userWindowsReconfigureTarget() string {
+	value := os.Getenv("GENTLE_AI_RECONFIGURE_TARGET")
+	if value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
+		return ""
+	}
+	return value
 }
 
 func userWindowsManifestRead(root string) (userWindowsManifest, error) {
@@ -193,6 +284,34 @@ func userWindowsManifestRead(root string) (userWindowsManifest, error) {
 type userWindowsProvisionDiagnostic struct {
 	data     []byte
 	withheld bool
+}
+
+// userWindowsVerifyBound budgets the complete post-publish verification: one
+// network-bound provision verify run plus headroom for the full archive
+// read-back and inventory walk.
+const userWindowsVerifyBound = 2 * userWindowsProvisionBound
+
+// userWindowsVerifyContext gives the post-publish verification its own budget,
+// decoupled from any inherited install deadline: by the time the stage is
+// published the install budget is spent, and killing the verification would
+// leave the installation "published ... remains unqualified" (issue #5714).
+// Dropping the inherited deadline must not drop the cooperative cancellation
+// channel, so a Done on the parent context is forwarded unless its cause is
+// the parent's own deadline; the worker context carries the cooperative
+// cancel channel (userWindowsCancelWatch) and console interrupts, never a
+// deadline of its own.
+func userWindowsVerifyContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	verifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), userWindowsVerifyBound)
+	go func() {
+		select {
+		case <-ctx.Done():
+			if context.Cause(ctx) != context.DeadlineExceeded {
+				cancel()
+			}
+		case <-verifyCtx.Done():
+		}
+	}()
+	return verifyCtx, cancel
 }
 
 func (d *userWindowsProvisionDiagnostic) Write(p []byte) (int, error) {
@@ -296,7 +415,7 @@ func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
 			}
 			total += info.Size()
 			bound := int64(32 << 20)
-			if strings.HasPrefix(path, filepath.Join(root, "runtime/node")+string(filepath.Separator)) || strings.HasPrefix(path, filepath.Join(root, "runtime/go")+string(filepath.Separator)) || path == filepath.Join(root, "runtime/archives/go.zip") || path == filepath.Join(root, "runtime/archives/node.zip") || path == filepath.Join(root, "supervisor.exe") {
+			if strings.HasPrefix(path, filepath.Join(root, "runtime/node")+string(filepath.Separator)) || strings.HasPrefix(path, filepath.Join(root, "runtime/go")+string(filepath.Separator)) || strings.HasPrefix(path, filepath.Join(root, "runtime/codegraph")+string(filepath.Separator)) || path == filepath.Join(root, "runtime/archives/go.zip") || path == filepath.Join(root, "runtime/archives/node.zip") || path == filepath.Join(root, "supervisor.exe") {
 				bound = 256 << 20
 			}
 			if info.Size() > bound || total > 2<<30 {
@@ -329,6 +448,18 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	req.Channel = channel
+	// The experience carries the channel authority: an explicit Main-preview
+	// SDK source always means the Main channel, exactly as the confirmation
+	// inspection derives it. Without this mirror a reconfigure of a Main
+	// installation would retire into a Stable reinstall.
+	if req.Experience != nil && req.Experience.SDKSource == "main-preview" {
+		req.Channel = userChannelMain
+	}
+	// GGA is retired from the shell installer. Force it inert before any
+	// inspection, staging or recording so an old profile or a crafted transport
+	// cannot silently enable it; such a request then fails its confirmation
+	// check below.
+	userForceGGAInert(req.Experience)
 	if err := userWindowsWorkerCheck(); err != nil {
 		return result, err
 	}
@@ -336,20 +467,94 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil || confirmation != req.Confirmation {
 		return result, errors.Join(err, errors.New("physical Windows selection confirmation differs"))
 	}
+	var backup string
+	// A component-scoped update reuses the recorded installation: the scope is
+	// bound to the reconfigure target and the recorded manifest supplies the
+	// trusted component sources. An empty scope is a full install.
+	scope, scopeErr := userInstallScopeOf(req)
+	if scopeErr != nil {
+		return result, scopeErr
+	}
+	var installed *userWindowsManifest
+	goReuse := false
 	if _, err := os.Lstat(req.Destination); err == nil {
-		if err := userWindowsVerify(ctx, req.Destination, io.Discard, io.Discard); err != nil {
+		// A reconfigure/replace of the managed target (channel switch or
+		// component update) is a fresh install over a retired backup, so the
+		// idempotent already-installed branch must not consume it.
+		if userWindowsReconfigureTarget() != req.Destination {
+			if err := userWindowsVerify(ctx, req.Destination, io.Discard, io.Discard); err != nil {
+				return result, err
+			}
+			selection, err := userWindowsRead(filepath.Join(req.Destination, "selection.json"), 4096)
+			selected, selectionErr := userWindowsSelection(selection, req.Destination)
+			if err != nil || selectionErr != nil || selected.Channel != channel {
+				return result, errors.Join(err, selectionErr, errors.New("existing installation channel differs; no replacement"))
+			}
+			// A previous attempt can publish and verify the target before the
+			// launcher is registered. Repair that tail on an idempotent run.
+			if err := userWindowsPublishLauncher(req.Destination); err != nil {
+				return result, errors.Join(err, errors.New("existing Windows installation could not publish the gentle-shell command"))
+			}
+			if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
+				fmt.Fprintf(os.Stderr, "Windows installation is verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
+			}
+			return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed", ""}, nil
+		}
+		// A reconfigure that only changes the SDK update channel swaps the
+		// installed SDK in place; components, preferences, runtimes and the
+		// supervisor stay untouched. Any other reconfigure keeps the full
+		// retire-and-reinstall below.
+		if result, applied, err := userWindowsChannelOverlay(ctx, req); err != nil {
+			return result, err
+		} else if applied {
+			if err := userWindowsPublishLauncher(req.Destination); err != nil {
+				return result, errors.Join(err, errors.New("channel overlay could not confirm the gentle-shell command"))
+			}
+			if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
+				fmt.Fprintf(os.Stderr, "Windows channel overlay is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
+			}
+			return result, nil
+		}
+		// Reconfigure: retire the previous tree to its .replaced- backup so the
+		// fresh install below can publish into the confirmed destination.
+		// Read the recorded manifest before the retire rename moves it away.
+		if !scope.full {
+			if userWindowsReconfigureTarget() != req.Destination {
+				return result, errors.New("a component update requires the reconfigure target binding")
+			}
+			recorded, manifestErr := userWindowsManifestRead(req.Destination)
+			if manifestErr != nil {
+				return result, fmt.Errorf("component update requires a recorded installation: %w", manifestErr)
+			}
+			installed = &recorded
+			if pin, pinErr := userWindowsGoPinSHA(); pinErr == nil && scope.reused[UserComponentNode] && installed.GoSHA == pin {
+				goReuse = true
+			}
+		} else if recorded, manifestErr := userWindowsManifestRead(req.Destination); manifestErr == nil {
+			// A full reconfigure of a recorded installation still rebuilds a
+			// fresh stage, so the operator state is carried from the recorded
+			// agent.
+			installed = &recorded
+		}
+		backup = req.Destination + ".replaced-" + time.Now().UTC().Format("20060102T150405Z")
+		if _, err := os.Lstat(backup); !os.IsNotExist(err) {
+			return result, errors.Join(err, errors.New("Windows replacement backup path is already occupied"))
+		}
+		if _, err := userWindowsIdentity(req.Destination, true); err != nil {
 			return result, err
 		}
-		selection, err := userWindowsRead(filepath.Join(req.Destination, "selection.json"), 4096)
-		selected, selectionErr := userWindowsSelection(selection, req.Destination)
-		if err != nil || selectionErr != nil || selected.Channel != channel {
-			return result, errors.Join(err, selectionErr, errors.New("existing installation channel differs; no replacement"))
+		if err := os.Rename(req.Destination, backup); err != nil {
+			return result, err
 		}
-		return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed"}, nil
+		fmt.Fprintf(os.Stderr, "Windows install phase: replaced previous installation %s -> %s\n", req.Destination, backup)
+	}
+	if !scope.full && installed == nil {
+		return result, errors.New("a component update requires a recorded installation")
 	}
 	var mainArtifact userWindowsArtifact
 	var mainData []byte
-	if channel == "main" {
+	if channel == "main" && !scope.reused[UserComponentSDK] {
+		fmt.Fprintln(os.Stderr, "Windows install phase: main-acquire")
 		mainArtifact, mainData, err = userWindowsMainSnapshot(ctx) // Confirmed choice, before first filesystem effect.
 		if err != nil {
 			return result, err
@@ -388,7 +593,48 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 	}
-	selection, _ := json.Marshal(req)
+	// Component reuse copies the out-of-scope trees of the retired
+	// installation into the stage before anything acquires or provisions.
+	if !scope.full {
+		fmt.Fprintln(os.Stderr, "Windows install phase: component-reuse")
+		if err := userWindowsReuseComponents(ctx, stage, backup, installed, req, scope, goReuse); err != nil {
+			return result, err
+		}
+	}
+	// System-Go reuse is decided before any artifact is downloaded: a caller
+	// go.exe that passes the full reuse contract replaces the pinned go.zip
+	// acquisition and is recorded inside the staged target itself. Anything
+	// else falls back to the pinned artifact unchanged.
+	fmt.Fprintln(os.Stderr, "Windows install phase: system-go-detect")
+	systemGo, systemGoOK := userWindowsSystemGoDetect(ctx)
+	if systemGoOK && !goReuse {
+		if err := userWindowsSystemGoStage(stage, systemGo); err != nil {
+			return result, err
+		}
+		fmt.Fprintf(os.Stderr, "Windows install phase: system-go reused %s (%s)\n", systemGo.Version, systemGo.Go)
+	}
+	if err := userStageExperience(ctx, stage, req.Experience); err != nil {
+		return result, err
+	}
+	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-acquire")
+	codegraph := make(chan error, 1)
+	go func() {
+		if scope.reused[UserComponentCodeGraph] && req.Experience != nil && req.Experience.CodeGraph == "on" {
+			if err := userWindowsReuseTree(ctx, filepath.Join(backup, "runtime", "codegraph"), filepath.Join(stage, "runtime", "codegraph")); err != nil {
+				codegraph <- fmt.Errorf("CodeGraph reuse: %w", err)
+				return
+			}
+			codegraph <- userWindowsCodeGraphCommand(ctx, stage)
+			return
+		}
+		codegraph <- userWindowsCodeGraphProvision(ctx, stage, req.Experience)
+	}()
+	// The Windows stock provision helper requires its exact six-field
+	// selection ABI. Preferences are already materialized in the staged
+	// config/state/mcp files and must not widen this helper boundary.
+	selectionRequest := req
+	selectionRequest.Experience = nil
+	selection, _ := json.Marshal(selectionRequest)
 	if err := userWindowsWrite(filepath.Join(stage, "selection.json"), selection); err != nil {
 		return result, err
 	}
@@ -396,16 +642,49 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	phase := func(step, artifact string) {
 		fmt.Fprintf(os.Stderr, "Windows install phase: %s %s %dms\n", step, artifact, time.Since(started).Milliseconds())
 	}
-	for i, artifact := range userWindowsArtifacts {
+	type fetchedArtifact struct {
+		data []byte
+		err  error
+	}
+	fetched := make([]fetchedArtifact, len(userWindowsArtifacts))
+	var downloads sync.WaitGroup
+	for index, artifact := range userWindowsArtifacts {
+		if userWindowsGoZipSkipped(systemGoOK, artifact.Archive) || (index == 1 && goReuse) {
+			continue // System Go reused or the recorded Go runtime is reused: the pinned Go artifact is never acquired.
+		}
+		if index == 0 && scope.reused[UserComponentNode] {
+			continue // The installed Node runtime is reused.
+		}
+		if index >= 2 && scope.reused[UserComponentSDK] {
+			continue // The reused agent carries the pinned tools.
+		}
 		phase("acquire", artifact.Archive)
-		data, err := userWindowsAcquire(ctx, artifact, filepath.Join(stage, "runtime/archives", artifact.Archive))
-		if err != nil {
-			return result, err
+		downloads.Add(1)
+		index, artifact := index, artifact
+		go func() {
+			defer downloads.Done()
+			fetched[index].data, fetched[index].err = userWindowsAcquire(ctx, artifact, filepath.Join(stage, "runtime/archives", artifact.Archive))
+		}()
+	}
+	downloads.Wait()
+	for index, artifact := range userWindowsArtifacts {
+		if userWindowsGoZipSkipped(systemGoOK, artifact.Archive) || (index == 1 && goReuse) {
+			continue // The reused system/recorded Go needs no unpacked runtime/go tree.
+		}
+		if index == 0 && scope.reused[UserComponentNode] {
+			continue // The installed Node runtime is reused.
+		}
+		if index >= 2 && scope.reused[UserComponentSDK] {
+			continue // The reused agent carries the pinned tools.
+		}
+		if fetched[index].err != nil {
+			return result, fetched[index].err
 		}
 		phase("unpack", artifact.Archive)
-		if i < 2 {
+		data := fetched[index].data
+		if index < 2 {
 			directory := "node"
-			if i == 1 {
+			if index == 1 {
 				directory = "go"
 			}
 			if _, err := userWindowsZIP(ctx, data, artifact, filepath.Join(stage, "runtime", directory), ""); err != nil {
@@ -422,6 +701,10 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			}
 		}
 	}
+	if err := <-codegraph; err != nil {
+		return result, err
+	}
+	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-ready")
 	if channel == "main" {
 		metadata, _ := json.Marshal(mainArtifact)
 		if err := userWindowsWrite(filepath.Join(stage, "main.json"), metadata); err != nil {
@@ -444,6 +727,17 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err := userWindowsWrite(filepath.Join(stage, "provision.mjs"), helper); err != nil {
 		return result, err
 	}
+	// The selected reviewed supplier list: the same list authority this build
+	// just resolved (live repository copy with the embedded fallback) is
+	// written into the stage, so the provisioner reads exactly the list
+	// detection used, and the published installation retains it for verify.
+	_, listBytes, err := userSelectedReviewedListFunc(ctx)
+	if err != nil {
+		return result, err
+	}
+	if err := userWindowsWrite(filepath.Join(stage, "gentle-pi-suppliers.json"), listBytes); err != nil {
+		return result, err
+	}
 	lockHelper, err := assets.ReadPrivateHelper("complete-generated-lock-sri.mjs")
 	if err != nil {
 		return result, err
@@ -451,7 +745,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err := userWindowsWrite(filepath.Join(stage, "complete-generated-lock-sri.mjs"), lockHelper); err != nil {
 		return result, err
 	}
-	self, err := os.Executable()
+	self, err := userWindowsExecutable()
 	if err != nil {
 		return result, err
 	}
@@ -463,11 +757,16 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	phase("provision", "stock")
-	if err := userWindowsProvision(ctx, stage, "install", io.Discard, io.Discard); err != nil {
-		return result, err
+	if !scope.reused[UserComponentSDK] {
+		if err := userWindowsProvision(ctx, stage, "install", io.Discard, os.Stderr); err != nil {
+			return result, err
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "Windows install phase: provision-reused stock")
 	}
 	phase("provision-ready", "stock")
-	if channel == "main" {
+	if channel == "main" && !scope.reused[UserComponentSDK] {
+		fmt.Fprintln(os.Stderr, "Windows install phase: overlay main")
 		if err := userWindowsInventory(stage, userWindowsInventoryInstalled); err != nil {
 			return result, err
 		}
@@ -492,8 +791,18 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if err := userWindowsCompareMain(ctx, mainData, mainArtifact, gentle); err != nil {
 			return result, err
 		}
-		if err := userWindowsProvision(ctx, stage, "overlay", io.Discard, io.Discard); err != nil {
+		if err := userWindowsProvision(ctx, stage, "overlay", io.Discard, os.Stderr); err != nil {
 			return result, err
+		}
+		fmt.Fprintln(os.Stderr, "Windows install phase: overlay-ready main")
+	}
+	if installed != nil && !scope.reused[UserComponentSDK] {
+		// A rebuilt agent must not look like a fresh installation to the
+		// operator: provider logins, sessions, project state and user models
+		// survive every update through the retired installation's agent.
+		fmt.Fprintln(os.Stderr, "Windows install phase: carry-operator-state")
+		if err := userCarryAgentState(ctx, filepath.Join(backup, "agent"), filepath.Join(stage, "agent")); err != nil {
+			return result, fmt.Errorf("operator state carry: %w", err)
 		}
 	}
 	for _, product := range []string{"pi", "gentle-shell"} {
@@ -524,22 +833,132 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil {
 		return result, err
 	}
-	manifest := userWindowsManifest{Schema: userWindowsSchema, Destination: req.Destination, SID: sid, Identity: stageIdentity, SupervisorSHA: userWindowsSHA(image), PrefixIdentity: prefixID, AgentIdentity: agentID, SelectionSHA: userWindowsSHA(selection), LockSHA: userWindowsSHA(lock)}
+	sdkVersion, err := userWindowsLockGentlePiVersion(lock)
+	if err != nil {
+		return result, err
+	}
+	manifest := userWindowsManifest{Schema: userWindowsSchema, Destination: req.Destination, SID: sid, Identity: stageIdentity, SupervisorSHA: userWindowsSHA(image), PrefixIdentity: prefixID, AgentIdentity: agentID, SelectionSHA: userWindowsSHA(selection), LockSHA: userWindowsSHA(lock), SDKVersion: sdkVersion}
 	if channel == "main" {
-		manifest.MainCommit, manifest.MainArchiveSHA = strings.TrimPrefix(mainArtifact.Prefix, "gentle-shell-"), mainArtifact.SHA
+		if !scope.reused[UserComponentSDK] {
+			manifest.MainCommit, manifest.MainArchiveSHA = strings.TrimPrefix(mainArtifact.Prefix, "gentle-shell-"), mainArtifact.SHA
+		} else if installed != nil {
+			manifest.MainCommit, manifest.MainArchiveSHA = installed.MainCommit, installed.MainArchiveSHA
+		}
+	}
+	// Component pins: the recorded pins let the next update check scope
+	// itself. The provision helper digest covers the stock dependency seed;
+	// the CodeGraph and Context7 pins derive from this build's composition.
+	if pin, pinErr := userWindowsSDKLockSHA(); pinErr == nil {
+		manifest.SDKLockSHA = pin
+	} else {
+		return result, pinErr
+	}
+	if pin, pinErr := userWindowsToolsPinSHA(); pinErr == nil {
+		manifest.ToolsSHA = pin
+	} else {
+		return result, pinErr
+	}
+	if pin, pinErr := userWindowsGoPinSHA(); pinErr == nil {
+		manifest.GoSHA = pin
+	} else {
+		return result, pinErr
+	}
+	manifest.CodeGraph = req.Experience != nil && req.Experience.CodeGraph == "on"
+	if manifest.CodeGraph {
+		if pin, pinErr := userWindowsCodeGraphPinSHA(); pinErr == nil {
+			manifest.CodeGraphSHA = pin
+		} else {
+			return result, pinErr
+		}
+	}
+	if req.Experience != nil && req.Experience.Context7 != "" {
+		if pin, pinErr := userWindowsContext7EntrySHA(req.Experience.Context7); pinErr == nil {
+			manifest.Context7SHA = pin
+		} else {
+			return result, pinErr
+		}
 	}
 	encoded, _ := json.Marshal(manifest)
 	if err := userWindowsWrite(filepath.Join(stage, "manifest.json"), append(encoded, '\n')); err != nil {
 		return result, err
 	}
+	fmt.Fprintln(os.Stderr, "Windows install phase: publish")
 	from, _ := windows.UTF16PtrFromString(stage)
 	to, _ := windows.UTF16PtrFromString(req.Destination)
 	if err := windows.MoveFileEx(from, to, windows.MOVEFILE_WRITE_THROUGH); err != nil {
 		return result, err
 	} // No replace-existing flag.
 	published = true
-	if err := userWindowsVerify(ctx, req.Destination, io.Discard, io.Discard); err != nil {
+	fmt.Fprintln(os.Stderr, "Windows install phase: verify")
+	// The verification runs on its own budget: the install deadline is spent,
+	// and an inherited deadline here would leave the published installation
+	// unqualified (issue #5714). Cooperative cancellation still applies.
+	verifyCtx, cancelVerify := userWindowsVerifyContext(ctx)
+	defer cancelVerify()
+	if err := userWindowsVerify(verifyCtx, req.Destination, io.Discard, io.Discard); err != nil {
 		return result, errors.Join(err, errors.New("published Windows installation remains unqualified; preserved, no success reported"))
 	}
-	return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "installed"}, nil
+	if err := userWindowsPublishLauncher(req.Destination); err != nil {
+		return result, errors.Join(err, errors.New("published Windows installation could not publish the gentle-shell command"))
+	}
+	// The installation is published and verified; drop only the ephemeral
+	// caches. runtime/archives stays: launch verification re-reads it.
+	// Failure is reported but never retracts the published installation.
+	if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
+		fmt.Fprintf(os.Stderr, "Windows installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
+	}
+	return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "installed", ""}, nil
 }
+
+// userWindowsPublishLauncher puts a tiny .cmd shim in the user's WindowsApps
+// PATH directory. It never overwrites a foreign command.
+func userWindowsLocalAppData() (string, error) {
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		return local, nil
+	}
+	// The worker environment is deliberately private and may omit
+	// LOCALAPPDATA. Resolve the real per-user folder from the token instead.
+	local, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, windows.KF_FLAG_DEFAULT)
+	if err != nil || local == "" {
+		return "", errors.Join(err, errors.New("LOCALAPPDATA is unavailable"))
+	}
+	return local, nil
+}
+
+func userWindowsPublishLauncher(destination string) error {
+	local, err := userWindowsLocalAppData()
+	if err != nil {
+		return errors.Join(err, errors.New("cannot publish the gentle-shell command"))
+	}
+	apps := filepath.Join(local, "Microsoft", "WindowsApps")
+	if info, err := os.Stat(apps); err != nil || !info.IsDir() {
+		return errors.Join(err, errors.New("WindowsApps PATH directory is unavailable"))
+	}
+	target := filepath.Join(destination, "bin", "gentle-shell.cmd")
+	if _, err := os.Stat(target); err != nil {
+		return err
+	}
+	link := filepath.Join(apps, "gentle-shell.cmd")
+	data := []byte("@echo off\r\ncall \"" + target + "\" %*\r\n")
+	if existing, err := os.ReadFile(link); err == nil {
+		if bytes.Equal(existing, data) {
+			return nil
+		}
+		return errors.New("a foreign gentle-shell command already exists in WindowsApps")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	file, err := os.OpenFile(link, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0700)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(data)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	return errors.Join(writeErr, syncErr, closeErr)
+}
+
+// RunUserLaunchProbe is the Windows stub of the Linux delegated-unit launch
+// probe (#5713): Windows supervises the runtime through its own cooperative
+// worker, so there is no transient-unit precondition to prove here.
+func RunUserLaunchProbe(context.Context, string) error { return nil }

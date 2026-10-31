@@ -47,7 +47,7 @@ for (const fixture of cases) {
   let actual = fixture.value, observed = 'accept', infrastructure = false;
   try {
     vm.runInNewContext(body, {
-      root, finalRoot: root, agent, path, action: fixture.action ?? 'verify',
+      root, finalRoot: root, agent, path, action: fixture.action ?? 'verify', declaredCompanion: null, lockedCompanion: null,
       read(file) {
         if (file === path.join(root, 'selection.json')) return Buffer.from(JSON.stringify({ Destination: root }));
         assert.equal(file, path.join(agent, 'settings.json'), 'only virtual settings and selection reads permitted');
@@ -71,7 +71,10 @@ for (const fixture of cases) {
 const configStart = source.indexOf("const configPath = path.join(root, 'config/gentle-shell.json');");
 assert.ok(configStart >= 0 && configStart < start, 'owned Shell config region must exist');
 const configBody = source.slice(configStart, start), homeKey = path.join(root, 'agent');
-const goodConfig = { home: 'isolated', provisioned: { [homeKey]: { gentleAi: '4.0.0', gentlePi: '4.0.0', at: '2026-01-01T00:00:00.000Z' } } };
+// The fixture proves no static version is trusted: 4.2.0 is deliberately not a
+// version the provisioner hardcodes; it flows in as the resolved dynamic value.
+const fixtureNativeVersion = '4.2.0';
+const goodConfig = { home: 'isolated', provisioned: { [homeKey]: { gentleAi: fixtureNativeVersion, gentlePi: fixtureNativeVersion, at: '2026-01-01T00:00:00.000Z' } } };
 for (const [name, value, want] of [
   ['owned-shell-config', goodConfig, 'accept'],
   ['shell-link-refused', { ...goodConfig, home: 'link' }, 'reject'],
@@ -82,7 +85,7 @@ for (const [name, value, want] of [
   let observed = 'accept';
   try {
     vm.runInNewContext(configBody, {
-      root, finalRoot: root, path, action: 'verify', gentleMetadata: { version: '4.0.0' },
+      root, finalRoot: root, path, action: 'verify', nativeVersion: fixtureNativeVersion, gentleMetadata: { version: fixtureNativeVersion },
       read(file) { assert.equal(file, path.join(root, 'config/gentle-shell.json')); return Buffer.from(JSON.stringify(value)); },
       exclusive() { assert.fail('verify attempted config write'); },
       reject(message) { throw Error(`Windows provision refused: ${message}`); },
@@ -96,31 +99,58 @@ for (const [name, value, want] of [
 }
 const supplierStart = source.indexOf('// Stock supplier pins authorize installation; Main source is bound by the frozen ZIP.');
 assert.ok(supplierStart >= 0 && supplierStart < configStart, 'native authority region must exist');
-const supplierBody = `${source.match(/^const mainOverlay = .*$/m)[0]}\n${source.slice(supplierStart, configStart)}`;
-for (const [name, action, channel, want] of [
-  ['main-stock-install', 'install', 'main', 'reject'],
-  ['stable-stock-verify', 'verify', 'stable', 'reject'],
-  ['stock-runtime', 'verify', 'stable', 'reject'],
-  ['main-overlay', 'overlay', 'main', 'accept'],
-  ['main-verify', 'verify', 'main', 'accept'],
-  ['main-native-version', 'verify', 'main', 'reject'],
-  ['main-native-method', 'verify', 'main', 'reject'],
-  ['main-native-checksum', 'verify', 'main', 'reject'],
-  ['main-native-digest', 'verify', 'main', 'reject'],
+const tableBegin = 'function reviewedSuppliers(', tableAt = source.indexOf(tableBegin);
+assert.ok(tableAt >= 0, 'reviewedSuppliers helper present');
+// The provisioner loads the reviewed list from its stage root: the installed
+// tree retains the list the Go worker wrote at install time, so the fixture
+// reads the real retained bytes.
+const stageRoot = path.dirname(path.resolve(process.argv[2]));
+const listPath = path.join(stageRoot, 'gentle-pi-suppliers.json');
+const listBytes = fs.readFileSync(listPath);
+const reviewedTable = vm.runInNewContext(`(${source.slice(tableAt, source.indexOf('\n}', tableAt) + 2)})()`, {
+  root: stageRoot, path, Buffer,
+  read(file) { assert.equal(file, listPath, 'only the retained supplier list is read'); return listBytes; },
+  reject(message) { throw Error(`Windows provision refused: ${message}`); },
+});
+const supplierBody = `${source.match(/^const mainOverlay = .*$/m)[0]}
+${['reviewedSuppliers', 'stockNativeDirectory', 'stockNativeIntegrity', 'reviewedSupplierSources'].map(name => {
+  const begin = `function ${name}(`, at = source.indexOf(begin);
+  assert.ok(at >= 0, `${name} helper present`);
+  return `${source.slice(at, source.indexOf('\n}', at) + 2)}\n`;
+}).join('')}${source.slice(supplierStart, configStart)}`;
+for (const [name, action, channel, want, resolvedVersion] of [
+  ['main-stock-install', 'install', 'main', 'reject', fixtureNativeVersion],
+  ['stable-stock-verify', 'verify', 'stable', 'reject', fixtureNativeVersion],
+  ['stock-runtime', 'verify', 'stable', 'reject', fixtureNativeVersion],
+  ['stable-reviewed-installer-digest', 'verify', 'stable', 'reject', '4.3.0'],
+  ['main-overlay', 'overlay', 'main', 'accept', fixtureNativeVersion],
+  ['main-verify', 'verify', 'main', 'accept', fixtureNativeVersion],
+  ['main-native-version', 'verify', 'main', 'reject', fixtureNativeVersion],
+  ['main-native-method', 'verify', 'main', 'reject', fixtureNativeVersion],
+  ['main-native-checksum', 'verify', 'main', 'reject', fixtureNativeVersion],
+  ['main-native-digest', 'verify', 'main', 'reject', fixtureNativeVersion],
 ]) {
   let supplierReads = 0, imports = 0, observed = 'accept';
-  const nativeManifest = { version: name === 'main-native-version' ? '4.1.0' : '4.0.0', method: name === 'main-native-method' ? 'signed-release-asset' : 'go-sumdb-source-build', moduleChecksum: name === 'main-native-checksum' ? 'changed' : 'h1:pZ/XZ2Pk3U9lgXigOTY62zlxxFOHnc9CjQhLgaV/Hfc=', binarySha256: 'owned-native' };
+  // The native layout is discovered dynamically from the resolved gentle-pi
+  // version; the fixture supplies an unreviewed version to prove the supplier
+  // check binds the resolved dynamic value, plus one listed version whose
+  // installer digest matches its reviewed entry before the binary differs.
+  const nativeManifest = { version: name === 'main-native-version' ? '4.3.0' : fixtureNativeVersion, method: name === 'main-native-method' ? 'signed-release-asset' : 'go-sumdb-source-build', moduleChecksum: name === 'main-native-checksum' ? 'changed' : `h1:${'A'.repeat(43)}=`, binarySha256: 'owned-native' };
   try {
     await vm.runInNewContext(`(async () => {${supplierBody}})()`, {
       gentle: path.join(root, 'prefix/node_modules/gentle-pi'), selection: { Channel: channel }, action, path,
+      root: stageRoot, Buffer, resolved: { 'gentle-pi': resolvedVersion },
+      fs: { readdirSync: () => [`v${fixtureNativeVersion}`], lstatSync: () => ({ isDirectory: () => true }), existsSync: () => true },
       read(file) {
+        if (file === listPath) return listBytes;
         if (file.endsWith('.mjs')) supplierReads++;
         return Buffer.from(file.endsWith('integrity.json') ? JSON.stringify(nativeManifest) : file);
       },
       digest(data) {
         const file = data.toString();
         if (file.endsWith('gentle-ai.exe')) return name === 'main-native-digest' ? 'changed' : 'owned-native';
-        return name === 'stock-runtime' && file.endsWith('gentle-ai-installer.mjs') ? 'bc2da0585026fa538f0c6ae0cf50463767c175b71d0dfdb582a88cbe894c84ca' : 'changed';
+        if (file.endsWith('gentle-ai-installer.mjs') && name === 'stable-reviewed-installer-digest') return reviewedTable['4.3.0'].installer;
+        return 'changed';
       },
       pathToFileURL() { imports++; assert.fail('supplier API invocation attempted'); },
       reject(message) { throw Error(`Windows provision refused: ${message}`); },
@@ -132,7 +162,7 @@ for (const [name, action, channel, want] of [
   try {
     assert.equal(observed, want, name);
     assert.equal(imports, 0, 'supplier API must not be reached');
-    assert.equal(supplierReads, channel === 'main' && action !== 'install' ? 0 : name === 'stock-runtime' ? 2 : 1);
+    assert.equal(supplierReads, channel === 'main' && action !== 'install' ? 0 : name === 'stable-reviewed-installer-digest' ? 2 : 0);
   } catch (error) { assertionCode = error.code; }
   outcomes.push({ name, expected: want, observed, infrastructure: observed === 'infrastructure', assertionCode });
 }

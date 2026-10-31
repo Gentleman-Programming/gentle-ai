@@ -73,6 +73,7 @@ const rejectionCases = {
   'missing expected package': ({ context }) => { context.expectedPaths.push('node_modules/missing'); },
   'nested expected subtree': ({ context, add }) => { const child = `${later}/node_modules/child`; add(child); context.expectedPaths.push(child); },
   'root pin excluded': ({ add }) => { add('node_modules/gentle-pi', { os: ['aix'] }); },
+  'companion root pin excluded': ({ add }) => { add('node_modules/gentle-engram', { os: ['aix'] }); },
   'required child inside removable parent': ({ add }) => { add(`${later}/node_modules/child`, { optional: false, os: ['aix'] }); },
   'unknown child inside removable parent': ({ add, lock }) => { const child = `${later}/node_modules/child`; add(child); delete lock.packages[child]; },
 };

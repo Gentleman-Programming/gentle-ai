@@ -296,10 +296,16 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
+	// Keep notices visible even if a later pipeline step failed. The shared
+	// component records them without writing to TUI stderr.
+	writeGGAProviderNotices(os.Stderr, runtime.state.ggaNotices)
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
 	result.PiCodeGraph = runtime.state.piCodeGraph
+	if runtime.state.ggaInstallDeferred {
+		result.ManualActions = append(result.ManualActions, GGAHomebrewDeferredAction)
+	}
 	result.ManualActions = append(result.ManualActions, runtime.state.nativeReviewActions...)
 	result.ManualActions = append(result.ManualActions, runtime.state.retiredSDDActions...)
 	result.Verify = runPostApplyVerification(postApplyVerificationInput{
@@ -310,7 +316,7 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		Resolved:     resolved,
 		State:        runtime.state,
 	})
-	result.Verify = withPostInstallNotes(result.Verify, resolved)
+	result.Verify = withPostInstallNotes(result.Verify, resolved, runtime.state.ggaInstallDeferred)
 	if backgroundActivation != nil {
 		// Notes describe the applied outcome, not the prepared prediction.
 		background.Activation = backgroundActivation.Report()
@@ -514,10 +520,10 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	return merged, nil
 }
 
-func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
+func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan, ggaInstallDeferred bool) verify.Report {
 	report = withReadyAgentRunNote(report, resolved)
 	report = withFailedVerificationNote(report, resolved)
-	if hasComponent(resolved.OrderedComponents, model.ComponentGGA) && report.Ready {
+	if hasComponent(resolved.OrderedComponents, model.ComponentGGA) && report.Ready && !ggaInstallDeferred {
 		report.FinalNote = report.FinalNote + "\n\nGGA is now installed globally. To enable project hooks, run in each repo:\n- gga init\n- gga install"
 	}
 	report = withGoInstallPathNote(report, resolved)
@@ -787,6 +793,9 @@ type runtimeState struct {
 	nativeReviewActions      []string
 	retiredSDDActions        []string
 	compatibilityTransaction compatibilityRefreshTransaction
+	ggaConfigCreationSkipped bool
+	ggaNotices               []string
+	ggaInstallDeferred       bool
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
 	// single `engram version` invocation performed by componentApplyStep.Run
@@ -800,6 +809,45 @@ type runtimeState struct {
 	// codexServiceTier is the tier the global engram injection left in Codex's
 	// config.toml (nil = not written); state records it as the managed tier.
 	codexServiceTier *string
+}
+
+// recordGGAInjection carries the actual write decision into verification. Agent
+// selection alone cannot excuse a missing config that should have been written.
+func (s *runtimeState) recordGGAInjection(result gga.InjectionResult) {
+	if s != nil {
+		s.ggaConfigCreationSkipped = result.ConfigCreationSkipped
+		s.ggaNotices = append([]string(nil), result.Notices...)
+	}
+}
+
+func (s *runtimeState) recordGGAInstallDeferred() {
+	if s != nil {
+		s.ggaInstallDeferred = true
+	}
+}
+
+// ggaManualActions returns the completion actions owed by the GGA steps.
+func (s *runtimeState) ggaManualActions() []string {
+	if s == nil {
+		return nil
+	}
+	actions := append([]string(nil), s.ggaNotices...)
+	if s.ggaInstallDeferred {
+		actions = append(actions, GGAHomebrewDeferredAction)
+	}
+	return actions
+}
+
+// deferredComponents returns the components whose install was deferred.
+func (s *runtimeState) deferredComponents() []model.ComponentID {
+	if s == nil || !s.ggaInstallDeferred {
+		return nil
+	}
+	return []model.ComponentID{model.ComponentGGA}
+}
+
+func (s *runtimeState) skipsGGAConfigVerification(homeDir string, component model.ComponentID, path string) bool {
+	return s != nil && s.ggaConfigCreationSkipped && component == model.ComponentGGA && path == gga.ConfigPath(homeDir)
 }
 
 func (s *runtimeState) cleanupRollbackSnapshot() {
@@ -3356,7 +3404,15 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentGGA:
-		if !ggaAvailable(s.profile) {
+		installGGA := !ggaAvailable(s.profile)
+		if installGGA && s.profile.PackageManager == "brew" && !homebrewAvailable() {
+			// Missing Homebrew is an optional prerequisite, not a failed install
+			// (#3018): record a manual action and still apply the GGA
+			// configuration below. A present Homebrew that fails still fails.
+			s.state.recordGGAInstallDeferred()
+			installGGA = false
+		}
+		if installGGA {
 			// GGA not found on any known PATH — install it.
 			if s.profile.OS == "windows" {
 				if err := cleanupGGAInstallDir(); err != nil {
@@ -3367,7 +3423,7 @@ func (s componentApplyStep) Run() error {
 			if err != nil {
 				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 			}
-			installErr := runCommandSequence(commands)
+			installErr := runCommandSequence(withResolvedBrewCommand(commands))
 			if installErr != nil {
 				if ggaAvailable(s.profile) {
 					// The GGA install script uses `set -e` and `read -p` for
@@ -3401,9 +3457,11 @@ func (s componentApplyStep) Run() error {
 				fmt.Fprintf(os.Stderr, "WARNING: could not add %s to PATH: %v\n", ggaBinDir, err)
 			}
 		}
-		if _, err := gga.Inject(s.homeDir, s.agents); err != nil {
+		res, err := gga.Inject(s.homeDir, s.agents)
+		if err != nil {
 			return fmt.Errorf("inject gga config: %w", err)
 		}
+		s.state.recordGGAInjection(res)
 		return nil
 	case model.ComponentTheme:
 		for _, adapter := range adapters {
@@ -3435,6 +3493,14 @@ func (s componentApplyStep) Run() error {
 		return nil
 	default:
 		return fmt.Errorf("component %q is not supported in install runtime", s.component)
+	}
+}
+
+// writeGGAProviderNotices keeps installation skips visible without treating
+// missing inference or conservative preservation as an installation failure.
+func writeGGAProviderNotices(w io.Writer, notices []string) {
+	for _, notice := range notices {
+		fmt.Fprintf(w, "WARNING: %s\n", notice)
 	}
 }
 
@@ -3524,6 +3590,8 @@ func executeTUIInstall(homeDir string, selection model.Selection, resolved plann
 	runtime.piBackgroundProjection = preparePiBackgroundProjection(homeDir, &piBackgroundResolution, containsAgent(resolved.Agents, model.AgentPi))
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress), pipeline.WithTerminalCleanup(runtime.state.cleanupRollbackSnapshot))
 	result := orchestrator.Execute(tuiInstallStagePlan(runtime))
+	result.ManualActions = append(result.ManualActions, runtime.state.ggaManualActions()...)
+	result.DeferredComponents = runtime.state.deferredComponents()
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
@@ -3638,6 +3706,21 @@ func resolveEngramInstalledPath(profile system.PlatformProfile) (string, bool) {
 		return standardHomebrewExecutable("engram")
 	}
 	return "", false
+}
+
+// GGAHomebrewDeferredAction is the manual action recorded when a GGA install is
+// skipped because Homebrew is not available. Completion renderers use it to
+// avoid reporting that GGA was installed.
+const GGAHomebrewDeferredAction = "gga was not installed because Homebrew is not available. Install Homebrew (https://brew.sh), then run `gentle-ai install --component gga`."
+
+// homebrewAvailable reports whether brew is on PATH or at a standard Homebrew
+// prefix, the same locations resolveBrewCommand uses.
+func homebrewAvailable() bool {
+	if _, err := cmdLookPath("brew"); err == nil {
+		return true
+	}
+	_, found := standardHomebrewExecutable("brew")
+	return found
 }
 
 // resolveBrewCommand avoids environment-sensitive shell profile probing. The
@@ -4499,7 +4582,7 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 			continue
 		}
 		for _, path := range verificationComponentPaths(input.HomeDir, input.WorkspaceDir, input.Scope, input.Selection, adapters, component) {
-			if path == "" {
+			if path == "" || input.State.skipsGGAConfigVerification(input.HomeDir, component, path) {
 				continue
 			}
 			if _, dup := seenPath[path]; dup {
@@ -4748,12 +4831,9 @@ func (s checkDependenciesStep) Run() error {
 		}
 	}
 
-	// Run detection but do NOT write to stdout/stderr — this step runs
-	// inside the Bubble Tea alternate screen in TUI mode, so any raw
-	// output corrupts the display (see issue #2). Missing deps are
-	// surfaced on the TUI complete screen and by the actual install steps
-	// failing with real error messages.
-	_ = system.DetectDependencies(context.Background(), s.profile)
+	// This step never prints (it runs inside the Bubble Tea alternate screen;
+	// see issue #2). Missing deps are surfaced on the TUI complete screen and
+	// by the install steps failing with real error messages.
 	for _, agent := range s.selection.Agents {
 		// Only Pi executes package commands (its already-present `pi`
 		// subcommands and npm-based Engram initialization — see

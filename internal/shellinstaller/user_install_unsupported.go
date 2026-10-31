@@ -15,9 +15,17 @@ func UserKernelCheck() error {
 }
 func ValidateUserInstall(UserInstallRequest) error          { return UserKernelCheck() }
 func InspectUserInstall(UserInstallRequest) (string, error) { return "", UserKernelCheck() }
+func RunUserInstallDirect(context.Context, UserInstallRequest) (UserInstallResult, error) {
+	return UserInstallResult{}, errors.New("shell install is unsupported on this platform")
+}
+
 func RunUserInstall(context.Context, UserInstallRequest) (UserInstallResult, error) {
 	return UserInstallResult{}, UserKernelCheck()
 }
 func RunUserEntry(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
 	return UserKernelCheck()
 }
+
+// RunUserLaunchProbe refuses on unsupported platforms, matching this file's
+// contract: no native backend exists here.
+func RunUserLaunchProbe(context.Context, string) error { return UserKernelCheck() }

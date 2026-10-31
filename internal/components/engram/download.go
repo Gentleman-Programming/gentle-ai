@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -493,6 +494,26 @@ func engramChecksumURL(baseURL, version string) string {
 		baseURL, engramOwner, engramRepo, version)
 }
 
+// ensureTraversableDownloadDir creates the directory that will hold a downloaded
+// archive or binary at 0755. os.MkdirAll applies the process umask, so a hardened
+// umask (for example 077) would leave a fresh download directory at 0700 and
+// contradict the documented contract that this path stays traversable. An
+// existing directory keeps the operator's chosen mode: only a directory this
+// call created is corrected.
+func ensureTraversableDownloadDir(dir string) error {
+	created := false
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		created = true
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if !created {
+		return nil
+	}
+	return os.Chmod(dir, 0o755)
+}
+
 // engramDownloadToFile downloads the resource at url to outPath and returns the
 // SHA256 hex digest of the bytes that landed there.
 //
@@ -517,7 +538,7 @@ func engramDownloadToFile(ctx context.Context, url string, outPath string) (hexD
 
 	// Create the parent at 0755 explicitly: the writer's own parent creation is
 	// tuned for private config files, and a download directory on PATH is not one.
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+	if err := ensureTraversableDownloadDir(filepath.Dir(outPath)); err != nil {
 		return "", fmt.Errorf("create dir: %w", err)
 	}
 	result, err := filemerge.WriteStreamAtomic(outPath, resp.Body, 0o644)
@@ -848,7 +869,7 @@ func engramGoInstallFromMain(pkg string) (string, error) {
 // The staged file is synchronized before publication, so if recovery preserves
 // the new name it also preserves complete content (#2216).
 func writeExecutable(r io.Reader, outPath string) error {
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+	if err := ensureTraversableDownloadDir(filepath.Dir(outPath)); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 	if _, err := filemerge.WriteStreamAtomic(outPath, r, 0o755); err != nil {

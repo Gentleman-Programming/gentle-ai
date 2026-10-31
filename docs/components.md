@@ -23,6 +23,23 @@ ODD (Organic Driven Development) is shared routing guidance, not a separate comp
 
 > **Since v4.0.0:** the SDD (Spec-Driven Development) component and its `sdd-*` skills are retired in favor of ODD. A legacy `sdd` selection persisted in state is still read, but install and sync no longer write its assets. A global install or sync also removes the native `sdd-*` sub-agents earlier releases rendered for Claude Code, Kiro, Cursor, and Kimi, proven by comparing each file with every released template; edited files are preserved and reported as manual actions. A Kimi `gentleman.yaml` inherited from v3.x declares every SDD subagent by path: when its bytes match a release, sync rewrites it first so the cleanup completes; when it was edited, sync keeps every SDD agent it references and reports one manual action naming it. For OpenCode and Kilocode, install and sync remove the `sdd-*` agent entries (including profile copies and the 3.7.0 plural `agents` map) and the `prompts/sdd/` files releases wrote; see [OpenCode compatibility](opencode-compatibility.md). For every runtime except Pi, install and sync also remove the retired `sdd-*` skills, the shared `_shared/sdd-*.md` and `_shared/openspec-convention.md` references (including the shared `~/.agents/skills` root outside Windows), the `/sdd-*` and `/gentle-sdd-*` slash commands, and the Claude Code `PreToolUse` hook that runs the removed `gentle-ai sdd-preflight-hook` command, each only when it matches what a release wrote. A workspace-scoped sync handles the workspace copies, including the Windsurf `.windsurf/workflows/sdd-new.md` workflow. An edited SDD skill keeps its whole directory and the shared SDD references it reads. A skills, skill, or `_shared` directory that is a symlink is never entered, and Claude Code settings that are a symlink or not strict JSON are never rewritten; both are reported with the exact file or hook to remove. Claude Code's `_shared/sdd-orchestrator-workflow.md` was rendered per installation: it is removed when it matches what a release's own writer renders with no model assignments or with one of that release's model presets, and kept and reported otherwise, for example when it carries model assignments you customized. For Codex, install and sync remove the `sdd-strong`, `sdd-mid`, and `sdd-cheap` `.config.toml` profiles when they hold exactly what a release wrote (only the `model` and `model_reasoning_effort` values may differ); a profile with anything else, including a profile left by downgrading to v1.36–v1.38, is kept and reported. They also remove the `<!-- gentle-ai:sdd-orchestrator -->` block from the lowercase `~/.codex/agents.md` that v1.7.10 to v1.31.0 wrote, when it is a separate file from `AGENTS.md`; a file that held only the block is left empty. For Kimi, they remove `~/.kimi/sdd-orchestrator.md` when it matches a release's render and the exact `{% include "sdd-orchestrator.md" ignore missing %}` line from `~/.kimi/KIMI.md`. A workspace-scoped sync retires the same Codex and Kimi files a workspace-scoped install wrote under the project and, since it refreshes no routing guidance for Claude Code or Codex, removes the v3.7.0 SDD orchestrator block from their project prompt files. Only one block whose markers each fill a line is removed; a file with an unmatched, repeated, or nested marker is kept unchanged and reported. Prompt files that are symlinks, or that sit in a symlinked `~/.codex` or `~/.kimi`, are never rewritten and are reported. Removed files are captured in the sync backup.
 
+## Claude Code permission customization
+
+For Claude Code, the `permissions` component seeds `permissions.deny` only when
+that key is absent. Later installs or permission-enabled syncs preserve an existing
+list, including its order and an explicit empty list (`[]`), without appending
+managed defaults. Other permission settings retain their existing merge behavior.
+
+Edit `~/.claude/settings.json` to customize the deny list. Remove the `deny` key
+and rerun `gentle-ai install --agent claude-code --component permissions` to restore
+the current default list. An empty list disables these default deny guardrails;
+it does not request a reset.
+
+The default `.env.*` rules are unchanged and still match `.env.schema` and
+`.env.example`. Existing default lists are not automatically narrowed. Preserving
+custom rules does not establish that files named as schemas or examples are
+secret-free.
+
 ## Explicit install modifiers
 
 Explicit `--persona` and `--skill` / `--skills` options require their consumer
@@ -61,6 +78,14 @@ This first delivery covers the 15 non-Pi primary instruction carriers, not every
 ## GGA Behavior
 
 `gentle-ai install --component gga` installs/provisions the `gga` binary globally on your machine.
+
+Install and sync preserve an existing literal `PROVIDER`, including custom/future names such as `ollama:my-model`, regardless of selected agents. Only a missing provider is initialized from known mappings, in priority order: Claude Code → `claude`, OpenCode → `opencode`, Gemini CLI / Antigravity → `gemini`, Codex → `codex`.
+
+With only unmapped agents (for example Pi or Cursor), or an empty agent selection, an existing literal provider leaves the **entire config byte-for-byte unchanged**, including custom patterns, timeout, comments and formatting. No provider change is needed. Mapped selections still regenerate the managed defaults while preserving the literal provider; this is not a general config merge.
+
+If no provider is configured and no mapping exists, the config stays unchanged or absent; guidance asks you to set a literal provider or select a mapped agent. Runtime assets and the starter `AGENTS.md` can still refresh in either case. GGA notices appear once in CLI output or in the TUI completion screen's manual actions, not as stray TUI stderr.
+
+GGA config is shell-sourced, but Gentle AI never sources or evaluates it. It recognizes simple standalone literal assignments (optionally `export`) and comments. Ambiguous, dynamic, malformed, duplicate, or unsupported syntax preserves the **entire config byte-for-byte**, with guidance even on repeat/no-op syncs. For example, `PROVIDER='ollama:my-model'` is literal; `PROVIDER="$MODEL"` and `PROVIDER=$(choose-provider)` require manual simplification. Unreadable config is an error, not permission to replace it. Other managed config defaults continue to refresh when the config is safe to update.
 
 It does **not** run project-level hook setup automatically (`gga init` / `gga install`) because that should be an explicit decision per repository.
 

@@ -3,10 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -126,5 +129,187 @@ func TestShellInstallInternalCommandsRetainKernelChecks(t *testing.T) {
 				t.Fatalf("internal route bypassed or blocked kernel checks: got %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestShellInstallLaunchProbeIsWired(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the inline launch probe is Linux-only")
+	}
+	if reflect.ValueOf(shellLaunchProbe).Pointer() != reflect.ValueOf(shellinstaller.RunUserLaunchProbe).Pointer() {
+		t.Fatal("inline install does not probe the delegated unit path before claiming success")
+	}
+}
+
+func TestShellPNPMLaunchHelp(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("PNPM dispatch is Linux-only")
+	}
+	var output bytes.Buffer
+	if err := RunShell([]string{"--help"}, &output); err != nil || !strings.Contains(output.String(), "launch-pnpm ROOT pi|gentle-shell [ARGS...]") || !strings.Contains(output.String(), "shell launch ROOT [PI_ARGS...]") {
+		t.Fatal("missing PNPM or legacy launch help", err, output.String())
+	}
+}
+
+// shellInlineHarness drives RunShellInstallInline's Linux route with a fake
+// direct worker that publishes like the real one: destination tree, the
+// ~/.local/bin launchers and the registry entry.
+type shellInlineHarness struct {
+	home, destination string
+	calls             []string
+	reports           []shellinstaller.UserInstallProgress
+}
+
+func newShellInlineHarness(t *testing.T, probe error) *shellInlineHarness {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the inline direct worker and launch probe are Linux routes")
+	}
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", filepath.Join(home, "emptybin"))
+	t.Setenv("GENTLE_AI_SHELL_REGISTRY_HOME", home)
+	// gentle-ai's own state writers leave ~/.gentle-ai at 0755.
+	if err := os.Mkdir(filepath.Join(home, ".gentle-ai"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	h := &shellInlineHarness{home: home, destination: filepath.Join(home, ".local", "share", "gentle-shell", "install")}
+	oldDirect, oldWorker, oldProbe, oldInspect := shellInlineDirect, shellDirectWorker, shellLaunchProbe, shellInstallInspect
+	t.Cleanup(func() {
+		shellInlineDirect, shellDirectWorker, shellLaunchProbe, shellInstallInspect = oldDirect, oldWorker, oldProbe, oldInspect
+	})
+	shellInlineDirect = true
+	shellInstallInspect = func(shellinstaller.UserInstallRequest) (string, error) { return "token", nil }
+	shellLaunchProbe = func(context.Context, string) error {
+		h.calls = append(h.calls, "probe")
+		return probe
+	}
+	shellDirectWorker = func(_ context.Context, _ string, args []string, stdout, _ io.Writer) error {
+		h.calls = append(h.calls, "worker")
+		if len(args) == 0 || args[0] != h.destination {
+			t.Errorf("direct worker args = %q, want the destination first", args)
+		}
+		bin := filepath.Join(h.destination, "bin")
+		if err := os.MkdirAll(bin, 0700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(bin, "gentle-shell"), []byte("#!/bin/sh\n"), 0700); err != nil {
+			return err
+		}
+		manifest := `{"Schema":"gentle-shell-user-install/v1","Destination":"` + h.destination + `","Mode":"separate"}`
+		if err := os.WriteFile(filepath.Join(h.destination, "installation.json"), []byte(manifest), 0600); err != nil {
+			return err
+		}
+		if err := shellinstaller.RecordUserShellInstall(home, shellinstaller.UserShellInstall{Target: h.destination, Mode: "separate", Channel: "stable"}); err != nil {
+			return err
+		}
+		links := filepath.Join(home, ".local", "bin")
+		if err := os.MkdirAll(links, 0755); err != nil {
+			return err
+		}
+		for _, name := range []string{"gentle-shell", "gs"} {
+			if err := os.Symlink(filepath.Join(bin, "gentle-shell"), filepath.Join(links, name)); err != nil {
+				return err
+			}
+		}
+		for index, label := range []string{"Validate the selection and target", "Prepare the private stage and preferences", "Install the runtime and pinned suppliers", "Apply optional runtimes and the SDK channel", "Publish, verify and register the installation"} {
+			if _, err := io.WriteString(stdout, "✓ "+strconv.Itoa(index+1)+"/5 "+label+"\n"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return h
+}
+
+func (h *shellInlineHarness) run() error {
+	selection := ShellInstallSelection{Request: shellinstaller.UserInstallRequest{Destination: h.destination, Mode: "separate", Confirmation: "token"}, Confirmed: true, Executed: true}
+	return RunShellInstallInline(context.Background(), selection, func(progress shellinstaller.UserInstallProgress) {
+		h.reports = append(h.reports, progress)
+	}, io.Discard)
+}
+
+func (h *shellInlineHarness) launcher(name string) (string, bool) {
+	target, err := os.Readlink(filepath.Join(h.home, ".local", "bin", name))
+	return target, err == nil
+}
+
+func (h *shellInlineHarness) registered() []shellinstaller.UserShellInstall {
+	var entries []shellinstaller.UserShellInstall
+	for _, install := range shellinstaller.ReadUserShellInstalls(h.home) {
+		if install.Target == h.destination {
+			entries = append(entries, install)
+		}
+	}
+	return entries
+}
+
+// A delegated unit that cannot run makes every later launch fail, so the
+// refusal must come before the worker publishes anything (L7, L12).
+func TestRunShellInstallInlineRefusesUnlaunchableUnitBeforeAnyEffect(t *testing.T) {
+	h := newShellInlineHarness(t, errors.New("set XDG_RUNTIME_DIR to your existing /run/user/UID; delegated user manager required"))
+	err := h.run()
+	if err == nil || !strings.Contains(err.Error(), "delegated unit launch probe failed") || !strings.Contains(err.Error(), "XDG_RUNTIME_DIR") {
+		t.Fatalf("unlaunchable unit not refused with its cause: %v", err)
+	}
+	if !reflect.DeepEqual(h.calls, []string{"probe"}) {
+		t.Errorf("calls = %q, want the probe alone before any worker", h.calls)
+	}
+	if _, statErr := os.Lstat(h.destination); !os.IsNotExist(statErr) {
+		t.Errorf("refused installation left its destination: %v", statErr)
+	}
+	for _, name := range []string{"gentle-shell", "gs"} {
+		if target, ok := h.launcher(name); ok {
+			t.Errorf("refused installation left launcher %s -> %s", name, target)
+		}
+	}
+	if entries := h.registered(); len(entries) != 0 {
+		t.Errorf("refused installation is registered: %+v", entries)
+	}
+	if installs := shellinstaller.DiscoverUserShellInstalls(h.home); len(installs) != 0 {
+		t.Errorf("refused installation is discoverable as managed: %+v", installs)
+	}
+	for _, progress := range h.reports {
+		if progress.State == "done" {
+			t.Errorf("refused installation reported step progress: %+v", h.reports)
+			break
+		}
+	}
+}
+
+func TestRunShellInstallInlinePublishedInstallRegistersAndKeepsLaunchers(t *testing.T) {
+	h := newShellInlineHarness(t, nil)
+	if err := h.run(); err != nil {
+		t.Fatalf("qualified installation failed: %v", err)
+	}
+	if !reflect.DeepEqual(h.calls, []string{"probe", "worker"}) {
+		t.Fatalf("calls = %q, want the probe then the worker", h.calls)
+	}
+	if _, err := os.Lstat(filepath.Join(h.destination, "installation.json")); err != nil {
+		t.Fatalf("published destination missing: %v", err)
+	}
+	for _, name := range []string{"gentle-shell", "gs"} {
+		if target, ok := h.launcher(name); !ok || target != filepath.Join(h.destination, "bin", "gentle-shell") {
+			t.Fatalf("launcher %s = %q (present %v)", name, target, ok)
+		}
+	}
+	entries := h.registered()
+	if len(entries) != 1 || entries[0].Mode != "separate" || entries[0].Channel != "stable" {
+		t.Fatalf("registry entries = %+v, want one separate/stable", entries)
+	}
+	if installs := shellinstaller.DiscoverUserShellInstalls(h.home); len(installs) != 1 || installs[0].Target != h.destination {
+		t.Fatalf("published installation not discoverable: %+v", installs)
+	}
+	done := 0
+	for _, progress := range h.reports {
+		if progress.State == "done" {
+			done++
+		}
+	}
+	if done != 5 {
+		t.Fatalf("progress = %+v, want 5 done steps", h.reports)
 	}
 }

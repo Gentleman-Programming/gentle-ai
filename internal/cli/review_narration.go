@@ -140,8 +140,10 @@ var reviewStopReasonNarration = map[string]string{
 		"<repo>", "<id>"),
 	"lens_context_budget_exceeded": "This frozen candidate cannot fit complete reviewer evidence without truncation, so this review stops before an inspection result. " +
 		"Reduce the candidate scope or target identity, then run `gentle-ai review start` for that new candidate; or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
-	"managed_assets_outdated": "This installation's reviewer assets no longer match this version of Gentle AI, so this review stops before it starts. " +
-		"Run `gentle-ai sync --agent " + reviewUndeclaredRuntimeIdentitySlot + "` to bring them back in sync, then re-run " +
+	"managed_assets_outdated": "This installation's reviewer assets no longer match this version of Gentle AI, so this operation is refused before it changes anything. " +
+		"The refusal names both asset versions, the one the last sync recorded and the one this binary carries; if they still differ after a sync that completed successfully (a failed or partial sync can leave the recorded one unchanged), that sync ran a different `gentle-ai` binary than the one refusing. " +
+		"Run the exact sync command the refusal carries: `gentle-ai sync` when a capture or `gentle-ai review repair` was refused, which syncs every agent, " +
+		"or `gentle-ai sync --agent " + reviewUndeclaredRuntimeIdentitySlot + "` when STATUS or START was refused for that runtime. Then re-run " +
 		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition`.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
 		"Ask a maintainer to inspect it directly, or run `" + reviewModeDisableCloneCommand + "` " +
@@ -160,6 +162,8 @@ var reviewStopReasonNarration = map[string]string{
 	"target_already_acknowledged": "This exact target was already acknowledged and its review authority was burned. " +
 		"No further review action is required; delivery follows ordinary repository policy. Changed targets remain eligible for review. " +
 		"Only when deliberately requesting a new independent review, use `gentle-ai review start`; do not automatically restart this consumed target.",
+	"acknowledged_boundary_reaches_head": "The reviewed boundary advances on acknowledgement and reaches HEAD: every commit since the boundary was empty, so nothing unreviewed remains. " +
+		"Continue working; any new commit re-derives a fresh candidate and `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <agent> --next-transition` offers it.",
 	"acknowledged_predecessor_passive_delta": "This committed range only adds passive content (documentation or notes) to a candidate that was already approved and acknowledged, so there is nothing new to review. " +
 		"No review action is required and no review authority was created; delivery follows ordinary repository policy. Any non-passive change is offered for review again. " +
 		"Only when deliberately requesting a new independent review, use `gentle-ai review start`.",

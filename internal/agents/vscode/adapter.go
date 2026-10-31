@@ -53,7 +53,7 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 		return false, "", extensionsDir, false, err
 	}
 	for _, entry := range entries {
-		if entry.IsDir() && (entry.Name() == "github.copilot" || strings.HasPrefix(entry.Name(), "github.copilot-")) {
+		if entry.IsDir() && system.IsCopilotExtensionDir(entry.Name()) {
 			return true, binaryPath, extensionsDir, true, nil
 		}
 	}

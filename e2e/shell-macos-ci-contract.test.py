@@ -4,10 +4,12 @@ Pure file parsing with the standard library (no YAML package), so it runs on
 Linux and macOS alike: `python3 -I e2e/shell-macos-ci-contract.test.py`.
 """
 import ast
+import os
 import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -17,6 +19,7 @@ PINS = ROOT / 'internal/shellinstaller/user_pins_darwin.go'
 REQUIRED_PATHS = [
     'internal/shellinstaller/**',
     'internal/cli/shell_install*',
+    'internal/tui/**',
     'scripts/bootstrap-gentle-shell-private-node.sh',
     'scripts/provision-gentle-shell-private-global.mjs',
     'scripts/runtime_helpers.go',
@@ -146,6 +149,7 @@ class MacOSQualificationContract(unittest.TestCase):
         order = []
         for marker in ['go test ./internal/shellinstaller ./scripts -count=1',
                        'go test ./internal/cli -run Shell -count=1',
+                       'go test ./internal/tui/... -count=1',
                        'go build -mod=readonly -o "$RUNNER_TEMP/candidate/gentle-ai" ./cmd/gentle-ai',
                        'e2e/shell-macos-qualification.py']:
             order.append(next(index for index, run in enumerate(runs) if marker in run))
@@ -173,6 +177,58 @@ class MacOSQualificationContract(unittest.TestCase):
         for name in ['INSPECT_SECONDS', 'INSTALL_SECONDS', 'RECOVER_SECONDS', 'PROBE_SECONDS']:
             self.assertLess(constants[name], whole, name)
 
+    def test_residue_admits_only_the_separate_launcher(self):
+        tree, _ = script_constants()
+        wanted = {'QualificationError', 'require', 'home_launcher'}
+        nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in wanted]
+        self.assertEqual({node.name for node in nodes}, wanted)
+        namespace = {'os': os}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SCRIPT), 'exec'), namespace)
+        home_launcher, failure = namespace['home_launcher'], namespace['QualificationError']
+        self.assertIn('launcher = home_launcher(context.home, separate)', SCRIPT.read_text())
+        with tempfile.TemporaryDirectory() as root:
+            home, separate = os.path.join(root, 'home'), os.path.join(root, 'separate')
+            os.makedirs(os.path.join(separate, 'bin'))
+            binding = os.path.join(os.path.realpath(separate), 'bin/gentle-shell')
+            with open(binding, 'w') as handle:
+                handle.write('binding\n')
+            os.chmod(binding, 0o700)
+            os.makedirs(home)
+            with self.assertRaises(failure):
+                home_launcher(home, separate)  # The launcher is required, not optional.
+            os.makedirs(os.path.join(home, '.local/bin'))
+            link = os.path.join(home, '.local/bin/gentle-shell')
+            os.symlink(binding, link)
+            with self.assertRaises(failure):
+                home_launcher(home, separate)  # Without SHELL, ~/.profile carries the PATH line.
+            profile = os.path.join(home, '.profile')
+            line = 'export PATH="$HOME/.local/bin:$PATH" # gentle-ai: gentle-shell launcher\n'
+            for wrong in ['', line + line, '# mine\n' + line, line.rstrip('\n')]:
+                with open(profile, 'w') as handle:
+                    handle.write(wrong)
+                with self.assertRaises(failure):
+                    home_launcher(home, separate)  # Exactly our one marked line, nothing else.
+            with open(profile, 'w') as handle:
+                handle.write(line)
+            self.assertEqual(home_launcher(home, separate), ['.local/bin/gentle-shell'])
+            gs = os.path.join(home, '.local/bin/gs')
+            os.symlink(binding, gs)  # `gs` is published unless the name is occupied.
+            self.assertEqual(home_launcher(home, separate), ['.local/bin/gentle-shell', '.local/bin/gs'])
+            os.unlink(gs)
+            os.symlink(os.path.join(root, 'elsewhere'), gs)
+            with self.assertRaises(failure):
+                home_launcher(home, separate)
+            os.unlink(gs)
+            with open(os.path.join(home, '.npmrc'), 'w') as handle:
+                handle.write('residue\n')
+            with self.assertRaises(failure):
+                home_launcher(home, separate)
+            os.unlink(os.path.join(home, '.npmrc'))
+            os.unlink(link)
+            os.symlink(os.path.join(root, 'elsewhere'), link)
+            with self.assertRaises(failure):
+                home_launcher(home, separate)
+
     def test_receipt_artifact_is_uploaded_even_after_failure(self):
         upload = next(step for step in self.steps if step['uses'] and step['uses'].startswith('actions/upload-artifact@'))
         self.assertEqual(upload['if'], "always() && steps.qualify.outcome != 'skipped'")
@@ -183,7 +239,7 @@ class MacOSQualificationContract(unittest.TestCase):
 
     def test_script_is_stdlib_only_and_reports_timeouts(self):
         tree, constants = script_constants()
-        allowed = {'argparse', 'hashlib', 'json', 'os', 'platform', 'pwd', 're', 'shutil', 'signal', 'subprocess', 'sys',
+        allowed = {'argparse', 'hashlib', 'json', 'os', 'pathlib', 'platform', 'pwd', 're', 'shutil', 'signal', 'subprocess', 'sys',
                    'tarfile', 'tempfile', 'time'}
         imported = set()
         for node in ast.walk(tree):
@@ -204,8 +260,12 @@ class MacOSQualificationContract(unittest.TestCase):
         _, constants = script_constants()
         node = re.search(r'privateNativeNodeSize int64 = (\d+)\nconst privateNativeNodeSHA = "([0-9a-f]{64})"', go)
         self.assertEqual(constants['NODE_PIN'], (node.group(2), int(node.group(1))))
-        binary = re.search(r'userBinarySize int64 = (\d+)\nconst userBinarySHA = "([0-9a-f]{64})"', go)
-        self.assertEqual(constants['GENTLE_AI_PIN'], (binary.group(2), int(binary.group(1))))
+        # The native member the gentle-pi installer builds is no longer the
+        # supervisor's own build pin: the reviewed list provisions gentle-pi
+        # 4.5.x, whose installer pins a newer gentle-ai. The harness derives
+        # the member from the authenticated installer's asset row instead.
+        self.assertNotIn('GENTLE_AI_PIN', constants)
+        self.assertIn("MEMBER_ROW = re.compile(r'\"darwin/arm64\": asset", SCRIPT.read_text())
         rows = re.findall(r'\{"(\w+)", "[\w/]+", "v?[\d.]+", "([\w.-]+)", "([0-9a-f]{64})", (\d+)\}', go)
         tools = {name: (sha, int(size), stem + '/' + name) for name, stem, sha, size in rows}
         self.assertEqual(set(tools), {'fd', 'rg'})

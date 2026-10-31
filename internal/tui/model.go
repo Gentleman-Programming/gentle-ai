@@ -30,6 +30,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
@@ -108,6 +109,13 @@ var osRemoveFn = os.Remove
 var execCommandFn = exec.Command
 var communityToolInstallFn = communitytool.Install
 var communityToolStatusFn = communitytool.DetectStatus
+
+// agentBuilderEngineAvailableFn reports whether an agent-builder engine binary
+// is on PATH. Tests may override it to count or fake PATH probes.
+var agentBuilderEngineAvailableFn = func(id model.AgentID) bool {
+	engine := agentbuilder.NewEngine(id)
+	return engine != nil && engine.Available()
+}
 
 // readCurrentAssignmentsFn reads OpenCode agent assignments for Configure models.
 // Tests may override it without touching user settings.
@@ -613,6 +621,8 @@ const (
 	ScreenUninstallEngramScope
 	ScreenUninstallConfirm
 	ScreenUninstallResult
+	ScreenCustomAgents
+	ScreenCustomAgentDelete
 	ScreenAgentBuilderEngine
 	ScreenAgentBuilderPrompt
 	ScreenAgentBuilderGenerating
@@ -632,9 +642,33 @@ const (
 	ScreenReviewStoreResetResult
 	// ScreenReviewMode displays and changes the global review-mode switch.
 	ScreenReviewMode
+	ScreenShellInstall
 )
 
 type Model struct {
+	// agentBuilderEngines is detected once in NewModel so View and optionCount
+	// never probe PATH per frame (#268).
+	agentBuilderEngines   []model.AgentID
+	shellExperience       *shellExperienceConfig
+	shellDetected         []shellinstaller.UserShellInstall
+	shellDetectedProfiles []shellinstaller.UserExperience
+	shellDetectedCursor   int
+	shellManage           *shellManageState
+	shellUpdate           *shellUpdateState
+	shellReconfigure      string
+	shellPlan             []string
+	shellPlanConfig       *shellExperienceConfig
+	shellPlanRequest      shellinstaller.UserInstallRequest
+	shellRootRisk         *shellRootRiskPrompt
+	shellInstallRun       *shellInstallRun
+	shellInstallEvents    <-chan shellInstallEvent
+	shellInstallRunner    func(context.Context, shellinstaller.UserInstallRequest, func(shellinstaller.UserInstallProgress)) error
+	shellReadyOffset      int
+	shellReadyCursor      int
+	shellInstallEnabled   bool
+	shellInstallModel     tea.Model
+	shellInstallSelection cli.ShellInstallSelection
+
 	openCodePresentationMajor opencode.RuntimeMajor
 	Screen                    Screen
 	PreviousScreen            Screen
@@ -825,6 +859,11 @@ type Model struct {
 	// AgentBuilder holds the transient state for the agent-builder TUI flow.
 	AgentBuilder AgentBuilderState
 
+	// CustomAgents holds the list and deletion selection for custom agents.
+	CustomAgentsList          []agentbuilder.RegistryEntry
+	CustomAgentsErr           error
+	CustomAgentDeleteSelected map[string]bool
+
 	InstallFlowActive bool
 
 	// ReviewStoreResetSurveyFn reports what a review store reset would
@@ -897,6 +936,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 	}
 
 	return Model{
+		agentBuilderEngines:   detectAgentBuilderEngines(),
 		Screen:                ScreenWelcome,
 		Version:               version,
 		Selection:             selection,
@@ -1023,6 +1063,17 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.Screen == ScreenShellInstall {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			return m.updateShellInstall(msg)
+		case tea.WindowSizeMsg:
+			m.Width, m.Height = msg.Width, msg.Height
+			return m.updateShellInstall(msg)
+		case shellInstallEvent, shellInstallTick, shellUpdateResult, shellUninstallResult:
+			return m.updateShellInstall(msg)
+		}
+	}
 	switch msg := msg.(type) {
 	case openCodePresentationMsg:
 		m.openCodePresentationMajor = msg.major
@@ -1459,11 +1510,17 @@ func (m Model) View() string {
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
-		return screens.RenderWelcomeWithAdvisory(
+		render := screens.RenderWelcomeWithAdvisory
+		if m.shellInstallEnabled {
+			render = screens.RenderShellWelcomeWithAdvisory
+		}
+		return render(
 			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone && m.UpdateCheckState == update.CheckCompleted, m.hasAgentBuilderEngines(),
 			m.Width, m.Height,
 			screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll},
 		)
+	case ScreenShellInstall:
+		return m.shellInstallView()
 	case ScreenUpgrade:
 		return screens.RenderUpgradeWithWidth(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame, m.Width)
 	case ScreenSync:
@@ -1541,8 +1598,8 @@ func (m Model) View() string {
 	case ScreenComplete:
 		return screens.RenderComplete(screens.CompletePayload{
 			ConfiguredAgents:    len(m.Selection.Agents),
-			InstalledComponents: len(m.Selection.Components),
-			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA),
+			InstalledComponents: installedComponentCount(m.Selection.Components, m.Execution.DeferredComponents),
+			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA) && !slices.Contains(m.Execution.DeferredComponents, model.ComponentGGA),
 			FailedSteps:         extractFailedSteps(m.Execution),
 			RollbackPerformed:   len(m.Execution.Rollback.Steps) > 0,
 			RollbackComplete:    m.Execution.Rollback.Success,
@@ -1581,6 +1638,10 @@ func (m Model) View() string {
 		return screens.RenderDeleteResult(m.SelectedBackup, m.DeleteErr)
 	case ScreenRenameBackup:
 		return screens.RenderRenameBackup(m.SelectedBackup, m.BackupRenameText, m.BackupRenamePos)
+	case ScreenCustomAgents:
+		return screens.RenderCustomAgents(m.CustomAgentsList, m.Cursor, m.CustomAgentsErr, m.hasAgentBuilderEngines())
+	case ScreenCustomAgentDelete:
+		return screens.RenderCustomAgentDelete(m.CustomAgentsList, m.CustomAgentDeleteSelected, m.Cursor)
 	case ScreenAgentBuilderEngine:
 		return screens.RenderABEngine(m.AgentBuilder.AvailableEngines, m.Cursor)
 	case ScreenAgentBuilderPrompt:
@@ -1910,6 +1971,14 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggleCurrentSkill()
 		case ScreenCommunityTools:
 			m.toggleCurrentCommunityTool()
+		case ScreenCustomAgentDelete:
+			if m.Cursor < len(m.CustomAgentsList) {
+				name := m.CustomAgentsList[m.Cursor].Name
+				if m.CustomAgentDeleteSelected == nil {
+					m.CustomAgentDeleteSelected = make(map[string]bool)
+				}
+				m.CustomAgentDeleteSelected[name] = !m.CustomAgentDeleteSelected[name]
+			}
 		}
 		return m, nil
 	case "r":
@@ -1922,6 +1991,15 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "d":
+		if m.Screen == ScreenCustomAgents && len(m.CustomAgentsList) > 0 {
+			m.CustomAgentsErr = nil
+			m.CustomAgentDeleteSelected = make(map[string]bool)
+			if m.Cursor < len(m.CustomAgentsList) {
+				m.CustomAgentDeleteSelected[m.CustomAgentsList[m.Cursor].Name] = true
+			}
+			m.setScreen(ScreenCustomAgentDelete)
+			return m, nil
+		}
 		// Delete: only when on ScreenBackups and cursor is on a backup item (not "Back").
 		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
 			m.SelectedBackup = m.Backups[m.Cursor]
@@ -1983,7 +2061,26 @@ func (m Model) isModelPickerSeparatorCursor() bool {
 func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	switch m.Screen {
 	case ScreenWelcome:
-		switch m.Cursor {
+		options := screens.WelcomeOptionsWithShellInstaller(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.shellInstallEnabled)
+		if m.Cursor >= 0 && m.Cursor < len(options) {
+			switch options[m.Cursor] {
+			case screens.ShellInstallWelcomeOption:
+				m.shellInstallSelection = cli.ShellInstallSelection{}
+				m.beginShellExperience()
+				if m.shellInstallModel != nil {
+					m.shellInstallModel, _ = m.shellInstallModel.Update(tea.WindowSizeMsg{Width: m.Width, Height: m.Height})
+				}
+				m.setScreen(ScreenShellInstall)
+				return m, nil
+			case "Quit":
+				return m, tea.Quit
+			}
+		}
+		welcomeCursor := m.Cursor
+		if m.shellInstallEnabled {
+			welcomeCursor--
+		}
+		switch welcomeCursor {
 		case 0:
 			m.InstallFlowActive = true
 			m.setScreen(ScreenDetection)
@@ -2015,45 +2112,35 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 4:
 			m.setScreen(ScreenModelConfig)
 		case 5:
-			// "Create your own Agent" — blocked when no engines are available.
-			if !m.hasAgentBuilderEngines() {
-				return m, nil
-			}
-			m.AgentBuilder = AgentBuilderState{}
-			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
-			ta := textarea.New()
-			ta.Placeholder = "Describe what you want your agent to do..."
-			ta.Focus()
-			ta.SetWidth(60)
-			ta.SetHeight(5)
-			m.AgentBuilder.Textarea = ta
-			m.setScreen(ScreenAgentBuilderEngine)
+			m.CustomAgentsErr = nil
+			m.setScreen(ScreenCustomAgents)
+			return m, nil
 		default:
 			next := 6
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				m.setScreen(ScreenBackups)
 				return m, nil
 			}
 			next++
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				return m.startReviewStoreResetSurvey()
 			}
 			next++
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				return m.startReviewModeLoad()
 			}
 			next++
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				m.setScreen(ScreenUninstallMode)
 				return m, nil
 			}
 			next++
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				m.CommunityToolsStandalone = true
 				m.CommunityToolResults = nil
 				m.CommunityToolErr = nil
@@ -2066,7 +2153,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			next++
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				return m, tea.Quit
 			}
 		}
@@ -2274,6 +2361,62 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			return m, discoveryCmd
 		case 4: // Back
 			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenCustomAgents:
+		agentCount := len(m.CustomAgentsList)
+		switch {
+		case m.Cursor < agentCount:
+			m.CustomAgentsErr = nil
+			m.CustomAgentDeleteSelected = map[string]bool{
+				m.CustomAgentsList[m.Cursor].Name: true,
+			}
+			m.setScreen(ScreenCustomAgentDelete)
+		case m.Cursor == agentCount:
+			m.agentBuilderEngines = detectAgentBuilderEngines()
+			if !m.hasAgentBuilderEngines() {
+				return m, nil
+			}
+			m.AgentBuilder = AgentBuilderState{}
+			m.AgentBuilder.AvailableEngines = m.agentBuilderEngines
+			ta := textarea.New()
+			ta.Placeholder = "Describe what you want your agent to do..."
+			ta.Focus()
+			ta.SetWidth(60)
+			ta.SetHeight(5)
+			m.AgentBuilder.Textarea = ta
+			m.setScreen(ScreenAgentBuilderEngine)
+		case m.Cursor == agentCount+1:
+			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenCustomAgentDelete:
+		agentCount := len(m.CustomAgentsList)
+		if agentCount == 0 {
+			m.setScreen(ScreenCustomAgents)
+			return m, nil
+		}
+		deleteIdx := agentCount
+		cancelIdx := agentCount + 1
+		switch m.Cursor {
+		case deleteIdx:
+			registryPath := customAgentsRegistryPath()
+			var toDelete []string
+			for name, selected := range m.CustomAgentDeleteSelected {
+				if selected {
+					toDelete = append(toDelete, name)
+				}
+			}
+			adapters := m.buildAgentBuilderAdapters()
+			err := agentbuilder.Uninstall(registryPath, toDelete, adapters)
+			m.CustomAgentDeleteSelected = nil
+			m.setScreen(ScreenCustomAgents)
+			if err != nil {
+				m.CustomAgentsErr = err
+			}
+		case cancelIdx:
+			m.setScreen(ScreenCustomAgents)
+			m.CustomAgentDeleteSelected = nil
 		}
 		return m, nil
 	case ScreenDetection:
@@ -2720,7 +2863,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenAgentBuilderComplete)
 		}
 	case ScreenAgentBuilderComplete:
-		m.setScreen(ScreenWelcome)
+		m.setScreen(ScreenCustomAgents)
 	case ScreenUpdatePrompt:
 		// Cursor maps to: 0=Update now, 1=View changes, 2=Keep current version.
 		// Enter always confirms the currently highlighted option.
@@ -3540,7 +3683,10 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	// Agent builder back navigation.
 	switch m.Screen {
 	case ScreenAgentBuilderComplete:
-		m.setScreen(ScreenWelcome)
+		m.setScreen(ScreenCustomAgents)
+		return m
+	case ScreenAgentBuilderEngine:
+		m.setScreen(ScreenCustomAgents)
 		return m
 	case ScreenAgentBuilderInstalling:
 		// Can't go back while installing — guard above handles this.
@@ -3719,6 +3865,9 @@ func (m *Model) setScreen(next Screen) {
 	if next == ScreenUninstallMode {
 		m.refreshUninstallEngramScope()
 	}
+	if next == ScreenCustomAgents {
+		m.loadCustomAgents()
+	}
 }
 
 // handleRenameInput processes key events when the rename backup screen is active.
@@ -3774,7 +3923,7 @@ func (m Model) optionCount() int {
 	}
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines()))
+		return len(screens.WelcomeOptionsWithShellInstaller(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.shellInstallEnabled))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 0
@@ -3875,6 +4024,10 @@ func (m Model) optionCount() int {
 		return 0
 	case ScreenRenameBackup:
 		return 0 // text input mode — no cursor navigation
+	case ScreenCustomAgents:
+		return screens.CustomAgentsOptionCount(m.CustomAgentsList)
+	case ScreenCustomAgentDelete:
+		return screens.CustomAgentDeleteOptionCount(m.CustomAgentsList)
 	case ScreenAgentBuilderEngine:
 		return len(m.AgentBuilder.AvailableEngines) + 1 // engines + Back
 	case ScreenAgentBuilderPrompt:
@@ -4204,6 +4357,8 @@ func detectedAgentIDs(detection system.DetectionResult) []model.AgentID {
 			selected = append(selected, model.AgentCursor)
 		case string(model.AgentVSCodeCopilot):
 			selected = append(selected, model.AgentVSCodeCopilot)
+		case string(model.AgentGitHubCopilotCLI):
+			selected = append(selected, model.AgentGitHubCopilotCLI)
 		case string(model.AgentCodex):
 			selected = append(selected, model.AgentCodex)
 		case string(model.AgentAntigravity):
@@ -4451,6 +4606,18 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 	return false
 }
 
+// installedComponentCount counts the selected components whose install was not
+// deferred for a missing prerequisite.
+func installedComponentCount(selected, deferred []model.ComponentID) int {
+	count := 0
+	for _, c := range selected {
+		if !slices.Contains(deferred, c) {
+			count++
+		}
+	}
+	return count
+}
+
 func (m Model) shouldShowUninstallEngramScopeSelection() bool {
 	if !hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
 		return false
@@ -4467,7 +4634,7 @@ func (m Model) isScrollableScreen() bool {
 
 // detectAgentBuilderEngines scans for supported AI agent binaries on PATH and
 // returns the list of available AgentIDs.
-func (m Model) detectAgentBuilderEngines() []model.AgentID {
+func detectAgentBuilderEngines() []model.AgentID {
 	candidateIDs := []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
@@ -4476,17 +4643,17 @@ func (m Model) detectAgentBuilderEngines() []model.AgentID {
 	}
 	var available []model.AgentID
 	for _, id := range candidateIDs {
-		engine := agentbuilder.NewEngine(id)
-		if engine != nil && engine.Available() {
+		if agentBuilderEngineAvailableFn(id) {
 			available = append(available, id)
 		}
 	}
 	return available
 }
 
-// hasAgentBuilderEngines reports whether any supported AI agent binary is installed.
+// hasAgentBuilderEngines reports whether any supported AI agent binary was
+// detected; it reads the stored result and never probes PATH.
 func (m Model) hasAgentBuilderEngines() bool {
-	return len(m.detectAgentBuilderEngines()) > 0
+	return len(m.agentBuilderEngines) > 0
 }
 
 // agentBuilderInstallTargets returns the list of install target paths for the preview screen.
@@ -4546,6 +4713,24 @@ func homeDir() string {
 		return h
 	}
 	return ""
+}
+
+// customAgentsRegistryPath resolves the user custom-agent registry file.
+func customAgentsRegistryPath() string {
+	return filepath.Join(homeDir(), ".config", "gentle-ai", "custom-agents.json")
+}
+
+// loadCustomAgents populates CustomAgentsList from the custom-agents.json registry.
+func (m *Model) loadCustomAgents() {
+	registryPath := customAgentsRegistryPath()
+	reg, err := agentbuilder.LoadRegistry(registryPath)
+	if err != nil {
+		m.CustomAgentsList = nil
+		m.CustomAgentsErr = err
+		return
+	}
+	m.CustomAgentsList = reg.Agents
+	m.CustomAgentsErr = nil
 }
 
 // buildInstalledAgentIDs returns the list of AgentIDs from the adapter list.
@@ -4660,6 +4845,15 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		_ = ctx // timeout enforced; Install itself is synchronous
+
+		// Validate before any adapter writes, including earlier non-Codex targets.
+		for _, adapter := range adapters {
+			if adapter.AgentID == model.AgentCodex {
+				if err := system.ValidateCodexHome(homeDir()); err != nil {
+					return AgentBuilderInstallDoneMsg{Err: err}
+				}
+			}
+		}
 
 		// Resolve agent name, applying conflict suffix if needed.
 		installAgent := agent

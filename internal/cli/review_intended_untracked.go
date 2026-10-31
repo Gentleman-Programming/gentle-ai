@@ -143,10 +143,25 @@ func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope re
 	paths, _ := json.Marshal(scope.Inventory)
 	input := ReviewTransitionInput{Name: "intended_untracked_selection", Schema: reviewIntendedUntrackedSelectionSchema, CaptureOperation: "external.select_intended_untracked", Arguments: append(reviewTargetArguments(status), ReviewTransitionArgument{Name: "eligible_paths_json", Value: string(paths)}, ReviewTransitionArgument{Name: "expected_untracked_inventory", Value: scope.Digest})}
 	if agent != "" {
-		tokens := []string{"--contract=" + ReviewIntegrationContractV2, "--next-transition=true", "--agent=" + string(agent), "--projection=workspace", "--intended-untracked-selection=" + reviewSubmissionValuePlaceholder}
-		input.Submission = &ReviewTransitionSubmission{OperationToken: "status", ArgumentTokens: tokens, Value: &ReviewTransitionSubmissionValue{Slot: "intended_untracked_selection", Domain: "schema_bound_json", Schema: reviewIntendedUntrackedSelectionSchema, SubstitutionLocation: 4}}
+		tokens := append([]string{"--contract=" + ReviewIntegrationContractV2, "--next-transition=true", "--agent=" + string(agent)}, reviewIntendedUntrackedSelectorTokens(status.Projection.Kind, status.Projection.BaseTree)...)
+		tokens = append(tokens, "--intended-untracked-selection="+reviewSubmissionValuePlaceholder)
+		input.Submission = &ReviewTransitionSubmission{OperationToken: "status", ArgumentTokens: tokens, Value: &ReviewTransitionSubmissionValue{Slot: "intended_untracked_selection", Domain: "schema_bound_json", Schema: reviewIntendedUntrackedSelectionSchema, SubstitutionLocation: len(tokens) - 1}}
 	}
 	return reviewCollectTransition("intended_untracked_selection_required", input)
+}
+
+// reviewIntendedUntrackedSelectorTokens names the target selector the
+// selected-STATUS submission replays. A base-diff or workspace-overlay STATUS
+// also inspects untracked files, so its submission must re-enter that same
+// target instead of a current-changes workspace one.
+func reviewIntendedUntrackedSelectorTokens(kind reviewtransaction.TargetKind, baseTree string) []string {
+	switch kind {
+	case reviewtransaction.TargetBaseDiff:
+		return []string{"--base-ref=" + baseTree, "--committed-only=true"}
+	case reviewtransaction.TargetBaseWorkspaceOverlay:
+		return []string{"--base-ref=" + baseTree, "--workspace-overlay=true"}
+	}
+	return []string{"--projection=workspace"}
 }
 
 // reviewUntrackedInventoryContainsSelection reports whether every frozen

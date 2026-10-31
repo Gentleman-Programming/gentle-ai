@@ -30,6 +30,9 @@ func shellInstallPlatformFlags(flags *flag.FlagSet, _ *shellinstaller.UserInstal
 }
 
 func shellEntryValues(req shellinstaller.UserInstallRequest) []string {
+	if req.Experience != nil {
+		return nil // Unsupported preferences must never become legacy worker arguments.
+	}
 	return []string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, req.Confirmation}
 }
 
@@ -50,6 +53,9 @@ func runShellInstallTUI(ctx context.Context, cancel context.CancelFunc, self str
 	}
 	selection, err := ShellInstallOutcome(final)
 	if err != nil || !selection.Confirmed {
+		return err
+	}
+	if err := shellinstaller.RootRiskGate(); err != nil {
 		return err
 	}
 	// Run only after Bubble Tea has restored the terminal and released stdin.

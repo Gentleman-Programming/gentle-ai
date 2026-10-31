@@ -43,7 +43,7 @@ func TestUserManagerCapabilityHelperUsesExecutableCustody(t *testing.T) {
 	if _, err := userSupervisorSHA(ctx, path); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []os.FileMode{0600, 0770, 0777} {
+	for _, mode := range []os.FileMode{0600, 0707, 0777} {
 		if err := os.Chmod(path, mode); err != nil {
 			t.Fatal(err)
 		}
@@ -64,7 +64,18 @@ func TestUserManagerCapabilityHelperUsesExecutableCustody(t *testing.T) {
 	if err := os.Chmod(root, 0770); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := userSupervisorSHA(ctx, path); err == nil || !strings.Contains(err.Error(), root) {
+	_, err := userSupervisorSHA(ctx, path)
+	if os.Getuid() != 0 && os.Getgid() == os.Getuid() {
+		// A 0770 ancestor owned by the user's own private group is accepted
+		// under the Debian/Ubuntu UPG scheme (#5696); the refusal needs a
+		// genuinely foreign group.
+		if err != nil {
+			t.Fatalf("private-group 0770 helper ancestor refused: %v", err)
+		}
+		userSupervisorAncestorForeignGroup(t, root, path)
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), root) {
 		t.Fatalf("unsafe helper ancestor not refused: %v", err)
 	}
 }

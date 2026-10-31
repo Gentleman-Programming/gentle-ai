@@ -156,7 +156,7 @@ func TestSyncWorkspaceScopeDeclaresAndVerifiesPersonaWorkspaceTarget(t *testing.
 
 	// Verification contract: the workspace persona prompt is a post-sync
 	// verification target; the global one never is.
-	verification := runPostSyncVerificationScoped(home, workspace, ScopeWorkspace, selection)
+	verification := runPostSyncVerificationWithState(home, workspace, ScopeWorkspace, selection, nil)
 	verifiedDeclaration := false
 	for _, check := range verification.Checks {
 		if check.ID == "verify:sync:file:"+workspacePrompt {

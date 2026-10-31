@@ -22,7 +22,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +37,7 @@ func TestDarwinPinLiterals(t *testing.T) {
 	if privateNativeNodeSize != 120965360 || privateNativeNodeSHA != "ee6fb0e015284d83a91e8ec5213f43a157f8a392b58555301682892ba928c04a" {
 		t.Fatal("fixed Node member pins changed")
 	}
-	if userBinarySize != 16047186 || userBinarySHA != "18a9f7fae55d85c95684b6d512a4a148d0cb24a856325f72573c34caf65159eb" || userNativeManifest != `{"version":"4.0.0","asset":"gentle-ai_4.0.0_darwin_arm64.tar.gz","assetSha256":"d2159caf6d68f367b18830ece6af71ef26963d5f5320d7df6a794773f45cc7e9","binarySha256":"18a9f7fae55d85c95684b6d512a4a148d0cb24a856325f72573c34caf65159eb"}`+"\n" {
+	if userBinarySize != 17462210 || userBinarySHA != "8ea490287ef796848b0d305cf2b26265e360d3f400efc016972844498fb87097" || userNativeManifest != `{"version":"4.2.0","asset":"gentle-ai_4.2.0_darwin_arm64.tar.gz","assetSha256":"d5e9a6521de5f08a393635f083f64dc7afc1b8e97884f7aab5ae5eb1f17c7f37","binarySha256":"8ea490287ef796848b0d305cf2b26265e360d3f400efc016972844498fb87097"}`+"\n" {
 		t.Fatal("fixed gentle-ai release pins changed")
 	}
 	if fmt.Sprint(userToolSources) != "[{fd sharkdp/fd v10.5.0 fd-v10.5.0-aarch64-apple-darwin b67e1836c468e42e411984b56e52fa7abec08c2bd22c867398e7cc134aac5e12 1334374} {rg BurntSushi/ripgrep 15.2.0 ripgrep-15.2.0-aarch64-apple-darwin 3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4 1764284}]" {
@@ -215,7 +214,8 @@ func TestDarwinProvisionPinParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := files["provision.mjs"]
-	native := `(?m)^    if \(process.platform === 'darwin'\) \{\n      const manifest = '([^'\n]+)';\n      if \(binary.length !== ([0-9]+) \|\| digest\(binary\) !== '([a-f0-9]{64})' \|\| !read\(path.join\(version, 'integrity.json'\)\).equals\(Buffer.from\(manifest\)\)\) reject\('native independent readback'\);\n      return;\n    \}$`
+	native := `(?m)^    if \(entries.length !== 1 \|\| !versionPattern.test\(entries\[0\].slice\(1\)\) \|\| !entries\[0\].startsWith\('v'\)\) reject\('foreign native recovery state'\);$`
+	nativeDigest := `(?m)^    if \(digest\(binary\) !== manifest.binarySha256\) reject\('native independent readback'\);$`
 	platform := `(?m)^  const platform = process.platform === '(darwin)' \? \{ os: '(darwin)', cpu: '(arm64)', libc: (null) \} : \{ os: 'linux', cpu: 'x64', libc: 'glibc' \};$`
 	equal := func(source []byte, pattern string, want ...string) bool {
 		matches := regexp.MustCompile(pattern).FindAllSubmatch(source, 2)
@@ -233,8 +233,9 @@ func TestDarwinProvisionPinParity(t *testing.T) {
 		pattern string
 		want    []string
 	}{
-		"native":   {native, []string{strings.ReplaceAll(userNativeManifest, "\n", `\n`), strconv.FormatInt(userBinarySize, 10), userBinarySHA}},
-		"platform": {platform, []string{"darwin", "darwin", "arm64", "null"}},
+		"native":       {native, nil},
+		"nativeDigest": {nativeDigest, nil},
+		"platform":     {platform, []string{"darwin", "darwin", "arm64", "null"}},
 	} {
 		if !equal(source, role.pattern, role.want...) {
 			t.Fatalf("%s: live darwin provision role differs from compiled Go authority (or is missing/ambiguous)", name)
