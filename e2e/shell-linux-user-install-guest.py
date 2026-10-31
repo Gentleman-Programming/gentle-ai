@@ -155,7 +155,8 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
                            'stderrBytes': len(error), 'stderrSHA256': hashlib.sha256(error).hexdigest()}
         if b'\0' not in raw:
             COMMAND_FAILURE.update(stdoutTailBase64=base64.b64encode(out[-600:]).decode('ascii'),
-                                   stderrTailBase64=base64.b64encode(error[-600:]).decode('ascii'))
+                                   stderrTailBase64=base64.b64encode(error[-600:]).decode('ascii'),
+                                   **failing_names(raw))
         raise RuntimeError('whole raw command output withheld: byte/NUL bound')
     text = raw.decode('utf-8', 'strict')
     if (child.returncode == 0) != good:
@@ -163,6 +164,23 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
                            'stderrBase64': base64.b64encode(error).decode('ascii')}
         raise RuntimeError('command outcome differs; bounded complete failure evidence')
     return out.decode('utf-8', 'strict') if stdout_only else text
+
+
+def failing_names(raw):
+    """Bounded failing-test names from withheld output: the verdict must name
+    its cause the way every Go refusal does, without disclosing the whole raw
+    bytes. TAP (node --test on a pipe) and Go both get their own key."""
+    text = raw.decode('utf-8', 'replace')
+    names = []
+    for line in text.splitlines():
+        marker, _, title = line.partition(' - ')
+        if marker.startswith('not ok ') and title:
+            names.append(title.strip()[:200])
+        elif line.startswith('--- FAIL: '):
+            names.append(line[len('--- FAIL: '):].split(' ', 1)[0][:200])
+        if len(names) >= 16:
+            break
+    return {'failingTests': names} if names else {}
 
 
 def physical_inventory(root, details=None):
