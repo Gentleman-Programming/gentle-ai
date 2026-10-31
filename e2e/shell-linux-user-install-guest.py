@@ -173,11 +173,12 @@ def failing_names(raw):
     text = raw.decode('utf-8', 'replace')
     names = []
     for line in text.splitlines():
-        marker, _, title = line.partition(' - ')
+        stripped = line.strip()
+        marker, _, title = stripped.partition(' - ')
         if marker.startswith('not ok ') and title:
             names.append(title.strip()[:200])
-        elif line.startswith('--- FAIL: '):
-            names.append(line[len('--- FAIL: '):].split(' ', 1)[0][:200])
+        elif stripped.startswith('--- FAIL: '):
+            names.append(stripped[len('--- FAIL: '):].split(' ', 1)[0][:200])
         if len(names) >= 16:
             break
     return {'failingTests': names} if names else {}
