@@ -853,3 +853,89 @@ func assertRegistrySkills(
 		}
 	}
 }
+
+func TestPostCreationSkillWorkflowIndexesProjectAndGlobalSkills(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+
+	initialSkillPath := filepath.Join(cwd, "skills", "initial-skill", "SKILL.md")
+	writeSkill(t, initialSkillPath, `---
+name: initial-skill
+description: "Trigger: initial, bootstrap. Existing skill in project."
+---
+`)
+
+	if err := EnsureATLIgnored(cwd); err != nil {
+		t.Fatalf("EnsureATLIgnored() error = %v", err)
+	}
+
+	initialResult, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatalf("initial Regenerate() error = %v", err)
+	}
+	if !initialResult.Regenerated || initialResult.SkillCount != 1 {
+		t.Fatalf("initial Regenerate() result = %#v", initialResult)
+	}
+
+	// Create a new project skill following the skill-creator checklist.
+	projectSkillName := "deploy-helper"
+	projectSkillTrigger := "Trigger: deploy, release, publish. Helper for service deployments."
+	projectSkillPath := filepath.Join(cwd, "skills", projectSkillName, "SKILL.md")
+	writeSkill(t, projectSkillPath, `---
+name: `+projectSkillName+`
+description: "`+projectSkillTrigger+`"
+license: Apache-2.0
+metadata:
+  author: test-author
+  version: "1.0"
+---
+
+## Activation Contract
+Create a deployment.
+`)
+
+	// Create a new global skill following the skill-creator checklist.
+	globalSkillName := "global-helper"
+	globalSkillTrigger := "Trigger: global, cross-project. Global utility skill."
+	globalSkillPath := filepath.Join(home, ".claude", "skills", globalSkillName, "SKILL.md")
+	writeSkill(t, globalSkillPath, `---
+name: `+globalSkillName+`
+description: "`+globalSkillTrigger+`"
+license: Apache-2.0
+metadata:
+  author: test-author
+  version: "1.0"
+---
+
+## Activation Contract
+Cross-project helper.
+`)
+
+	// Execute post-creation step: gentle-ai skill-registry refresh.
+	postCreationResult, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatalf("post-creation Regenerate() error = %v", err)
+	}
+	if !postCreationResult.Regenerated {
+		t.Fatalf("post-creation Regenerate() did not regenerate registry: %#v", postCreationResult)
+	}
+	if postCreationResult.SkillCount != 3 {
+		t.Fatalf("post-creation SkillCount = %d, want 3", postCreationResult.SkillCount)
+	}
+
+	registryData, err := os.ReadFile(filepath.Join(cwd, RegistryRelPath))
+	if err != nil {
+		t.Fatalf("read registry error = %v", err)
+	}
+	registryContent := string(registryData)
+
+	wantProjectRow := "| `" + projectSkillName + "` | " + projectSkillTrigger + " | project | `" + projectSkillPath + "` |"
+	if !strings.Contains(registryContent, wantProjectRow) {
+		t.Errorf("registry missing expected project skill announcement row %q\ngot:\n%s", wantProjectRow, registryContent)
+	}
+
+	wantGlobalRow := "| `" + globalSkillName + "` | " + globalSkillTrigger + " | user | `" + globalSkillPath + "` |"
+	if !strings.Contains(registryContent, wantGlobalRow) {
+		t.Errorf("registry missing expected global skill announcement row %q\ngot:\n%s", wantGlobalRow, registryContent)
+	}
+}

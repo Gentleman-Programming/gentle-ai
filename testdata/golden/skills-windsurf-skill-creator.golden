@@ -26,6 +26,7 @@ Do not create a skill when the pattern is trivial, one-off, or better served by 
 - Do not add a `Keywords` section; preserve essential trigger words in `description`.
 - References must point to local files.
 - Keep the skill body concise: target 180–450 tokens, recommended max 700, hard max 1000.
+- Run the post-creation checklist for every created skill before concluding the session.
 
 ## Decision Gates
 
@@ -66,6 +67,7 @@ metadata:
 ```
 6. Write sections in this order: Activation Contract, Hard Rules, Decision Gates, Execution Steps, Output Contract, References.
 7. Register the skill in `AGENTS.md` when it is a project skill.
+8. Execute the mandatory post-creation checklist for all skills (project and global).
 
 ## Inline Fallback Rules
 
@@ -97,8 +99,16 @@ Return:
 - Whether the repo style guide or inline fallback rules were used.
 - Any AGENTS.md registration change.
 - Any supporting files added under `assets/` or `references/`.
+- Post-creation announcement containing skill name, trigger sentence, and registry row.
 
 ## References
 
 - `docs/skill-style-guide.md` — normative LLM-first skill style guide for this repo.
 - `references/skill-style-guide.md` — bundled local copy for installed global skills when the repo doc is unavailable.
+
+## Post-creation checklist (mandatory)
+
+1. Validate frontmatter (`name` matches the folder, lowercase-hyphenated, <=64 chars; single-line quoted `description` front-loaded with trigger keywords).
+2. Run `gentle-ai skill-registry refresh --cwd <project>` and confirm the new row exists in `.atl/skill-registry.md`.
+3. Persist a discovery pointer: `mem_save` with `topic_key: skills/<name>` (name, path, trigger, one-line purpose).
+4. Announce to the user: skill name, trigger sentence, registry row.
