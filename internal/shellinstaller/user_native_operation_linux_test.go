@@ -77,7 +77,7 @@ func TestUserNativeOperationStopPrivate(t *testing.T) {
 		command := exec.CommandContext(ctx, "/usr/bin/systemd-run", "--user", "--quiet", "--wait", "--pipe",
 			"--unit=gentle-native-stop-"+suffix, "--slice="+operation.name,
 			"--property=MemoryMax=3221225472", "--property=MemorySwapMax=0",
-			"--property=CPUQuota=100%", "--property=CPUQuotaPeriodSec=100ms", "--property=TasksMax=64",
+			"--property=CPUQuota=100%", "--property=CPUQuotaPeriodSec=100ms", "--property=TasksMax=512",
 			"--property=NoNewPrivileges=yes", "--property=CapabilityBoundingSet=",
 			"--property=RuntimeMaxSec=300s", "--property=TimeoutStopSec=2s", "/bin/sh", "-c",
 			"printf ready > /fixture/ready-"+suffix+"; /usr/bin/sleep 30; printf completed > /fixture/completed-"+suffix)

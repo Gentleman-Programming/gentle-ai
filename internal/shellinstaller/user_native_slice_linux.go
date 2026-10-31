@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -36,7 +37,7 @@ func userNativeSliceName(name string) bool {
 }
 
 func userNativeSliceCreateArgs(name string) []string {
-	return []string{"--user", "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit", "ssa(sv)a(sa(sv))", name, "fail", "5", "MemoryMax", "t", "3221225472", "MemorySwapMax", "t", "0", "CPUQuotaPerSecUSec", "t", "1000000", "CPUQuotaPeriodUSec", "t", "100000", "TasksMax", "t", "64", "0"}
+	return []string{"--user", "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit", "ssa(sv)a(sa(sv))", name, "fail", "5", "MemoryMax", "t", strconv.FormatUint(userUnitMemoryMaxBytes, 10), "MemorySwapMax", "t", "0", "CPUQuotaPerSecUSec", "t", "1000000", "CPUQuotaPeriodUSec", "t", "100000", "TasksMax", "t", strconv.FormatUint(userUnitTasksMax, 10), "0"}
 }
 
 func newUserNativeSlice(ctx context.Context) (*userNativeSlice, error) {
