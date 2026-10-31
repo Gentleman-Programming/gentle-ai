@@ -107,7 +107,10 @@ def kernel():
     relative = membership.strip()[3:]
     group = pathlib.Path('/sys/fs/cgroup' + (relative if relative != '/' else ''))
     require(str(group.resolve()) == str(group), 'noncanonical cgroup mapping')
-    expected = {'memory.max': '3221225472', 'memory.swap.max': '0', 'cpu.max': '100000 100000', 'pids.max': '64'}
+    # The physical leaf budget mirrors the shared transient unit budget (#5815,
+    # internal/shellinstaller/user_install.go userUnitTasksMax); the exact leaf
+    # check refuses the stale 64-task budget.
+    expected = {'memory.max': '3221225472', 'memory.swap.max': '0', 'cpu.max': '100000 100000', 'pids.max': '512'}
     for name, value in expected.items():
         require((group / name).read_text().strip() == value, 'physical cgroup limit differs')
     require(' - cgroup2 ' in pathlib.Path('/proc/self/mountinfo').read_text(), 'cgroup2 mount missing')
