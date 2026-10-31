@@ -41,6 +41,7 @@ This is scoped lab evidence for the unfinished Windows Separate installer, not g
 - `windows-owned-settings.test.mjs` replaced `unproven-theme` with `theme-path-injection` (still 37 fixtures; Guest digest updated). `windows-mutable-settings.test.mjs` is a portable VM region check, not runtime evidence.
 - The stable lane now resolves gentle-pi only onto reviewed supplier versions (4.3.0/4.4.0/4.5.0) with a single fallback re-resolution; `windows-owned-settings.test.mjs` gained a reviewed-digest supplier fixture and its Guest SHA-256 pin in `e2e/windows-ui-acceptance-normal.ps1` was updated. This correction has no Guest run yet.
 - The new native Windows unit tests only cross-compiled; no Guest run, RED or installed-runtime proof exists for these corrections yet. The matrix above predates them.
+- The Main overlay composition is now read from the frozen snapshot's own `package.json` instead of embedded expectations (gentle-pi 4.5.1's `@earendil-works/pi-coding-agent >=1.2.0` peer refused every main-channel install at `provision-compare`); `scripts/windows-main-overlay-composition.test.mjs` is a portable VM region check, and the node engines preflight plus every composition refusal name expected and staged values. This correction has no Guest run yet (#5902).
 
 ## Limits and follow-up
 - The disposable guests' system-root ACLs were modified. Untouched/default Windows and independent stock-UI authenticity are not qualified.
