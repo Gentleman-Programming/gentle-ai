@@ -307,6 +307,126 @@ func TestRetireOpenCodeSDDPromptsByShippedBytes(t *testing.T) {
 	}
 }
 
+// Sync retires settings before prompts in the same step. An entry it cannot
+// prove it wrote is kept, so prompt retirement must not delete the file that
+// entry loads: the runtime resolves every {file:} reference before starting and
+// refuses a dangling one, leaving the whole config unloadable (#5623).
+func TestRetireOpenCodeSDDPromptsKeepsFilesRetainedSettingsLoad(t *testing.T) {
+	releasedPrompt, err := os.ReadFile(filepath.Join("testdata", "v3.7.0", "opencode-prompt-sdd-apply.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		ref  func(file string) string
+	}{
+		{"settings-relative reference", func(string) string { return "{file:./prompts/sdd/sdd-apply.md}" }},
+		{"absolute reference", func(file string) string { return "{file:" + filepath.ToSlash(file) + "}" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := t.TempDir()
+			promptDir := filepath.Join(config, "prompts", "sdd")
+			if err := os.MkdirAll(promptDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(promptDir, "sdd-apply.md")
+			if err := os.WriteFile(file, releasedPrompt, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// options is a field no release wrote, so the entry cannot be
+			// proven Gentle AI's (a custom model alone is the user's), and
+			// sync keeps it.
+			entry := withoutMarker(releasedOpenCodeAgents(t, "v1")["sdd-apply"].(map[string]any))
+			entry["model"] = "github-copilot/claude-opus-4.6"
+			entry["options"] = map[string]any{"reasoningEffort": "high"}
+			entry["prompt"] = tc.ref(file)
+			document, err := json.MarshalIndent(map[string]any{"agent": map[string]any{"sdd-apply": entry}}, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			settingsPath := filepath.Join(config, "opencode.json")
+			if err := os.WriteFile(settingsPath, document, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			settings, err := RetireOpenCodeSDDSettings(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(settings.Preserved, []string{"agent.sdd-apply"}) {
+				t.Fatalf("preserved = %v, want the customized entry kept", settings.Preserved)
+			}
+			if !slices.Equal(settings.RetainedPromptRefs, []string{file}) {
+				t.Fatalf("retained prompt references = %v, want [%s]", settings.RetainedPromptRefs, file)
+			}
+
+			retired, err := RetireOpenCodeSDDPrompts(promptDir, settings.RetainedPromptRefs...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(retired.Removed) != 0 {
+				t.Fatalf("removed a prompt the kept entry still loads: %v", retired.Removed)
+			}
+			if !slices.Equal(retired.Retained, []string{file}) {
+				t.Fatalf("retained = %v, want [%s]", retired.Retained, file)
+			}
+			if _, err := os.Stat(file); err != nil {
+				t.Fatalf("prompt the kept entry loads is gone: %v", err)
+			}
+			if !hasAction(retired.ManualActions(), file, "still loads it") {
+				t.Fatalf("actions = %v, want one naming the kept prompt", retired.ManualActions())
+			}
+		})
+	}
+}
+
+// The proof runs both ways: an entry sync removes leaves no reference behind,
+// so its prompt is still retired.
+func TestRetireOpenCodeSDDPromptsRetiresPromptsOfRemovedEntries(t *testing.T) {
+	config := t.TempDir()
+	promptDir := filepath.Join(config, "prompts", "sdd")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	releasedPrompt, err := os.ReadFile(filepath.Join("testdata", "v3.7.0", "opencode-prompt-sdd-apply.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(promptDir, "sdd-apply.md")
+	if err := os.WriteFile(file, releasedPrompt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The released entry as rendered: the marker proves Gentle AI wrote it.
+	document, err := json.MarshalIndent(map[string]any{
+		"agent": map[string]any{"sdd-apply": releasedOpenCodeAgents(t, "v1")["sdd-apply"]},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(config, "opencode.json")
+	if err := os.WriteFile(settingsPath, document, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := RetireOpenCodeSDDSettings(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.Preserved) != 0 || len(settings.RetainedPromptRefs) != 0 {
+		t.Fatalf("removed entry left a reference: preserved = %v, refs = %v", settings.Preserved, settings.RetainedPromptRefs)
+	}
+	retired, err := RetireOpenCodeSDDPrompts(promptDir, settings.RetainedPromptRefs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(retired.Removed, []string{file}) {
+		t.Fatalf("removed = %v, want [%s]", retired.Removed, file)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("prompt of a removed entry survived: %v", err)
+	}
+}
+
 func sortedCopy(values []string) []string {
 	copied := append([]string(nil), values...)
 	slices.Sort(copied)
