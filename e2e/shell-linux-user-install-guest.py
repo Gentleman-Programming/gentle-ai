@@ -172,6 +172,7 @@ def failing_names(raw):
     bytes. TAP (node --test on a pipe) and Go both get their own key."""
     text = raw.decode('utf-8', 'replace')
     names = []
+    refusals = []
     for line in text.splitlines():
         stripped = line.strip()
         marker, _, title = stripped.partition(' - ')
@@ -179,9 +180,17 @@ def failing_names(raw):
             names.append(title.strip()[:200])
         elif stripped.startswith('--- FAIL: '):
             names.append(stripped[len('--- FAIL: '):].split(' ', 1)[0][:200])
+        refused = stripped.find('provision refused: ')
+        if refused >= 0 and len(refusals) < 8:
+            message = stripped[refused + len('provision refused: '):][:300]
+            if message not in refusals:
+                refusals.append(message)
         if len(names) >= 16:
             break
-    return {'failingTests': names} if names else {}
+    verdict = {'failingTests': names} if names else {}
+    if refusals:
+        verdict['refusals'] = refusals
+    return verdict
 
 
 def physical_inventory(root, details=None):
