@@ -818,6 +818,15 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 # whole verdict must stay under the 4096-byte Guest bound.
                 'queries': sorted({match.decode('ascii') for match in re.findall(
                     rb'\x1b\[[0-9;?<>=]*[cntup]|\x1b\][0-9]+;\?', snapshot)})[:12],
+                # Renderer identity: pi-tui enters the alternate screen before
+                # painting. Its absence means the launcher never reached the
+                # TUI (the spinner is the launcher's own), so the stall sits in
+                # the delegated-manager launch path, not in the app.
+                'altScreenEnter': b'\x1b[?1049h' in snapshot,
+                'firstBytesHex': snapshot[:48].hex(),
+                'setupTextSeen': any(marker in snapshot for marker in
+                                     (b"You're ready", b'verify:', b'engram binary was installed')),
+                'printableNonSpace': len(re.sub(rb'[\x1b\x00-\x20\x7f-\xff]', b'', snapshot)),
                 'printableHead': re.sub(rb'[^\x20-\x7e]', b' ', re.sub(
                     rb'\x1b\[[0-9;?<>]*[a-zA-Z]|\x1b\][^\x07]*(\x07|\x1b\\)', b' ', snapshot[:1500])).decode('ascii', 'replace')[:400],
             }
