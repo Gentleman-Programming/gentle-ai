@@ -210,7 +210,11 @@ jobs:
           for raw in user-build.raw primitives.raw user-guest.raw pty-failure.bin; do
             test -e "$RUNNER_TEMP/$raw" && cp "$RUNNER_TEMP/$raw" qualification-raw/ || true
           done
-          test -e /work/pty-failure.bin && cp /work/pty-failure.bin qualification-raw/ || true
+          # /work is 0700 owned by the worker user; read the capture through sudo.
+          if sudo -n test -e /work/pty-failure.bin; then
+            sudo -n cp /work/pty-failure.bin qualification-raw/pty-failure.bin
+            sudo -n chown "$(id -u):$(id -g)" qualification-raw/pty-failure.bin
+          fi
       - name: Upload raw worker outputs
         if: failure()
         uses: actions/upload-artifact@v4
