@@ -136,7 +136,10 @@ function newestReviewedListVersion(table) {
 function physical(absolute, directory = false) {
   if (!path.isAbsolute(absolute) || path.resolve(absolute) !== absolute || fs.realpathSync(absolute) !== absolute) reject('noncanonical path');
   const stat = fs.lstatSync(absolute);
-  if (stat.uid !== uid || (stat.mode & 0o022) !== 0 || (directory ? !stat.isDirectory() : !stat.isFile())) reject('foreign or nonphysical object');
+  if (stat.uid !== uid || (stat.mode & 0o022) !== 0 || (directory ? !stat.isDirectory() : !stat.isFile()))
+    // Name the observed values (#5713): a foreign-uid or writable-mode object
+    // is only diagnosable when the refusal says which path and why.
+    reject(`foreign or nonphysical object: ${JSON.stringify(absolute)} uid=${stat.uid} want=${uid} mode=${(stat.mode & 0o7777).toString(8)}${directory ? ' want directory' : ''}`);
   return stat;
 }
 function read(absolute) {

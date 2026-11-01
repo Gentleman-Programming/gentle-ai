@@ -107,7 +107,10 @@ def kernel():
     relative = membership.strip()[3:]
     group = pathlib.Path('/sys/fs/cgroup' + (relative if relative != '/' else ''))
     require(str(group.resolve()) == str(group), 'noncanonical cgroup mapping')
-    expected = {'memory.max': '3221225472', 'memory.swap.max': '0', 'cpu.max': '100000 100000', 'pids.max': '64'}
+    # The physical leaf budget mirrors the shared transient unit budget (#5815,
+    # internal/shellinstaller/user_install.go userUnitTasksMax); the exact leaf
+    # check refuses the stale 64-task budget.
+    expected = {'memory.max': '3221225472', 'memory.swap.max': '0', 'cpu.max': '100000 100000', 'pids.max': '512'}
     for name, value in expected.items():
         require((group / name).read_text().strip() == value, 'physical cgroup limit differs')
     require(' - cgroup2 ' in pathlib.Path('/proc/self/mountinfo').read_text(), 'cgroup2 mount missing')
@@ -152,7 +155,8 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
                            'stderrBytes': len(error), 'stderrSHA256': hashlib.sha256(error).hexdigest()}
         if b'\0' not in raw:
             COMMAND_FAILURE.update(stdoutTailBase64=base64.b64encode(out[-600:]).decode('ascii'),
-                                   stderrTailBase64=base64.b64encode(error[-600:]).decode('ascii'))
+                                   stderrTailBase64=base64.b64encode(error[-600:]).decode('ascii'),
+                                   **failing_names(raw))
         raise RuntimeError('whole raw command output withheld: byte/NUL bound')
     text = raw.decode('utf-8', 'strict')
     if (child.returncode == 0) != good:
@@ -160,6 +164,33 @@ def run(args, cwd=None, extra=None, timeout=180, good=True, stdout_only=False):
                            'stderrBase64': base64.b64encode(error).decode('ascii')}
         raise RuntimeError('command outcome differs; bounded complete failure evidence')
     return out.decode('utf-8', 'strict') if stdout_only else text
+
+
+def failing_names(raw):
+    """Bounded failing-test names from withheld output: the verdict must name
+    its cause the way every Go refusal does, without disclosing the whole raw
+    bytes. TAP (node --test on a pipe) and Go both get their own key."""
+    text = raw.decode('utf-8', 'replace')
+    names = []
+    refusals = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        marker, _, title = stripped.partition(' - ')
+        if marker.startswith('not ok ') and title:
+            names.append(title.strip()[:200])
+        elif stripped.startswith('--- FAIL: '):
+            names.append(stripped[len('--- FAIL: '):].split(' ', 1)[0][:200])
+        refused = stripped.find('provision refused: ')
+        if refused >= 0 and len(refusals) < 8:
+            message = stripped[refused + len('provision refused: '):][:300]
+            if message not in refusals:
+                refusals.append(message)
+        if len(names) >= 16:
+            break
+    verdict = {'failingTests': names} if names else {}
+    if refusals:
+        verdict['refusals'] = refusals
+    return verdict
 
 
 def physical_inventory(root, details=None):
@@ -343,6 +374,21 @@ def install(target, shared=None):
     require(manifest['Destination'] == str(target), 'manifest destination')
     REPORT.setdefault('installs', []).append({'mode': manifest['Mode'], 'manifestSHA': hashlib.sha256((target / 'installation.json').read_bytes()).hexdigest()})
     return manifest
+
+
+def settle_shell_tui(prefix):
+    """Pin the installed shell's own minimal animation policy before its TUI
+    stages (#5904): the newest reviewed release boots with the full quality
+    animation, which on the single-CPU worker outlives the interactive window
+    without ever reaching the prompt. This lane qualifies command registration
+    and session behavior, not animation rendering, so it uses the product's
+    own constrained-environment policy (gentle-pi.animations/v1, potato) at
+    the bundled config home the launcher resolves (<prefix>/config/gentle-ai)."""
+    config = pathlib.Path(prefix) / 'config' / 'gentle-ai'
+    config.mkdir(mode=0o700, parents=True, exist_ok=True)
+    policy = config / 'animations.json'
+    policy.write_text('{"schema":"gentle-pi.animations/v1","policy":"potato"}\n', encoding='utf8')
+    os.chmod(policy, 0o600)
 
 
 def acquisition_fault(target, cleanup=False):
@@ -568,7 +614,11 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     raw = bytearray()
     carry = b''
     truncated = 0
-    deadline = time.monotonic() + min(45, remaining())
+    # The first boot of a fresh install performs the expansive setup (native
+    # persona, engram provisioning, verification), which on the single-CPU
+    # worker with a filtered network outlived the old 45s window: the TUI was
+    # still rendering its animated setup state when the check gave up (#5904).
+    deadline = time.monotonic() + min(150, remaining())
     sent = False
     typed = False
     expected = b'type, or / for commands' if opening_only else b'el Gentleman package is active.'
@@ -761,9 +811,35 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 'openingObserved': opening_only and expected in snapshot, 'exitInputSent': stopped,
                 'statusObserved': b'GUEST-STATUS:' in snapshot, 'exit': child.poll(),
                 'deadlineExpired': time.monotonic() >= deadline, 'foregroundCWD': observed_cwd,
+                # Bounded diagnosis of a spinner/stall state: the distinct
+                # capability queries the TUI emitted (an unanswered new query
+                # stalls startup) and the printable head of the capture, which
+                # names whatever dialog or banner preceded the animation. The
+                # whole verdict must stay under the 4096-byte Guest bound.
+                'queries': sorted({match.decode('ascii') for match in re.findall(
+                    rb'\x1b\[[0-9;?<>=]*[cntup]|\x1b\][0-9]+;\?', snapshot)})[:12],
+                # Renderer identity: pi-tui enters the alternate screen before
+                # painting. Its absence means the launcher never reached the
+                # TUI (the spinner is the launcher's own), so the stall sits in
+                # the delegated-manager launch path, not in the app.
+                'altScreenEnter': b'\x1b[?1049h' in snapshot,
+                'firstBytesHex': snapshot[:48].hex(),
+                'setupTextSeen': any(marker in snapshot for marker in
+                                     (b"You're ready", b'verify:', b'engram binary was installed')),
+                'printableNonSpace': len(re.sub(rb'[\x1b\x00-\x20\x7f-\xff]', b'', snapshot)),
+                'printableHead': re.sub(rb'[^\x20-\x7e]', b' ', re.sub(
+                    rb'\x1b\[[0-9;?<>]*[a-zA-Z]|\x1b\][^\x07]*(\x07|\x1b\\)', b' ', snapshot[:1500])).decode('ascii', 'replace')[:400],
             }
             if valid_utf8 and b'\0' not in snapshot and len(snapshot) < 4096:
                 REPORT['ptyFailureBuffer'] = base64.b64encode(snapshot).decode('ascii')
+            # Persist the whole capture for off-runner frame analysis; the
+            # workflow's failure-diagnosis artifact ships /work/pty-failure.bin.
+            try:
+                capture = pathlib.Path('/work/pty-failure.bin')
+                capture.write_bytes(snapshot)
+                capture.chmod(0o644)  # The runner user ships it in the artifact.
+            except OSError:
+                pass
         raise
     finally:
         if child.poll() is None:
@@ -1056,6 +1132,7 @@ def mvp_smoke(personal):
             'authenticated native bytes differ')
     require(native_manifest['version'] in run([str(native), '--version']), 'authenticated native v4 did not execute')
     pty_status(pathlib.Path(SUPERVISOR), WORK / 'project', [SUPERVISOR, 'shell', 'install'], installer=target)
+    settle_shell_tui(target / 'prefix')
     for name in ['gentle-shell', 'pi']:
         pty_status(target / 'bin' / name, WORK / 'project', opening_only=True)
     home_after = []
@@ -1131,13 +1208,21 @@ def main():
         REPORT['existingParentGuard'] = 'occupied installation refused under changed nonprivate parent'
         run(['git', '-c', 'core.hooksPath=/dev/null', 'init', '-q', str(WORK / 'project')])
         run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Guest Fixture', '-c', 'user.email=guest@invalid.local', 'commit', '--allow-empty', '-m', 'fixture'], cwd=WORK / 'project')
-        native = pathlib.Path(manifest['Prefix']) / 'lib/node_modules/gentle-pi/.gentle-ai/v4.2.0/gentle-ai'
-        require('4.2.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
+        # The resolved reviewed release moves with every gentle-pi publish, so
+        # derive the native bundle from the installed tree (#5904): exactly one
+        # semver directory, whose bytes the integrity manifest authenticates.
+        native_root = pathlib.Path(manifest['Prefix']) / 'lib/node_modules/gentle-pi/.gentle-ai'
+        semver = re.compile(r'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')
+        bundles = [item for item in native_root.iterdir() if item.is_dir() and semver.fullmatch(item.name[1:] or '')]
+        require(len(bundles) == 1, 'native bundle layout differs')
+        native = bundles[0] / 'gentle-ai'
+        require(bundles[0].name[1:] in run([str(native), '--version']), 'authenticated native v4 did not execute')
         backend = json.loads(run([str(native), 'review', 'status', '--contract', 'gentle-ai.review-integration/v2', '--cwd', str(WORK / 'project'), '--projection', 'workspace', '--next-transition'], cwd=WORK / 'project', timeout=35, stdout_only=True))
         require(backend.get('contract') == 'gentle-ai.review-integration/v2' and backend.get('operation') == 'review.status' and backend.get('applicability') == 'unrelated', 'native read-only negotiated status identity differs')
         require(backend.get('authority') is None and backend.get('candidates') == [], 'fresh native status unexpectedly contains review authority')
         require(backend.get('schema') in {'gentle-ai.review-integration.status/v' + str(v) for v in [3, 5, 6, 7, 8, 9]}, 'unsupported native status schema')
         REPORT['nativeBackend'] = backend['schema']
+        settle_shell_tui(target / 'prefix')  # Channel overlays re-provision the prefix.
         pty_status(target / 'bin/gentle-shell', WORK / 'project')
         pty_status(target / 'bin/pi', WORK / 'project')
         prefix, agent = pathlib.Path(manifest['Prefix']), pathlib.Path(manifest['Agent'])
@@ -1181,6 +1266,7 @@ def main():
         tool_acquisition_fault(WORK / 'parents/tool-fault', (shared_prefix, shared_agent))
         shared_manifest = install(shared, (shared_prefix, shared_agent))
         require(shared_manifest['Prefix'] == str(shared_prefix) and shared_manifest['Agent'] == str(shared_agent), 'shared physical binding selection')
+        settle_shell_tui(shared_prefix)
         pty_status(shared / 'bin/gentle-shell', WORK / 'project')
         pty_status(shared / 'bin/pi', WORK / 'project')
         REPORT['manager'] = 'UNQUALIFIED: real externally provided delegated manager required'

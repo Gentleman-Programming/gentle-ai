@@ -187,16 +187,16 @@ for (const profile of ['modern', 'prior']) {
       for (const name of directories) fs.mkdirSync(path.join(root, name), { recursive: true, mode: 0o700 });
       fs.copyFileSync(process.execPath, path.join(root, 'runtime/node/bin/node'));
       fs.chmodSync(path.join(root, 'runtime/node/bin/node'), 0o700);
-      fs.writeFileSync(path.join(root, 'runtime/node/lib/node_modules/npm/bin/npm-cli.js'), 'throw Error("unexpected npm execution");');
+      fs.writeFileSync(path.join(root, 'runtime/node/lib/node_modules/npm/bin/npm-cli.js'), 'throw Error("unexpected npm execution");', { mode: 0o600 });
       const lockBytes = fs.readFileSync(new URL(`../scripts/user-locks/${profile}/package-lock.json`, import.meta.url));
-      fs.writeFileSync(path.join(root, `user-locks/${profile}/package-lock.json`), lockBytes);
-      fs.writeFileSync(path.join(root, source, 'package-lock.json'), lockBytes);
+      fs.writeFileSync(path.join(root, `user-locks/${profile}/package-lock.json`), lockBytes, { mode: 0o600 });
+      fs.writeFileSync(path.join(root, source, 'package-lock.json'), lockBytes, { mode: 0o600 });
       fs.writeFileSync(path.join(root, 'prefix/lib/node_modules/@earendil-works/pi-coding-agent/package.json'),
-        JSON.stringify({ version: profile === 'prior' ? '0.99.2' : '1.3.0' }));
-      if (profile === 'prior') fs.writeFileSync(path.join(root, 'state/prior-global-graph.json'), '[]');
+        JSON.stringify({ version: profile === 'prior' ? '0.99.2' : '1.3.0' }), { mode: 0o600 });
+      if (profile === 'prior') fs.writeFileSync(path.join(root, 'state/prior-global-graph.json'), '[]', { mode: 0o600 });
       const emptyInventorySHA = crypto.createHash('sha256').update(JSON.stringify([['', 'dir', 0o700]])).digest('hex');
       fs.writeFileSync(path.join(root, source, '.gentle-shell-optional.json'),
-        JSON.stringify({ paths: [retainedPath], sha256: emptyInventorySHA }));
+        JSON.stringify({ paths: [retainedPath], sha256: emptyInventorySHA }), { mode: 0o600 });
       const helper = new URL('../scripts/provision-gentle-shell-private-global.mjs', import.meta.url);
       const prefix = path.join(root, 'prefix');
       const result = spawnSync(process.execPath, [helper.pathname, root, prefix, path.join(root, 'agent'), prefix, root, 'separate', 'verify'], {
@@ -231,16 +231,17 @@ for (const [scenario, retainedPath] of [
     for (const name of directories) fs.mkdirSync(path.join(root, name), { recursive: true, mode: 0o700 });
     fs.copyFileSync(process.execPath, path.join(root, 'runtime/node/bin/node'));
     fs.chmodSync(path.join(root, 'runtime/node/bin/node'), 0o700);
-    fs.writeFileSync(path.join(root, 'runtime/node/lib/node_modules/npm/bin/npm-cli.js'), 'throw Error("unexpected npm execution");');
+    fs.writeFileSync(path.join(root, 'runtime/node/lib/node_modules/npm/bin/npm-cli.js'), 'throw Error("unexpected npm execution");', { mode: 0o600 });
     fs.copyFileSync(new URL('../scripts/gentle-pi-suppliers.json', import.meta.url), path.join(root, 'gentle-pi-suppliers.json'));
+    fs.chmodSync(path.join(root, 'gentle-pi-suppliers.json'), 0o600);
     const lockBytes = fs.readFileSync(new URL('../scripts/user-locks/modern/package-lock.json', import.meta.url));
-    fs.writeFileSync(path.join(root, 'user-locks/modern/package-lock.json'), lockBytes);
-    fs.writeFileSync(path.join(root, source, 'package-lock.json'), lockBytes);
+    fs.writeFileSync(path.join(root, 'user-locks/modern/package-lock.json'), lockBytes, { mode: 0o600 });
+    fs.writeFileSync(path.join(root, source, 'package-lock.json'), lockBytes, { mode: 0o600 });
     fs.writeFileSync(path.join(root, 'prefix/lib/node_modules/@earendil-works/pi-coding-agent/package.json'),
-      JSON.stringify({ version: '1.3.0' }));
+      JSON.stringify({ version: '1.3.0' }), { mode: 0o600 });
     const emptyInventorySHA = crypto.createHash('sha256').update(JSON.stringify([['', 'dir', 0o700]])).digest('hex');
     fs.writeFileSync(path.join(root, source, '.gentle-shell-optional.json'),
-      JSON.stringify({ paths: [retainedPath], sha256: emptyInventorySHA }));
+      JSON.stringify({ paths: [retainedPath], sha256: emptyInventorySHA }), { mode: 0o600 });
     const helper = new URL('../scripts/provision-gentle-shell-private-global.mjs', import.meta.url);
     const prefix = path.join(root, 'prefix');
     const result = spawnSync(process.execPath, [helper.pathname, root, prefix, path.join(root, 'agent'), prefix, root, 'separate', 'verify'], {
