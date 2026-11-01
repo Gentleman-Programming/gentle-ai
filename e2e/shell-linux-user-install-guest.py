@@ -834,6 +834,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 REPORT['ptyFailureBuffer'] = base64.b64encode(snapshot).decode('ascii')
             # The delegated launch runs the private Node inside the user unit;
             # its own stderr lands in the user journal, which names what the
+            # sandboxed
             # sandboxed session tripped over. Shipped via the failure artifact.
             if os.path.isdir('/run/user/1002'):
                 try:
