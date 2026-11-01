@@ -1162,8 +1162,14 @@ def main():
         REPORT['existingParentGuard'] = 'occupied installation refused under changed nonprivate parent'
         run(['git', '-c', 'core.hooksPath=/dev/null', 'init', '-q', str(WORK / 'project')])
         run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Guest Fixture', '-c', 'user.email=guest@invalid.local', 'commit', '--allow-empty', '-m', 'fixture'], cwd=WORK / 'project')
-        native = pathlib.Path(manifest['Prefix']) / 'lib/node_modules/gentle-pi/.gentle-ai/v4.2.0/gentle-ai'
-        require('4.2.0' in run([str(native), '--version']), 'authenticated native v4 did not execute')
+        # The resolved reviewed release moves with every gentle-pi publish, so
+        # derive the native bundle from the installed tree (#5904): exactly one
+        # semver directory, whose bytes the integrity manifest authenticates.
+        native_root = pathlib.Path(manifest['Prefix']) / 'lib/node_modules/gentle-pi/.gentle-ai'
+        bundles = [item for item in native_root.iterdir() if item.is_dir() and semver.fullmatch(item.name[1:] or '')]
+        require(len(bundles) == 1, 'native bundle layout differs')
+        native = bundles[0] / 'gentle-ai'
+        require(bundles[0].name[1:] in run([str(native), '--version']), 'authenticated native v4 did not execute')
         backend = json.loads(run([str(native), 'review', 'status', '--contract', 'gentle-ai.review-integration/v2', '--cwd', str(WORK / 'project'), '--projection', 'workspace', '--next-transition'], cwd=WORK / 'project', timeout=35, stdout_only=True))
         require(backend.get('contract') == 'gentle-ai.review-integration/v2' and backend.get('operation') == 'review.status' and backend.get('applicability') == 'unrelated', 'native read-only negotiated status identity differs')
         require(backend.get('authority') is None and backend.get('candidates') == [], 'fresh native status unexpectedly contains review authority')
