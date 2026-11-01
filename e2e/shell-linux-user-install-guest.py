@@ -795,10 +795,12 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 # Bounded diagnosis of a spinner/stall state: the distinct
                 # capability queries the TUI emitted (an unanswered new query
                 # stalls startup) and the printable head of the capture, which
-                # names whatever dialog or banner preceded the animation.
+                # names whatever dialog or banner preceded the animation. The
+                # whole verdict must stay under the 4096-byte Guest bound.
                 'queries': sorted({match.decode('ascii') for match in re.findall(
                     rb'\x1b\[[0-9;?<>=]*[cntup]|\x1b\][0-9]+;\?', snapshot)})[:12],
-                'headTailBase64': base64.b64encode(snapshot[:1024] + snapshot[-1024:]).decode('ascii'),
+                'printableHead': re.sub(rb'[^\x20-\x7e]', b' ', re.sub(
+                    rb'\x1b\[[0-9;?<>]*[a-zA-Z]|\x1b\][^\x07]*(\x07|\x1b\\)', b' ', snapshot[:1500])).decode('ascii', 'replace')[:400],
             }
             if valid_utf8 and b'\0' not in snapshot and len(snapshot) < 4096:
                 REPORT['ptyFailureBuffer'] = base64.b64encode(snapshot).decode('ascii')
