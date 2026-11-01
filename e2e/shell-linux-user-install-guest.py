@@ -792,6 +792,13 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 'openingObserved': opening_only and expected in snapshot, 'exitInputSent': stopped,
                 'statusObserved': b'GUEST-STATUS:' in snapshot, 'exit': child.poll(),
                 'deadlineExpired': time.monotonic() >= deadline, 'foregroundCWD': observed_cwd,
+                # Bounded diagnosis of a spinner/stall state: the distinct
+                # capability queries the TUI emitted (an unanswered new query
+                # stalls startup) and the printable head of the capture, which
+                # names whatever dialog or banner preceded the animation.
+                'queries': sorted({match.decode('ascii') for match in re.findall(
+                    rb'\x1b\[[0-9;?<>=]*[cntup]|\x1b\][0-9]+;\?', snapshot)})[:12],
+                'headTailBase64': base64.b64encode(snapshot[:1024] + snapshot[-1024:]).decode('ascii'),
             }
             if valid_utf8 and b'\0' not in snapshot and len(snapshot) < 4096:
                 REPORT['ptyFailureBuffer'] = base64.b64encode(snapshot).decode('ascii')
