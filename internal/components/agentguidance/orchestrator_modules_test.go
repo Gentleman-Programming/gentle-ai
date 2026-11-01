@@ -134,38 +134,6 @@ func TestOrchestratorModulesCarryCanonicalBodies(t *testing.T) {
 	}
 }
 
-func TestOrchestratorContributionPolicyScope(t *testing.T) {
-	contracts := map[string]string{}
-	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode} {
-		text, err := RenderOrchestratorWithSource(agent, fakeModuleContract, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		contracts[string(agent)] = text
-	}
-	for _, module := range buildClaudeTestModules(t).modules {
-		if module.name == "skills" {
-			contracts["Claude skills module"] = module.content
-		}
-	}
-	if len(contracts) != 3 {
-		t.Fatal("missing rendered skills module")
-	}
-	for name, text := range contracts {
-		t.Run(name, func(t *testing.T) {
-			for _, rule := range []string{
-				"Contribution requirements belong to the destination repository",
-				"Never infer an issue-before-PR gate from an installed skill",
-				"project contribution skill, then `branch-pr`",
-			} {
-				if !strings.Contains(text, rule) {
-					t.Errorf("rendered discovery omits policy boundary %q", rule)
-				}
-			}
-		})
-	}
-}
-
 func TestOrchestratorModuleCoreKeepsAuthorityAndSafety(t *testing.T) {
 	core := buildClaudeTestModules(t).core
 	for _, required := range []string{

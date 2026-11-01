@@ -186,15 +186,13 @@ Discovery order:
 4. Prefer the most specific project skill over a global skill with the same intent.
 5. If no matching skill exists, continue with the smallest safe fallback and say which expected skill was unavailable.
 
-Contribution requirements belong to the destination repository. Never infer an issue-before-PR gate from an installed skill; approval labels, issue formats, naming and review rules apply only when the target's actual policy requires them. Prefer its project-specific contribution skill before a portable fallback.
-
 Common intent hints, not hard routing:
 
 | User intent                | Skill to check                         |
 | -------------------------- | -------------------------------------- |
 | PR review / GitHub PR URL  | project review skill, then `pr-review` |
 | Post-ready review comments | `comment-writer`                       |
-| Create/open/prepare PR     | project contribution skill, then `branch-pr` |
+| Create/open/prepare PR     | `branch-pr`                            |
 | Split/stack/large PR       | `chained-pr`                           |
 
 Keep this lightweight: loading a skill should improve the immediate task, not force extra ceremony.
