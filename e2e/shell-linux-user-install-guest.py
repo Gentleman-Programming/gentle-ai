@@ -376,6 +376,21 @@ def install(target, shared=None):
     return manifest
 
 
+def settle_shell_tui(prefix):
+    """Pin the installed shell's own minimal animation policy before its TUI
+    stages (#5904): the newest reviewed release boots with the full quality
+    animation, which on the single-CPU worker outlives the interactive window
+    without ever reaching the prompt. This lane qualifies command registration
+    and session behavior, not animation rendering, so it uses the product's
+    own constrained-environment policy (gentle-pi.animations/v1, potato) at
+    the bundled config home the launcher resolves (<prefix>/config/gentle-ai)."""
+    config = pathlib.Path(prefix) / 'config' / 'gentle-ai'
+    config.mkdir(mode=0o700, parents=True, exist_ok=True)
+    policy = config / 'animations.json'
+    policy.write_text('{"schema":"gentle-pi.animations/v1","policy":"potato"}\n', encoding='utf8')
+    os.chmod(policy, 0o600)
+
+
 def acquisition_fault(target, cleanup=False):
     global FAULT
     args, token = inspect(target)
@@ -1096,6 +1111,7 @@ def mvp_smoke(personal):
             'authenticated native bytes differ')
     require(native_manifest['version'] in run([str(native), '--version']), 'authenticated native v4 did not execute')
     pty_status(pathlib.Path(SUPERVISOR), WORK / 'project', [SUPERVISOR, 'shell', 'install'], installer=target)
+    settle_shell_tui(target / 'prefix')
     for name in ['gentle-shell', 'pi']:
         pty_status(target / 'bin' / name, WORK / 'project', opening_only=True)
     home_after = []
@@ -1185,6 +1201,7 @@ def main():
         require(backend.get('authority') is None and backend.get('candidates') == [], 'fresh native status unexpectedly contains review authority')
         require(backend.get('schema') in {'gentle-ai.review-integration.status/v' + str(v) for v in [3, 5, 6, 7, 8, 9]}, 'unsupported native status schema')
         REPORT['nativeBackend'] = backend['schema']
+        settle_shell_tui(target / 'prefix')  # Channel overlays re-provision the prefix.
         pty_status(target / 'bin/gentle-shell', WORK / 'project')
         pty_status(target / 'bin/pi', WORK / 'project')
         prefix, agent = pathlib.Path(manifest['Prefix']), pathlib.Path(manifest['Agent'])
@@ -1228,6 +1245,7 @@ def main():
         tool_acquisition_fault(WORK / 'parents/tool-fault', (shared_prefix, shared_agent))
         shared_manifest = install(shared, (shared_prefix, shared_agent))
         require(shared_manifest['Prefix'] == str(shared_prefix) and shared_manifest['Agent'] == str(shared_agent), 'shared physical binding selection')
+        settle_shell_tui(shared_prefix)
         pty_status(shared / 'bin/gentle-shell', WORK / 'project')
         pty_status(shared / 'bin/pi', WORK / 'project')
         REPORT['manager'] = 'UNQUALIFIED: real externally provided delegated manager required'
