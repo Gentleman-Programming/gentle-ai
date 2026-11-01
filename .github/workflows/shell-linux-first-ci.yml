@@ -207,9 +207,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -m 700 qualification-raw
-          for raw in user-build.raw primitives.raw user-guest.raw; do
+          for raw in user-build.raw primitives.raw user-guest.raw pty-failure.bin; do
             test -e "$RUNNER_TEMP/$raw" && cp "$RUNNER_TEMP/$raw" qualification-raw/ || true
           done
+          test -e /work/pty-failure.bin && cp /work/pty-failure.bin qualification-raw/ || true
       - name: Upload raw worker outputs
         if: failure()
         uses: actions/upload-artifact@v4

@@ -832,6 +832,12 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
             }
             if valid_utf8 and b'\0' not in snapshot and len(snapshot) < 4096:
                 REPORT['ptyFailureBuffer'] = base64.b64encode(snapshot).decode('ascii')
+            # Persist the whole capture for off-runner frame analysis; the
+            # workflow's failure-diagnosis artifact ships /work/pty-failure.bin.
+            try:
+                pathlib.Path('/work/pty-failure.bin').write_bytes(snapshot)
+            except OSError:
+                pass
         raise
     finally:
         if child.poll() is None:
