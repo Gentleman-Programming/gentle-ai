@@ -627,7 +627,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			codegraph <- userWindowsCodeGraphCommand(ctx, stage)
 			return
 		}
-		codegraph <- userWindowsCodeGraphProvision(ctx, stage, req.Experience)
+		codegraph <- userWindowsCodeGraphProvision(ctx, stage, req.Destination, req.Experience)
 	}()
 	// The Windows stock provision helper requires its exact six-field
 	// selection ABI. Preferences are already materialized in the staged
@@ -663,7 +663,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		index, artifact := index, artifact
 		go func() {
 			defer downloads.Done()
-			fetched[index].data, fetched[index].err = userWindowsAcquire(ctx, artifact, filepath.Join(stage, "runtime/archives", artifact.Archive))
+			fetched[index].data, fetched[index].err = userWindowsAcquire(ctx, artifact, filepath.Join(stage, "runtime/archives", artifact.Archive), req.Destination)
 		}()
 	}
 	downloads.Wait()

@@ -50,7 +50,10 @@ var userWindowsCodeGraphSources = []struct {
 	},
 }
 
-func userWindowsCodeGraphProvision(ctx context.Context, root string, profile *UserExperience) error {
+// userWindowsCodeGraphProvision acquires and unpacks the agreed CodeGraph
+// archives into the private stage. The installation destination is carried only
+// so the optional download cache can refuse an overlapping path.
+func userWindowsCodeGraphProvision(ctx context.Context, root, destination string, profile *UserExperience) error {
 	if profile == nil || profile.CodeGraph != "on" {
 		return nil
 	}
@@ -67,7 +70,7 @@ func userWindowsCodeGraphProvision(ctx context.Context, root string, profile *Us
 			Prefix: "", Bound: 64 << 20, Size: source.size,
 		}
 		fmt.Fprintf(os.Stderr, "Windows install phase: codegraph-download %s\n", source.name)
-		data, err := userWindowsAcquire(ctx, artifact, filepath.Join(archives, source.archive))
+		data, err := userWindowsAcquire(ctx, artifact, filepath.Join(archives, source.archive), destination)
 		if err != nil {
 			return err
 		}
