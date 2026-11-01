@@ -1166,6 +1166,7 @@ def main():
         # derive the native bundle from the installed tree (#5904): exactly one
         # semver directory, whose bytes the integrity manifest authenticates.
         native_root = pathlib.Path(manifest['Prefix']) / 'lib/node_modules/gentle-pi/.gentle-ai'
+        semver = re.compile(r'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')
         bundles = [item for item in native_root.iterdir() if item.is_dir() and semver.fullmatch(item.name[1:] or '')]
         require(len(bundles) == 1, 'native bundle layout differs')
         native = bundles[0] / 'gentle-ai'
