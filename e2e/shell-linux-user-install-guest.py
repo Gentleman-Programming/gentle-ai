@@ -614,7 +614,11 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     raw = bytearray()
     carry = b''
     truncated = 0
-    deadline = time.monotonic() + min(45, remaining())
+    # The first boot of a fresh install performs the expansive setup (native
+    # persona, engram provisioning, verification), which on the single-CPU
+    # worker with a filtered network outlived the old 45s window: the TUI was
+    # still rendering its animated setup state when the check gave up (#5904).
+    deadline = time.monotonic() + min(150, remaining())
     sent = False
     typed = False
     expected = b'type, or / for commands' if opening_only else b'el Gentleman package is active.'
