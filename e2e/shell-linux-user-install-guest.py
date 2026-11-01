@@ -835,7 +835,9 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
             # Persist the whole capture for off-runner frame analysis; the
             # workflow's failure-diagnosis artifact ships /work/pty-failure.bin.
             try:
-                pathlib.Path('/work/pty-failure.bin').write_bytes(snapshot)
+                capture = pathlib.Path('/work/pty-failure.bin')
+                capture.write_bytes(snapshot)
+                capture.chmod(0o644)  # The runner user ships it in the artifact.
             except OSError:
                 pass
         raise
