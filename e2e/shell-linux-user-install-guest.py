@@ -832,6 +832,20 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
             }
             if valid_utf8 and b'\0' not in snapshot and len(snapshot) < 4096:
                 REPORT['ptyFailureBuffer'] = base64.b64encode(snapshot).decode('ascii')
+            # The delegated launch runs the private Node inside the user unit;
+            # its own stderr lands in the user journal, which names what the
+            # sandboxed session tripped over. Shipped via the failure artifact.
+            if os.path.isdir('/run/user/1002'):
+                try:
+                    journal = subprocess.run(['/usr/bin/journalctl', '--user', '--no-pager', '-n', '200', '--since', '-12min'],
+                                             capture_output=True, timeout=20)
+                    text = (journal.stdout + journal.stderr)
+                    if text.strip():
+                        capture = pathlib.Path('/work/user-journal.txt')
+                        capture.write_bytes(text)
+                        capture.chmod(0o644)  # The runner user ships it in the artifact.
+                except (OSError, subprocess.SubprocessError):
+                    pass
             # Persist the whole capture for off-runner frame analysis; the
             # workflow's failure-diagnosis artifact ships /work/pty-failure.bin.
             try:

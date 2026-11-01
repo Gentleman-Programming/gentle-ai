@@ -215,6 +215,10 @@ jobs:
             sudo -n cp /work/pty-failure.bin qualification-raw/pty-failure.bin
             sudo -n chown "$(id -u):$(id -g)" qualification-raw/pty-failure.bin
           fi
+          if sudo -n test -e /work/user-journal.txt; then
+            sudo -n cp /work/user-journal.txt qualification-raw/user-journal.txt
+            sudo -n chown "$(id -u):$(id -g)" qualification-raw/user-journal.txt
+          fi
       - name: Upload raw worker outputs
         if: failure()
         uses: actions/upload-artifact@v4
