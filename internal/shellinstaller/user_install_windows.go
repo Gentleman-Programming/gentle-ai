@@ -3,7 +3,6 @@
 package shellinstaller
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -491,14 +490,15 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 				return result, errors.Join(err, selectionErr, errors.New("existing installation channel differs; no replacement"))
 			}
 			// A previous attempt can publish and verify the target before the
-			// launcher is registered. Repair that tail on an idempotent run.
-			if err := userWindowsPublishLauncher(req.Destination); err != nil {
-				return result, errors.Join(err, errors.New("existing Windows installation could not publish the gentle-shell command"))
+			// launchers are registered. Repair that tail on an idempotent run.
+			launcherReport, launcherErr := userWindowsPublishLauncher(req.Destination)
+			if launcherErr != nil {
+				return result, errors.Join(launcherErr, errors.New("existing Windows installation could not publish the gentle-shell commands"))
 			}
 			if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
 				fmt.Fprintf(os.Stderr, "Windows installation is verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
 			}
-			return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed", ""}, nil
+			return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "already-installed", userWindowsLauncherNote(launcherReport)}, nil
 		}
 		// A reconfigure that only changes the SDK update channel swaps the
 		// installed SDK in place; components, preferences, runtimes and the
@@ -507,9 +507,11 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if result, applied, err := userWindowsChannelOverlay(ctx, req); err != nil {
 			return result, err
 		} else if applied {
-			if err := userWindowsPublishLauncher(req.Destination); err != nil {
-				return result, errors.Join(err, errors.New("channel overlay could not confirm the gentle-shell command"))
+			launcherReport, launcherErr := userWindowsPublishLauncher(req.Destination)
+			if launcherErr != nil {
+				return result, errors.Join(launcherErr, errors.New("channel overlay could not confirm the gentle-shell commands"))
 			}
+			result.LauncherNote = userWindowsLauncherNote(launcherReport)
 			if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
 				fmt.Fprintf(os.Stderr, "Windows channel overlay is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
 			}
@@ -890,20 +892,20 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err := userWindowsVerify(verifyCtx, req.Destination, io.Discard, io.Discard); err != nil {
 		return result, errors.Join(err, errors.New("published Windows installation remains unqualified; preserved, no success reported"))
 	}
-	if err := userWindowsPublishLauncher(req.Destination); err != nil {
-		return result, errors.Join(err, errors.New("published Windows installation could not publish the gentle-shell command"))
+	launcherReport, launcherErr := userWindowsPublishLauncher(req.Destination)
+	if launcherErr != nil {
+		return result, errors.Join(launcherErr, errors.New("published Windows installation could not publish the gentle-shell commands"))
 	}
+	result.LauncherNote = userWindowsLauncherNote(launcherReport)
 	// The installation is published and verified; drop only the ephemeral
 	// caches. runtime/archives stays: launch verification re-reads it.
 	// Failure is reported but never retracts the published installation.
 	if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "Windows installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
 	}
-	return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "installed", ""}, nil
+	return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "installed", result.LauncherNote}, nil
 }
 
-// userWindowsPublishLauncher puts a tiny .cmd shim in the user's WindowsApps
-// PATH directory. It never overwrites a foreign command.
 func userWindowsLocalAppData() (string, error) {
 	if local := os.Getenv("LOCALAPPDATA"); local != "" {
 		return local, nil
@@ -915,39 +917,6 @@ func userWindowsLocalAppData() (string, error) {
 		return "", errors.Join(err, errors.New("LOCALAPPDATA is unavailable"))
 	}
 	return local, nil
-}
-
-func userWindowsPublishLauncher(destination string) error {
-	local, err := userWindowsLocalAppData()
-	if err != nil {
-		return errors.Join(err, errors.New("cannot publish the gentle-shell command"))
-	}
-	apps := filepath.Join(local, "Microsoft", "WindowsApps")
-	if info, err := os.Stat(apps); err != nil || !info.IsDir() {
-		return errors.Join(err, errors.New("WindowsApps PATH directory is unavailable"))
-	}
-	target := filepath.Join(destination, "bin", "gentle-shell.cmd")
-	if _, err := os.Stat(target); err != nil {
-		return err
-	}
-	link := filepath.Join(apps, "gentle-shell.cmd")
-	data := []byte("@echo off\r\ncall \"" + target + "\" %*\r\n")
-	if existing, err := os.ReadFile(link); err == nil {
-		if bytes.Equal(existing, data) {
-			return nil
-		}
-		return errors.New("a foreign gentle-shell command already exists in WindowsApps")
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	file, err := os.OpenFile(link, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0700)
-	if err != nil {
-		return err
-	}
-	_, writeErr := file.Write(data)
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	return errors.Join(writeErr, syncErr, closeErr)
 }
 
 // RunUserLaunchProbe is the Windows stub of the Linux delegated-unit launch
