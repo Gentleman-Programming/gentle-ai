@@ -61,8 +61,11 @@ func userWindowsLauncherNote(report userWindowsLauncherReport) string {
 }
 
 // userWindowsPublishLauncher exposes the Separate target as `gentle-shell.cmd`
-// and `gs.cmd` in the user's WindowsApps PATH directory. A foreign command — a
-// foreign shim or a PATH entry like Ghostscript's gs.exe — is reported, never overwritten.
+// and `gs.cmd` in the user's WindowsApps PATH directory. A foreign command is
+// reported, never overwritten: a shim with different content, or a command on
+// the worker's PATH, is reported occupied. Detection of foreign commands on
+// the user's original PATH (for example Ghostscript's gs.exe) is a follow-up:
+// the install worker PATH is System32-only, so it cannot see them.
 func userWindowsPublishLauncher(destination string) (userWindowsLauncherReport, error) {
 	report := userWindowsLauncherReport{}
 	local, err := userWindowsLocalAppData()
@@ -100,15 +103,19 @@ func userWindowsPublishLauncher(destination string) (userWindowsLauncherReport, 
 			report.Outcomes = append(report.Outcomes, outcome)
 			continue
 		}
-		file, err := os.OpenFile(link, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0700)
+		temporary := link + ".new"
+		tempFile, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0700)
 		if err != nil {
 			return report, err
 		}
-		_, writeErr := file.Write(data)
-		syncErr := file.Sync()
-		closeErr := file.Close()
+		_, writeErr := tempFile.Write(data)
+		syncErr := tempFile.Sync()
+		closeErr := tempFile.Close()
 		if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
-			return report, err
+			return report, errors.Join(err, os.Remove(temporary))
+		}
+		if err := os.Rename(temporary, link); err != nil {
+			return report, errors.Join(err, os.Remove(temporary))
 		}
 		outcome.State = userWindowsLauncherPublished
 		report.Outcomes = append(report.Outcomes, outcome)
@@ -116,8 +123,9 @@ func userWindowsPublishLauncher(destination string) (userWindowsLauncherReport, 
 	return report, nil
 }
 
-// userWindowsRemoveLauncher removes only the WindowsApps shims that forward to
-// the given destination's installed binding; foreign commands stay untouched.
+// userWindowsRemoveLauncher removes only the WindowsApps shims whose bytes are
+// exactly the canonical shim forwarding to the given destination's installed
+// binding; foreign or user-modified commands stay untouched.
 func userWindowsRemoveLauncher(target string) error {
 	local, err := userWindowsLocalAppData()
 	if err != nil {
@@ -132,7 +140,7 @@ func userWindowsRemoveLauncher(target string) error {
 		if readErr != nil {
 			return readErr
 		}
-		if !bytes.Contains(data, []byte(target)) {
+		if !bytes.Equal(data, userWindowsLauncherShim(filepath.Join(target, "bin", "gentle-shell.cmd"))) {
 			continue
 		}
 		if err := os.Remove(link); err != nil {

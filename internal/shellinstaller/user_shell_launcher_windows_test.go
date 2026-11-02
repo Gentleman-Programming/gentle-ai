@@ -56,14 +56,9 @@ func TestPublishUserShellLauncherWindowsPublishesBothCommands(t *testing.T) {
 	if !strings.Contains(note, "Commands: ") || !strings.Contains(note, filepath.Join(apps, "gentle-shell.cmd")) || !strings.Contains(note, filepath.Join(apps, "gs.cmd")) {
 		t.Fatalf("note does not report both published commands: %q", note)
 	}
-}
-
-func TestPublishUserShellLauncherWindowsIsIdempotent(t *testing.T) {
-	destination, _ := userWindowsLauncherFixture(t)
-	if _, err := userWindowsPublishLauncher(destination); err != nil {
-		t.Fatalf("first publish failed: %v", err)
-	}
-	report, err := userWindowsPublishLauncher(destination)
+	// A republish over the owned shims is idempotent: every name reports
+	// existing and no file is rewritten.
+	report, err = userWindowsPublishLauncher(destination)
 	if err != nil {
 		t.Fatalf("republish failed: %v", err)
 	}
