@@ -13,13 +13,21 @@ import (
 
 func userPinCacheFixture(t *testing.T) (string, string, string) {
 	t.Helper()
-	root := t.TempDir()
-	privateMust(t, os.Mkdir(filepath.Join(root, "state"), 0700))
-	privateMust(t, os.Mkdir(filepath.Join(root, "bin"), 0700))
+	root := userUnixTempRoot(t)
+	if err := os.Mkdir(filepath.Join(root, "state"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(root, "bin", "tool")
 	data := []byte("pinned tool bytes")
-	privateMust(t, os.WriteFile(path, data, 0700))
-	privateMust(t, os.Chmod(path, 0700))
+	if err := os.WriteFile(path, data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
 	pin := fmt.Sprintf("%x", sha256.Sum256(data))
 	return root, path, pin
 }
@@ -27,7 +35,9 @@ func userPinCacheFixture(t *testing.T) (string, string, string) {
 func userMustStat(t *testing.T, path string) os.FileInfo {
 	t.Helper()
 	info, err := os.Lstat(path)
-	privateMust(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return info
 }
 
@@ -61,8 +71,12 @@ func TestUserPinnedFileCachedRehashesOnDrift(t *testing.T) {
 	}
 	// Any content rewrite changes ctime, so the recorded stamp must miss and
 	// the full hash must run again — and refuse the tampered bytes.
-	privateMust(t, os.WriteFile(path, []byte("tampered tool bytes"), 0700))
-	privateMust(t, os.Chmod(path, 0700))
+	if err := os.WriteFile(path, []byte("tampered tool bytes"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := userPinnedFileCached(context.Background(), root, "bin/tool", 0700, pin); err == nil {
 		t.Fatal("tampered bytes accepted through the stamp cache")
 	}
@@ -77,7 +91,9 @@ func TestUserPinnedFileCachedRehashesOnDrift(t *testing.T) {
 
 func TestUserPinCacheIgnoresMalformedRecords(t *testing.T) {
 	root, _, pin := userPinCacheFixture(t)
-	privateMust(t, os.WriteFile(userPinCachePath(root), []byte("{not json"), 0600))
+	if err := os.WriteFile(userPinCachePath(root), []byte("{not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := userReadPinCacheEntry(root, "bin/tool"); ok {
 		t.Fatal("malformed cache record accepted")
 	}

@@ -13,10 +13,16 @@ import (
 // member so a full compare has real bytes to authenticate.
 func userMainSourceCacheFixture(t *testing.T) (string, userSnapshotArtifact) {
 	t.Helper()
-	root := t.TempDir()
-	privateMust(t, os.MkdirAll(filepath.Join(root, "runtime", "main"), 0700))
-	privateMust(t, os.MkdirAll(filepath.Join(root, "runtime", "main-source", "pkg"), 0700))
-	privateMust(t, os.WriteFile(filepath.Join(root, "runtime", "main-source", "pkg", "index.mjs"), []byte("export const main = 'source';\n"), 0600))
+	root := userUnixTempRoot(t)
+	if err := os.MkdirAll(filepath.Join(root, "runtime", "main"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "runtime", "main-source", "pkg"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "runtime", "main-source", "pkg", "index.mjs"), []byte("export const main = 'source';\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	artifact := userSnapshotArtifact{
 		URL:     "https://canelo.invalid/zip/main.zip",
 		SHA:     "0000000000000000000000000000000000000000000000000000000000000000",
@@ -41,8 +47,12 @@ func TestUserMainSourceCacheFallsBackAndRecords(t *testing.T) {
 
 func TestUserMainSourceCacheIgnoresMalformedRecords(t *testing.T) {
 	root, _ := userMainSourceCacheFixture(t)
-	privateMust(t, os.Mkdir(filepath.Join(root, "state"), 0700))
-	privateMust(t, os.WriteFile(userMainSourceCachePath(root), []byte("]["), 0600))
+	if err := os.Mkdir(filepath.Join(root, "state"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userMainSourceCachePath(root), []byte("]["), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := userReadMainSourceCache(root); ok {
 		t.Fatal("malformed cache record accepted")
 	}
