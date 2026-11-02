@@ -348,7 +348,9 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		if err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(stdout, "Installed %s (%s); owned commands %s and %s (personal PATH unchanged)\nCurrent CMD only: set \"PATH=%s;%%PATH%%\"\n", result.Destination, req.Channel, filepath.Join(result.Destination, "bin/gentle-shell.cmd"), filepath.Join(result.Destination, "bin/pi.cmd"), filepath.Join(result.Destination, "bin"))
+		if _, err = fmt.Fprintf(stdout, "Installed %s (%s); owned commands %s and %s (personal PATH unchanged)\nCurrent CMD only: set \"PATH=%s;%%PATH%%\"\n", result.Destination, req.Channel, filepath.Join(result.Destination, "bin/gentle-shell.cmd"), filepath.Join(result.Destination, "bin/pi.cmd"), filepath.Join(result.Destination, "bin")); err == nil && result.LauncherNote != "" {
+			_, err = fmt.Fprintln(stdout, result.LauncherNote)
+		}
 		return err
 	case "launch":
 		if len(args) < 3 || (args[2] != "pi" && args[2] != "gentle-shell") {

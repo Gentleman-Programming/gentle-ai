@@ -3,7 +3,6 @@
 package shellinstaller
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -362,25 +361,6 @@ func userWindowsRemoveDownloadCache() error {
 		return fmt.Errorf("Windows download cache %q still exists after removal", cache)
 	}
 	return nil
-}
-
-func userWindowsRemoveLauncher(target string) error {
-	local, err := userWindowsLocalAppData()
-	if err != nil {
-		return err
-	}
-	link := filepath.Join(local, "Microsoft", "WindowsApps", "gentle-shell.cmd")
-	data, readErr := os.ReadFile(link)
-	if os.IsNotExist(readErr) {
-		return nil
-	}
-	if readErr != nil {
-		return readErr
-	}
-	if !bytes.Contains(data, []byte(target)) {
-		return nil
-	}
-	return os.Remove(link)
 }
 
 // CheckUserShellUpdate routes at the persisted SDK source channel: Stable
