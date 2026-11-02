@@ -4202,6 +4202,13 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 						filepath.Join(codexHomeDir, "engram-instructions.md"),
 						filepath.Join(codexHomeDir, "engram-compact-prompt.md"),
 					)
+					// The Engram writer still targets ~/.codex when CODEX_HOME moves config.toml.
+					if writerDir := filepath.Join(targetDir, ".codex"); writerDir != codexHomeDir {
+						paths = append(paths,
+							filepath.Join(writerDir, "engram-instructions.md"),
+							filepath.Join(writerDir, "engram-compact-prompt.md"),
+						)
+					}
 					paths = append(paths, codexagent.SddProfilePaths(codexHomeDir)...)
 				}
 			}

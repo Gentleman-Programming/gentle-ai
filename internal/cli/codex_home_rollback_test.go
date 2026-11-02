@@ -64,6 +64,36 @@ func TestRollbackRestoresEngramFilesUnderExternalCodexHome(t *testing.T) {
 	}
 }
 
+// TestBackupTargetsKeepDefaultEngramFilesUnderCodexHome pins that a CODEX_HOME
+// override still snapshots the Engram instruction files under ~/.codex, where
+// the Engram writer puts them, so a failed install or sync restores them.
+func TestBackupTargetsKeepDefaultEngramFilesUnderCodexHome(t *testing.T) {
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	workspace := filepath.Join(root, "workspace")
+	override := filepath.Join(root, "codex-home")
+	for _, dir := range []string{home, workspace, override} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", override)
+
+	selection := model.Selection{Agents: []model.AgentID{model.AgentCodex}, Components: []model.ComponentID{model.ComponentEngram}}
+	targets, err := backupTargets(home, workspace, ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"engram-instructions.md", "engram-compact-prompt.md"} {
+		if want := filepath.Join(home, ".codex", name); !slices.Contains(targets, want) {
+			t.Errorf("snapshot targets = %v; want %q", targets, want)
+		}
+	}
+}
+
 // TestCodexRollbackRootOnlyForSelectedOverride pins that only a selected Codex
 // with an applicable CODEX_HOME override extends the restore roots.
 func TestCodexRollbackRootOnlyForSelectedOverride(t *testing.T) {
