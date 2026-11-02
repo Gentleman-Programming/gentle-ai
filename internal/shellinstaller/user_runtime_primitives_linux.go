@@ -87,15 +87,15 @@ func privateKernelData(membership, mounts string, limits []string) error {
 	if _, err := privateCgroupPath(membership, mounts); err != nil {
 		return err
 	}
-	const want = "3221225472\n0\n100000 100000\n64"
+	want := fmt.Sprintf("%d\n0\n100000 100000\n%d", userUnitMemoryMaxBytes, userUnitTasksMax)
 	if len(limits) != 4 || strings.Join(limits, "\n") != want {
 		observed := append([]string(nil), limits...)
 		for len(observed) < 4 {
 			observed = append(observed, "")
 		}
 		return privateError("unavailable", fmt.Errorf(
-			"leaf limits differ: memory.max=%q memory.swap.max=%q cpu.max=%q pids.max=%q want 3221225472/0/\"100000 100000\"/64",
-			observed[0], observed[1], observed[2], observed[3]))
+			"leaf limits differ: memory.max=%q memory.swap.max=%q cpu.max=%q pids.max=%q want %d/0/\"100000 100000\"/%d",
+			observed[0], observed[1], observed[2], observed[3], userUnitMemoryMaxBytes, userUnitTasksMax))
 	}
 	return nil
 }

@@ -98,7 +98,7 @@ func privateGuest(t *testing.T) {
 func TestPrivateKernel(t *testing.T) {
 	privateGuest(t)
 	mount := "1 0 0:1 / /sys/fs/cgroup ro - cgroup2 cgroup rw\n"
-	limits := []string{"3221225472", "0", "100000 100000", "64"}
+	limits := []string{"3221225472", "0", "100000 100000", "512"}
 	cases := []struct {
 		name, membership, mount string
 		change                  int
@@ -123,6 +123,24 @@ func TestPrivateKernel(t *testing.T) {
 				t.Fatal("kernel qualification mismatch")
 			}
 		})
+	}
+}
+
+// The leaf budget is declared once and applied to every managed transient unit
+// (systemd-run property path and native D-Bus path, #5815). A unit still
+// carrying the original 64-task budget is below the managed runtime's own
+// footprint, so the exact leaf check must refuse it and name the shared want.
+func TestPrivateKernelDataBindsSharedUnitBudget(t *testing.T) {
+	mount := "1 0 0:1 / /sys/fs/cgroup ro - cgroup2 cgroup rw\n"
+	if err := privateKernelData("0::/\n", mount, []string{"3221225472", "0", "100000 100000", "512"}); err != nil {
+		t.Fatalf("exact shared unit budget rejected: %v", err)
+	}
+	err := privateKernelData("0::/\n", mount, []string{"3221225472", "0", "100000 100000", "64"})
+	if err == nil {
+		t.Fatal("stale 64-task budget accepted; the leaf check must demand the shared unit budget")
+	}
+	if !strings.Contains(err.Error(), `pids.max="64"`) || !strings.Contains(err.Error(), `want 3221225472/0/"100000 100000"/512`) {
+		t.Fatalf("refusal does not name the stale budget and the shared want: %v", err)
 	}
 }
 
@@ -170,9 +188,9 @@ func TestPrivateKernelRefusalCauses(t *testing.T) {
 		{"membership outside mount root", func() error { _, err := privateCgroupPath("0::/\n", "1 0 0:1 / /mnt ro - ext4 ext4 rw\n"); return err },
 			`membership "0::/" does not resolve inside the observed cgroup2 mount root ""`},
 		{"differing leaf limits", func() error { return privateKernelData("0::/\n", mount, []string{"max", "0", "100000 100000", "64"}) },
-			`leaf limits differ: memory.max="max" memory.swap.max="0" cpu.max="100000 100000" pids.max="64" want 3221225472/0/"100000 100000"/64`},
+			`leaf limits differ: memory.max="max" memory.swap.max="0" cpu.max="100000 100000" pids.max="64" want 3221225472/0/"100000 100000"/512`},
 		{"absent leaf limits", func() error { return privateKernelData("0::/\n", mount, nil) },
-			`leaf limits differ: memory.max="" memory.swap.max="" cpu.max="" pids.max="" want 3221225472/0/"100000 100000"/64`},
+			`leaf limits differ: memory.max="" memory.swap.max="" cpu.max="" pids.max="" want 3221225472/0/"100000 100000"/512`},
 		{"missing physical path", func() error { return privateCgroupPhysical(filepath.Join(parent, "missing"), true) },
 			`physical cgroup path "` + filepath.Join(parent, "missing") + `" is not inspectable: lstat `},
 		{"symlinked physical path", func() error { return privateCgroupPhysical(link, true) },

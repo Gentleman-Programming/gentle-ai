@@ -136,7 +136,9 @@ class LinuxCIContract(unittest.TestCase):
         self.assertEqual([value.value for value in geometry.args[1:]], [80, 72, 0, 0])
         self.assertIn("b'el Gentleman package is active.'", text)
         self.assertIn("require(expected in raw,", text)
-        self.assertIn("min(45, remaining())", text)
+        # The window covers the first boot's expansive setup on the single-CPU
+        # worker (#5904); no success check was lowered, only given time.
+        self.assertIn("min(150, remaining())", text)
         self.assertIn("len(raw) <= 65536", text)
         self.assertIn("require(not violations, 'fixture blank caller project changed during launch')", text)
 

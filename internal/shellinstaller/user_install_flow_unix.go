@@ -1279,6 +1279,9 @@ func userLaunchCommand(ctx context.Context, root string, manifest userManifest, 
 	// Read-only stock Git probes must not refresh the caller's index. Explicit
 	// Git writes still take their mandatory locks.
 	cmd.Env = append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0")
+	// Shared memory: only the outer entry's Engram decision, never caller env;
+	// a Separate launch without one runs with memory disabled.
+	cmd.Env = append(cmd.Env, userEngramSeparateLaunch(manifest.Mode, userEngramContextEnv(ctx))...)
 	// GGA is retired from the shell installer: no runtime PATH is extended.
 	userCodeGraphLaunchEnv(root, manifest, cmd)
 	return cmd // Empty Dir inherits the caller's project, not the installer stage.
@@ -1299,6 +1302,7 @@ func userRootRiskBannerUID(stderr io.Writer, uid int) {
 
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	userRootRiskBanner(stderr)
+	ctx = userEngramLaunchScope(ctx, root, args)
 	manifest, err := userReadManifest(ctx, root)
 	if err != nil {
 		return err

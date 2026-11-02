@@ -47,7 +47,7 @@ for (const fixture of cases) {
   let actual = fixture.value, observed = 'accept', infrastructure = false;
   try {
     vm.runInNewContext(body, {
-      root, finalRoot: root, agent, path, action: fixture.action ?? 'verify',
+      root, finalRoot: root, agent, path, action: fixture.action ?? 'verify', declaredCompanion: null, lockedCompanion: null,
       read(file) {
         if (file === path.join(root, 'selection.json')) return Buffer.from(JSON.stringify({ Destination: root }));
         assert.equal(file, path.join(agent, 'settings.json'), 'only virtual settings and selection reads permitted');

@@ -18,7 +18,7 @@ import (
 func TestUserNativeSliceCommands(t *testing.T) {
 	name := "gentleshell0123456789abcdef.slice"
 	args := userNativeSliceCreateArgs(name)
-	want := []string{"--user", "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit", "ssa(sv)a(sa(sv))", name, "fail", "5", "MemoryMax", "t", "3221225472", "MemorySwapMax", "t", "0", "CPUQuotaPerSecUSec", "t", "1000000", "CPUQuotaPeriodUSec", "t", "100000", "TasksMax", "t", "64", "0"}
+	want := []string{"--user", "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit", "ssa(sv)a(sa(sv))", name, "fail", "5", "MemoryMax", "t", "3221225472", "MemorySwapMax", "t", "0", "CPUQuotaPerSecUSec", "t", "1000000", "CPUQuotaPeriodUSec", "t", "100000", "TasksMax", "t", "512", "0"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatal("aggregate creation changed", args)
 	}
@@ -106,7 +106,7 @@ func TestUserNativeSlicePrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := []string{"--user", "--quiet", "--wait", "--pipe", arg, "--unit=gentle-private-slice-member", "--property=MemoryMax=3221225472", "--property=MemorySwapMax=0", "--property=CPUQuota=100%", "--property=CPUQuotaPeriodSec=100ms", "--property=TasksMax=64", "--property=NoNewPrivileges=yes", "--property=CapabilityBoundingSet=", "--property=RuntimeMaxSec=300s", "--property=TimeoutStopSec=2s", "/usr/bin/env", "GENTLE_PRIVATE_SLICE_TEST=member", self, "-test.run=^TestUserNativeSlicePrivate$", "-test.v"}
+	command := []string{"--user", "--quiet", "--wait", "--pipe", arg, "--unit=gentle-private-slice-member", "--property=MemoryMax=3221225472", "--property=MemorySwapMax=0", "--property=CPUQuota=100%", "--property=CPUQuotaPeriodSec=100ms", "--property=TasksMax=512", "--property=NoNewPrivileges=yes", "--property=CapabilityBoundingSet=", "--property=RuntimeMaxSec=300s", "--property=TimeoutStopSec=2s", "/usr/bin/env", "GENTLE_PRIVATE_SLICE_TEST=member", self, "-test.run=^TestUserNativeSlicePrivate$", "-test.v"}
 	env, err := userBusEnvironment()
 	if err != nil {
 		t.Fatal(err)

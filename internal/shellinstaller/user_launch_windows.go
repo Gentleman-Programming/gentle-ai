@@ -310,6 +310,9 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 			if candidate := userWindowsSystemGitCandidate(); candidate != "" {
 				command.Env = append(command.Env, userWindowsSystemGitCandidateEnv+"="+candidate)
 			}
+			// Shared memory is decided here, outside the owned Job Object
+			// the worker enters: a server started inside it dies with it.
+			command.Env = append(command.Env, userEngramWindowsWorkerEnv(ctx, args)...)
 		}
 		grace := 2 * time.Second
 		if args[0] == "install" {

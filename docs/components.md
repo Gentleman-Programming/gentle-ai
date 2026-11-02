@@ -135,8 +135,8 @@ Skill files organized by category, embedded in the binary and injected into your
 | Go Testing | `go-testing` | Go testing patterns including Bubbletea TUI testing |
 | Skill Creator | `skill-creator` | Create new AI agent skills following the Agent Skills spec |
 | Skill Improver | `skill-improver` | Audit and improve existing skills against the repository style guide |
-| Branch & PR | `branch-pr` | PR creation workflow with conventional commits, branch naming, and issue-first enforcement |
-| Issue Creation | `issue-creation` | Issue filing workflow with bug report and feature request templates |
+| Branch & PR | `branch-pr` | PR preparation following the destination repository's issue, label, naming and template policy |
+| Issue Creation | `issue-creation` | Issue filing using the target's YAML forms, Markdown templates or supported no-template policy |
 | Skill Registry | `skill-registry` | Build an index of installed skills with triggers, scopes, and exact `SKILL.md` paths |
 | Chained PR | `chained-pr` | Plan and create reviewable stacked/chained pull requests |
 | Cognitive Doc Design | `cognitive-doc-design` | Write docs that reduce review and onboarding cognitive load |
@@ -144,7 +144,7 @@ Skill files organized by category, embedded in the binary and injected into your
 | Work Unit Commits | `work-unit-commits` | Split implementation into reviewable work units |
 | RDD Defect Workflow | `rdd-defect-workflow` | Guide receipt-driven defect work with truthful evidence and authority boundaries |
 
-Of these, `go-testing`, `skill-creator`, `skill-improver`, `skill-registry`, `chained-pr`, `cognitive-doc-design` and `work-unit-commits` are installed by default with both the `full-gentleman` (Dev Stack + Polish) and `ecosystem-only` (Dev Stack) presets. `branch-pr`, `issue-creation`, `comment-writer` and `rdd-defect-workflow` are repository-contributor workflow skills: they remain selectable with an explicit `--skills <id>`, but no default preset installs them.
+Of these, `go-testing`, `skill-creator`, `skill-improver`, `skill-registry`, `chained-pr`, `cognitive-doc-design` and `work-unit-commits` are installed by default with both the `full-gentleman` (Dev Stack + Polish) and `ecosystem-only` (Dev Stack) presets. `branch-pr`, `issue-creation`, `comment-writer` and `rdd-defect-workflow` are opt-in collaboration/workflow skills: they remain selectable with an explicit `--skills <id>`, but no default preset installs them. The portable contribution skills follow the destination repository's policy; installing them does not require an issue before every PR, Gentle AI labels, naming regexes or YAML forms in unrelated projects. Gentle AI's own repository-specific contribution skill still enforces this repository's rules.
 
 ### Coding Skills (separate repository)
 
