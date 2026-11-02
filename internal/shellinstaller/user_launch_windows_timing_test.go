@@ -5,6 +5,7 @@ package shellinstaller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,7 +42,7 @@ func TestUserWindowsLaunchBoundaryTiming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cold launch boundary refused the owned tree: %v", err)
 	}
-	t.Logf("launch boundary cold: %v", cold)
+	fmt.Fprintln(os.Stdout, "WINDOWS-LAUNCH-BOUNDARY cold:", cold)
 	warmTotal := time.Duration(0)
 	var warmBest time.Duration
 	for i := 0; i < 3; i++ {
@@ -53,10 +54,9 @@ func TestUserWindowsLaunchBoundaryTiming(t *testing.T) {
 		if warmBest == 0 || warm < warmBest {
 			warmBest = warm
 		}
-		t.Logf("launch boundary warm %d: %v", i+1, warm)
+		fmt.Fprintln(os.Stdout, "WINDOWS-LAUNCH-BOUNDARY warm", i+1, ":", warm)
 	}
-	t.Logf("launch boundary warm mean: %v best: %v (supervisor image %d bytes)",
-		warmTotal/3, warmBest, productionSupervisorBytes)
+	fmt.Fprintln(os.Stdout, "WINDOWS-LAUNCH-BOUNDARY warm mean:", warmTotal/3, "best:", warmBest, "(supervisor image", productionSupervisorBytes, "bytes)")
 }
 
 // userWindowsLaunchFixtureRepinSupervisor rewrites manifest.json so its
