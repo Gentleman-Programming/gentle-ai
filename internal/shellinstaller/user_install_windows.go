@@ -619,15 +619,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-acquire")
 	codegraph := make(chan error, 1)
 	go func() {
-		if scope.reused[UserComponentCodeGraph] && req.Experience != nil && req.Experience.CodeGraph == "on" {
-			if err := userWindowsReuseTree(ctx, filepath.Join(backup, "runtime", "codegraph"), filepath.Join(stage, "runtime", "codegraph")); err != nil {
-				codegraph <- fmt.Errorf("CodeGraph reuse: %w", err)
-				return
-			}
-			codegraph <- userWindowsCodeGraphCommand(ctx, stage)
-			return
-		}
-		codegraph <- userWindowsCodeGraphProvision(ctx, stage, req.Experience)
+		codegraph <- userWindowsCodeGraphAcquire(ctx, stage, req, scope)
 	}()
 	// The Windows stock provision helper requires its exact six-field
 	// selection ABI. Preferences are already materialized in the staged
