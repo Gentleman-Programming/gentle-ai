@@ -626,9 +626,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	// The Windows stock provision helper requires its exact six-field
 	// selection ABI. Preferences are already materialized in the staged
 	// config/state/mcp files and must not widen this helper boundary.
-	selectionRequest := req
-	selectionRequest.Experience = nil
-	selection, _ := json.Marshal(selectionRequest)
+	selection := userWindowsStagedSelection(req)
 	if err := userWindowsWrite(filepath.Join(stage, "selection.json"), selection); err != nil {
 		return result, err
 	}

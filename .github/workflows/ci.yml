@@ -274,6 +274,22 @@ jobs:
           go test -v ./internal/reviewtransaction -count=1 -run $selector
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # The staged selection.json is the provision helper's six-field ABI; a
+      # scoped update that leaks the Scope field makes the provisioner refuse
+      # the whole update (#5923). This lane is the only PR-time Windows
+      # execution path, so the contract test runs here or the regression is
+      # only caught after merge.
+      - name: Run native Windows staged selection ABI test
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          $selector = '^TestUserWindowsStagedSelectionKeepsSixFieldABI$'
+          $selected = @(go test ./internal/shellinstaller -list $selector | Where-Object { $_ -match '^Test' })
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list the staged Windows selection ABI test' }
+          if ($selected.Count -ne 1) { throw "Missing staged Windows selection ABI test: $($selected -join ', ')" }
+          go test -v ./internal/shellinstaller -count=1 -run $selector -timeout=10m
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       # The launch trust boundary reads and hashes the whole supervisor.exe on
       # every start; the probe below reports what that actually costs on this
       # runner (cold first read, then warm repeats) so any caching decision is
