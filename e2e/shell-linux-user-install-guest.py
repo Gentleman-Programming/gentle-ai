@@ -587,7 +587,12 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
         os.setsid()
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
-    env = {'PATH': '/usr/local/bin:/usr/bin:/bin:/work/personal/prefix/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'), 'TERM': 'xterm-256color'}
+    env = {'PATH': '/usr/local/bin:/usr/bin:/bin:/work/personal/prefix/bin', 'HOME': str(WORK / 'home'), 'TMPDIR': str(WORK / 'tmp'), 'TERM': 'xterm-256color',
+           # The lab's egress filter DROPs the Go module hosts the first-boot
+           # auto-setup installs from, so its connect() hangs past any window
+           # and the session never starts (#5908). The lane qualifies command
+           # registration and session behavior, not setup performance: skip it.
+           'GENTLE_SHELL_NO_AUTO_SETUP': '1'}
     env.update(extra or {})
     if installer is None and extra is None:
         # The installed bindings delegate their launch through the real user
