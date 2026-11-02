@@ -144,8 +144,8 @@ func TestBranchPRGuidanceDoesNotOverrideHumanOrEvidence(t *testing.T) {
 }
 
 // TestBranchPRChecklistsKeepEveryTemplateGateSeparate pins checklist parity
-// with .github/PULL_REQUEST_TEMPLATE.md: every gate the template requires is
-// its own item, so a box can be checked only with evidence for that gate.
+// with the destination template: repository-specific gates stay in the repo
+// skill, while the portable skill preserves each target-required item.
 func TestBranchPRChecklistsKeepEveryTemplateGateSeparate(t *testing.T) {
 	public, err := os.ReadFile("../../skills/branch-pr/SKILL.md")
 	if err != nil {
@@ -167,15 +167,11 @@ func TestBranchPRChecklistsKeepEveryTemplateGateSeparate(t *testing.T) {
 			},
 		},
 		"embedded asset": {
-			text: MustRead("skills/branch-pr/SKILL.md"), start: "### 6. Contributor Checklist", end: "## Automated Checks",
+			text: MustRead("skills/branch-pr/SKILL.md"), start: "## Execution Steps", end: "## Output Contract",
 			items: []string{
-				"- PR stays within 400 changed lines",
-				"- Unit tests pass (`go test ./...`)",
-				"- Go format passes (`go run ./internal/gofmtcheck`)",
-				"- E2E tests pass (`cd e2e && ./docker-test.sh`)",
-				"- Benchmark validation completed",
-				"- Understood, reviewed, and took responsibility for the complete submission",
-				"- Selected exactly one AI-assistance option",
+				"Keep each required template checklist item separate",
+				"Mark checkboxes only after observed evidence",
+				"Leave unsupported claims unchecked",
 			},
 		},
 	}
