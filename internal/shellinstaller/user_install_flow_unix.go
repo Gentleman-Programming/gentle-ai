@@ -1304,8 +1304,16 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	if _, err := userSourceFile(ctx, cli, -1, ""); err != nil {
 		return userGraphRepairError(root, manifest.Mode, err)
 	}
-	if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
-		return userGraphRepairError(root, manifest.Mode, err)
+	// userReadManifest already proved the Main SDK graph for this exact launch
+	// (its reuse==nil path runs userVerifyInstalledGlobal for MainSDK) and only
+	// stat/read operations ran since; re-running the provisioner here doubled
+	// every launch's verification cost while leaving the unverified window at
+	// least as wide as the one it closed. Stock-only installs keep their single
+	// pre-exec verification, which only this call performs.
+	if manifest.MainSDK == nil {
+		if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
+			return userGraphRepairError(root, manifest.Mode, err)
+		}
 	}
 	// S23/M1: a tree without a staged reviewed list keeps its supplier files
 	// authenticated against the embedded entry on every launch.
