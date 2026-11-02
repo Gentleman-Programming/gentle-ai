@@ -286,9 +286,9 @@ func TestOpenCodePermissionsMirrorPiSafetyModel(t *testing.T) {
 		{"bash", "git rebase main", "ask"},
 		{"bash", "git branch -D feature", "ask"},
 		{"bash", "npm publish", "ask"},
-		// Remote commands keep approval (#4324).
-		{"bash", "ssh example.invalid", "ask"},
-		{"bash", "rsync source destination", "ask"},
+		// Remote shell utilities are denied by default (#4324).
+		{"bash", "ssh example.invalid", "deny"},
+		{"bash", "rsync source destination", "deny"},
 		// Ordinary files stay readable and editable.
 		{"read", "src/main.go", "allow"},
 		{"edit", "src/main.go", "allow"},
@@ -353,9 +353,19 @@ func TestOpenCodePermissionsUpgradeFromPreviousOverlay(t *testing.T) {
 }
 
 func TestRemoteMatcherBoundaryFixtures(t *testing.T) {
-	// These are matcher inputs, not shell programs. bash.ts extracts command
+	// #4324 deny policy: absolute-path, backslash-escape, and shell resolution
+	// wrapper invocations of the remote shell utilities are denied by the
+	// overlay itself. Pattern-only rules are bypassable through these forms
+	// (the command token is not the bare utility name), so the deny entries
+	// enumerate them explicitly instead of relying on guidance alone.
+	for _, input := range []string{"/usr/bin/ssh example.invalid", "/bin/scp file example.invalid:file", "\\ssh example.invalid", "command ssh example.invalid", "exec rsync -a src dst", "env ssh example.invalid", "'ssh' example.invalid", `"scp" file example.invalid:file`, "'rsync' -a src dst", `"sftp" example.invalid`} {
+		if got := remoteAction(t, openCodeOverlayJSON, input); got != "deny" {
+			t.Errorf("bypass invocation %q not denied: %s", input, got)
+		}
+	}
+	// These remain matcher inputs, not shell programs. bash.ts extracts command
 	// nodes separately; no claim is made about parsing arbitrary shell syntax.
-	for _, input := range []string{"/usr/bin/ssh example.invalid", "env ssh example.invalid", "true && ssh example.invalid", `python -c 'import subprocess'`} {
+	for _, input := range []string{"true && ssh example.invalid", `python -c 'import subprocess'`} {
 		if got := remoteAction(t, openCodeOverlayJSON, input); got != "allow" {
 			t.Errorf("unsupported matcher input %q unexpectedly intercepted: %s", input, got)
 		}
@@ -364,7 +374,7 @@ func TestRemoteMatcherBoundaryFixtures(t *testing.T) {
 
 func TestRemoteCommandApprovalDefaults(t *testing.T) {
 	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
-		for _, seed := range []string{`{}`, `{"permission":{"bash":{"*":"allow"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"deny"}}}`, `{"permission":"deny"}`, `{"permission":{"bash":"ask"}}`, `{"permission":{"bash":"deny"}}`, `{"permission":{"bash":{"*":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh *":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"allow"}}}`} {
+		for _, seed := range []string{`{}`, `{"permission":{"bash":{"*":"allow"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"deny"}}}`, `{"permission":"deny"}`, `{"permission":{"bash":"ask"}}`, `{"permission":{"bash":"deny"}}`, `{"permission":{"bash":{"*":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh *":"deny"}}}`, `{"permission":{"bash":{"*":"allow","ssh*":"allow"}}}`, `{"permission":{"bash":{"make deploy":"ask","*":"allow"}}}`} {
 			t.Run(string(id)+seed, func(t *testing.T) {
 				home := t.TempDir()
 				adapter, _ := agents.NewAdapter(id)
@@ -383,9 +393,12 @@ func TestRemoteCommandApprovalDefaults(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, command := range []string{"ssh", "ssh example.invalid", "scp", "scp file example.invalid:file", "sftp", "sftp example.invalid", "rsync", "rsync source destination"} {
-					want := "ask"
-					if seed == `{"permission":"deny"}` || seed == `{"permission":{"bash":"deny"}}` || strings.Contains(seed, `"*":"deny"`) || (strings.Contains(seed, `"deny"`) && strings.HasPrefix(command, "ssh")) {
-						want = "deny"
+					// #4324 deny policy: the overlay denies the remote shell
+					// utilities by default instead of asking per command; a human
+					// who wants them re-enables them explicitly in their own config.
+					want := "deny"
+					if seed == `{"permission":{"bash":"ask"}}` {
+						want = "ask" // Explicit personal scalar ask is not silently rewritten.
 					}
 					if strings.Contains(seed, `"ssh*":"allow"`) && strings.HasPrefix(command, "ssh") {
 						want = "allow" // Explicit personal allow is not silently rewritten.
@@ -394,11 +407,135 @@ func TestRemoteCommandApprovalDefaults(t *testing.T) {
 						t.Errorf("%q: got %s, want %s", command, got, want)
 					}
 				}
+				// A rule the user placed before their catch-all allow keeps the
+				// resolution it had: the overlay must not reorder user rules.
+				if strings.HasPrefix(seed, `{"permission":{"bash":{"make deploy"`) {
+					if got := remoteAction(t, raw, "make deploy"); got != "allow" {
+						t.Errorf("user rule before catch-all changed resolution: make deploy = %s, want allow", got)
+					}
+				}
 				if result, err := Inject(home, adapter); err != nil || result.Changed {
 					t.Fatalf("repeat injection = %+v, %v", result, err)
 				}
 			})
 		}
+	}
+}
+
+// remoteShellTools lists the remote shell utilities the overlay denies to keep
+// agents inside the workspace boundary (#4324).
+var remoteShellTools = []string{"ssh", "scp", "sftp", "rsync"}
+
+var remoteShellPathPrefixes = []string{
+	"/bin/",
+	"/usr/bin/",
+	"/usr/local/bin/",
+	"/opt/homebrew/bin/",
+	"/run/current-system/sw/bin/",
+}
+
+// openCodeRemoteShellEscapeForms returns every OpenCode deny surface one tool
+// needs beyond the bare name: one entry per absolute install prefix, the
+// root-level absolute form (which OpenCode's matcher also reaches for
+// backslash-escaped invocations because it normalizes backslashes to forward
+// slashes), the shell resolution wrappers, and the single- and double-quoted
+// command names.
+func openCodeRemoteShellEscapeForms(tool, suffix string) []string {
+	var forms []string
+	for _, prefix := range remoteShellPathPrefixes {
+		forms = append(forms, prefix+tool+suffix)
+	}
+	forms = append(forms, "/"+tool+suffix, "command "+tool+suffix, "exec "+tool+suffix)
+	for _, quote := range []string{"'", `"`} {
+		forms = append(forms, quote+tool+quote+suffix)
+	}
+	return forms
+}
+
+// TestInjectOpenCodeDeniesRemoteShellUtilities verifies that the remote shell
+// utilities used to reach machines outside the workspace (ssh, scp, sftp,
+// rsync) are denied in the OpenCode/Kilocode bash permission map in their
+// exact and wildcard forms — including absolute-path invocations, which
+// OpenCode's full-command matcher treats as distinct patterns — and that
+// these deny entries coexist with the global bash allow (#4324).
+func TestInjectOpenCodeDeniesRemoteShellUtilities(t *testing.T) {
+	remoteDenyRules := []string{
+		"ssh",
+		"ssh *",
+		"scp",
+		"scp *",
+		"sftp",
+		"sftp *",
+		"rsync",
+		"rsync *",
+	}
+	for _, tool := range remoteShellTools {
+		remoteDenyRules = append(remoteDenyRules, openCodeRemoteShellEscapeForms(tool, " *")...)
+		remoteDenyRules = append(remoteDenyRules, "env "+tool+" *")
+	}
+
+	tests := []struct {
+		name    string
+		adapter agents.Adapter
+	}{
+		{"opencode", opencodeAdapter()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if _, err := Inject(home, tt.adapter); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			settingsPath := tt.adapter.SettingsPath(home)
+			content, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("read settings file %q: %v", settingsPath, err)
+			}
+
+			var settings map[string]any
+			if err := json.Unmarshal(content, &settings); err != nil {
+				t.Fatalf("unmarshal settings json: %v", err)
+			}
+
+			permNode, ok := settings["permission"].(map[string]any)
+			if !ok {
+				t.Fatalf("permission node missing or invalid: %#v", settings["permission"])
+			}
+
+			bashNode, ok := permNode["bash"].(map[string]any)
+			if !ok {
+				t.Fatalf("bash node missing or invalid: %#v", permNode["bash"])
+			}
+
+			for _, pattern := range remoteDenyRules {
+				t.Run(pattern, func(t *testing.T) {
+					val, exists := bashNode[pattern]
+					if !exists {
+						t.Errorf("bash deny map missing pattern %q; got: %v", pattern, bashNode)
+						return
+					}
+					if val != "deny" {
+						t.Errorf("pattern %q has value %q, want %q", pattern, val, "deny")
+					}
+				})
+			}
+
+			// The remote denials must coexist with the global bash allow.
+			if bashNode["*"] != "allow" {
+				t.Errorf("global bash allow rule \"*\" missing or changed after Inject; got: %v", bashNode["*"])
+			}
+
+			// The written file must resolve the quoted spellings to deny, not
+			// only list them: OpenCode applies the last matching rule, and a
+			// quote sorts before "*", so the catch-all must precede them.
+			for _, input := range []string{"'ssh' example.invalid", `"rsync" -a src dst`} {
+				if got := permissionAction(t, content, "bash", input); got != "deny" {
+					t.Errorf("injected bash %q resolved to %s, want deny", input, got)
+				}
+			}
+		})
 	}
 }
 
