@@ -61,10 +61,8 @@ func userWindowsLauncherNote(report userWindowsLauncherReport) string {
 }
 
 // userWindowsPublishLauncher exposes the Separate target as `gentle-shell.cmd`
-// and `gs.cmd` in the user's WindowsApps PATH directory. It never overwrites a
-// foreign command and reports every name's outcome instead; a foreign command
-// on PATH (for example Ghostscript's gs.exe) is likewise reported, never
-// shadowed.
+// and `gs.cmd` in the user's WindowsApps PATH directory. A foreign command — a
+// foreign shim or a PATH entry like Ghostscript's gs.exe — is reported, never overwritten.
 func userWindowsPublishLauncher(destination string) (userWindowsLauncherReport, error) {
 	report := userWindowsLauncherReport{}
 	local, err := userWindowsLocalAppData()

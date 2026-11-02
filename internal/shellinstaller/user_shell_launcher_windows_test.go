@@ -12,7 +12,7 @@ import (
 
 func userWindowsLauncherFixture(t *testing.T) (destination, apps string) {
 	t.Helper()
-	t.Setenv("PATH", "") // Foreign PATH commands must never leak into the outcomes.
+	t.Setenv("PATH", "")
 	home := t.TempDir()
 	destination = filepath.Join(home, "shell")
 	if err := os.MkdirAll(filepath.Join(destination, "bin"), 0755); err != nil {
