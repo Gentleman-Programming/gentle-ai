@@ -1238,7 +1238,10 @@ func userRecordedPin(ctx context.Context, root, relative, pin string) error {
 	if len(pin) != 64 {
 		return privateError("source", nil)
 	}
-	_, err := privateNativeFile(ctx, filepath.Join(root, relative), 0700, -1, pin)
+	// The pinned supervisor and node binaries are large; the stamp cache keeps
+	// the full privateNativeFile hash for starts where ctime proves the bytes
+	// unchanged (user_launch_pin_cache_unix.go).
+	_, err := userPinnedFileCached(ctx, root, relative, 0700, pin)
 	return err
 }
 
