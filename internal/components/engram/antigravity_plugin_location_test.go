@@ -72,6 +72,20 @@ func seedLegacyAntigravityPlugin(t *testing.T, home, command string) string {
 	return dir
 }
 
+// fakeEngramBinaryForTest writes an executable named engram under a fresh
+// temp dir and returns its absolute path.
+func fakeEngramBinaryForTest(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "bin", "engram")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+	return path
+}
+
 func TestAntigravityPluginDirUsesSharedConfigRoot(t *testing.T) {
 	home := t.TempDir()
 	if got, want := AntigravityPluginDir(home), sharedAntigravityPluginDir(home); got != want {
@@ -150,7 +164,8 @@ func TestInjectAntigravityHookRunsOncePerSession(t *testing.T) {
 
 func TestInjectAntigravityMigratesLegacyManagedPlugin(t *testing.T) {
 	home := t.TempDir()
-	legacyDir := seedLegacyAntigravityPlugin(t, home, "/opt/engram/bin/engram")
+	customCommand := fakeEngramBinaryForTest(t)
+	legacyDir := seedLegacyAntigravityPlugin(t, home, customCommand)
 	userPlugin := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "my-plugin", "plugin.json")
 	if err := os.MkdirAll(filepath.Dir(userPlugin), 0o755); err != nil {
 		t.Fatalf("MkdirAll(user plugin) error = %v", err)
@@ -166,7 +181,7 @@ func TestInjectAntigravityMigratesLegacyManagedPlugin(t *testing.T) {
 
 	// The registration survives the move: the legacy command is carried over.
 	gotMCP := readAntigravityFile(t, filepath.Join(sharedAntigravityPluginDir(home), "mcp_config.json"))
-	if want := engramOverlayJSON(model.AgentAntigravity, "/opt/engram/bin/engram"); !bytes.Equal(gotMCP, want) {
+	if want := engramOverlayJSON(model.AgentAntigravity, customCommand); !bytes.Equal(gotMCP, want) {
 		t.Fatalf("migrated plugin MCP config must keep the legacy command\nwant:\n%s\ngot:\n%s", want, gotMCP)
 	}
 	for _, name := range []string{"plugin.json", "mcp_config.json", "hooks.json"} {
@@ -230,6 +245,62 @@ func TestInjectAntigravityKeepsLegacyPluginWhenNewRegistrationFails(t *testing.T
 	for _, name := range []string{"plugin.json", "mcp_config.json", "hooks.json"} {
 		if _, statErr := os.Stat(filepath.Join(legacyDir, name)); statErr != nil {
 			t.Fatalf("legacy asset %q must survive a failed new registration: %v", name, statErr)
+		}
+	}
+}
+
+// #5930 T8: a preserved command that no longer resolves would leave agy with
+// a disconnected Engram, so the fresh-install command replaces it.
+func TestInjectAntigravityReplacesUnresolvableLegacyCommand(t *testing.T) {
+	nonExecutable := filepath.Join(t.TempDir(), "engram")
+	if err := os.WriteFile(nonExecutable, []byte("not a binary"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", nonExecutable, err)
+	}
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{name: "missing absolute path", command: filepath.Join(t.TempDir(), "gone", "engram")},
+		{name: "bare name not on PATH", command: "engram"},
+	}
+	if runtime.GOOS != "windows" {
+		tests = append(tests, struct {
+			name    string
+			command string
+		}{name: "non-executable file", command: nonExecutable})
+	}
+	for _, tt := range tests {
+		for _, migrated := range []bool{false, true} {
+			name := tt.name + " in legacy plugin"
+			if migrated {
+				name = tt.name + " in migrated plugin"
+			}
+			t.Run(name, func(t *testing.T) {
+				home := t.TempDir()
+				fresh := fakeEngramBinaryForTest(t)
+				t.Setenv("GENTLE_AI_ENGRAM_BIN", fresh)
+				SetLookPathForTest(t, "", "engram not on PATH")
+				if migrated {
+					pluginMCP := filepath.Join(sharedAntigravityPluginDir(home), "mcp_config.json")
+					if err := os.MkdirAll(filepath.Dir(pluginMCP), 0o755); err != nil {
+						t.Fatalf("MkdirAll(plugin) error = %v", err)
+					}
+					if err := os.WriteFile(pluginMCP, engramOverlayJSON(model.AgentAntigravity, tt.command), 0o644); err != nil {
+						t.Fatalf("WriteFile(plugin mcp) error = %v", err)
+					}
+				} else {
+					seedLegacyAntigravityPlugin(t, home, tt.command)
+				}
+
+				if _, err := Inject(home, antigravityAdapter()); err != nil {
+					t.Fatalf("Inject(antigravity) error = %v", err)
+				}
+
+				gotMCP := readAntigravityFile(t, filepath.Join(sharedAntigravityPluginDir(home), "mcp_config.json"))
+				if want := engramOverlayJSON(model.AgentAntigravity, fresh); !bytes.Equal(gotMCP, want) {
+					t.Fatalf("plugin MCP config must use the fresh-install command instead of %q\nwant:\n%s\ngot:\n%s", tt.command, want, gotMCP)
+				}
+			})
 		}
 	}
 }

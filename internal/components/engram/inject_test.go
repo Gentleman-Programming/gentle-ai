@@ -35,8 +35,18 @@ var errAntigravityWriteFault = errors.New("injected antigravity write fault")
 // antigravityWriteFixture seeds a home with a global Antigravity MCP config
 // holding an unrelated server plus a managed Engram duplicate, and returns the
 // five paths the Antigravity injection pass touches, in write order.
+// assumeEngramCommandsResolveForTest lets fixtures keep fixed command paths
+// such as /usr/local/bin/engram that do not exist on the test host.
+func assumeEngramCommandsResolveForTest(t *testing.T) {
+	t.Helper()
+	orig := engramCommandResolves
+	engramCommandResolves = func(string) bool { return true }
+	t.Cleanup(func() { engramCommandResolves = orig })
+}
+
 func antigravityWriteFixture(t *testing.T) (home, globalPath, settingsPath, pluginPath, pluginMCPPath, hooksPath string) {
 	t.Helper()
+	assumeEngramCommandsResolveForTest(t)
 	home = t.TempDir()
 	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
 	pluginDir := AntigravityPluginDir(home)
@@ -315,6 +325,7 @@ func TestInjectAntigravityAccountsEachWriteFailure(t *testing.T) {
 // recovery tests assert against plus the before-image of every seeded asset.
 func antigravityRecoveryFixture(t *testing.T) (home, settingsPath, pluginDir, pluginPath, pluginMCPPath, hooksPath, unrelatedPath string, before map[string]antigravityAssetBackup) {
 	t.Helper()
+	assumeEngramCommandsResolveForTest(t)
 	home = t.TempDir()
 	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
 	pluginDir = AntigravityPluginDir(home)
@@ -650,6 +661,7 @@ func failAntigravityRemove(t *testing.T, mode string) {
 // MCP config (context7 + managed Engram duplicate); returns path and bytes.
 func seedAntigravityGlobalManagedDuplicate(t *testing.T, home string) (string, string) {
 	t.Helper()
+	assumeEngramCommandsResolveForTest(t)
 	globalPath := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
 	global := `{
   "mcpServers": {
@@ -706,6 +718,7 @@ func readAntigravityFile(t *testing.T, path string) []byte {
 // seedAntigravitySoleEntry writes a sole managed-entry global config; returns dir, path, bytes.
 func seedAntigravitySoleEntry(t *testing.T, home string) (string, string, string) {
 	t.Helper()
+	assumeEngramCommandsResolveForTest(t)
 	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
 	mcpPath := filepath.Join(cliDir, "mcp_config.json")
 	if err := os.MkdirAll(cliDir, 0o755); err != nil {
@@ -1840,11 +1853,11 @@ func TestInjectAntigravityRemovesManagedGlobalEngramDuplicate(t *testing.T) {
 		args    string
 	}{{
 		name:    "default invocation",
-		command: "/custom/bin/engram",
+		command: fakeEngramBinaryForTest(t),
 		args:    `["mcp"]`,
 	}, {
 		name:    "legacy agent tool profile",
-		command: "/usr/local/bin/engram",
+		command: fakeEngramBinaryForTest(t),
 		args:    `["mcp", "--tools=agent"]`,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1901,7 +1914,7 @@ func TestInjectAntigravityRemovesManagedGlobalEngramDuplicate(t *testing.T) {
 			if !strings.Contains(string(pluginRaw), "--tools=agent") {
 				t.Fatalf("plugin MCP config must use --tools=agent; got:\n%s", pluginRaw)
 			}
-			if !strings.Contains(string(pluginRaw), tc.command) {
+			if !bytes.Equal(pluginRaw, engramOverlayJSON(model.AgentAntigravity, tc.command)) {
 				t.Fatalf("plugin MCP config must preserve selected command %q; got:\n%s", tc.command, pluginRaw)
 			}
 
@@ -1956,7 +1969,7 @@ func TestInjectAntigravityIgnoresNonEngramGlobalCommandWhenPreservingPlugin(t *t
 	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(antigravityEngramPluginJSON), 0o644); err != nil {
 		t.Fatalf("WriteFile(plugin.json) error = %v", err)
 	}
-	pluginRaw := engramOverlayJSON(model.AgentAntigravity, "/custom/bin/engram")
+	pluginRaw := engramOverlayJSON(model.AgentAntigravity, fakeEngramBinaryForTest(t))
 	if err := os.WriteFile(pluginMCPPath, pluginRaw, 0o644); err != nil {
 		t.Fatalf("WriteFile(%q) error = %v", pluginMCPPath, err)
 	}
