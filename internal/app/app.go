@@ -713,6 +713,7 @@ func tuiExecuteWithSDK(
 			installState.ClaudeModelAssignments = claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState)
 			installState.ClaudePhaseAssignments = claudePhaseState
 			installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+			installState.AntigravityModelAssignments = model.AntigravityModelTiersToStrings(selection.AntigravityModelAssignments)
 			installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
 			installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
 			if codexServiceTier != nil { // only what engram actually left in config.toml
@@ -913,6 +914,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.KiroModelAssignments != nil {
 		selection.KiroModelAssignments = overrides.KiroModelAssignments
 	}
+	if overrides.AntigravityModelAssignments != nil {
+		selection.AntigravityModelAssignments = overrides.AntigravityModelAssignments
+	}
 	if overrides.ClearCodexOrchestratorAssignment {
 		selection.CodexOrchestratorAssignment = nil
 		selection.ClearCodexOrchestratorAssignment = true
@@ -981,6 +985,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		}
 		selection.KiroModelAssignments = m
 	}
+	if len(selection.AntigravityModelAssignments) == 0 {
+		selection.AntigravityModelAssignments = model.AntigravityModelTiersFromStrings(s.AntigravityModelAssignments)
+	}
 	if len(selection.CodexModelAssignments) == 0 && len(s.CodexModelAssignments) > 0 {
 		m := make(map[string]model.CodexEffort, len(s.CodexModelAssignments))
 		for k, v := range s.CodexModelAssignments {
@@ -1025,6 +1032,7 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 	hasAssignmentSignal := selection.ClaudeModelAssignments != nil ||
 		selection.ClaudePhaseAssignments != nil ||
 		selection.KiroModelAssignments != nil ||
+		selection.AntigravityModelAssignments != nil ||
 		selection.ModelAssignments != nil ||
 		selection.CodexModelAssignments != nil ||
 		selection.CodexOrchestratorAssignment != nil ||
@@ -1068,6 +1076,9 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 			} else {
 				current.KiroModelAssignments = nil
 			}
+		}
+		if selection.AntigravityModelAssignments != nil {
+			current.AntigravityModelAssignments = model.AntigravityModelTiersToStrings(selection.AntigravityModelAssignments)
 		}
 		if selection.ClearCodexOrchestratorAssignment {
 			current.CodexOrchestratorAssignment = nil
