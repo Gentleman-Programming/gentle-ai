@@ -361,6 +361,7 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		ClaudeModelAssignments:      claudeLegacyAssignmentsForState(input.Selection.ClaudeModelAssignments, claudePhaseState),
 		ClaudePhaseAssignments:      claudePhaseState,
 		KiroModelAssignments:        kiroAliasesToStrings(input.Selection.KiroModelAssignments),
+		AntigravityModelAssignments: model.AntigravityModelTiersToStrings(input.Selection.AntigravityModelAssignments),
 		CodexModelAssignments:       codexEffortsToStrings(input.Selection.CodexModelAssignments),
 		CodexOrchestratorAssignment: codexOrchestratorToState(input.Selection.CodexOrchestratorAssignment),
 		CodexCarrilModelAssignments: input.Selection.CodexCarrilModelAssignments,
@@ -431,6 +432,7 @@ func mergeFullInstallState(existing, fresh state.InstallState) state.InstallStat
 	merged.CommunityTools, merged.CommunityToolsConfigured = fresh.CommunityTools, fresh.CommunityToolsConfigured
 	merged.ClaudeModelAssignments, merged.ClaudePhaseAssignments = fresh.ClaudeModelAssignments, fresh.ClaudePhaseAssignments
 	merged.KiroModelAssignments, merged.CodexModelAssignments = fresh.KiroModelAssignments, fresh.CodexModelAssignments
+	merged.AntigravityModelAssignments = fresh.AntigravityModelAssignments
 	merged.CodexOrchestratorAssignment = fresh.CodexOrchestratorAssignment
 	merged.CodexCarrilModelAssignments, merged.CodexPhaseModelAssignments = fresh.CodexCarrilModelAssignments, fresh.CodexPhaseModelAssignments
 	merged.ModelAssignments, merged.Persona = fresh.ModelAssignments, fresh.Persona
@@ -478,6 +480,9 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	}
 	if newState.KiroModelAssignments != nil {
 		merged.KiroModelAssignments = newState.KiroModelAssignments
+	}
+	if newState.AntigravityModelAssignments != nil {
+		merged.AntigravityModelAssignments = newState.AntigravityModelAssignments
 	}
 	if newState.CodexOrchestratorAssignment != nil {
 		merged.CodexOrchestratorAssignment = newState.CodexOrchestratorAssignment
@@ -1088,10 +1093,11 @@ func (s nativeReviewAgentStep) Run() error {
 	adapter := resolveAdapters([]model.AgentID{s.agent})[0]
 	target := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 	res, err := reviewassets.InstallNativeAgents(target, adapter, reviewassets.InstallOptions{
-		ClaudeModelAssignments:    s.selection.ClaudeModelAssignments,
-		ClaudePhaseAssignments:    s.selection.ClaudePhaseAssignments,
-		KiroModelAssignments:      s.selection.KiroModelAssignments,
-		CodeGraphGuidanceMarkdown: nativeReviewCodeGraphGuidanceMarkdown(s.homeDir, s.selection.CommunityTools),
+		ClaudeModelAssignments:      s.selection.ClaudeModelAssignments,
+		ClaudePhaseAssignments:      s.selection.ClaudePhaseAssignments,
+		KiroModelAssignments:        s.selection.KiroModelAssignments,
+		AntigravityModelAssignments: s.selection.AntigravityModelAssignments,
+		CodeGraphGuidanceMarkdown:   nativeReviewCodeGraphGuidanceMarkdown(s.homeDir, s.selection.CommunityTools),
 	})
 	if err != nil {
 		return fmt.Errorf("install native review agents for %q: %w", s.agent, err)
@@ -4008,6 +4014,11 @@ func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, sele
 				}
 			}
 		}
+		if component == model.ComponentEngram {
+			for _, path := range antigravityLegacyEngramPluginPaths(homeDir, workspaceDir, scope, adapters) {
+				paths[path] = struct{}{}
+			}
+		}
 		// Persona backup captures every managed output-style file, not just the
 		// selected one, so a failed persona switch can restore the file its
 		// cleanup removed. Backup-only: verification stays on the selected file.
@@ -4273,6 +4284,10 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					if p := adapter.SettingsPath(homeDir); p != "" {
 						paths = append(paths, p)
 					}
+					// Engram registration is plugin-owned (#797); declaring
+					// the assets snapshots them, so sync reports only plugin
+					// files whose bytes really changed (#5614).
+					paths = append(paths, engram.AntigravityPluginAssetPaths(targetDir)...)
 				}
 			case model.StrategyMergeIntoYAML:
 				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
@@ -4536,6 +4551,19 @@ func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScop
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
 }
 
+// antigravityLegacyEngramPluginPaths returns the Engram plugin assets older
+// gentle-ai versions wrote under antigravity-cli/plugins. Engram injection
+// retires them (#5930), so they are backup-only targets: never verified.
+func antigravityLegacyEngramPluginPaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	var paths []string
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentAntigravity {
+			paths = append(paths, engram.AntigravityLegacyPluginAssetPaths(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))...)
+		}
+	}
+	return paths
+}
+
 // piPersonaConfigPaths returns the Pi persona state files managed by install.
 // Like every scoped component, global install writes only the global file,
 // which GENTLE_AI_PI_CONFIG_DIR may relocate; workspace install writes only
@@ -4624,11 +4652,14 @@ func openCodeSDDPluginPaths(adapter agents.Adapter, targetDir string) []string {
 	return paths
 }
 
-// verificationComponentPaths excludes retired Codex SDD profiles and Pi's
-// mcp.json from active health checks. Pi Engram is native-only (gentle-engram),
-// so Engram provisioning writes mcp.json only to migrate mcp-adapter.json
-// servers and its absence is healthy (#5103). The shared component path
-// inventory retains both for snapshots and rollback of user-owned files.
+// verificationComponentPaths excludes retired Codex SDD profiles, Pi's
+// mcp.json, and Antigravity's global mcp_config.json from active health checks.
+// Pi Engram is native-only (gentle-engram), so Engram provisioning writes
+// mcp.json only to migrate mcp-adapter.json servers and its absence is healthy
+// (#5103). Antigravity Engram registration is plugin-owned (#797): Engram only
+// removes a managed duplicate from the global config and never creates it. The
+// shared component path inventory retains them for snapshots and rollback of
+// user-owned files.
 func verificationComponentPaths(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component)
 	if component != model.ComponentEngram {
@@ -4644,7 +4675,7 @@ func verificationComponentPaths(homeDir, workspaceDir string, scope InstallScope
 					excluded[profile] = true
 				}
 			}
-		case model.AgentPi:
+		case model.AgentPi, model.AgentAntigravity:
 			if config := adapter.MCPConfigPath(targetDir, "engram"); config != "" {
 				excluded[config] = true
 			}
