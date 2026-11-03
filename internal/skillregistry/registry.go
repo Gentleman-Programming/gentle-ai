@@ -73,6 +73,7 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".config", "kilo", "skills"),
 		filepath.Join(home, ".claude", "skills"),
 		filepath.Join(home, ".gemini", "skills"),
+		filepath.Join(home, ".gemini", "config", "skills"),
 		filepath.Join(home, ".gemini", "antigravity", "skills"),
 		filepath.Join(home, ".gemini", "antigravity-desktop", "skills"),
 		filepath.Join(home, ".gemini", "antigravity-cli", "skills"),
