@@ -102,10 +102,10 @@ func TestRunInstallGeminiCLIOnlyLeavesAntigravitySurfacesUntouched(t *testing.T)
 		t.Fatalf("RunInstall() error = %v", err)
 	}
 
-	gemini := readString(t, antigravityrules.LegacyPromptPath(home))
+	gemini := importedGuidance(t, home)
 	for _, want := range []string{"<!-- gentle-ai:engram-protocol -->", "<!-- gentle-ai:agent-routing -->"} {
 		if !strings.Contains(gemini, want) {
-			t.Errorf("Gemini CLI GEMINI.md missing %q", want)
+			t.Errorf("Gemini CLI guidance imported by GEMINI.md missing %q", want)
 		}
 	}
 	for _, path := range []string{antigravityrules.RulesDir(home), antigravityrules.StagingPath(home)} {

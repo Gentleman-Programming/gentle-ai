@@ -121,8 +121,13 @@ func TestGeminiAndAntigravityKeepOnePersonaInAnyOrder(t *testing.T) {
 					}
 					continue
 				}
-				if n := personaCopies(string(data)); n != 1 {
-					t.Fatalf("after step %d GEMINI.md has %d persona copies, want 1:\n%s", i+1, n, data)
+				// Gemini CLI loads GEMINI.md plus the modules it imports.
+				guidance := string(data)
+				if strings.Contains(guidance, "<!-- gentle-ai:"+geminimodules.ImportSectionID+" -->") {
+					guidance += importedGuidance(t, home)
+				}
+				if n := personaCopies(guidance); n != 1 {
+					t.Fatalf("after step %d Gemini CLI guidance has %d persona copies, want 1:\n%s", i+1, n, guidance)
 				}
 			}
 		})

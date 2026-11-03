@@ -966,6 +966,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if r.piBackgroundProjection != nil {
 		apply = append(apply, piBackgroundProjectionStep{id: "pi:background-projection", plan: r.piBackgroundProjection})
 	}
+	// Before every prompt writer.
+	apply = append(apply, geminiLegacyRootSteps("agent:gemini-legacy-root", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil)...)
 
 	// Before installing components, ensure modular agents have their system prompt hub.
 	// This ensures that SDD or Engram can inject their modules even if Persona is skipped.
@@ -1050,6 +1052,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	// After every prompt writer, including community-tool guidance.
+	apply = append(apply, geminiModulesSteps("agent:gemini-modules", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil)...)
 	apply = append(apply, antigravityRulesSteps("agent:antigravity-rules", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil)...)
 
 	if needsCompatibilitySkillsRefresh(r.resolved.OrderedComponents) {
@@ -4069,6 +4072,9 @@ func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, sele
 	for _, path := range antigravityRulesBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
 		paths[path] = struct{}{}
 	}
+	for _, path := range geminiModulesBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
+		paths[path] = struct{}{}
+	}
 	for _, adapter := range adapters {
 		if path := agentguidance.StrictTDDPath(routingGuidanceDir(homeDir, workspaceDir, scope, adapter), adapter.Agent()); path != "" {
 			paths[path] = struct{}{}
@@ -4903,7 +4909,8 @@ func engramInstallCommand(agentIDs []model.AgentID) string {
 // antigravityCollisionCheck returns a soft verify check that warns the user
 // when Antigravity and Gemini CLI are selected together. Antigravity reads its
 // Gentle AI guidance from published agy rules, but agy also loads the
-// ~/.gemini/GEMINI.md Gemini CLI owns, so its sessions see both.
+// ~/.gemini/GEMINI.md Gemini CLI owns, which keeps only user content and the
+// import lines agy does not expand.
 func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
 	hasAntigravitySurface := false
 	hasGemini := false
@@ -4927,7 +4934,7 @@ func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
 				// refusal:by-design human-authority: keeping Gemini CLI selected beside Antigravity is the user's choice
 				return fmt.Errorf(
 					"Antigravity loads its Gentle AI guidance from ~/.gemini/config/rules/gentle-ai-*.md and also loads ~/.gemini/GEMINI.md, which Gemini CLI owns.\n" +
-						"With both selected, Antigravity sessions receive the Gemini CLI guidance in addition to their own rules.\n" +
+						"Gemini CLI keeps only your content and @./gentle-ai/... import lines there, which Antigravity does not expand, so its sessions do not load the Gemini CLI guidance.\n" +
 						"Keep Gemini CLI selected only if you also use it; otherwise remove it from your Gentle AI selection.",
 				)
 			},

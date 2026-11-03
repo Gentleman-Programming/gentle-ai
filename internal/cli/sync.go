@@ -562,6 +562,8 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	if r.piBackgroundProjection != nil {
 		apply = append(apply, piBackgroundProjectionStep{id: "sync:pi:background-projection", plan: r.piBackgroundProjection})
 	}
+	// Before every prompt writer.
+	apply = append(apply, geminiLegacyRootSteps("sync:agent:gemini-legacy-root", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles)...)
 
 	for _, component := range installOrderedComponents(r.selection.Components) {
 		apply = append(apply, componentSyncStep{
@@ -683,6 +685,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	// After every prompt writer, including CodeGraph guidance.
+	apply = append(apply, geminiModulesSteps("sync:agent:gemini-modules", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles)...)
 	apply = append(apply, antigravityRulesSteps("sync:agent:antigravity-rules", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles)...)
 
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
@@ -892,6 +895,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		}
 	}
 	for _, path := range antigravityRulesBackupPaths(homeDir, workspaceDir, scope, selection.Agents) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range geminiModulesBackupPaths(homeDir, workspaceDir, scope, selection.Agents) {
 		paths[path] = struct{}{}
 	}
 	if !workspace && containsAgent(selection.Agents, model.AgentOpenCode) {
