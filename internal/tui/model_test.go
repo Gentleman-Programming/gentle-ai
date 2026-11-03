@@ -2912,19 +2912,19 @@ func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
 	}
 }
 
-// TestModelConfig_BackNavigation verifies that selecting cursor 4 (Back) from
+// TestModelConfig_BackNavigation verifies that selecting cursor 5 (Back) from
 // ScreenModelConfig returns to ScreenWelcome.
-// Index 3 is now "Configure Codex models"; Back moved to index 4.
+// Index 4 is now "Configure Antigravity models"; Back moved to index 5.
 func TestModelConfig_BackNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelConfig
-	m.Cursor = 4 // Back is now at index 4
+	m.Cursor = 5 // Back is now at index 5
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenWelcome {
-		t.Fatalf("ModelConfig cursor=4 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+		t.Fatalf("ModelConfig cursor=5 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
 	}
 }
 
@@ -7846,5 +7846,36 @@ func TestInstallerAntigravityPickerPreloadsPersistedTiers(t *testing.T) {
 	picker := updated.(Model).AntigravityModelPicker
 	if want := map[string]model.AntigravityModelTier{"jd-judge-a": model.AntigravityModelPro}; picker.Preset != screens.AntigravityPresetCustom || !reflect.DeepEqual(picker.CustomAssignments, want) {
 		t.Fatalf("picker = %+v, want custom %v (unknown tiers dropped)", picker, want)
+	}
+}
+
+func TestModelConfigAntigravityPickerSyncsSelectedTiers(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{
+		AntigravityModelAssignments: map[string]string{"jd-fix-agent": "flash"},
+	})
+	m.Screen = ScreenModelConfig
+	m.Cursor = 4
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenAntigravityModelPicker || !m.ModelConfigMode || m.AntigravityModelPicker.CustomAssignments["jd-fix-agent"] != model.AntigravityModelFlash {
+		t.Fatalf("ModelConfig cursor=4: screen = %v, mode %t, picker %+v", m.Screen, m.ModelConfigMode, m.AntigravityModelPicker)
+	}
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyEnter}} {
+		back := m
+		back.Cursor = screens.AntigravityModelPickerOptionCount(back.AntigravityModelPicker) - 1
+		updated, _ = back.Update(key)
+		if got := updated.(Model); got.Screen != ScreenModelConfig || got.ModelConfigMode {
+			t.Fatalf("%s from picker: screen = %v, mode %t; want ModelConfig", key, got.Screen, got.ModelConfigMode)
+		}
+	}
+	m.Cursor = 1 // performance
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	want := &model.SyncOverrides{
+		TargetAgents:                []model.AgentID{model.AgentAntigravity},
+		AntigravityModelAssignments: model.AntigravityModelPresetPerformance(),
+	}
+	if m.Screen != ScreenSync || !reflect.DeepEqual(m.PendingSyncOverrides, want) {
+		t.Fatalf("picker confirm: screen = %v, overrides %+v; want sync with %+v", m.Screen, m.PendingSyncOverrides, want)
 	}
 }

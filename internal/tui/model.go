@@ -1746,6 +1746,16 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			if updated != nil {
 				m.Selection.AntigravityModelAssignments = updated
+				if m.ModelConfigMode {
+					m.ModelConfigMode = false
+					m.PendingSyncOverrides = &model.SyncOverrides{
+						TargetAgents:                []model.AgentID{model.AgentAntigravity},
+						AntigravityModelAssignments: updated,
+					}
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
+					return m, nil
+				}
 				if next, ok := m.pickerNextScreen(); ok {
 					return m, m.advanceToNextPickerScreen(next)
 				}
@@ -2388,7 +2398,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			discoveryCmd := m.enterCodexModelPicker()
 			m.setScreen(ScreenCodexModelPicker)
 			return m, discoveryCmd
-		case 4: // Back
+		case 4: // Configure Antigravity models
+			m.ModelConfigMode = true
+			m.AntigravityModelPicker = screens.NewAntigravityModelPickerStateFromAssignments(m.Selection.AntigravityModelAssignments)
+			m.setScreen(ScreenAntigravityModelPicker)
+		case 5: // Back
 			m.setScreen(ScreenWelcome)
 		}
 		return m, nil
@@ -2534,6 +2548,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 	case ScreenAntigravityModelPicker:
 		if !m.AntigravityModelPicker.InCustomMode && m.Cursor == screens.AntigravityModelPickerOptionCount(m.AntigravityModelPicker)-1 {
+			if m.ModelConfigMode {
+				m.ModelConfigMode = false
+				m.setScreen(ScreenModelConfig)
+				return m, nil
+			}
 			if prev, ok := m.pickerPreviousScreen(); ok {
 				m.applyPickerEntry(prev)
 			}
@@ -3775,7 +3794,7 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	}
 
 	// ModelConfigMode: pickers reached via Model Config shortcut return to ScreenModelConfig.
-	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenCodexModelPicker || m.Screen == ScreenModelPicker) {
+	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenCodexModelPicker || m.Screen == ScreenAntigravityModelPicker || m.Screen == ScreenModelPicker) {
 		m.ModelConfigMode = false
 		m.setScreen(ScreenModelConfig)
 		return m
