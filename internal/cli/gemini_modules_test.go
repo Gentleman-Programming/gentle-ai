@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -122,8 +123,11 @@ func TestRunInstallGeminiMigratesMonolithicGEMINIMD(t *testing.T) {
 	if !strings.Contains(root, "# My notes\n") || personaCopies(root) != 0 || strings.Contains(root, "engram guidance") {
 		t.Fatalf("GEMINI.md = %q, want the user notes and the import block only", root)
 	}
-	if info, err := os.Stat(geminimodules.RootPath(home)); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("GEMINI.md mode changed: %v %v", info.Mode(), err)
+	// Windows has no POSIX permission bits to preserve.
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(geminimodules.RootPath(home)); err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("GEMINI.md mode changed: %v %v", info.Mode(), err)
+		}
 	}
 	guidance := importedGuidance(t, home)
 	if personaCopies(guidance) != 1 || !strings.Contains(guidance, "engram guidance from an older release") {

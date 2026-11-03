@@ -3,6 +3,7 @@ package geminimodules_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -105,9 +106,12 @@ func TestPublishWritesModulesAndAnImportOnlyManagedBlock(t *testing.T) {
 	if got := read(t, geminimodules.RootPath(home)); got != want {
 		t.Fatalf("GEMINI.md =\n%s\nwant\n%s", got, want)
 	}
-	info, err := os.Stat(geminimodules.RootPath(home))
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("GEMINI.md mode = %v (%v), want 0600 kept", info.Mode().Perm(), err)
+	// Windows has no POSIX permission bits to preserve.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(geminimodules.RootPath(home))
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("GEMINI.md mode = %v (%v), want 0600 kept", info.Mode().Perm(), err)
+		}
 	}
 	joined := ""
 	for _, module := range geminimodules.Render(staging) {

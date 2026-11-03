@@ -2,6 +2,7 @@ package geminimodules_test
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,7 +48,7 @@ func TestPublishRefusesToOverwriteUnownedModule(t *testing.T) {
 	write(t, mine, "my persona notes\n", 0o644)
 	write(t, geminimodules.StagingPath(home), personaAsset, 0o644)
 
-	if _, err := geminimodules.Publish(home); err == nil || !strings.Contains(err.Error(), mine) {
+	if _, err := geminimodules.Publish(home); err == nil || !strings.Contains(err.Error(), strconv.Quote(mine)) {
 		t.Fatalf("Publish() error = %v, want a refusal naming %s", err, mine)
 	}
 	if got := read(t, mine); got != "my persona notes\n" {
