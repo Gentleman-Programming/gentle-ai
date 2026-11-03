@@ -413,6 +413,19 @@ func TestRemoteCommandApprovalDefaults(t *testing.T) {
 					if got := remoteAction(t, raw, "make deploy"); got != "allow" {
 						t.Errorf("user rule before catch-all changed resolution: make deploy = %s, want allow", got)
 					}
+					// The catch-all resolves make deploy to allow on its own, so
+					// the resolution check alone would pass with the rule dropped.
+					var settings struct {
+						Permission struct {
+							Bash map[string]string `json:"bash"`
+						} `json:"permission"`
+					}
+					if err := json.Unmarshal(raw, &settings); err != nil {
+						t.Fatal(err)
+					}
+					if got, ok := settings.Permission.Bash["make deploy"]; !ok || got != "ask" {
+						t.Errorf("user rule lost or changed: make deploy = %q (present: %v), want ask", got, ok)
+					}
 				}
 				if result, err := Inject(home, adapter); err != nil || result.Changed {
 					t.Fatalf("repeat injection = %+v, %v", result, err)
