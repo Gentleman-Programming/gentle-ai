@@ -241,19 +241,45 @@ const antigravityEngramPluginJSON = `{
 
 const antigravityEngramToolsMessage = "CRITICAL FIRST ACTION — Ensure these Engram MCP tools are available before responding: mem_save, mem_search, mem_context, mem_session_summary, mem_session_start, mem_session_end, mem_get_observation, mem_suggest_topic_key, mem_capture_passive, mem_save_prompt, mem_update, mem_current_project, mem_judge. When available, also load/select optional mem_review for memory lifecycle review; if mem_review is unavailable, continue with the required tools above. If Antigravity defers MCP tools, load/select these tools from the engram MCP server first. Loading tools never resolves the project: before any initial mem_context, follow the Engram startup protocol (call mem_current_project and apply its workspace, ambiguous, and no-project checks), then pass only the resolved project to mem_context when the user asks about prior work or the session needs project memory."
 
+// antigravityEngramHookTimeout is the explicit handler timeout in agy's hook
+// shape {type, command, timeout}; the hook only prints a static message.
+const antigravityEngramHookTimeout = 10
+
+// antigravityEngramHooksJSON registers the Engram guidance as a SessionStart
+// hook, so agy injects it once per session instead of before every model call
+// (#5895).
 func antigravityEngramHooksJSON() []byte {
+	return antigravityEngramHooksJSONFor("SessionStart", antigravityEngramHookTimeout)
+}
+
+// legacyAntigravityEngramHooksJSON lists hooks.json bytes earlier gentle-ai
+// builds wrote: the per-invocation hook and the SessionStart hook without an
+// explicit timeout. They stay recognized as managed so migration and
+// uninstall can remove them.
+func legacyAntigravityEngramHooksJSON() [][]byte {
+	return [][]byte{
+		antigravityEngramHooksJSONFor("PreInvocation", 0),
+		antigravityEngramHooksJSONFor("SessionStart", 0),
+	}
+}
+
+// antigravityEngramHooksJSONFor renders the hook for event; a zero timeout
+// omits the field, reproducing the legacy handler shape.
+func antigravityEngramHooksJSONFor(event string, timeout int) []byte {
+	handler := map[string]any{
+		"type": "command",
+		"command": "printf '%s\\n' '" + mustJSONString(map[string]any{
+			"injectSteps": []any{
+				map[string]any{"ephemeralMessage": antigravityEngramToolsMessage},
+			},
+		}) + "'",
+	}
+	if timeout > 0 {
+		handler["timeout"] = timeout
+	}
 	cfg := map[string]any{
 		"gentle-ai-engram-tools": map[string]any{
-			"PreInvocation": []any{
-				map[string]any{
-					"type": "command",
-					"command": "printf '%s\\n' '" + mustJSONString(map[string]any{
-						"injectSteps": []any{
-							map[string]any{"ephemeralMessage": antigravityEngramToolsMessage},
-						},
-					}) + "'",
-				},
-			},
+			event: []any{handler},
 		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")

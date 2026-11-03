@@ -1813,7 +1813,7 @@ func TestInjectAntigravityRegistersEngramViaPluginOnly(t *testing.T) {
 	}
 	hooksText := string(hooksContent)
 	for _, want := range []string{
-		"PreInvocation",
+		"SessionStart",
 		"injectSteps",
 		"mem_save",
 		"mem_search",

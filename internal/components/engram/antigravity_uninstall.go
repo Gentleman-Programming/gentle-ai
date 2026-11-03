@@ -106,7 +106,15 @@ func isManagedAntigravityPluginAsset(name string, content []byte) bool {
 	case "plugin.json":
 		return bytes.Equal(content, []byte(antigravityEngramPluginJSON))
 	case "hooks.json":
-		return bytes.Equal(content, antigravityEngramHooksJSON())
+		if bytes.Equal(content, antigravityEngramHooksJSON()) {
+			return true
+		}
+		for _, legacy := range legacyAntigravityEngramHooksJSON() {
+			if bytes.Equal(content, legacy) {
+				return true
+			}
+		}
+		return false
 	case "mcp_config.json":
 		var root struct {
 			MCPServers map[string]struct {
