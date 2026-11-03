@@ -20,29 +20,6 @@ func TestAntigravityModelIDFallsBackToInherit(t *testing.T) {
 	}
 }
 
-func TestAntigravityModelPresetsCoverEveryRole(t *testing.T) {
-	presets := map[string]map[string]AntigravityModelTier{
-		"inherit":     AntigravityModelPresetInherit(),
-		"performance": AntigravityModelPresetPerformance(),
-		"economy":     AntigravityModelPresetEconomy(),
-	}
-	for name, preset := range presets {
-		if len(preset) != len(AntigravityModelRoles) {
-			t.Errorf("%s preset roles = %v, want exactly %v", name, preset, AntigravityModelRoles)
-		}
-		for _, role := range AntigravityModelRoles {
-			if !preset[role].Valid() {
-				t.Errorf("%s preset has invalid tier for %s", name, role)
-			}
-		}
-	}
-	for _, role := range AntigravityModelRoles {
-		if presets["inherit"][role] != AntigravityModelInherit {
-			t.Errorf("default preset must inherit for %s", role)
-		}
-	}
-}
-
 func TestAntigravityModelTiersStringRoundTrip(t *testing.T) {
 	typed := map[string]AntigravityModelTier{"jd-judge-a": AntigravityModelPro, "jd-fix-agent": AntigravityModelFlash}
 	plain := AntigravityModelTiersToStrings(typed)

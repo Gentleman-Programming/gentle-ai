@@ -33,25 +33,6 @@ func AntigravityModelID(tier AntigravityModelTier) string {
 	return string(tier)
 }
 
-// AntigravityModelPresetInherit keeps every native agent on the session model.
-func AntigravityModelPresetInherit() map[string]AntigravityModelTier {
-	return antigravityModelPreset(AntigravityModelInherit, AntigravityModelInherit)
-}
-
-// AntigravityModelPresetPerformance runs judges and the fix agent on pro.
-func AntigravityModelPresetPerformance() map[string]AntigravityModelTier {
-	return antigravityModelPreset(AntigravityModelPro, AntigravityModelPro)
-}
-
-// AntigravityModelPresetEconomy runs judges on flash and fixes on flash_lite.
-func AntigravityModelPresetEconomy() map[string]AntigravityModelTier {
-	return antigravityModelPreset(AntigravityModelFlash, AntigravityModelFlashLite)
-}
-
-func antigravityModelPreset(judges, fix AntigravityModelTier) map[string]AntigravityModelTier {
-	return map[string]AntigravityModelTier{"jd-judge-a": judges, "jd-judge-b": judges, "jd-fix-agent": fix}
-}
-
 // AntigravityModelTiersToStrings converts tiers for state.json.
 func AntigravityModelTiersToStrings(m map[string]AntigravityModelTier) map[string]string {
 	if len(m) == 0 {
