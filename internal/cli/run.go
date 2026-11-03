@@ -29,6 +29,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agenthooks"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
@@ -1046,6 +1047,9 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	for _, tool := range r.selection.CommunityTools {
 		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state})
 	}
+
+	// After every prompt writer, including community-tool guidance.
+	apply = append(apply, antigravityRulesSteps("agent:antigravity-rules", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil)...)
 
 	if needsCompatibilitySkillsRefresh(r.resolved.OrderedComponents) {
 		apply = append(apply, compatibilitySkillsRefreshStep{
@@ -2628,6 +2632,52 @@ func managedOrchestratorPromptFromSettings(raw []byte) (string, bool) {
 	return prompt, ok
 }
 
+// antigravityRulesStep publishes the guidance every prompt writer staged for
+// Antigravity as size-capped agy rule files, then retires the sections older
+// releases appended to the GEMINI.md agy also loads (#5676, #1989).
+type antigravityRulesStep struct {
+	id, homeDir, baseDir string
+	agents               []model.AgentID
+	changedFiles         *[]string
+}
+
+func (s antigravityRulesStep) ID() string { return s.id }
+
+func (s antigravityRulesStep) Run() error {
+	published, err := antigravityrules.Publish(s.baseDir)
+	if err != nil {
+		return fmt.Errorf("publish Antigravity rules: %w", err)
+	}
+	migrated, err := antigravityrules.MigrateLegacyPrompt(s.baseDir, antigravityrules.GeminiCLIManaged(s.homeDir, s.agents))
+	if err != nil {
+		return fmt.Errorf("retire Antigravity sections from GEMINI.md: %w", err)
+	}
+	if s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, published.Files...)
+		*s.changedFiles = append(*s.changedFiles, migrated.Files...)
+	}
+	return nil
+}
+
+// antigravityRulesSteps schedules the publisher once when Antigravity is
+// selected; it writes beside the scoped prompt the writers staged.
+func antigravityRulesSteps(id, homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string) []pipeline.Step {
+	if !containsAgent(agentIDs, model.AgentAntigravity) {
+		return nil
+	}
+	return []pipeline.Step{antigravityRulesStep{id: id, homeDir: homeDir, baseDir: ResolveAgentConfigDir(scope, homeDir, workspaceDir), agents: agentIDs, changedFiles: changedFiles}}
+}
+
+// antigravityRulesBackupPaths lists the rule files the publisher may write or
+// remove and the legacy GEMINI.md it may rewrite.
+func antigravityRulesBackupPaths(homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID) []string {
+	if !containsAgent(agentIDs, model.AgentAntigravity) {
+		return nil
+	}
+	baseDir := ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+	return append(antigravityrules.ManagedPaths(baseDir), antigravityrules.LegacyPromptPath(baseDir))
+}
+
 type piCodeGraphReconcileStep struct {
 	id, homeDir, workspaceDir string
 	selected                  bool
@@ -3957,6 +4007,9 @@ func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, sele
 	for _, path := range retiredSDDAssetBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
 		paths[path] = struct{}{}
 	}
+	for _, path := range antigravityRulesBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
+		paths[path] = struct{}{}
+	}
 	for _, adapter := range adapters {
 		if path := agentguidance.StrictTDDPath(routingGuidanceDir(homeDir, workspaceDir, scope, adapter), adapter.Agent()); path != "" {
 			paths[path] = struct{}{}
@@ -4789,10 +4842,9 @@ func engramInstallCommand(agentIDs []model.AgentID) string {
 }
 
 // antigravityCollisionCheck returns a soft verify check that warns the user
-// when Antigravity and Gemini CLI are selected together. These agents
-// intentionally share ~/.gemini/GEMINI.md because Antigravity uses a
-// Gemini-compatible prompt surface; the last synced agent routing guidance
-// controls the shared gentle-ai:agent-routing section.
+// when Antigravity and Gemini CLI are selected together. Antigravity reads its
+// Gentle AI guidance from published agy rules, but agy also loads the
+// ~/.gemini/GEMINI.md Gemini CLI owns, so its sessions see both.
 func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
 	hasAntigravitySurface := false
 	hasGemini := false
@@ -4810,13 +4862,14 @@ func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
 	return []verify.Check{
 		{
 			ID:          "verify:antigravity:rules-collision",
-			Description: "Antigravity and Gemini CLI share ~/.gemini/GEMINI.md",
+			Description: "Antigravity also loads the Gemini CLI prompt ~/.gemini/GEMINI.md",
 			Soft:        true,
 			Run: func(context.Context) error {
+				// refusal:by-design human-authority: keeping Gemini CLI selected beside Antigravity is the user's choice
 				return fmt.Errorf(
-					"Antigravity and Gemini CLI write rules to ~/.gemini/GEMINI.md\n" +
-						"Antigravity intentionally uses the Gemini-compatible global prompt surface; the last synced agent routing guidance controls the shared gentle-ai:agent-routing section.\n" +
-						"Prefer Antigravity for new installs; keep Gemini CLI selected only when you intentionally want that legacy prompt to be the active one.",
+					"Antigravity loads its Gentle AI guidance from ~/.gemini/config/rules/gentle-ai-*.md and also loads ~/.gemini/GEMINI.md, which Gemini CLI owns.\n" +
+						"With both selected, Antigravity sessions receive the Gemini CLI guidance in addition to their own rules.\n" +
+						"Keep Gemini CLI selected only if you also use it; otherwise remove it from your Gentle AI selection.",
 				)
 			},
 		},

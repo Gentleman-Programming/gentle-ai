@@ -263,8 +263,17 @@ func TestConfigPathsStaticPaths(t *testing.T) {
 	if got := a.SystemPromptDir(home); got != filepath.Join(home, ".gemini") {
 		t.Fatalf("SystemPromptDir() = %q, want %q", got, filepath.Join(home, ".gemini"))
 	}
-	if got := a.SystemPromptFile(home); got != filepath.Join(home, ".gemini", "GEMINI.md") {
-		t.Fatalf("SystemPromptFile() = %q, want %q", got, filepath.Join(home, ".gemini", "GEMINI.md"))
+	// The prompt writers stage guidance in a gentle-ai-owned file agy does not
+	// load; antigravityrules publishes it as size-capped rule files, so
+	// ~/.gemini/GEMINI.md is never written for Antigravity (#5676, #5608).
+	want := filepath.Join(home, ".gemini", "config", "gentle-ai", "guidance.md")
+	for _, setup := range []string{"fresh", "migrated"} {
+		if setup == "migrated" {
+			a.statPath = func(string) statResult { return statResult{isDir: true} }
+		}
+		if got := a.SystemPromptFile(home); got != want {
+			t.Fatalf("%s: SystemPromptFile() = %q, want %q", setup, got, want)
+		}
 	}
 }
 

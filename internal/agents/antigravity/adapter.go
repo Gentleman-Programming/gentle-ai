@@ -116,8 +116,12 @@ func (a *Adapter) SystemPromptDir(homeDir string) string {
 	return filepath.Join(homeDir, ".gemini")
 }
 
+// SystemPromptFile is a gentle-ai-owned staging file agy does not load. Every
+// prompt writer appends its marker section here, and antigravityrules
+// publishes the sections as always-on rules under ~/.gemini/config/rules,
+// each within agy's per-file size cap (#5676, #1989).
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, ".gemini", "GEMINI.md")
+	return filepath.Join(homeDir, ".gemini", "config", "gentle-ai", "guidance.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {
