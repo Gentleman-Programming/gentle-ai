@@ -11,6 +11,12 @@ const preparing = requestedAction === 'prepare-prior';
 const action = preparing ? 'install' : requestedAction;
 const selectingSDK = action === 'select-main-sdk-package';
 const verifyingSelectedSDK = action === 'verify-main-sdk-selected';
+// Both launch-time verifications read the whole installed graph; the receipt
+// fast path below serves them identically. A stable-channel launch verifies
+// through the stock 'verify' action (userVerifyInstalledGlobal with a nil
+// MainSDK), a Main SDK launch through 'verify-main-sdk-selected' — same tree,
+// same byte-audit cost, same receipt.
+const launchVerify = action === 'verify' || verifyingSelectedSDK;
 const mainRuntimeActions = ['materialize-main-sdk-runtime', 'verify-main-sdk-runtime', 'select-main-sdk-package', 'verify-main-sdk-selected'];
 const mainActions = ['verify-main-source', 'verify-main-sdk-source', 'materialize-main-sdk-source', 'verify-main-sdk-composition', ...mainRuntimeActions];
 // Main runtime placement and selection are qualified where the stock native
@@ -625,7 +631,7 @@ if (action === 'restore') {
       return null;
     }
   }
-  if (verifyingSelectedSDK) graphFast = graphFastPath();
+  if (launchVerify) graphFast = graphFastPath();
   function sourceBytes(directory, acquired, gentle = false) {
     const include = name => name !== 'node_modules' && !(gentle && name === '.gentle-ai');
     const entries = fs.readdirSync(directory).filter(include).sort();
@@ -751,7 +757,7 @@ if (action === 'restore') {
     observed.push(...graphFast);
   } else {
     packages(modules);
-    if (verifyingSelectedSDK) {
+    if (launchVerify) {
       graphReceiptCandidate = {
         ...graphReceiptHeader(),
         entries: graphStamps(modules),
