@@ -2322,6 +2322,9 @@ func RunSync(args []string) (SyncResult, error) {
 		}
 		selection.KiroModelAssignments = m
 	}
+	if len(selection.AntigravityModelAssignments) == 0 {
+		selection.AntigravityModelAssignments = model.AntigravityModelTiersFromStrings(persistedState.AntigravityModelAssignments)
+	}
 	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
 		workspaceDir, _ := os.Getwd()
 		selection.ModelAssignments = restoreOpenCodeModelAssignmentsFromState(homeDir, workspaceDir, persistedState, selection.SDDMode)

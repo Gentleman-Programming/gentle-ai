@@ -21,7 +21,10 @@ func TestAntigravityInstallAndSyncWriteJudgmentDayAgents(t *testing.T) {
 		t.Run(flow, func(t *testing.T) {
 			home := t.TempDir()
 			dir := filepath.Join(home, ".gemini", "config", "agents")
-			selection := model.Selection{Agents: []model.AgentID{model.AgentAntigravity}}
+			selection := model.Selection{
+				Agents:                      []model.AgentID{model.AgentAntigravity},
+				AntigravityModelAssignments: map[string]model.AntigravityModelTier{"jd-judge-a": model.AntigravityModelPro},
+			}
 
 			var targets []string
 			var err error
@@ -54,6 +57,13 @@ func TestAntigravityInstallAndSyncWriteJudgmentDayAgents(t *testing.T) {
 				}
 				if !strings.HasPrefix(string(data), "---\nname: "+strings.TrimSuffix(name, ".md")+"\n") {
 					t.Errorf("%s has no agy frontmatter:\n%s", name, data)
+				}
+				wantModel := "\nmodel: inherit\n"
+				if name == "jd-judge-a.md" {
+					wantModel = "\nmodel: pro\n"
+				}
+				if !strings.Contains(string(data), wantModel) {
+					t.Errorf("%s %s does not render %q", flow, name, strings.TrimSpace(wantModel))
 				}
 				if flow == "sync" && !slices.Contains(changed, path) {
 					t.Errorf("sync did not report %s as changed", path)
