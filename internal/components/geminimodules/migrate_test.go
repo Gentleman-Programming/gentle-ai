@@ -70,7 +70,7 @@ func TestMigrateThenPublishKeepsUserBytesAndOnePersona(t *testing.T) {
 	}
 
 	root := read(t, geminimodules.RootPath(home))
-	if !strings.HasPrefix(root, userContent) || strings.Count(root, "<!-- gentle-ai:") != 1 {
+	if !strings.HasSuffix(root, "\n"+userContent) || strings.Count(root, "<!-- gentle-ai:") != 1 {
 		t.Fatalf("GEMINI.md = %q, want the user bytes plus one import block", root)
 	}
 	guidance := ""
@@ -79,5 +79,36 @@ func TestMigrateThenPublishKeepsUserBytesAndOnePersona(t *testing.T) {
 	}
 	if n := strings.Count(root+guidance, `Never add "Co-Authored-By"`); n != 1 {
 		t.Fatalf("persona copies = %d, want 1", n)
+	}
+}
+
+// TestMigrateLegacyRootAfterDowngradeKeepsOnePersona covers an older release
+// syncing over the current layout: it put a persona body and sections back
+// beside the import block. They move to the staging file again, replacing the
+// stale staged copies, and the import block and user bytes stay.
+func TestMigrateLegacyRootAfterDowngradeKeepsOnePersona(t *testing.T) {
+	home := t.TempDir()
+	write(t, geminimodules.StagingPath(home), stagingWith(personaAsset, "codegraph-guidance"), 0o644)
+	if _, err := geminimodules.Publish(home); err != nil {
+		t.Fatal(err)
+	}
+	block := read(t, geminimodules.RootPath(home))
+	downgraded := personaAsset + "\n" + block + filemerge.InjectMarkdownSection(userContent, "engram-protocol", "newer engram\n")
+	write(t, geminimodules.RootPath(home), downgraded, 0o644)
+
+	if _, err := geminimodules.MigrateLegacyRoot(home); err != nil {
+		t.Fatalf("MigrateLegacyRoot() error = %v", err)
+	}
+	if _, err := geminimodules.Publish(home); err != nil {
+		t.Fatal(err)
+	}
+
+	root := read(t, geminimodules.RootPath(home))
+	if want := rootWith(importBlock("01-persona.md", "02-codegraph-guidance.md", "03-engram-protocol.md"), userContent); root != want {
+		t.Fatalf("GEMINI.md =\n%q\nwant\n%q", root, want)
+	}
+	staging := read(t, geminimodules.StagingPath(home))
+	if n := strings.Count(staging, `Never add "Co-Authored-By"`); n != 1 || !strings.Contains(staging, "newer engram") || !strings.Contains(staging, "codegraph-guidance guidance") {
+		t.Fatalf("staging = %q, want one persona, the moved section and the kept one", staging)
 	}
 }

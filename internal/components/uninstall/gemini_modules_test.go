@@ -70,7 +70,7 @@ func TestPartialUninstallGeminiMigratesMonolithicGEMINIMD(t *testing.T) {
 	}
 
 	root := readTestFile(t, geminimodules.RootPath(home))
-	want := filemerge.InjectMarkdownSection("\n# My notes\n", geminimodules.ImportSectionID, "@./gentle-ai/01-agent-routing.md\n")
+	want := filemerge.InjectMarkdownSection("", geminimodules.ImportSectionID, "@./gentle-ai/01-agent-routing.md\n") + "\n# My notes\n"
 	if root != want {
 		t.Fatalf("GEMINI.md =\n%q\nwant\n%q", root, want)
 	}

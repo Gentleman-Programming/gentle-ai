@@ -288,12 +288,11 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		// The upgraded binary's sync moves the guidance older releases wrote
 		// into GEMINI.md to the staging file and republishes the modules
 		// GEMINI.md imports.
-		owned, err := geminimodules.OwnedModulePaths(homeDir)
-		if err != nil {
-			writeBackupDiagnostic(diagnostics, "backup: skipping Gemini CLI modules: %v", err)
+		if _, err := geminimodules.OwnedModulePaths(homeDir); err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: Gemini CLI module manifest unreadable: %v", err)
 		}
-		add(owned...)
-		add(presentPaths([]string{geminimodules.RootPath(homeDir), geminimodules.StagingPath(homeDir)})...)
+		// Owned and to-be-written modules, the manifest, staging and root.
+		add(presentPaths(geminimodules.ManagedPaths(homeDir))...)
 	case model.AgentClaudeCode:
 		add(claude.UserConfigPath(homeDir))
 		add(theme.VisualThemePaths(homeDir, adapter)...)

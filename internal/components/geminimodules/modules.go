@@ -11,6 +11,7 @@ package geminimodules
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,13 +20,14 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/managedownership"
 )
 
 // ImportSectionID marks the only Gentle AI block GEMINI.md keeps.
 const ImportSectionID = "gemini-cli-imports"
 
-// ownedModulePattern is the only name shape Publish writes inside ModulesDir,
-// so stale-module cleanup never touches other files there.
+// ownedModulePattern is the only name shape Publish writes inside ModulesDir
+// and its manifest may list; the manifest, not the name, proves ownership.
 var ownedModulePattern = regexp.MustCompile(`^\d{2}-[A-Za-z0-9_.-]+\.md$`)
 
 // Module is one rendered module file.
@@ -97,21 +99,37 @@ func stripSections(content string) string {
 }
 
 // Publish renders the staging file into ModulesDir, removes the owned modules
-// it no longer produces, and rewrites GEMINI.md as the content outside
-// Gentle AI marker sections plus one import block. A missing or emptied
-// staging file retires every module and the import block.
+// it no longer produces, and rewrites GEMINI.md as one import block followed
+// by the content outside Gentle AI marker sections. Before any write it
+// refuses a module path holding other bytes the manifest does not prove
+// Gentle AI wrote. A missing or emptied staging file retires every owned
+// module and the import block; a GEMINI.md without one is left to migration.
 func Publish(baseDir string) (Result, error) {
 	staging, err := os.ReadFile(StagingPath(baseDir))
 	if err != nil && !os.IsNotExist(err) {
 		return Result{}, fmt.Errorf("read Gemini CLI guidance staging file: %w", err)
 	}
 	modules := Render(string(staging))
+	dir := ModulesDir(baseDir)
+	ledger, err := readManifest(baseDir)
+	if err != nil {
+		return Result{}, err
+	}
+	for _, module := range modules {
+		data, exists, owned, err := moduleState(ledger, dir, module.Name)
+		if err != nil {
+			return Result{}, err
+		}
+		if exists && !owned && string(data) != module.Content {
+			return Result{}, fmt.Errorf("refuse to overwrite %q: Gentle AI did not write it or it was edited; move it out of %s and rerun", filepath.Join(dir, module.Name), dir)
+		}
+	}
 	result := Result{}
-	wanted := map[string]bool{}
+	files := map[string]string{}
 	imports := ""
 	for _, module := range modules {
-		path := filepath.Join(ModulesDir(baseDir), module.Name)
-		wanted[path] = true
+		path := filepath.Join(dir, module.Name)
+		files[module.Name] = managedownership.Hash([]byte(module.Content))
 		imports += "@./gentle-ai/" + module.Name + "\n"
 		write, err := filemerge.WriteFileAtomic(path, []byte(module.Content), 0o644)
 		if err != nil {
@@ -126,7 +144,7 @@ func Publish(baseDir string) (Result, error) {
 		return result, err
 	}
 	for _, path := range owned {
-		if wanted[path] {
+		if _, wanted := files[filepath.Base(path)]; wanted {
 			continue
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -134,26 +152,34 @@ func Publish(baseDir string) (Result, error) {
 		}
 		result.add(path)
 	}
+	if changed, err := writeManifest(baseDir, files); err != nil {
+		return result, err
+	} else if changed {
+		result.add(manifestPath(baseDir))
+	}
+	if len(modules) == 0 {
+		// Only an emptied directory goes; it is Gentle AI's own, and the
+		// files it held are already reported.
+		_ = os.Remove(dir)
+	}
 
 	root := RootPath(baseDir)
 	raw, err := os.ReadFile(root)
 	if err != nil && !os.IsNotExist(err) {
 		return result, fmt.Errorf("read %q: %w", root, err)
 	}
+	if imports == "" && !strings.Contains(string(raw), "<!-- gentle-ai:"+ImportSectionID+" -->") {
+		return result, nil
+	}
 	updated := stripSections(string(raw))
 	if imports != "" {
-		updated = filemerge.InjectMarkdownSection(updated, ImportSectionID, imports)
+		updated = withImports(updated, imports)
 	}
 	if updated != string(raw) {
 		if err := writeOrRemove(root, updated); err != nil {
 			return result, err
 		}
 		result.add(root)
-	}
-	if len(modules) == 0 {
-		// Only an emptied directory goes; it is Gentle AI's own, and the
-		// files it held are already reported.
-		_ = os.Remove(ModulesDir(baseDir))
 	}
 	return result, nil
 }
@@ -174,27 +200,27 @@ func Retire(baseDir string) (Result, error) {
 	return result, err
 }
 
-// OwnedModulePaths lists the module files Publish owns that exist on disk.
+// OwnedModulePaths lists the module files the manifest proves Gentle AI
+// wrote, unchanged since.
 func OwnedModulePaths(baseDir string) ([]string, error) {
-	dir := ModulesDir(baseDir)
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
+	ledger, err := readManifest(baseDir)
 	if err != nil {
-		return nil, fmt.Errorf("read Gemini CLI module directory: %w", err)
+		return nil, err
 	}
 	var paths []string
-	for _, entry := range entries {
-		if entry.Type().IsRegular() && ownedModulePattern.MatchString(entry.Name()) {
-			paths = append(paths, filepath.Join(dir, entry.Name()))
+	for _, name := range slices.Sorted(maps.Keys(ledger.Files)) {
+		if _, _, owned, err := moduleState(ledger, ModulesDir(baseDir), name); err != nil {
+			return nil, err
+		} else if owned {
+			paths = append(paths, filepath.Join(ModulesDir(baseDir), name))
 		}
 	}
 	return paths, nil
 }
 
-// ManagedPaths returns GEMINI.md, the staging file and every module Publish
-// may write or remove for the current staging content, for backup snapshots.
+// ManagedPaths returns GEMINI.md, the staging file, the manifest and every
+// module Publish may write or remove for the current staging content, for
+// backup snapshots.
 // It is best effort: unreadable inputs contribute no module paths, and
 // Publish itself reports those errors.
 func ManagedPaths(baseDir string) []string {
@@ -205,7 +231,7 @@ func ManagedPaths(baseDir string) []string {
 			paths = append(paths, path)
 		}
 	}
-	return append(paths, StagingPath(baseDir), RootPath(baseDir))
+	return append(paths, manifestPath(baseDir), StagingPath(baseDir), RootPath(baseDir))
 }
 
 // writeOrRemove writes content keeping the file mode, or removes the file

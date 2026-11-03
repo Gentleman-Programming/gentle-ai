@@ -14,8 +14,8 @@ import (
 // section) into the staging file, so the writers that run next update it as
 // they updated GEMINI.md. The persona body is recognized with the persona
 // fingerprints StripLegacyPersonaBlock uses; any other text stays in
-// GEMINI.md. A GEMINI.md that already carries the import block is the
-// current layout and is left alone.
+// GEMINI.md. The import block stays, and content an older release put beside
+// it after a downgrade replaces its staged copy.
 func MigrateLegacyRoot(baseDir string) (Result, error) {
 	path := RootPath(baseDir)
 	raw, err := os.ReadFile(path)
@@ -26,28 +26,48 @@ func MigrateLegacyRoot(baseDir string) (Result, error) {
 		return Result{}, fmt.Errorf("read %q: %w", path, err)
 	}
 	content := string(raw)
-	if strings.Contains(content, "<!-- gentle-ai:"+ImportSectionID+" -->") {
-		return Result{}, nil
-	}
 
-	user, managed := content, ""
+	user, preamble := content, ""
 	if filemerge.StripLegacyPersonaBlock(content) != content {
 		cut := strings.Index(content, "<!-- gentle-ai:")
 		if cut < 0 {
 			cut = len(content)
 		}
-		managed, user = content[:cut], content[cut:]
+		preamble, user = content[:cut], content[cut:]
 	}
+	var moved []antigravityrules.Section
 	for _, section := range antigravityrules.Sections(user) {
-		if managed != "" && !strings.HasSuffix(managed, "\n\n") {
-			managed = strings.TrimRight(managed, "\n") + "\n\n"
+		if section.ID != ImportSectionID {
+			moved = append(moved, section)
 		}
-		managed += user[section.Start:section.End] + "\n"
 	}
-	if managed == "" {
+	if preamble == "" && len(moved) == 0 {
 		return Result{}, nil
 	}
-	user = stripSections(user)
+
+	staged, err := os.ReadFile(StagingPath(baseDir))
+	if err != nil && !os.IsNotExist(err) {
+		return Result{}, fmt.Errorf("read Gemini CLI guidance staging file: %w", err)
+	}
+	stagedSections := antigravityrules.Sections(string(staged))
+	if preamble == "" {
+		preamble = string(staged)
+		if len(stagedSections) > 0 {
+			preamble = preamble[:stagedSections[0].Start]
+		}
+	}
+	managed := ""
+	if strings.TrimSpace(preamble) != "" {
+		managed = strings.TrimRight(preamble, "\n") + "\n"
+	}
+	for _, section := range append(stagedSections, moved...) {
+		if section.Body != "" {
+			managed = filemerge.InjectMarkdownSection(managed, section.ID, section.Body)
+		}
+	}
+	for _, section := range moved {
+		user = filemerge.InjectMarkdownSection(user, section.ID, "")
+	}
 
 	result := Result{}
 	if _, err := filemerge.WriteFileAtomic(StagingPath(baseDir), []byte(managed), 0o644); err != nil {
