@@ -11,6 +11,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
 )
 
 var geminiImportLine = regexp.MustCompile(`^@\./[A-Za-z0-9_.\-/]+\.md$`)
@@ -120,5 +122,53 @@ func TestRunInstallGeminiMigratesMonolithicGEMINIMD(t *testing.T) {
 	guidance := importedGuidance(t, home)
 	if personaCopies(guidance) != 1 || !strings.Contains(guidance, "engram guidance from an older release") {
 		t.Fatal("the migrated persona and the unselected engram section must survive as modules")
+	}
+}
+
+func TestSyncGeminiModulesIsIdempotent(t *testing.T) {
+	home := stubAntigravityHome(t, true)
+	selection := model.Selection{Agents: []model.AgentID{model.AgentGeminiCLI, model.AgentAntigravity}, Components: []model.ComponentID{model.ComponentPersona}, Persona: model.PersonaGentleman}
+	if _, err := RunSyncWithSelection(home, selection); err != nil {
+		t.Fatalf("first sync error = %v", err)
+	}
+	result, err := RunSyncWithSelection(home, selection)
+	if err != nil {
+		t.Fatalf("second sync error = %v", err)
+	}
+	for _, path := range result.ChangedFiles {
+		if path == geminimodules.RootPath(home) || strings.HasPrefix(path, geminimodules.ModulesDir(home)) {
+			t.Errorf("second sync reported %s as changed", path)
+		}
+	}
+}
+
+func TestRunInstallGeminiRollbackLeavesNoNewModules(t *testing.T) {
+	home := stubAntigravityHome(t, true)
+	before := readString(t, geminimodules.RootPath(home))
+	previous := installStagePlan
+	t.Cleanup(func() { installStagePlan = previous })
+	published := false
+	installStagePlan = func(rt *installRuntime) pipeline.StagePlan {
+		plan := previous(rt)
+		plan.Apply = append(plan.Apply, antigravityTestStep{id: "test:break-staging", run: func() error {
+			owned, _ := geminimodules.OwnedModulePaths(home)
+			published = len(owned) > 2
+			return os.Remove(geminimodules.StagingPath(home))
+		}})
+		return plan
+	}
+
+	_, err := RunInstall([]string{"--agent", "gemini-cli", "--component", "persona", "--component", "engram"}, macOSDetectionResult())
+	if err == nil || !strings.Contains(err.Error(), "post-apply verification failed") {
+		t.Fatalf("RunInstall() error = %v, want a post-apply verification failure", err)
+	}
+	if !published {
+		t.Fatal("the publisher did not write modules before verification failed")
+	}
+	if owned, _ := geminimodules.OwnedModulePaths(home); len(owned) != 0 {
+		t.Fatalf("rollback left modules behind: %v", owned)
+	}
+	if got := readString(t, geminimodules.RootPath(home)); got != before {
+		t.Fatalf("GEMINI.md after rollback = %q, want %q", got, before)
 	}
 }
