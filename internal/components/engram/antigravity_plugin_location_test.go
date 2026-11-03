@@ -249,6 +249,50 @@ func TestRemoveManagedAntigravityPluginAssetRecognizesLegacyHooks(t *testing.T) 
 	}
 }
 
+// ─── #5930 S7 / #5607: doctor reads the plugin-owned registration ────────────
+
+func TestReadPersistedStdioCommandsReadsAntigravityPluginRegistration(t *testing.T) {
+	home := t.TempDir()
+	pluginMCP := filepath.Join(sharedAntigravityPluginDir(home), "mcp_config.json")
+	if err := os.MkdirAll(filepath.Dir(pluginMCP), 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugin) error = %v", err)
+	}
+	if err := os.WriteFile(pluginMCP, engramOverlayJSON(model.AgentAntigravity, "/configured/agy-engram"), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin mcp) error = %v", err)
+	}
+
+	commands, err := ReadPersistedStdioCommands(home, []string{string(model.AgentAntigravity)})
+	if err != nil {
+		t.Fatalf("ReadPersistedStdioCommands() error = %v", err)
+	}
+	if len(commands) != 1 {
+		t.Fatalf("ReadPersistedStdioCommands() = %+v, want the plugin-owned registration", commands)
+	}
+	got := commands[0]
+	if got.Command != "/configured/agy-engram" || got.Source != pluginMCP || !slices.Equal(got.Args, []string{"mcp", "--tools=agent"}) {
+		t.Fatalf("plugin registration = %+v, want /configured/agy-engram [mcp --tools=agent] from %q", got, pluginMCP)
+	}
+}
+
+func TestReadPersistedStdioCommandsKeepsGeminiConfigUnchanged(t *testing.T) {
+	home := t.TempDir()
+	settings := filepath.Join(home, ".gemini", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0o755); err != nil {
+		t.Fatalf("MkdirAll(gemini) error = %v", err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"mcpServers":{"engram":{"command":"/configured/gemini-engram","args":["mcp"]}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(gemini settings) error = %v", err)
+	}
+
+	commands, err := ReadPersistedStdioCommands(home, []string{string(model.AgentGeminiCLI)})
+	if err != nil {
+		t.Fatalf("ReadPersistedStdioCommands() error = %v", err)
+	}
+	if len(commands) != 1 || commands[0].Command != "/configured/gemini-engram" || commands[0].Source != settings {
+		t.Fatalf("gemini-cli registration = %+v, want only %q", commands, settings)
+	}
+}
+
 func TestAntigravityCoordinationLockKeyStaysStableAcrossPluginMove(t *testing.T) {
 	home := t.TempDir()
 	target, err := antigravityLockTarget(home)
