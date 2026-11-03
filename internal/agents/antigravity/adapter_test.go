@@ -369,3 +369,17 @@ func TestIdentity(t *testing.T) {
 		t.Fatalf("Tier() = %q, want %q", got, model.TierFull)
 	}
 }
+
+func TestAdapter_AntigravityModelID(t *testing.T) {
+	a := &Adapter{}
+	for tier, want := range map[model.AntigravityModelTier]string{
+		model.AntigravityModelPro:       "pro",
+		model.AntigravityModelFlashLite: "flash_lite",
+		"":                              "inherit",
+		"unknown":                       "inherit",
+	} {
+		if got := a.AntigravityModelID(tier); got != want {
+			t.Errorf("AntigravityModelID(%q) = %q, want %q", tier, got, want)
+		}
+	}
+}

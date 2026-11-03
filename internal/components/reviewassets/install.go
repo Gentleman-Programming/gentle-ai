@@ -58,10 +58,11 @@ func NativeAgentFileNames(agent model.AgentID) []string {
 }
 
 type InstallOptions struct {
-	ClaudeModelAssignments    map[string]model.ClaudeModelAlias
-	ClaudePhaseAssignments    map[string]model.ClaudePhaseAssignment
-	KiroModelAssignments      map[string]model.KiroModelAlias
-	CodeGraphGuidanceMarkdown string
+	ClaudeModelAssignments      map[string]model.ClaudeModelAlias
+	ClaudePhaseAssignments      map[string]model.ClaudePhaseAssignment
+	KiroModelAssignments        map[string]model.KiroModelAlias
+	AntigravityModelAssignments map[string]model.AntigravityModelTier
+	CodeGraphGuidanceMarkdown   string
 }
 type InstallResult struct {
 	Changed bool
@@ -73,6 +74,9 @@ var engramToolPlaceholder = regexp.MustCompile(`\{\{ENGRAM_TOOL_PREFIX\}\}([A-Za
 
 type kiroModelResolver interface {
 	KiroModelID(model.KiroModelAlias) string
+}
+type antigravityModelResolver interface {
+	AntigravityModelID(model.AntigravityModelTier) string
 }
 type claudeModelResolver interface {
 	ClaudeModelID(model.ClaudeModelAlias) string
@@ -252,6 +256,10 @@ func renderNativeAgent(adapter agents.Adapter, name string, opts InstallOptions)
 			}
 		}
 		content = strings.ReplaceAll(content, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
+	}
+	if amr, ok := adapter.(antigravityModelResolver); ok {
+		// A missing role keeps agy's default: the agent inherits the session model.
+		content = strings.ReplaceAll(content, "{{ANTIGRAVITY_MODEL}}", amr.AntigravityModelID(opts.AntigravityModelAssignments[phase]))
 	}
 	if cmr, ok := adapter.(claudeModelResolver); ok {
 		assignment := resolveClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, phase)

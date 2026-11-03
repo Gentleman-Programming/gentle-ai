@@ -176,6 +176,11 @@ func (a *Adapter) EmbeddedSubAgentsDir() string {
 	return "antigravity/agents"
 }
 
+// AntigravityModelID resolves a tier to the agy `model:` frontmatter value.
+func (a *Adapter) AntigravityModelID(tier model.AntigravityModelTier) string {
+	return model.AntigravityModelID(tier)
+}
+
 func (a *Adapter) SupportsSkills() bool {
 	return a.CapabilityManifest().Features.Skills
 }
