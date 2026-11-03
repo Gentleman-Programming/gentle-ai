@@ -682,6 +682,9 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
 	}
 
+	// After every prompt writer, including CodeGraph guidance.
+	apply = append(apply, antigravityRulesSteps("sync:agent:antigravity-rules", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles)...)
+
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
 }
 
@@ -884,6 +887,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 			paths[path] = struct{}{}
 		}
+	}
+	for _, path := range antigravityRulesBackupPaths(homeDir, workspaceDir, scope, selection.Agents) {
+		paths[path] = struct{}{}
 	}
 	if !workspace && containsAgent(selection.Agents, model.AgentOpenCode) {
 		for _, path := range opencodeactivation.LauncherPaths(homeDir, runtime.GOOS) {

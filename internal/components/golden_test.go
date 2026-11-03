@@ -474,7 +474,7 @@ func TestGoldenPersona_Antigravity_Gentleman(t *testing.T) {
 		t.Fatalf("persona.Inject(antigravity, gentleman) changed = false")
 	}
 
-	rulesFile := readTestFile(t, filepath.Join(home, ".gemini", "GEMINI.md"))
+	rulesFile := readTestFile(t, antigravityAdapter().SystemPromptFile(home))
 	assertGolden(t, "persona-antigravity-gentleman.golden", rulesFile)
 }
 
@@ -504,8 +504,8 @@ func TestGoldenEngram_Antigravity(t *testing.T) {
 		t.Fatalf("global Antigravity MCP config %q must not be written for Engram; stat err = %v", globalMCPPath, err)
 	}
 
-	// GEMINI.md must contain the engram-protocol section.
-	rulesFile := readTestFile(t, filepath.Join(home, ".gemini", "GEMINI.md"))
+	// The staged prompt must contain the engram-protocol section.
+	rulesFile := readTestFile(t, antigravityAdapter().SystemPromptFile(home))
 	assertGolden(t, "engram-antigravity-rulesmd.golden", rulesFile)
 }
 
