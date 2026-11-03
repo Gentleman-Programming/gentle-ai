@@ -74,6 +74,10 @@ type InstallState struct {
 	// written before Kiro had its own picker options.
 	KiroModelAssignments map[string]string `json:"kiro_model_assignments,omitempty"`
 
+	// AntigravityModelAssignments maps Antigravity native agent roles to an agy
+	// model tier (inherit|flash_lite|flash|pro). Absent = every role inherits.
+	AntigravityModelAssignments map[string]string `json:"antigravity_model_assignments,omitempty"`
+
 	// CodexModelAssignments maps SDD phase names to a Codex reasoning_effort value
 	// (low|medium|high|xhigh). Persisted so that `gentle-ai sync` preserves the
 	// user's per-phase effort preset instead of falling back to Recommended.
@@ -308,6 +312,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		ClaudeModelAssignments:      existing.ClaudeModelAssignments,
 		ClaudePhaseAssignments:      existing.ClaudePhaseAssignments,
 		KiroModelAssignments:        existing.KiroModelAssignments,
+		AntigravityModelAssignments: existing.AntigravityModelAssignments,
 		CodexModelAssignments:       existing.CodexModelAssignments,
 		CodexOrchestratorAssignment: existing.CodexOrchestratorAssignment,
 		CodexServiceTier:            existing.CodexServiceTier,

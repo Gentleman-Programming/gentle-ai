@@ -2873,3 +2873,29 @@ func writeFakeOpenCodeRuntime(t *testing.T) string {
 	}
 	return binDir
 }
+
+func TestAntigravityModelAssignmentsOverridePersistAndRestore(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{}
+	applyOverrides(&selection, &model.SyncOverrides{
+		AntigravityModelAssignments: map[string]model.AntigravityModelTier{"jd-judge-a": model.AntigravityModelPro},
+	})
+	if err := persistAssignments(home, selection); err != nil {
+		t.Fatalf("persistAssignments: %v", err)
+	}
+	got, err := state.Read(home)
+	if err != nil || got.AntigravityModelAssignments["jd-judge-a"] != "pro" {
+		t.Fatalf("persisted Antigravity tiers = %#v, err %v", got.AntigravityModelAssignments, err)
+	}
+	restored := model.Selection{}
+	loadPersistedAssignments(home, &restored)
+	if restored.AntigravityModelAssignments["jd-judge-a"] != model.AntigravityModelPro {
+		t.Fatalf("restored Antigravity tiers = %#v", restored.AntigravityModelAssignments)
+	}
+	if err := persistAssignments(home, model.Selection{AntigravityModelAssignments: map[string]model.AntigravityModelTier{}}); err != nil {
+		t.Fatalf("persistAssignments clear: %v", err)
+	}
+	if got, _ := state.Read(home); got.AntigravityModelAssignments != nil {
+		t.Fatalf("empty override must reset Antigravity tiers, got %#v", got.AntigravityModelAssignments)
+	}
+}
