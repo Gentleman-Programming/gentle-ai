@@ -494,7 +494,7 @@ func TestGoldenEngram_Antigravity(t *testing.T) {
 	// #797: Engram registration for Antigravity is plugin-owned only; the
 	// plugin MCP config uses the canonical agent tool profile
 	// (args ["mcp", "--tools=agent"]).
-	pluginMCPJSON := readTestFile(t, filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json"))
+	pluginMCPJSON := readTestFile(t, filepath.Join(home, ".gemini", "config", "plugins", "gentle-ai-engram", "mcp_config.json"))
 	assertGolden(t, "engram-antigravity-mcp.golden", pluginMCPJSON)
 
 	// The global ~/.gemini/antigravity-cli/mcp_config.json is shared with

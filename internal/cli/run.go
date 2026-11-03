@@ -3910,6 +3910,11 @@ func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, sele
 				}
 			}
 		}
+		if component == model.ComponentEngram {
+			for _, path := range antigravityLegacyEngramPluginPaths(homeDir, workspaceDir, scope, adapters) {
+				paths[path] = struct{}{}
+			}
+		}
 		// Persona backup captures every managed output-style file, not just the
 		// selected one, so a failed persona switch can restore the file its
 		// cleanup removed. Backup-only: verification stays on the selected file.
@@ -4433,6 +4438,19 @@ func routingGuidanceDir(homeDir, workspaceDir string, scope InstallScope, adapte
 // components write to workspaceDir instead of the selected agent's global config root.
 func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+}
+
+// antigravityLegacyEngramPluginPaths returns the Engram plugin assets older
+// gentle-ai versions wrote under antigravity-cli/plugins. Engram injection
+// retires them (#5930), so they are backup-only targets: never verified.
+func antigravityLegacyEngramPluginPaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	var paths []string
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentAntigravity {
+			paths = append(paths, engram.AntigravityLegacyPluginAssetPaths(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))...)
+		}
+	}
+	return paths
 }
 
 // piPersonaConfigPaths returns the Pi persona state files managed by install.

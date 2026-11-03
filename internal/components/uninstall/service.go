@@ -1172,6 +1172,7 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 		targets = append(targets, adapter.MCPConfigPath(homeDir, "engram"))
 		if adapter.Agent() == model.AgentAntigravity {
 			targets = append(targets, engram.AntigravityPluginAssetPaths(homeDir)...)
+			targets = append(targets, engram.AntigravityLegacyPluginAssetPaths(homeDir)...)
 		}
 	case model.StrategyTOMLFile:
 		targets = append(targets,
@@ -1211,11 +1212,17 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 			// #779: since #5065 Antigravity Engram registration is
 			// plugin-owned; the rewrite above only clears a legacy duplicate
 			// entry. Remove the plugin assets install wrote, leaving any
-			// edited asset (and so its directory) in place.
+			// edited asset (and so its directory) in place. #5930: the plugin
+			// moved to the shared config root; a legacy copy that was never
+			// migrated is retired the same way.
 			for _, asset := range engram.AntigravityPluginAssetPaths(homeDir) {
 				ops = append(ops, removeManagedAntigravityPluginAsset(asset))
 			}
 			ops = append(ops, removeDirIfEmpty(engram.AntigravityPluginDir(homeDir)))
+			for _, asset := range engram.AntigravityLegacyPluginAssetPaths(homeDir) {
+				ops = append(ops, removeManagedAntigravityPluginAsset(asset))
+			}
+			ops = append(ops, removeDirIfEmpty(engram.AntigravityLegacyPluginDir(homeDir)))
 		}
 		return ops
 	case model.StrategyTOMLFile:

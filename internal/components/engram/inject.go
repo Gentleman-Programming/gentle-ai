@@ -681,7 +681,21 @@ func injectAntigravityMutationsUnderLock(configHomeDir, settingsPath, mcpPath st
 	if removalErr != nil {
 		return changed, files, classifyAntigravityOwnershipTransferFailure(mcpPath, transfer, removalErr)
 	}
-	return changed, files, nil
+	// #5930: the legacy plugin under antigravity-cli/plugins is retired only
+	// once the new registration is read back from disk exactly as installed.
+	for _, asset := range transfer.expected {
+		current, err := readAntigravityPluginAsset(asset.path)
+		if err != nil {
+			return changed, files, fmt.Errorf("verify Antigravity plugin asset %q before retiring the legacy plugin: %w", asset.path, err)
+		}
+		if !current.existed || !bytes.Equal(current.content, asset.content) {
+			return changed, files, fmt.Errorf("Antigravity plugin asset %q on disk does not match the state it was installed with; the legacy plugin was not retired", asset.path)
+		}
+	}
+	legacyRemoved, legacyErr := removeLegacyAntigravityPlugin(configHomeDir)
+	changed = changed || len(legacyRemoved) > 0
+	files = append(files, legacyRemoved...)
+	return changed, files, legacyErr
 }
 
 // injectAntigravityOwnership runs every managed Antigravity mutation under
@@ -1185,7 +1199,8 @@ func stableEngramCommandForExisting(cmd string, _ model.AgentID) string {
 func stableAntigravityEngramCommand(homeDir, globalPath string) string {
 	paths := []string{
 		globalPath,
-		filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json"),
+		filepath.Join(AntigravityPluginDir(homeDir), "mcp_config.json"),
+		filepath.Join(AntigravityLegacyPluginDir(homeDir), "mcp_config.json"),
 	}
 	for _, path := range paths {
 		raw, err := osReadFile(path)
