@@ -25,7 +25,8 @@ func NewAdapter() *Adapter {
 	}
 }
 
-// antigravityVariantDir retains Gentle AI's legacy settings/skills selection.
+// antigravityVariantDir selects the variant-private directory that holds
+// settings.json. Customizations live in the shared root instead.
 func (a *Adapter) antigravityVariantDir(homeDir string) string {
 	desktop := filepath.Join(homeDir, ".gemini", "antigravity-desktop")
 	if stat := a.statPath(desktop); stat.err == nil {
@@ -38,8 +39,17 @@ func (a *Adapter) antigravityRoot(homeDir string) string {
 	return filepath.Join(homeDir, ".gemini", "antigravity")
 }
 
+// sharedConfigDir is the customization root shared by the Antigravity CLI
+// (agy 1.4+) and desktop app: rules/, skills/, plugins/, agents/ and
+// mcp_config.json are loaded from here. The variant directories only keep
+// private settings and caches, and on migrated layouts their mcp_config.json
+// is a symlink into this root.
+func (a *Adapter) sharedConfigDir(homeDir string) string {
+	return filepath.Join(homeDir, ".gemini", "config")
+}
+
 func (a *Adapter) migratedMarker(homeDir string) string {
-	return filepath.Join(homeDir, ".gemini", "config", ".migrated")
+	return filepath.Join(a.sharedConfigDir(homeDir), ".migrated")
 }
 
 // --- Identity ---
@@ -81,16 +91,7 @@ func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 // --- Config paths ---
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
-	if stat := a.statPath(a.migratedMarker(homeDir)); stat.err == nil {
-		return filepath.Join(homeDir, ".gemini", "config")
-	}
-	if stat := a.statPath(a.antigravityRoot(homeDir)); stat.err == nil {
-		return a.antigravityRoot(homeDir)
-	}
-	if stat := a.statPath(a.antigravityVariantDir(homeDir)); stat.err == nil {
-		return a.antigravityVariantDir(homeDir)
-	}
-	return a.antigravityRoot(homeDir)
+	return a.sharedConfigDir(homeDir)
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {
@@ -102,7 +103,7 @@ func (a *Adapter) SystemPromptFile(homeDir string) string {
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {
-	return filepath.Join(a.antigravityVariantDir(homeDir), "skills")
+	return filepath.Join(a.sharedConfigDir(homeDir), "skills")
 }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
@@ -122,7 +123,7 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 // --- MCP ---
 
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(a.antigravityVariantDir(homeDir), "mcp_config.json")
+	return filepath.Join(a.sharedConfigDir(homeDir), "mcp_config.json")
 }
 
 // --- Optional capabilities ---

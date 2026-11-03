@@ -33,7 +33,7 @@ func TestRunDoctor_AgentConfigDirectories(t *testing.T) {
 		{"openclaw", ".openclaw"},
 		{"trae-ide", ".trae"},
 		{"hermes", ".hermes"},
-		{"antigravity", ".gemini/antigravity"},
+		{"antigravity", ".gemini/config"},
 	}
 	for _, tt := range tests {
 		for _, present := range []bool{false, true} {

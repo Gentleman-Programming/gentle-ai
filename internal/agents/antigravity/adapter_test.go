@@ -78,6 +78,7 @@ func TestDetect(t *testing.T) {
 	home := t.TempDir()
 	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
 	desktopDir := filepath.Join(home, ".gemini", "antigravity-desktop")
+	sharedDir := filepath.Join(home, ".gemini", "config")
 
 	tests := []struct {
 		name            string
@@ -93,28 +94,28 @@ func TestDetect(t *testing.T) {
 			name:            "CLI dir found, no Desktop",
 			existingDirs:    []string{cliDir},
 			wantInstalled:   true,
-			wantConfigPath:  cliDir,
+			wantConfigPath:  sharedDir,
 			wantConfigFound: true,
 		},
 		{
 			name:            "Desktop dir found, no CLI",
 			existingDirs:    []string{desktopDir},
 			wantInstalled:   true,
-			wantConfigPath:  desktopDir,
+			wantConfigPath:  sharedDir,
 			wantConfigFound: true,
 		},
 		{
 			name:            "both exist, prefers Desktop",
 			existingDirs:    []string{cliDir, desktopDir},
 			wantInstalled:   true,
-			wantConfigPath:  desktopDir,
+			wantConfigPath:  sharedDir,
 			wantConfigFound: true,
 		},
 		{
-			name:            "neither exists, falls back to CLI path",
+			name:            "neither exists, reports shared root",
 			existingDirs:    []string{},
 			wantInstalled:   false,
-			wantConfigPath:  filepath.Join(home, ".gemini", "antigravity"),
+			wantConfigPath:  sharedDir,
 			wantConfigFound: false,
 		},
 		{
@@ -160,64 +161,46 @@ func TestDetect(t *testing.T) {
 
 // --- Config paths ---
 
-func TestConfigPathsCLIOnly(t *testing.T) {
+// TestConfigPathsUseSharedRoot pins agy 1.4's shared customization root:
+// skills, MCP config and the global config dir resolve under ~/.gemini/config
+// on every layout, while settings stay in the CLI-private variant directory.
+func TestConfigPathsUseSharedRoot(t *testing.T) {
 	home := t.TempDir()
-	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
-	a := &Adapter{statPath: makeStatFn(cliDir)}
-
-	if got := a.GlobalConfigDir(home); got != cliDir {
-		t.Fatalf("GlobalConfigDir() = %q, want %q", got, cliDir)
-	}
-	if got := a.SkillsDir(home); got != filepath.Join(cliDir, "skills") {
-		t.Fatalf("SkillsDir() = %q, want %q", got, filepath.Join(cliDir, "skills"))
-	}
-	if got := a.SettingsPath(home); got != filepath.Join(cliDir, "settings.json") {
-		t.Fatalf("SettingsPath() = %q, want %q", got, filepath.Join(cliDir, "settings.json"))
-	}
-	if got := a.MCPConfigPath(home, "ctx7"); got != filepath.Join(cliDir, "mcp_config.json") {
-		t.Fatalf("MCPConfigPath() = %q, want Gentle AI CLI path", got)
-	}
-}
-
-func TestConfigPathsDesktopOnly(t *testing.T) {
-	home := t.TempDir()
-	desktopDir := filepath.Join(home, ".gemini", "antigravity-desktop")
-	a := &Adapter{statPath: makeStatFn(desktopDir)}
-
-	if got := a.GlobalConfigDir(home); got != desktopDir {
-		t.Fatalf("GlobalConfigDir() = %q, want %q", got, desktopDir)
-	}
-	if got := a.SkillsDir(home); got != filepath.Join(desktopDir, "skills") {
-		t.Fatalf("SkillsDir() = %q, want %q", got, filepath.Join(desktopDir, "skills"))
-	}
-	if got := a.SettingsPath(home); got != filepath.Join(desktopDir, "settings.json") {
-		t.Fatalf("SettingsPath() = %q, want %q", got, filepath.Join(desktopDir, "settings.json"))
-	}
-	if got := a.MCPConfigPath(home, "ctx7"); got != filepath.Join(desktopDir, "mcp_config.json") {
-		t.Fatalf("MCPConfigPath() = %q, want Gentle AI desktop path", got)
-	}
-}
-
-func TestConfigPathsBothExistPrefersDesktop(t *testing.T) {
-	home := t.TempDir()
+	shared := filepath.Join(home, ".gemini", "config")
 	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
 	desktopDir := filepath.Join(home, ".gemini", "antigravity-desktop")
-	a := &Adapter{statPath: makeStatFn(cliDir, desktopDir)}
+	legacy := filepath.Join(home, ".gemini", "antigravity")
+	marker := filepath.Join(shared, ".migrated")
 
-	if got := a.GlobalConfigDir(home); got != desktopDir {
-		t.Fatalf("GlobalConfigDir() = %q, want %q (should prefer Desktop)", got, desktopDir)
+	tests := []struct {
+		name         string
+		existingDirs []string
+		wantSettings string
+	}{
+		{name: "fresh home", existingDirs: nil, wantSettings: filepath.Join(cliDir, "settings.json")},
+		{name: "CLI only", existingDirs: []string{cliDir}, wantSettings: filepath.Join(cliDir, "settings.json")},
+		{name: "Desktop only", existingDirs: []string{desktopDir}, wantSettings: filepath.Join(desktopDir, "settings.json")},
+		{name: "legacy root only", existingDirs: []string{legacy}, wantSettings: filepath.Join(cliDir, "settings.json")},
+		{name: "migrated layout", existingDirs: []string{shared, marker, cliDir}, wantSettings: filepath.Join(cliDir, "settings.json")},
 	}
-	if got := a.SkillsDir(home); got != filepath.Join(desktopDir, "skills") {
-		t.Fatalf("SkillsDir() = %q, want %q", got, filepath.Join(desktopDir, "skills"))
-	}
-}
 
-func TestConfigPathsNeitherExistsFallsBackToCLI(t *testing.T) {
-	home := t.TempDir()
-	a := &Adapter{statPath: makeStatFn()}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &Adapter{statPath: makeStatFn(tt.existingDirs...)}
 
-	if got := a.GlobalConfigDir(home); got != filepath.Join(home, ".gemini", "antigravity") {
-		t.Fatalf("GlobalConfigDir() = %q, want upstream legacy root", got)
+			if got := a.GlobalConfigDir(home); got != shared {
+				t.Fatalf("GlobalConfigDir() = %q, want %q", got, shared)
+			}
+			if got := a.SkillsDir(home); got != filepath.Join(shared, "skills") {
+				t.Fatalf("SkillsDir() = %q, want %q", got, filepath.Join(shared, "skills"))
+			}
+			if got := a.MCPConfigPath(home, "ctx7"); got != filepath.Join(shared, "mcp_config.json") {
+				t.Fatalf("MCPConfigPath() = %q, want %q", got, filepath.Join(shared, "mcp_config.json"))
+			}
+			if got := a.SettingsPath(home); got != tt.wantSettings {
+				t.Fatalf("SettingsPath() = %q, want %q", got, tt.wantSettings)
+			}
+		})
 	}
 }
 
@@ -233,10 +216,10 @@ func TestUpstreamDetectionScenarios(t *testing.T) {
 		want     bool
 		root     string
 	}{
-		{"legacy", []string{legacy}, true, legacy},
+		{"legacy", []string{legacy}, true, config},
 		{"unified", []string{config, marker}, true, config},
 		{"half migrated marker", []string{marker}, true, config},
-		{"Gemini only", []string{geminiOnly}, false, legacy},
+		{"Gemini only", []string{geminiOnly}, false, config},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
