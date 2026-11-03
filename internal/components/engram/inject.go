@@ -803,8 +803,8 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		engramCommand := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
 		if adapter.Agent() == model.AgentAntigravity {
 			// #797: Engram registration for Antigravity is plugin-owned only.
-			// The global ~/.gemini/antigravity-cli/mcp_config.json is shared
-			// with other MCP servers (e.g. Context7), so gentle-ai never
+			// The global ~/.gemini/config/mcp_config.json is shared with
+			// other MCP servers (e.g. Context7), so gentle-ai never
 			// writes it for Engram and removes only its own exact managed
 			// duplicate entry left behind by older versions.
 			//
