@@ -166,12 +166,14 @@ func (a *Adapter) SupportsSubAgents() bool {
 	return a.CapabilityManifest().Features.FileSubAgents
 }
 
-func (a *Adapter) SubAgentsDir(_ string) string {
-	return ""
+// SubAgentsDir is agy's shared custom agents directory. agy 1.4 reads
+// ~/.gemini/config/agents on every layout, so it does not follow the variant.
+func (a *Adapter) SubAgentsDir(homeDir string) string {
+	return filepath.Join(homeDir, ".gemini", "config", "agents")
 }
 
 func (a *Adapter) EmbeddedSubAgentsDir() string {
-	return ""
+	return "antigravity/agents"
 }
 
 func (a *Adapter) SupportsSkills() bool {

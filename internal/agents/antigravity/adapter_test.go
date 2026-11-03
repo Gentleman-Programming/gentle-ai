@@ -308,8 +308,8 @@ func TestCapabilities(t *testing.T) {
 	if a.SupportsSlashCommands() {
 		t.Fatal("SupportsSlashCommands() = true, want false")
 	}
-	if a.SupportsSubAgents() {
-		t.Fatal("SupportsSubAgents() = true, want false")
+	if !a.SupportsSubAgents() {
+		t.Fatal("SupportsSubAgents() = false, want true")
 	}
 	if got := a.OutputStyleDir("/tmp/home"); got != "" {
 		t.Fatalf("OutputStyleDir() = %q, want empty string", got)
@@ -317,11 +317,30 @@ func TestCapabilities(t *testing.T) {
 	if got := a.CommandsDir("/tmp/home"); got != "" {
 		t.Fatalf("CommandsDir() = %q, want empty string", got)
 	}
-	if got := a.SubAgentsDir("/tmp/home"); got != "" {
-		t.Fatalf("SubAgentsDir() = %q, want empty string", got)
+	if got := a.EmbeddedSubAgentsDir(); got != "antigravity/agents" {
+		t.Fatalf("EmbeddedSubAgentsDir() = %q, want antigravity/agents", got)
 	}
-	if got := a.EmbeddedSubAgentsDir(); got != "" {
-		t.Fatalf("EmbeddedSubAgentsDir() = %q, want empty string", got)
+}
+
+// TestSubAgentsDirUsesSharedConfigRoot proves custom agents always land in
+// agy's shared ~/.gemini/config/agents, whatever layout evidence exists.
+func TestSubAgentsDirUsesSharedConfigRoot(t *testing.T) {
+	home := t.TempDir()
+	want := filepath.Join(home, ".gemini", "config", "agents")
+	layouts := map[string][]string{
+		"fresh home":      nil,
+		"migrated marker": {filepath.Join(home, ".gemini", "config", ".migrated")},
+		"legacy root":     {filepath.Join(home, ".gemini", "antigravity")},
+		"cli variant":     {filepath.Join(home, ".gemini", "antigravity-cli")},
+		"desktop variant": {filepath.Join(home, ".gemini", "antigravity-desktop")},
+	}
+	for name, existing := range layouts {
+		t.Run(name, func(t *testing.T) {
+			a := &Adapter{statPath: makeStatFn(existing...)}
+			if got := a.SubAgentsDir(home); got != want {
+				t.Fatalf("SubAgentsDir() = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
