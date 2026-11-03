@@ -1233,11 +1233,28 @@ func stableAntigravityEngramCommand(homeDir, globalPath string) string {
 		if err != nil {
 			continue
 		}
-		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) {
+		// #5930: a preserved command that no longer resolves leaves agy with a
+		// disconnected Engram, so it falls through to the fresh-install command.
+		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) && engramCommandResolves(cmd) {
 			return stableEngramCommandForExisting(cmd, model.AgentAntigravity)
 		}
 	}
 	return preferredStableEngramCommand()
+}
+
+// engramCommandResolves reports whether cmd can still be launched: a bare name
+// must be on PATH, and a path must name an existing executable file. It is a
+// variable so ownership-transfer tests can keep their fixed fixture commands.
+var engramCommandResolves = func(cmd string) bool {
+	if filepath.Base(cmd) == cmd {
+		p, err := EngramLookPath(cmd)
+		return err == nil && p != ""
+	}
+	info, err := os.Stat(cmd)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0
 }
 
 func preferredStableEngramCommand() string {
