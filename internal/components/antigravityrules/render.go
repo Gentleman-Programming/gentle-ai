@@ -33,37 +33,59 @@ type Rule struct {
 	Content string
 }
 
+// Section is one complete gentle-ai marker section: content[Start:End] spans
+// both markers, and Body is the text between them without the newline that
+// follows the opening marker.
+type Section struct {
+	ID         string
+	Start, End int
+	Body       string
+}
+
+// Sections returns every complete gentle-ai marker section of content in
+// order. An opening marker without its closing marker is skipped.
+func Sections(content string) []Section {
+	var sections []Section
+	for search := 0; ; {
+		loc := openMarkerPattern.FindStringSubmatchIndex(content[search:])
+		if loc == nil {
+			return sections
+		}
+		id := content[search+loc[2] : search+loc[3]]
+		bodyStart := search + loc[1]
+		closeMarker := "<!-- /gentle-ai:" + id + " -->"
+		closeOffset := strings.Index(content[bodyStart:], closeMarker)
+		if closeOffset < 0 {
+			search = bodyStart
+			continue
+		}
+		end := bodyStart + closeOffset + len(closeMarker)
+		sections = append(sections, Section{
+			ID:    id,
+			Start: search + loc[0],
+			End:   end,
+			Body:  strings.TrimPrefix(content[bodyStart:bodyStart+closeOffset], "\n"),
+		})
+		search = end
+	}
+}
+
 // Render turns every complete gentle-ai marker section of the staging content
 // into rule files no larger than MaxRuleFileBytes. Concatenating the bodies of
 // a section's parts, in order, yields the section body unchanged.
 func Render(staging string) []Rule {
 	var rules []Rule
 	index := 0
-	for search := 0; ; {
-		loc := openMarkerPattern.FindStringSubmatchIndex(staging[search:])
-		if loc == nil {
-			break
-		}
-		id := staging[search+loc[2] : search+loc[3]]
-		bodyStart := search + loc[1]
-		closeMarker := "<!-- /gentle-ai:" + id + " -->"
-		closeOffset := strings.Index(staging[bodyStart:], closeMarker)
-		if closeOffset < 0 {
-			search = bodyStart
+	for _, section := range Sections(staging) {
+		if strings.TrimSpace(section.Body) == "" {
 			continue
 		}
-		body := strings.TrimPrefix(staging[bodyStart:bodyStart+closeOffset], "\n")
-		search = bodyStart + closeOffset + len(closeMarker)
-		if strings.TrimSpace(body) == "" {
-			continue
-		}
-
 		index++
-		parts := splitBody(body, MaxRuleFileBytes-len(frontmatter))
+		parts := splitBody(section.Body, MaxRuleFileBytes-len(frontmatter))
 		for i, part := range parts {
-			name := fmt.Sprintf("gentle-ai-%02d-%s.md", index, id)
+			name := fmt.Sprintf("gentle-ai-%02d-%s.md", index, section.ID)
 			if len(parts) > 1 {
-				name = fmt.Sprintf("gentle-ai-%02d-%s-part%d.md", index, id, i+1)
+				name = fmt.Sprintf("gentle-ai-%02d-%s-part%d.md", index, section.ID, i+1)
 			}
 			rules = append(rules, Rule{Name: name, Content: frontmatter + part})
 		}
