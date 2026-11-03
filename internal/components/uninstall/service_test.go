@@ -2551,13 +2551,53 @@ func antigravityEngramPluginForTest(t *testing.T, svc *Service, homeDir string) 
 	if _, err := engram.Inject(homeDir, adapter); err != nil {
 		t.Fatalf("engram.Inject(antigravity) error = %v", err)
 	}
-	pluginDir := filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram")
+	pluginDir := filepath.Join(homeDir, ".gemini", "config", "plugins", "gentle-ai-engram")
 	for _, name := range []string{"plugin.json", "mcp_config.json", "hooks.json"} {
 		if _, err := os.Stat(filepath.Join(pluginDir, name)); err != nil {
 			t.Fatalf("install did not write plugin asset %q: %v", name, err)
 		}
 	}
 	return pluginDir, adapter
+}
+
+// TestComponentOperationsEngramAntigravityRemovesLegacyPlugin covers a host
+// that never re-ran install after the plugin moved to the shared config root
+// (#5930): uninstall also retires the managed plugin under antigravity-cli.
+func TestComponentOperationsEngramAntigravityRemovesLegacyPlugin(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	pluginDir, adapter := antigravityEngramPluginForTest(t, svc, homeDir)
+	legacyDir := filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(legacy) error = %v", err)
+	}
+	for _, name := range []string{"plugin.json", "mcp_config.json", "hooks.json"} {
+		raw, readErr := os.ReadFile(filepath.Join(pluginDir, name))
+		if readErr != nil {
+			t.Fatalf("ReadFile(%q) error = %v", name, readErr)
+		}
+		if err := os.WriteFile(filepath.Join(legacyDir, name), raw, 0o644); err != nil {
+			t.Fatalf("WriteFile(legacy %q) error = %v", name, err)
+		}
+	}
+
+	targets := applyEngramUninstallForTest(t, svc, adapter)
+
+	for _, name := range []string{"plugin.json", "mcp_config.json", "hooks.json"} {
+		path := filepath.Join(legacyDir, name)
+		if !slices.Contains(targets, path) {
+			t.Fatalf("uninstall targets missing legacy plugin asset %q: %v", path, targets)
+		}
+		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("legacy managed plugin asset %q must be removed; lstat error = %v", path, statErr)
+		}
+	}
+	if _, statErr := os.Lstat(legacyDir); !os.IsNotExist(statErr) {
+		t.Fatalf("empty legacy plugin directory must be removed; lstat error = %v", statErr)
+	}
 }
 
 func applyEngramUninstallForTest(t *testing.T, svc *Service, adapter agents.Adapter) []string {

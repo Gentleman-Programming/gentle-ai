@@ -2081,3 +2081,38 @@ func TestInstallPrepareValidationScopesRefusalsToSelectedWriters(t *testing.T) {
 func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
 	return installBackupTargets(homeDir, workspaceDir, scope, selection, resolved, false)
 }
+
+// TestComponentPathsAntigravityUsesSharedConfigRoot pins agy 1.4's shared
+// ~/.gemini/config root for backup and verification paths, and proves the
+// Gemini CLI and Claude Code paths that share these helpers are unchanged.
+func TestComponentPathsAntigravityUsesSharedConfigRoot(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentAntigravity, model.AgentGeminiCLI, model.AgentClaudeCode})
+	selection := model.Selection{Skills: []model.SkillID{model.SkillGoTesting}}
+
+	context7 := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, adapters, model.ComponentContext7)
+	skills := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, adapters, model.ComponentSkills)
+
+	for _, tc := range []struct {
+		paths []string
+		want  string
+	}{
+		{context7, filepath.Join(home, ".gemini", "config", "mcp_config.json")},
+		{context7, filepath.Join(home, ".gemini", "settings.json")},
+		{skills, filepath.Join(home, ".gemini", "config", "skills", "go-testing", "SKILL.md")},
+		{skills, filepath.Join(home, ".gemini", "skills", "go-testing", "SKILL.md")},
+		{skills, filepath.Join(home, ".claude", "skills", "go-testing", "SKILL.md")},
+	} {
+		if !containsPath(tc.paths, tc.want) {
+			t.Errorf("component paths missing %q\npaths=%v", tc.want, tc.paths)
+		}
+	}
+	for _, unwanted := range []string{
+		filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json"),
+		filepath.Join(home, ".gemini", "antigravity-cli", "skills", "go-testing", "SKILL.md"),
+	} {
+		if containsPath(context7, unwanted) || containsPath(skills, unwanted) {
+			t.Errorf("component paths must not target the variant directory %q", unwanted)
+		}
+	}
+}
