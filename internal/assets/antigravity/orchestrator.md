@@ -170,4 +170,4 @@ Search engram (`mem_search`) for relevant prior context before starting when ava
 
 ## State and Conventions
 
-Convention files under `~/.gemini/antigravity-cli/skills/_shared/` (global), `.agents/skills/_shared/` (workspace), or legacy `.agent/skills/_shared/` (workspace fallback): `engram-convention.md`, `persistence-contract.md`.
+Convention files under `~/.gemini/config/skills/_shared/` (global), `.agents/skills/_shared/` (workspace), or legacy `.agent/skills/_shared/` (workspace fallback): `engram-convention.md`, `persistence-contract.md`.
