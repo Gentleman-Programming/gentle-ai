@@ -56,14 +56,20 @@ func TestPublishRemovesOnlyStaleGentleAIRules(t *testing.T) {
 	writeFile(t, userNamed, "my own notes\n")
 	userEdited := filepath.Join(rules, "gentle-ai-08-custom.md")
 	writeFile(t, userEdited, "no managed frontmatter\n")
+	staleDemoted := filepath.Join(rules, "gentle-ai-06-retired-part2.md")
+	writeFile(t, staleDemoted, "---\ntrigger: model_decision\ndescription: \"Gentle AI retired guidance\"\n---\n\nold\n")
+	userDemoted := filepath.Join(rules, "gentle-ai-09-team.md")
+	writeFile(t, userDemoted, "---\ntrigger: model_decision\n---\n\nmine\n")
 
 	if _, err := antigravityrules.Publish(home); err != nil {
 		t.Fatalf("Publish() error = %v", err)
 	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("stale owned rule still present; stat err = %v", err)
+	for _, removed := range []string{stale, staleDemoted} {
+		if _, err := os.Stat(removed); !os.IsNotExist(err) {
+			t.Fatalf("stale owned rule %s still present; stat err = %v", removed, err)
+		}
 	}
-	for _, kept := range []string{userRule, userNamed, userEdited} {
+	for _, kept := range []string{userRule, userNamed, userEdited, userDemoted} {
 		if _, err := os.Stat(kept); err != nil {
 			t.Fatalf("user rule %s was removed: %v", kept, err)
 		}
@@ -84,7 +90,7 @@ func TestPublishRemovesOnlyStaleGentleAIRules(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("Publish(empty) changed = false, want owned rules removed")
 	}
-	if names := publishedRules(t, home); strings.Join(names, ",") != "gentle-ai-08-custom.md,gentle-ai-notes.md" {
+	if names := publishedRules(t, home); strings.Join(names, ",") != "gentle-ai-08-custom.md,gentle-ai-09-team.md,gentle-ai-notes.md" {
 		t.Fatalf("remaining gentle-ai rules = %v", names)
 	}
 }

@@ -1,7 +1,6 @@
 package antigravityrules
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,8 +42,8 @@ func LegacyPromptPath(baseDir string) string {
 
 // Publish renders the staging file into RulesDir and removes the Gentle AI
 // rules it no longer produces. A missing or emptied staging file retires every
-// owned rule. Files outside the owned name pattern, or without the managed
-// frontmatter, are never touched.
+// owned rule. Files outside the owned name pattern, or without one of the
+// managed frontmatters, are never touched.
 func Publish(baseDir string) (Result, error) {
 	staging, err := os.ReadFile(StagingPath(baseDir))
 	if err != nil && !os.IsNotExist(err) {
@@ -104,7 +103,7 @@ func OwnedRulePaths(baseDir string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read Antigravity rule %q: %w", path, err)
 		}
-		if bytes.HasPrefix(content, []byte(managedHeader)) {
+		if managedHeaderPattern.Match(content) {
 			paths = append(paths, path)
 		}
 	}

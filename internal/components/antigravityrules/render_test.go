@@ -18,7 +18,25 @@ import (
 
 const frontmatter = "---\ntrigger: always_on\n---\n"
 
-var markerPattern = regexp.MustCompile(`<!-- gentle-ai:([A-Za-z0-9_.-]+) -->`)
+var (
+	markerPattern = regexp.MustCompile(`<!-- gentle-ai:([A-Za-z0-9_.-]+) -->`)
+	// demotedPattern is the on-demand frontmatter of a rule over the budget.
+	demotedPattern = regexp.MustCompile(`\A---\ntrigger: model_decision\ndescription: "([^"\n]+)"\n---\n\n`)
+)
+
+// ruleBody strips either managed frontmatter and reports whether the rule is
+// always on.
+func ruleBody(t *testing.T, rule antigravityrules.Rule) (string, bool) {
+	t.Helper()
+	if body, ok := strings.CutPrefix(rule.Content, frontmatter+"\n"); ok {
+		return body, true
+	}
+	match := demotedPattern.FindStringSubmatch(rule.Content)
+	if match == nil {
+		t.Fatalf("%s starts with neither managed frontmatter: %q", rule.Name, rule.Content[:min(len(rule.Content), 120)])
+	}
+	return rule.Content[len(match[0]):], false
+}
 
 // renderRealGuidance runs the production writers for Antigravity into a fake
 // home, exactly as install does, and returns the staging file content.
@@ -84,9 +102,7 @@ func TestRenderRealAntigravityGuidanceFitsAgyRuleLimit(t *testing.T) {
 		if len(content) > antigravityrules.MaxRuleFileBytes {
 			t.Errorf("%s is %d bytes, want <= %d", name, len(content), antigravityrules.MaxRuleFileBytes)
 		}
-		if !strings.HasPrefix(content, frontmatter) {
-			t.Errorf("%s does not start with the always_on frontmatter", name)
-		}
+		body, _ := ruleBody(t, rule)
 		id := regexp.MustCompile(`^gentle-ai-\d{2}-(.+?)(-part\d+)?\.md$`).FindStringSubmatch(name)
 		if id == nil {
 			t.Fatalf("unexpected rule file name %q", name)
@@ -94,7 +110,7 @@ func TestRenderRealAntigravityGuidanceFitsAgyRuleLimit(t *testing.T) {
 		if _, seen := bodies[id[1]]; !seen {
 			order = append(order, id[1])
 		}
-		bodies[id[1]] += strings.TrimPrefix(content, frontmatter+"\n")
+		bodies[id[1]] += body
 	}
 
 	// Nested sections (remote-authorization lives inside routing guidance)
@@ -167,5 +183,74 @@ func TestRenderSplitsOversizedSectionsAtHeadingBoundaries(t *testing.T) {
 				t.Fatalf("concatenated bodies differ from the section body")
 			}
 		})
+	}
+}
+
+func TestRenderRealAntigravityGuidanceKeepsCoreInlineWithinBudget(t *testing.T) {
+	rules := antigravityrules.Render(renderRealGuidance(t, t.TempDir()))
+	core := map[string]bool{
+		"gentle-ai-01-persona.md":             true,
+		"gentle-ai-02-engram-protocol.md":     true,
+		"gentle-ai-03-orchestrator-part1.md":  true,
+		"gentle-ai-04-agent-routing-part1.md": true,
+	}
+	inline, demoted := 0, 0
+	for _, rule := range rules {
+		_, alwaysOn := ruleBody(t, rule)
+		if core[rule.Name] && !alwaysOn {
+			t.Errorf("core rule %s was demoted", rule.Name)
+		}
+		if alwaysOn {
+			inline += len(rule.Content)
+			delete(core, rule.Name)
+			continue
+		}
+		demoted++
+		t.Logf("%s demoted: %s", rule.Name, demotedPattern.FindStringSubmatch(rule.Content)[1])
+	}
+	if len(core) > 0 {
+		t.Errorf("core rules not rendered: %v", core)
+	}
+	if inline > antigravityrules.AlwaysOnBudgetBytes {
+		t.Errorf("always_on rules total %d bytes, want <= %d", inline, antigravityrules.AlwaysOnBudgetBytes)
+	}
+	if demoted == 0 {
+		t.Fatalf("no rule was demoted; the test needs guidance larger than the budget")
+	}
+}
+
+func TestRenderKeepsSmallGuidanceAlwaysOn(t *testing.T) {
+	staging := filemerge.InjectMarkdownSection("", "persona", "Be kind.\n")
+	staging = filemerge.InjectMarkdownSection(staging, "agent-routing", "## Routing\nDelegate.\n")
+	staging = filemerge.InjectMarkdownSection(staging, "codegraph-guidance", "## CodeGraph\nExplore.\n")
+	rules := antigravityrules.Render(staging)
+	if len(rules) != 3 {
+		t.Fatalf("Render() produced %d rules, want 3", len(rules))
+	}
+	for _, rule := range rules {
+		if _, alwaysOn := ruleBody(t, rule); !alwaysOn {
+			t.Errorf("%s was demoted; small guidance must stay always_on", rule.Name)
+		}
+	}
+}
+
+func TestRenderDescribesDemotedRulesByFirstHeading(t *testing.T) {
+	filler := strings.Repeat("guidance line that fills the always-on budget\n", 250)
+	staging := ""
+	for _, id := range []string{"persona", "engram-protocol", "orchestrator", "agent-routing", "strict-tdd"} {
+		staging = filemerge.InjectMarkdownSection(staging, id, "## \"Quoted\" "+id+" rules\n"+filler)
+	}
+	var demoted []string
+	for _, rule := range antigravityrules.Render(staging) {
+		if _, alwaysOn := ruleBody(t, rule); !alwaysOn {
+			description := demotedPattern.FindStringSubmatch(rule.Content)[1]
+			if !strings.Contains(description, "Quoted strict-tdd rules") {
+				t.Errorf("%s description = %q, want its first heading", rule.Name, description)
+			}
+			demoted = append(demoted, rule.Name)
+		}
+	}
+	if strings.Join(demoted, ",") != "gentle-ai-05-strict-tdd.md" {
+		t.Fatalf("demoted rules = %v, want only the lowest-priority section", demoted)
 	}
 }
