@@ -18,7 +18,11 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 )
+
+// ImportSectionID marks the only Gentle AI block GEMINI.md keeps.
+const ImportSectionID = "gemini-cli-imports"
 
 // ownedModulePattern is the only name shape Publish writes inside ModulesDir,
 // so stale-module cleanup never touches other files there.
@@ -30,14 +34,25 @@ type Module struct {
 	Content string
 }
 
+// Result reports the files an operation changed or removed.
+type Result struct {
+	Changed bool
+	Files   []string
+}
+
+func (r *Result) add(path string) {
+	r.Changed = true
+	r.Files = append(r.Files, path)
+}
+
 // RootPath is the GEMINI.md Gemini CLI loads globally.
 func RootPath(baseDir string) string { return filepath.Join(baseDir, ".gemini", "GEMINI.md") }
 
 // ModulesDir is the Gentle AI-owned directory holding the modules.
 func ModulesDir(baseDir string) string { return filepath.Join(baseDir, ".gemini", "gentle-ai") }
 
-// StagingPath is the Gemini CLI guidance staging file, inside ModulesDir but
-// outside the owned module names.
+// StagingPath is the Gemini CLI adapter's SystemPromptFile, inside ModulesDir
+// but outside the owned module names.
 func StagingPath(baseDir string) string { return filepath.Join(ModulesDir(baseDir), "guidance.md") }
 
 // Render partitions the staging content into modules: the persona body the
@@ -72,6 +87,93 @@ func Render(staging string) []Module {
 	return modules
 }
 
+// stripSections removes every complete gentle-ai marker section, preserving
+// every byte outside them.
+func stripSections(content string) string {
+	for _, section := range antigravityrules.Sections(content) {
+		content = filemerge.InjectMarkdownSection(content, section.ID, "")
+	}
+	return content
+}
+
+// Publish renders the staging file into ModulesDir, removes the owned modules
+// it no longer produces, and rewrites GEMINI.md as the content outside
+// Gentle AI marker sections plus one import block. A missing or emptied
+// staging file retires every module and the import block.
+func Publish(baseDir string) (Result, error) {
+	staging, err := os.ReadFile(StagingPath(baseDir))
+	if err != nil && !os.IsNotExist(err) {
+		return Result{}, fmt.Errorf("read Gemini CLI guidance staging file: %w", err)
+	}
+	modules := Render(string(staging))
+	result := Result{}
+	wanted := map[string]bool{}
+	imports := ""
+	for _, module := range modules {
+		path := filepath.Join(ModulesDir(baseDir), module.Name)
+		wanted[path] = true
+		imports += "@./gentle-ai/" + module.Name + "\n"
+		write, err := filemerge.WriteFileAtomic(path, []byte(module.Content), 0o644)
+		if err != nil {
+			return result, fmt.Errorf("write Gemini CLI module %q: %w", path, err)
+		}
+		if write.Changed {
+			result.add(path)
+		}
+	}
+	owned, err := OwnedModulePaths(baseDir)
+	if err != nil {
+		return result, err
+	}
+	for _, path := range owned {
+		if wanted[path] {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return result, fmt.Errorf("remove stale Gemini CLI module %q: %w", path, err)
+		}
+		result.add(path)
+	}
+
+	root := RootPath(baseDir)
+	raw, err := os.ReadFile(root)
+	if err != nil && !os.IsNotExist(err) {
+		return result, fmt.Errorf("read %q: %w", root, err)
+	}
+	updated := stripSections(string(raw))
+	if imports != "" {
+		updated = filemerge.InjectMarkdownSection(updated, ImportSectionID, imports)
+	}
+	if updated != string(raw) {
+		if err := writeOrRemove(root, updated); err != nil {
+			return result, err
+		}
+		result.add(root)
+	}
+	if len(modules) == 0 {
+		// Only an emptied directory goes; it is Gentle AI's own, and the
+		// files it held are already reported.
+		_ = os.Remove(ModulesDir(baseDir))
+	}
+	return result, nil
+}
+
+// Retire removes the staging file, every owned module, the import block and
+// the emptied module directory, preserving the user's GEMINI.md content.
+func Retire(baseDir string) (Result, error) {
+	result := Result{}
+	staging := StagingPath(baseDir)
+	if err := os.Remove(staging); err == nil {
+		result.add(staging)
+	} else if !os.IsNotExist(err) {
+		return result, fmt.Errorf("remove Gemini CLI guidance staging file: %w", err)
+	}
+	published, err := Publish(baseDir)
+	result.Changed = result.Changed || published.Changed
+	result.Files = append(result.Files, published.Files...)
+	return result, err
+}
+
 // OwnedModulePaths lists the module files Publish owns that exist on disk.
 func OwnedModulePaths(baseDir string) ([]string, error) {
 	dir := ModulesDir(baseDir)
@@ -104,4 +206,19 @@ func ManagedPaths(baseDir string) []string {
 		}
 	}
 	return append(paths, StagingPath(baseDir), RootPath(baseDir))
+}
+
+// writeOrRemove writes content keeping the file mode, or removes the file
+// when nothing but whitespace is left.
+func writeOrRemove(path, content string) error {
+	if strings.TrimSpace(content) == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove emptied %q: %w", path, err)
+		}
+		return nil
+	}
+	if _, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write %q: %w", path, err)
+	}
+	return nil
 }

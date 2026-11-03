@@ -87,3 +87,85 @@ func TestRenderWithoutPersonaStartsAtTheFirstSection(t *testing.T) {
 		t.Fatalf("Render(blank) = %+v, want no modules", got)
 	}
 }
+
+func TestPublishWritesModulesAndAnImportOnlyManagedBlock(t *testing.T) {
+	home := t.TempDir()
+	staging := stagingWith(personaAsset, "engram-protocol")
+	write(t, geminimodules.StagingPath(home), staging, 0o644)
+	write(t, geminimodules.RootPath(home), userContent, 0o600)
+
+	result, err := geminimodules.Publish(home)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Publish() changed = false, want true")
+	}
+	want := filemerge.InjectMarkdownSection(userContent, geminimodules.ImportSectionID, importBlock("01-persona.md", "02-engram-protocol.md"))
+	if got := read(t, geminimodules.RootPath(home)); got != want {
+		t.Fatalf("GEMINI.md =\n%s\nwant\n%s", got, want)
+	}
+	info, err := os.Stat(geminimodules.RootPath(home))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("GEMINI.md mode = %v (%v), want 0600 kept", info.Mode().Perm(), err)
+	}
+	joined := ""
+	for _, module := range geminimodules.Render(staging) {
+		joined += read(t, filepath.Join(geminimodules.ModulesDir(home), module.Name))
+	}
+	if joined != staging {
+		t.Fatal("module files on disk do not reproduce the staged guidance")
+	}
+
+	again, err := geminimodules.Publish(home)
+	if err != nil || again.Changed {
+		t.Fatalf("second Publish() = %+v, %v; want no change", again, err)
+	}
+}
+
+func TestPublishRemovesOnlyStaleOwnedModules(t *testing.T) {
+	home := t.TempDir()
+	dir := geminimodules.ModulesDir(home)
+	write(t, geminimodules.StagingPath(home), stagingWith("", "engram-protocol"), 0o644)
+	write(t, filepath.Join(dir, "07-retired.md"), "old", 0o644)
+	write(t, filepath.Join(dir, "notes.md"), "mine", 0o644)
+
+	if _, err := geminimodules.Publish(home); err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "07-retired.md")); !os.IsNotExist(err) {
+		t.Fatalf("stale module kept; stat err = %v", err)
+	}
+	if got := read(t, filepath.Join(dir, "notes.md")); got != "mine" {
+		t.Fatalf("notes.md = %q, want untouched", got)
+	}
+}
+
+func TestRetireRemovesImportBlockModulesAndStaging(t *testing.T) {
+	for _, user := range []string{userContent, ""} {
+		home := t.TempDir()
+		write(t, geminimodules.StagingPath(home), stagingWith(personaAsset, "engram-protocol"), 0o644)
+		write(t, geminimodules.RootPath(home), user, 0o644)
+		write(t, filepath.Join(home, ".gemini", "settings.json"), "{}", 0o644)
+		if _, err := geminimodules.Publish(home); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := geminimodules.Retire(home); err != nil {
+			t.Fatalf("Retire() error = %v", err)
+		}
+		if _, err := os.Stat(geminimodules.ModulesDir(home)); !os.IsNotExist(err) {
+			t.Fatalf("module directory kept; stat err = %v", err)
+		}
+		got, err := os.ReadFile(geminimodules.RootPath(home))
+		if user == "" {
+			if !os.IsNotExist(err) {
+				t.Fatalf("emptied GEMINI.md kept: %q", got)
+			}
+			continue
+		}
+		if string(got) != user {
+			t.Fatalf("GEMINI.md = %q, want the user bytes %q", got, user)
+		}
+	}
+}
