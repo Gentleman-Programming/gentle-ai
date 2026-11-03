@@ -109,7 +109,7 @@ func (a *Adapter) GlobalConfigDir(homeDir string) string {
 // the variant directory that holds settings. Hosts that predate the shared
 // root carry only the latter two.
 func (a *Adapter) ConfigDirs(homeDir string) []string {
-	return []string{a.GlobalConfigDir(homeDir), a.antigravityRoot(homeDir), a.antigravityVariantDir(homeDir)}
+	return append([]string{a.GlobalConfigDir(homeDir), a.antigravityRoot(homeDir)}, LegacyVariantDirs(homeDir)...)
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {
