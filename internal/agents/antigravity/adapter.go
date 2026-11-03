@@ -48,6 +48,16 @@ func (a *Adapter) sharedConfigDir(homeDir string) string {
 	return filepath.Join(homeDir, ".gemini", "config")
 }
 
+// LegacyVariantDirs returns the variant directories that held skills and
+// mcp_config.json before Gentle AI targeted the shared ~/.gemini/config root.
+// Older installs may still carry managed files there.
+func LegacyVariantDirs(homeDir string) []string {
+	return []string{
+		filepath.Join(homeDir, ".gemini", "antigravity-cli"),
+		filepath.Join(homeDir, ".gemini", "antigravity-desktop"),
+	}
+}
+
 func (a *Adapter) migratedMarker(homeDir string) string {
 	return filepath.Join(a.sharedConfigDir(homeDir), ".migrated")
 }
@@ -92,6 +102,14 @@ func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
 	return a.sharedConfigDir(homeDir)
+}
+
+// ConfigDirs lists every directory whose presence shows an Antigravity
+// configuration, in preference order: the shared root, the legacy root, and
+// the variant directory that holds settings. Hosts that predate the shared
+// root carry only the latter two.
+func (a *Adapter) ConfigDirs(homeDir string) []string {
+	return append([]string{a.GlobalConfigDir(homeDir), a.antigravityRoot(homeDir)}, LegacyVariantDirs(homeDir)...)
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {

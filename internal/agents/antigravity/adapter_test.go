@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -201,6 +202,25 @@ func TestConfigPathsUseSharedRoot(t *testing.T) {
 				t.Fatalf("SettingsPath() = %q, want %q", got, tt.wantSettings)
 			}
 		})
+	}
+}
+
+func TestConfigDirsListsSharedLegacyAndVariantRoots(t *testing.T) {
+	home := t.TempDir()
+	desktopDir := filepath.Join(home, ".gemini", "antigravity-desktop")
+	want := []string{
+		filepath.Join(home, ".gemini", "config"),
+		filepath.Join(home, ".gemini", "antigravity"),
+		filepath.Join(home, ".gemini", "antigravity-cli"),
+		desktopDir,
+	}
+	// Both variant roots are listed whichever one exists, so doctor accepts
+	// a host that only has the desktop or only has the CLI directory.
+	for _, existing := range [][]string{nil, {desktopDir}} {
+		a := &Adapter{statPath: makeStatFn(existing...)}
+		if got := a.ConfigDirs(home); !slices.Equal(got, want) {
+			t.Fatalf("ConfigDirs() with %v = %v, want %v", existing, got, want)
+		}
 	}
 }
 
