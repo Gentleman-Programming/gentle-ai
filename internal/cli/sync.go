@@ -720,6 +720,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 			}
 		}
 		if component == model.ComponentEngram {
+			for _, path := range antigravityLegacyEngramPluginPaths(homeDir, workspaceDir, scope, componentAdapters) {
+				paths[path] = struct{}{}
+			}
 			for _, adapter := range componentAdapters {
 				if adapter.Agent() == model.AgentClaudeCode {
 					// Scope the declared engram MCP target like the sync step

@@ -11,21 +11,62 @@ import (
 )
 
 // AntigravityPluginDir is the plugin-owned Engram registration directory for
-// one Antigravity config home. It is shared by the desktop and CLI variants on
-// purpose (see antigravityLockTarget), so it never depends on the variant.
+// one Antigravity config home. agy 1.4 loads plugins only from the shared
+// ~/.gemini/config root (#5930), so it never depends on the desktop/CLI variant.
 func AntigravityPluginDir(homeDir string) string {
+	return filepath.Join(homeDir, ".gemini", "config", "plugins", "gentle-ai-engram")
+}
+
+// AntigravityLegacyPluginDir is where gentle-ai wrote the Engram plugin before
+// agy 1.4 (#5930).
+func AntigravityLegacyPluginDir(homeDir string) string {
 	return filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram")
 }
 
 // AntigravityPluginAssetPaths returns the Engram plugin assets install writes
 // for one Antigravity config home, in install order.
 func AntigravityPluginAssetPaths(homeDir string) []string {
-	dir := AntigravityPluginDir(homeDir)
+	return antigravityPluginAssetPathsIn(AntigravityPluginDir(homeDir))
+}
+
+// AntigravityLegacyPluginAssetPaths returns the Engram plugin assets older
+// gentle-ai versions wrote under AntigravityLegacyPluginDir. Install migrates
+// them away and uninstall removes any that remain.
+func AntigravityLegacyPluginAssetPaths(homeDir string) []string {
+	return antigravityPluginAssetPathsIn(AntigravityLegacyPluginDir(homeDir))
+}
+
+func antigravityPluginAssetPathsIn(dir string) []string {
 	return []string{
 		filepath.Join(dir, "plugin.json"),
 		filepath.Join(dir, "mcp_config.json"),
 		filepath.Join(dir, "hooks.json"),
 	}
+}
+
+// removeLegacyAntigravityPlugin retires the managed plugin assets an older
+// gentle-ai wrote under AntigravityLegacyPluginDir (#5930). Only byte-identical
+// managed assets are removed and the directory only when it is left empty;
+// edited assets and unrelated plugins are never touched. It returns the
+// removed asset paths.
+func removeLegacyAntigravityPlugin(homeDir string) ([]string, error) {
+	var removed []string
+	for _, path := range AntigravityLegacyPluginAssetPaths(homeDir) {
+		ok, err := RemoveManagedAntigravityPluginAsset(path)
+		if err != nil {
+			return removed, err
+		}
+		if ok {
+			removed = append(removed, path)
+		}
+	}
+	dir := AntigravityLegacyPluginDir(homeDir)
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
+		if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
+			return removed, fmt.Errorf("remove empty legacy Antigravity Engram plugin dir %q: %w", dir, err)
+		}
+	}
+	return removed, nil
 }
 
 // RemoveManagedAntigravityPluginAsset removes path only when it is a regular
