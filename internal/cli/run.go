@@ -2626,32 +2626,31 @@ func managedOrchestratorPromptFromSettings(raw []byte) (string, bool) {
 	return prompt, ok
 }
 
-// antigravityRulesStep publishes the guidance every prompt writer staged for
-// Antigravity as size-capped agy rule files, then retires the sections older
-// releases appended to the GEMINI.md agy also loads (#5676, #1989, #5608).
-//
-// The rule names depend on the staged content, which does not exist when the
-// run's backup is taken, so the step snapshots exactly what it will touch
-// right before publishing and restores that on rollback: rules this run
-// created are removed and previous ones come back byte for byte.
-type antigravityRulesStep struct {
-	id, homeDir, baseDir string
-	agents               []model.AgentID
-	changedFiles         *[]string
-	before               map[string]syncFileSnapshot
-	createdRulesDir      bool
+// publishedGuidanceStep runs a publisher whose output file names depend on
+// the guidance the prompt writers staged, which does not exist when the run's
+// backup is taken. It snapshots exactly what the publisher may touch right
+// before it runs and restores that on rollback: files this run created are
+// removed, previous ones come back byte for byte, and an emptied directory
+// this run created is removed.
+type publishedGuidanceStep struct {
+	id           string
+	dir          string
+	paths        func() []string
+	publish      func() ([]string, error)
+	changedFiles *[]string
+	before       map[string]syncFileSnapshot
+	createdDir   bool
 }
 
-func (s *antigravityRulesStep) ID() string { return s.id }
+func (s *publishedGuidanceStep) ID() string { return s.id }
 
-func (s *antigravityRulesStep) Run() (runErr error) {
-	rulesDir := antigravityrules.RulesDir(s.baseDir)
-	if _, err := os.Lstat(rulesDir); os.IsNotExist(err) {
-		s.createdRulesDir = true
+func (s *publishedGuidanceStep) Run() (runErr error) {
+	if _, err := os.Lstat(s.dir); os.IsNotExist(err) {
+		s.createdDir = true
 	}
-	before, err := snapshotSyncFiles(append(antigravityrules.ManagedPaths(s.baseDir), antigravityrules.LegacyPromptPath(s.baseDir)))
+	before, err := snapshotSyncFiles(s.paths())
 	if err != nil {
-		return fmt.Errorf("snapshot Antigravity rules: %w", err)
+		return fmt.Errorf("snapshot %s: %w", s.id, err)
 	}
 	s.before = before
 	defer func() {
@@ -2660,37 +2659,52 @@ func (s *antigravityRulesStep) Run() (runErr error) {
 		}
 	}()
 
-	published, err := antigravityrules.Publish(s.baseDir)
+	files, err := s.publish()
 	if err != nil {
-		return fmt.Errorf("publish Antigravity rules: %w", err)
-	}
-	migrated, err := antigravityrules.MigrateLegacyPrompt(s.baseDir, antigravityrules.GeminiCLIManaged(s.homeDir, s.agents))
-	if err != nil {
-		return fmt.Errorf("retire Antigravity sections from GEMINI.md: %w", err)
+		return err
 	}
 	if s.changedFiles != nil {
-		*s.changedFiles = append(*s.changedFiles, published.Files...)
-		*s.changedFiles = append(*s.changedFiles, migrated.Files...)
+		*s.changedFiles = append(*s.changedFiles, files...)
 	}
 	return nil
 }
 
-func (s *antigravityRulesStep) Rollback() error {
+func (s *publishedGuidanceStep) Rollback() error {
 	err := restoreSyncFiles(s.before)
-	if s.createdRulesDir {
+	if s.createdDir {
 		// Only an emptied directory this run created is removed.
-		_ = os.Remove(antigravityrules.RulesDir(s.baseDir))
+		_ = os.Remove(s.dir)
 	}
 	return err
 }
 
 // antigravityRulesSteps schedules the publisher once when Antigravity is
-// selected; it writes beside the scoped prompt the writers staged.
+// selected; it writes beside the scoped prompt the writers staged. It
+// publishes the staged guidance as size-capped agy rule files, then retires
+// the sections older releases appended to the GEMINI.md agy also loads
+// (#5676, #1989, #5608).
 func antigravityRulesSteps(id, homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string) []pipeline.Step {
 	if !containsAgent(agentIDs, model.AgentAntigravity) {
 		return nil
 	}
-	return []pipeline.Step{&antigravityRulesStep{id: id, homeDir: homeDir, baseDir: ResolveAgentConfigDir(scope, homeDir, workspaceDir), agents: agentIDs, changedFiles: changedFiles}}
+	baseDir := ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+	return []pipeline.Step{&publishedGuidanceStep{
+		id:           id,
+		dir:          antigravityrules.RulesDir(baseDir),
+		paths:        func() []string { return antigravityRulesBackupPaths(homeDir, workspaceDir, scope, agentIDs) },
+		changedFiles: changedFiles,
+		publish: func() ([]string, error) {
+			published, err := antigravityrules.Publish(baseDir)
+			if err != nil {
+				return nil, fmt.Errorf("publish Antigravity rules: %w", err)
+			}
+			migrated, err := antigravityrules.MigrateLegacyPrompt(baseDir, antigravityrules.GeminiCLIManaged(homeDir, agentIDs))
+			if err != nil {
+				return published.Files, fmt.Errorf("retire Antigravity sections from GEMINI.md: %w", err)
+			}
+			return append(published.Files, migrated.Files...), nil
+		},
+	}}
 }
 
 // antigravityRulesBackupPaths lists the rule files the publisher may write or
