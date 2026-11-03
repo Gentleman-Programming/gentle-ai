@@ -14,6 +14,7 @@ var linearRoutes = map[Screen]Route{
 	ScreenClaudeModelPicker:       {Forward: ScreenDependencyTree, Backward: ScreenPreset},
 	ScreenKiroModelPicker:         {Forward: ScreenDependencyTree, Backward: ScreenPreset},
 	ScreenCodexModelPicker:        {Forward: ScreenDependencyTree, Backward: ScreenPreset},
+	ScreenAntigravityModelPicker:  {Forward: ScreenDependencyTree, Backward: ScreenPreset},
 	ScreenCommunityToolInstalling: {Forward: ScreenCommunityToolResult},
 	ScreenCommunityToolResult:     {Backward: ScreenWelcome},
 	ScreenModelPicker:             {Backward: ScreenModelConfig},

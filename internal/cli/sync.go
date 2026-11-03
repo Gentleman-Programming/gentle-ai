@@ -726,6 +726,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 			}
 		}
 		if component == model.ComponentEngram {
+			for _, path := range antigravityLegacyEngramPluginPaths(homeDir, workspaceDir, scope, componentAdapters) {
+				paths[path] = struct{}{}
+			}
 			for _, adapter := range componentAdapters {
 				if adapter.Agent() == model.AgentClaudeCode {
 					// Scope the declared engram MCP target like the sync step
@@ -2333,6 +2336,9 @@ func RunSync(args []string) (SyncResult, error) {
 			m[k] = model.KiroModelAlias(v)
 		}
 		selection.KiroModelAssignments = m
+	}
+	if len(selection.AntigravityModelAssignments) == 0 {
+		selection.AntigravityModelAssignments = model.AntigravityModelTiersFromStrings(persistedState.AntigravityModelAssignments)
 	}
 	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
 		workspaceDir, _ := os.Getwd()
