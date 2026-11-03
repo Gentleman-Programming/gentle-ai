@@ -23,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
@@ -412,6 +413,10 @@ type plan struct {
 	// also strips the sections older releases appended to GEMINI.md.
 	antigravityRules              bool
 	retireLegacyAntigravityPrompt bool
+	// geminiModules moves what older releases wrote into GEMINI.md to the
+	// Gemini CLI staging file the operations target, then republishes the
+	// modules from what is left.
+	geminiModules bool
 }
 
 func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.ComponentID) (plan, error) {
@@ -551,6 +556,12 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	if retireLegacyAntigravity {
 		backupTargets[antigravityrules.LegacyPromptPath(s.homeDir)] = struct{}{}
 	}
+	geminiModules := slices.Contains(agentIDs, model.AgentGeminiCLI)
+	if geminiModules || retireLegacyAntigravity {
+		for _, path := range geminimodules.ManagedPaths(s.homeDir) {
+			backupTargets[path] = struct{}{}
+		}
+	}
 	if slices.Contains(agentIDs, model.AgentClaudeCode) && removesAllAgentComponents(componentIDs) {
 		// Only a complete Claude removal retires the module pilot (see
 		// retireClaudeGlobalModules); snapshot every file it may change. An
@@ -622,7 +633,7 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	}
 	slices.SortFunc(operations, compareOperations)
 
-	return plan{backupTargets: orderedTargets, operations: operations, antigravityRules: publishAntigravity, retireLegacyAntigravityPrompt: retireLegacyAntigravity}, nil
+	return plan{backupTargets: orderedTargets, operations: operations, antigravityRules: publishAntigravity, retireLegacyAntigravityPrompt: retireLegacyAntigravity, geminiModules: geminiModules}, nil
 }
 
 func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, error) {
@@ -689,6 +700,18 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		}
 	}
 
+	var geminiFiles []string
+	if p.geminiModules {
+		migrated, err := geminimodules.MigrateLegacyRoot(s.homeDir)
+		if err != nil {
+			failures = append(failures, operationFailure{path: geminimodules.RootPath(s.homeDir), agents: []model.AgentID{model.AgentGeminiCLI}, err: err})
+		}
+		// Without the migration the operations miss the guidance, so the
+		// modules are not republished from an incomplete staging file.
+		p.geminiModules = err == nil
+		geminiFiles = migrated.Files
+	}
+
 	for _, op := range p.operations {
 		changed, removed, err := op.apply(op.path)
 		if op.report != nil {
@@ -720,6 +743,14 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 			if removed {
 				result.RemovedDirectories = append(result.RemovedDirectories, op.path)
 			}
+		}
+	}
+
+	if p.geminiModules {
+		published, err := geminimodules.Publish(s.homeDir)
+		reportPublishedFiles(&result, append(geminiFiles, published.Files...))
+		if err != nil {
+			failures = append(failures, operationFailure{path: geminimodules.ModulesDir(s.homeDir), agents: []model.AgentID{model.AgentGeminiCLI}, err: err})
 		}
 	}
 
@@ -797,15 +828,30 @@ func (s *Service) publishAntigravityRules(result *Result, retireLegacy bool) err
 		if err := os.Remove(stagingDir); err == nil {
 			result.RemovedDirectories = append(result.RemovedDirectories, stagingDir)
 		}
+		if !antigravityrules.GeminiCLIManaged(s.homeDir, nil) {
+			// Nothing imports the modules an earlier Gemini CLI install left.
+			retired, err := geminimodules.Retire(s.homeDir)
+			files = append(files, retired.Files...)
+			if err != nil {
+				reportPublishedFiles(result, files)
+				return err
+			}
+		}
 	}
-	for _, path := range files {
+	reportPublishedFiles(result, files)
+	return nil
+}
+
+// reportPublishedFiles records each path a publisher touched as it is on disk
+// afterwards: removed or changed.
+func reportPublishedFiles(result *Result, files []string) {
+	for _, path := range slices.Compact(slices.Sorted(slices.Values(files))) {
 		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 			result.RemovedFiles = append(result.RemovedFiles, path)
 		} else {
 			result.ChangedFiles = append(result.ChangedFiles, path)
 		}
 	}
-	return nil
 }
 
 // retireClaudeGlobalModules returns a complete Claude removal from the module
