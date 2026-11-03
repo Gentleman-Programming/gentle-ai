@@ -1651,7 +1651,7 @@ func TestInjectGeminiGentlemanWritesSystemPromptWithRealContent(t *testing.T) {
 		t.Fatal("Inject(gemini, gentleman) changed = false")
 	}
 
-	path := filepath.Join(home, ".gemini", "GEMINI.md")
+	path := geminiAdapter.SystemPromptFile(home)
 	content, readErr := os.ReadFile(path)
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q) error = %v", path, readErr)
