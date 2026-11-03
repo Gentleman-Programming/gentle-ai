@@ -101,7 +101,7 @@ func TestPublishWritesModulesAndAnImportOnlyManagedBlock(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("Publish() changed = false, want true")
 	}
-	want := filemerge.InjectMarkdownSection(userContent, geminimodules.ImportSectionID, importBlock("01-persona.md", "02-engram-protocol.md"))
+	want := rootWith(importBlock("01-persona.md", "02-engram-protocol.md"), userContent)
 	if got := read(t, geminimodules.RootPath(home)); got != want {
 		t.Fatalf("GEMINI.md =\n%s\nwant\n%s", got, want)
 	}
@@ -126,14 +126,17 @@ func TestPublishWritesModulesAndAnImportOnlyManagedBlock(t *testing.T) {
 func TestPublishRemovesOnlyStaleOwnedModules(t *testing.T) {
 	home := t.TempDir()
 	dir := geminimodules.ModulesDir(home)
-	write(t, geminimodules.StagingPath(home), stagingWith("", "engram-protocol"), 0o644)
-	write(t, filepath.Join(dir, "07-retired.md"), "old", 0o644)
+	write(t, geminimodules.StagingPath(home), stagingWith("", "engram-protocol", "retired"), 0o644)
+	if _, err := geminimodules.Publish(home); err != nil {
+		t.Fatal(err)
+	}
 	write(t, filepath.Join(dir, "notes.md"), "mine", 0o644)
+	write(t, geminimodules.StagingPath(home), stagingWith("", "engram-protocol"), 0o644)
 
 	if _, err := geminimodules.Publish(home); err != nil {
 		t.Fatalf("Publish() error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "07-retired.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "02-retired.md")); !os.IsNotExist(err) {
 		t.Fatalf("stale module kept; stat err = %v", err)
 	}
 	if got := read(t, filepath.Join(dir, "notes.md")); got != "mine" {
