@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -199,6 +200,28 @@ func TestConfigPathsUseSharedRoot(t *testing.T) {
 			}
 			if got := a.SettingsPath(home); got != tt.wantSettings {
 				t.Fatalf("SettingsPath() = %q, want %q", got, tt.wantSettings)
+			}
+		})
+	}
+}
+
+func TestConfigDirsListsSharedLegacyAndVariantRoots(t *testing.T) {
+	home := t.TempDir()
+	desktopDir := filepath.Join(home, ".gemini", "antigravity-desktop")
+	tests := []struct {
+		name         string
+		existingDirs []string
+		wantVariant  string
+	}{
+		{name: "CLI variant", wantVariant: filepath.Join(home, ".gemini", "antigravity-cli")},
+		{name: "desktop variant", existingDirs: []string{desktopDir}, wantVariant: desktopDir},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &Adapter{statPath: makeStatFn(tt.existingDirs...)}
+			want := []string{filepath.Join(home, ".gemini", "config"), filepath.Join(home, ".gemini", "antigravity"), tt.wantVariant}
+			if got := a.ConfigDirs(home); !slices.Equal(got, want) {
+				t.Fatalf("ConfigDirs() = %v, want %v", got, want)
 			}
 		})
 	}
