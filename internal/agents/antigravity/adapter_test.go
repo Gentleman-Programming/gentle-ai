@@ -208,22 +208,19 @@ func TestConfigPathsUseSharedRoot(t *testing.T) {
 func TestConfigDirsListsSharedLegacyAndVariantRoots(t *testing.T) {
 	home := t.TempDir()
 	desktopDir := filepath.Join(home, ".gemini", "antigravity-desktop")
-	tests := []struct {
-		name         string
-		existingDirs []string
-		wantVariant  string
-	}{
-		{name: "CLI variant", wantVariant: filepath.Join(home, ".gemini", "antigravity-cli")},
-		{name: "desktop variant", existingDirs: []string{desktopDir}, wantVariant: desktopDir},
+	want := []string{
+		filepath.Join(home, ".gemini", "config"),
+		filepath.Join(home, ".gemini", "antigravity"),
+		filepath.Join(home, ".gemini", "antigravity-cli"),
+		desktopDir,
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a := &Adapter{statPath: makeStatFn(tt.existingDirs...)}
-			want := []string{filepath.Join(home, ".gemini", "config"), filepath.Join(home, ".gemini", "antigravity"), tt.wantVariant}
-			if got := a.ConfigDirs(home); !slices.Equal(got, want) {
-				t.Fatalf("ConfigDirs() = %v, want %v", got, want)
-			}
-		})
+	// Both variant roots are listed whichever one exists, so doctor accepts
+	// a host that only has the desktop or only has the CLI directory.
+	for _, existing := range [][]string{nil, {desktopDir}} {
+		a := &Adapter{statPath: makeStatFn(existing...)}
+		if got := a.ConfigDirs(home); !slices.Equal(got, want) {
+			t.Fatalf("ConfigDirs() with %v = %v, want %v", existing, got, want)
+		}
 	}
 }
 
