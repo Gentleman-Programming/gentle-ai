@@ -7766,3 +7766,85 @@ func TestInstalledComponentCountExcludesDeferredComponents(t *testing.T) {
 		t.Fatalf("installedComponentCount() with GGA deferred = %d, want 1", got)
 	}
 }
+
+func TestInstallerShowsAntigravityModelPickerOnlyWhenAntigravitySelected(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		agents []model.AgentID
+		want   Screen
+	}{
+		{"Antigravity", []model.AgentID{model.AgentAntigravity}, ScreenAntigravityModelPicker},
+		{"Antigravity with Claude", []model.AgentID{model.AgentClaudeCode, model.AgentAntigravity}, ScreenAntigravityModelPicker},
+		{"Claude only", []model.AgentID{model.AgentClaudeCode}, ScreenDependencyTree},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenPreset
+			m.Selection.Agents = tt.agents
+			m.Cursor = presetCursor(t, model.PresetFullGentleman)
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if got := updated.(Model).Screen; got != tt.want {
+				t.Fatalf("Preset confirm: screen = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInstallerAntigravityPickerConfirmContinuesInstallFlow(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPreset
+	m.InstallFlowActive = true
+	m.Selection.Agents = []model.AgentID{model.AgentAntigravity}
+	m.Cursor = presetCursor(t, model.PresetFullGentleman)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	m.Cursor = 1 // performance
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenCommunityTools || m.PendingSyncOverrides != nil {
+		t.Fatalf("picker confirm: screen = %v, overrides %+v; want community tools without sync", m.Screen, m.PendingSyncOverrides)
+	}
+	if !reflect.DeepEqual(m.Selection.AntigravityModelAssignments, model.AntigravityModelPresetPerformance()) {
+		t.Fatalf("Selection.AntigravityModelAssignments = %v", m.Selection.AntigravityModelAssignments)
+	}
+	if back := m.goBackFromCommunityTools(); back.Screen != ScreenAntigravityModelPicker {
+		t.Fatalf("community tools back: screen = %v, want Antigravity picker", back.Screen)
+	}
+	m.Screen = ScreenAntigravityModelPicker
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := updated.(Model).Screen; got != ScreenPreset {
+		t.Fatalf("picker Esc: screen = %v, want Preset", got)
+	}
+}
+
+func TestInstallerCustomPresetRoutesThroughAntigravityPicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenDependencyTree
+	m.Selection.Preset = model.PresetCustom
+	m.Selection.Agents = []model.AgentID{model.AgentAntigravity}
+	m.Cursor = len(screens.AllComponents())
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenAntigravityModelPicker {
+		t.Fatalf("custom continue: screen = %v, want Antigravity picker", m.Screen)
+	}
+	m.Cursor = 0
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := updated.(Model).Screen; got == ScreenAntigravityModelPicker || got == ScreenSync {
+		t.Fatalf("custom picker confirm stayed or synced: screen = %v", got)
+	}
+}
+
+func TestInstallerAntigravityPickerPreloadsPersistedTiers(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{
+		AntigravityModelAssignments: map[string]string{"jd-judge-a": "pro", "jd-judge-b": "ultra"},
+	})
+	m.Screen = ScreenPreset
+	m.Selection.Agents = []model.AgentID{model.AgentAntigravity}
+	m.Cursor = presetCursor(t, model.PresetFullGentleman)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	picker := updated.(Model).AntigravityModelPicker
+	if want := map[string]model.AntigravityModelTier{"jd-judge-a": model.AntigravityModelPro}; picker.Preset != screens.AntigravityPresetCustom || !reflect.DeepEqual(picker.CustomAssignments, want) {
+		t.Fatalf("picker = %+v, want custom %v (unknown tiers dropped)", picker, want)
+	}
+}
