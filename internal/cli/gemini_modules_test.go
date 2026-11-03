@@ -30,8 +30,10 @@ func geminiImportTargets(t *testing.T, base string) []string {
 	if start < 0 || end < start {
 		t.Fatalf("GEMINI.md has no import block:\n%s", root)
 	}
-	if strings.Contains(root[:start], "```") || strings.Contains(root[:start], "~~~") {
-		t.Fatalf("import block may sit inside a code fence:\n%s", root)
+	// Gemini CLI finds code regions in the whole file, so only an import
+	// block ahead of every user byte is safe from a stray backtick.
+	if start != 0 {
+		t.Fatalf("import block is not the first thing in GEMINI.md, where user text could put it in a code region:\n%s", root)
 	}
 	dir := filepath.Dir(geminimodules.RootPath(base))
 	var targets []string
@@ -70,6 +72,10 @@ func installGemini(t *testing.T, args ...string) {
 
 func TestGeminiRootImportLinesMatchGeminiCLIImportGrammar(t *testing.T) {
 	home := stubAntigravityHome(t, true)
+	stray := "Use `foo to start.\n\n```sh\nunclosed fence\n\n" + readString(t, geminimodules.RootPath(home))
+	if err := os.WriteFile(geminimodules.RootPath(home), []byte(stray), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	installGemini(t, "--agent", "gemini-cli", "--component", "persona", "--component", "engram", "--component", "context7")
 
 	targets := geminiImportTargets(t, home)
@@ -89,8 +95,8 @@ func TestRunInstallGeminiAndAntigravityKeepsTheGeminiRootSmall(t *testing.T) {
 	if len(root) >= 2048 {
 		t.Fatalf("GEMINI.md is %d bytes, want < 2 KB of user content and import lines:\n%s", len(root), root)
 	}
-	if got := filemerge.InjectMarkdownSection(root, geminimodules.ImportSectionID, ""); got != legacyGeminiUserContent {
-		t.Fatalf("GEMINI.md outside the import block = %q, want only the user content", got)
+	if _, user, _ := strings.Cut(root, "<!-- /gentle-ai:"+geminimodules.ImportSectionID+" -->\n"); user != legacyGeminiUserContent {
+		t.Fatalf("GEMINI.md after the import block = %q, want only the user content", user)
 	}
 	if n := personaCopies(root + importedGuidance(t, home)); n != 1 {
 		t.Fatalf("Gemini CLI guidance carries %d persona copies, want 1", n)
