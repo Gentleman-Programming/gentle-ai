@@ -2,12 +2,14 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
@@ -124,5 +126,44 @@ func TestGeminiAndAntigravityKeepOnePersonaInAnyOrder(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRunInstallAntigravityRetiresUnmanagedGeminiModules covers a host whose
+// Gemini CLI is no longer managed: nothing imports the modules an earlier
+// install published, so Antigravity removes them with the import block and
+// keeps the user content and other files.
+func TestRunInstallAntigravityRetiresUnmanagedGeminiModules(t *testing.T) {
+	home := stubAntigravityHome(t, true)
+	dir := geminimodules.ModulesDir(home)
+	root := filemerge.InjectMarkdownSection(legacyGeminiUserContent, geminimodules.ImportSectionID, "@./gentle-ai/01-persona.md\n")
+	for path, content := range map[string]string{
+		geminimodules.StagingPath(home):     "persona\n",
+		filepath.Join(dir, "01-persona.md"): "persona\n",
+		filepath.Join(dir, "notes.md"):      "mine\n",
+		geminimodules.RootPath(home):        root,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := RunInstall([]string{"--agent", "antigravity", "--component", "persona", "--component", "engram", "--component", "context7"}, macOSDetectionResult()); err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if got := readString(t, geminimodules.RootPath(home)); got != legacyGeminiUserContent {
+		t.Fatalf("GEMINI.md = %q, want only the user content", got)
+	}
+	for _, path := range []string{geminimodules.StagingPath(home), filepath.Join(dir, "01-persona.md")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s kept; stat err = %v", path, err)
+		}
+	}
+	if got := readString(t, filepath.Join(dir, "notes.md")); got != "mine\n" {
+		t.Fatalf("notes.md = %q, want untouched", got)
 	}
 }
