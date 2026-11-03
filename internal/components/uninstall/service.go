@@ -19,6 +19,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
@@ -406,6 +407,11 @@ func (s *Service) CompleteUninstall() (Result, error) {
 type plan struct {
 	backupTargets []string
 	operations    []operation
+	// antigravityRules republishes the Antigravity rules from the staging
+	// file after its sections were removed; retireLegacyAntigravityPrompt
+	// also strips the sections older releases appended to GEMINI.md.
+	antigravityRules              bool
+	retireLegacyAntigravityPrompt bool
 }
 
 func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.ComponentID) (plan, error) {
@@ -535,6 +541,16 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			}
 		}
 	}
+	publishAntigravity := slices.Contains(agentIDs, model.AgentAntigravity)
+	retireLegacyAntigravity := publishAntigravity && removesAllAgentComponents(componentIDs)
+	if publishAntigravity {
+		for _, path := range antigravityrules.ManagedPaths(s.homeDir) {
+			backupTargets[path] = struct{}{}
+		}
+	}
+	if retireLegacyAntigravity {
+		backupTargets[antigravityrules.LegacyPromptPath(s.homeDir)] = struct{}{}
+	}
 	if slices.Contains(agentIDs, model.AgentClaudeCode) && removesAllAgentComponents(componentIDs) {
 		// Only a complete Claude removal retires the module pilot (see
 		// retireClaudeGlobalModules); snapshot every file it may change. An
@@ -606,7 +622,7 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	}
 	slices.SortFunc(operations, compareOperations)
 
-	return plan{backupTargets: orderedTargets, operations: operations}, nil
+	return plan{backupTargets: orderedTargets, operations: operations, antigravityRules: publishAntigravity, retireLegacyAntigravityPrompt: retireLegacyAntigravity}, nil
 }
 
 func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, error) {
@@ -707,6 +723,16 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		}
 	}
 
+	if p.antigravityRules {
+		if err := s.publishAntigravityRules(&result, p.retireLegacyAntigravityPrompt); err != nil {
+			failures = append(failures, operationFailure{
+				path:   antigravityrules.RulesDir(s.homeDir),
+				agents: []model.AgentID{model.AgentAntigravity},
+				err:    err,
+			})
+		}
+	}
+
 	if slices.Contains(agentsToRemove, model.AgentClaudeCode) {
 		if err := s.retireClaudeGlobalModules(&result); err != nil {
 			failures = append(failures, operationFailure{
@@ -747,6 +773,39 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		return result, errors.Join(errs...)
 	}
 	return result, nil
+}
+
+// publishAntigravityRules runs after the staging file lost its removed
+// sections, so the published rules match what is left: an emptied staging
+// file retires every owned rule. A complete removal also strips the sections
+// older releases appended to GEMINI.md.
+func (s *Service) publishAntigravityRules(result *Result, retireLegacy bool) error {
+	published, err := antigravityrules.Publish(s.homeDir)
+	if err != nil {
+		return err
+	}
+	files := published.Files
+	if retireLegacy {
+		migrated, err := antigravityrules.MigrateLegacyPrompt(s.homeDir, antigravityrules.GeminiCLIManaged(s.homeDir, nil))
+		if err != nil {
+			return err
+		}
+		files = append(files, migrated.Files...)
+		// The staging directory is Gentle AI's own; it stays only while it
+		// holds guidance uninstall retains (routing), which is no leftover.
+		stagingDir := filepath.Dir(antigravityrules.StagingPath(s.homeDir))
+		if err := os.Remove(stagingDir); err == nil {
+			result.RemovedDirectories = append(result.RemovedDirectories, stagingDir)
+		}
+	}
+	for _, path := range files {
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			result.RemovedFiles = append(result.RemovedFiles, path)
+		} else {
+			result.ChangedFiles = append(result.ChangedFiles, path)
+		}
+	}
+	return nil
 }
 
 // retireClaudeGlobalModules returns a complete Claude removal from the module
