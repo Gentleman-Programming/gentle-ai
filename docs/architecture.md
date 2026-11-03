@@ -27,6 +27,7 @@ internal/
     engram/  skills/  mcp/  persona/  theme/  permissions/  gga/
     agentguidance/         Always-installed routing guidance projected into every agent
     agenthooks/            Runtime hook installation independent of optional components
+    antigravityrules/      Antigravity guidance published as size-capped agy rule files
     telemetryruntime/      Native runtime telemetry event adapters and managed hooks
     reviewassets/          Runtime review contract rendering for each agent
     communitytool/         Community tool install/guidance/config orchestration
