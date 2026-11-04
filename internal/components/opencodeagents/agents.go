@@ -192,6 +192,23 @@ func NativeValidator() map[string]any {
 	return map[string]any{"mode": "subagent", "hidden": true, "description": validator["description"], "system": validator["prompt"], "permissions": NativeRules(rules)}
 }
 
+// NativeEntryByName renders the native settings-entry shape for one managed
+// subagent by name.
+func NativeEntryByName(agent model.AgentID, name string) (map[string]any, error) {
+	for _, spec := range Parity(agent) {
+		if spec.Name == name {
+			return NativeEntry(spec)
+		}
+	}
+	if model.SupportsReceiptDrivenDevelopment(agent) && name == "review-refuter" {
+		return NativeRefuter(), nil
+	}
+	if agent == model.AgentOpenCode && name == "review-validator" {
+		return NativeValidator(), nil
+	}
+	return nil, fmt.Errorf("unknown managed subagent %q for %q", name, agent)
+}
+
 // MergeRuleLists appends incoming rules to existing rules, skipping rules that
 // already exist verbatim (action, resource, effect). Existing rules keep their
 // order so user-authored precedence decisions are preserved.
