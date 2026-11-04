@@ -125,17 +125,29 @@ func (m Model) starStarNow() tea.Cmd {
 	direct := m.StarState.DirectStar
 	return func() tea.Msg {
 		if direct {
-			outcome := starprompt.GhStar(context.Background(), starGhRunner, starGhPath, starprompt.Repository)
+			outcome := starprompt.GhStar(context.Background(), starGhRunner, starGhPath, starprompt.Repositories)
 			if outcome == starprompt.OutcomeYes {
 				return StarGhDoneMsg{Starred: true}
 			}
 			// Unknown or failed gh: fall through to the browser so the chord
 			// never dead-ends.
 		}
-		err := tuiOpenBrowserFn(starprompt.RepositoryURL)
-		return StarGhDoneMsg{Opened: err == nil, Err: err}
+		var firstErr error
+		opened := true
+		for _, url := range append([]string{starprompt.RepositoryURL}, extraStarURLs...) {
+			if err := tuiOpenBrowserFn(url); err != nil {
+				opened = false
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		return StarGhDoneMsg{Opened: opened, Err: firstErr}
 	}
 }
+
+// extraStarURLs are the sibling repos starred together with the primary one.
+var extraStarURLs = []string{"https://github.com/Gentleman-Programming/gentle-shell"}
 
 // starDismiss marks the state dismissed forever and persists it; a failed
 // write keeps the session-level dismissal and disables future asks.
@@ -169,7 +181,7 @@ func (m *Model) starHandleMsg(msg tea.Msg) tea.Cmd {
 		// browser-only default never touches credentials. An already-starred
 		// account or an ambiguous check marks the offer done for this session.
 		if m.StarState.DirectStar {
-			outcome := starprompt.GhStarred(context.Background(), starGhRunner, starGhPath, starprompt.Repository)
+			outcome := starprompt.GhStarred(context.Background(), starGhRunner, starGhPath, starprompt.Repositories)
 			switch outcome {
 			case starprompt.OutcomeYes:
 				m.StarOffered = true
@@ -213,10 +225,10 @@ func (m *Model) starHandleMsg(msg tea.Msg) tea.Cmd {
 // state, or "" when nothing must be shown.
 func (m Model) starFooterLine() string {
 	if m.StarVisible {
-		return fmt.Sprintf("Enjoying Gentle AI? Ctrl+G stars %s on GitHub, Alt+D never asks again", starprompt.RepositoryURL)
+		return fmt.Sprintf("Enjoying Gentle AI? Ctrl+G stars both Gentleman-Programming repos (%s and %s) on GitHub, Alt+D never asks again", starprompt.RepositoryURL, extraStarURLs[0])
 	}
 	if !m.StarThanksAt.IsZero() && starTimeNow().Sub(m.StarThanksAt) < 5*time.Second {
-		return fmt.Sprintf("Thanks for the star! It really helps %s grow.", starprompt.RepositoryURL)
+		return "Thanks for the stars! They really help both repos grow."
 	}
 	if m.StarManualURL != "" {
 		return "Could not open the browser; star us at " + m.StarManualURL

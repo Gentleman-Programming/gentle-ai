@@ -23,10 +23,15 @@ const Schema = "gentle-ai.star-prompt/v1"
 // couple.
 const FileName = "star-prompt.json"
 
-// Repository is the GitHub repository the offer points at.
+// Repository is the primary GitHub repository the offer points at; the chord
+// stars both sibling repos.
 const Repository = "Gentleman-Programming/gentle-ai"
 
-// RepositoryURL is the browser fallback target.
+// Repositories are starred together: the one in use and its sibling. Each PUT
+// is an idempotent no-op when already starred.
+var Repositories = []string{"Gentleman-Programming/gentle-ai", "Gentleman-Programming/gentle-shell"}
+
+// RepositoryURL is the browser fallback target for the primary repo.
 const RepositoryURL = "https://github.com/" + Repository
 
 // Threshold is how many successful completed operations stay silent; the offer
@@ -150,33 +155,42 @@ func DefaultGhRunner(ctx context.Context, ghPath string, args ...string) (int, s
 	return code, stderr.String(), err
 }
 
-// GhStarred resolves whether the authenticated gh account already starred the
-// repository. Unknown on any ambiguity (network failure, auth error).
-func GhStarred(ctx context.Context, run GhRunner, ghPath, repository string) Outcome {
-	code, stderr, err := run(ctx, ghPath, "api", "user/starred/"+repository)
-	if err != nil && code == -1 {
+// GhStarred resolves whether the authenticated gh account already starred
+// every repository. Unknown on any ambiguity; an unstarred repo is No, and the
+// TUI treats Unknown as skip-the-offer (the PUT is idempotent anyway).
+func GhStarred(ctx context.Context, run GhRunner, ghPath string, repositories []string) Outcome {
+	sawUnknown := false
+	for _, repository := range repositories {
+		code, stderr, err := run(ctx, ghPath, "api", "user/starred/"+repository)
+		if err != nil && code == -1 {
+			return OutcomeUnknown
+		}
+		if code == 0 {
+			continue
+		}
+		if strings.Contains(stderr, "HTTP 404") {
+			return OutcomeNo
+		}
+		sawUnknown = true
+	}
+	if sawUnknown {
 		return OutcomeUnknown
 	}
-	if code == 0 {
-		return OutcomeYes
-	}
-	if strings.Contains(stderr, "HTTP 404") {
-		return OutcomeNo
-	}
-	return OutcomeUnknown
+	return OutcomeYes
 }
 
-// GhStar stars the repository with the authenticated gh account.
-func GhStar(ctx context.Context, run GhRunner, ghPath, repository string) Outcome {
-	code, stderr, err := run(ctx, ghPath, "api", "--method", "PUT", "user/starred/"+repository)
-	if err != nil && code == -1 {
+// GhStar stars every repository with the authenticated gh account; each PUT is
+// an idempotent no-op when already starred.
+func GhStar(ctx context.Context, run GhRunner, ghPath string, repositories []string) Outcome {
+	for _, repository := range repositories {
+		code, stderr, err := run(ctx, ghPath, "api", "--method", "PUT", "user/starred/"+repository)
+		if err != nil && code == -1 {
+			return OutcomeUnknown
+		}
+		if code == 0 || strings.Contains(stderr, "HTTP 404") {
+			continue
+		}
 		return OutcomeUnknown
 	}
-	if code == 0 {
-		return OutcomeYes
-	}
-	if strings.Contains(stderr, "HTTP 404") {
-		return OutcomeNo
-	}
-	return OutcomeUnknown
+	return OutcomeYes
 }

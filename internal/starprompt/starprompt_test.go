@@ -78,28 +78,28 @@ func TestShouldOffer(t *testing.T) {
 func TestGhClassification(t *testing.T) {
 	ctx := context.Background()
 	yes := func(ctx context.Context, ghPath string, args ...string) (int, string, error) { return 0, "", nil }
-	if got := GhStarred(ctx, yes, "gh", "x/y"); got != OutcomeYes {
+	if got := GhStarred(ctx, yes, "gh", []string{"x/y"}); got != OutcomeYes {
 		t.Errorf("exit 0 must be yes, got %v", got)
 	}
 	notFound := func(ctx context.Context, ghPath string, args ...string) (int, string, error) {
 		return 1, "gh: Not Found (HTTP 404)", assertErr{}
 	}
-	if got := GhStarred(ctx, notFound, "gh", "x/y"); got != OutcomeNo {
+	if got := GhStarred(ctx, notFound, "gh", []string{"x/y"}); got != OutcomeNo {
 		t.Errorf("404 must be no, got %v", got)
 	}
 	broken := func(ctx context.Context, ghPath string, args ...string) (int, string, error) {
 		return -1, "", context.DeadlineExceeded
 	}
-	if got := GhStarred(ctx, broken, "gh", "x/y"); got != OutcomeUnknown {
+	if got := GhStarred(ctx, broken, "gh", []string{"x/y"}); got != OutcomeUnknown {
 		t.Errorf("spawn failure must be unknown, got %v", got)
 	}
 	other := func(ctx context.Context, ghPath string, args ...string) (int, string, error) {
 		return 1, "HTTP 403", assertErr{}
 	}
-	if got := GhStarred(ctx, other, "gh", "x/y"); got != OutcomeUnknown {
+	if got := GhStarred(ctx, other, "gh", []string{"x/y"}); got != OutcomeUnknown {
 		t.Errorf("403 must be unknown, got %v", got)
 	}
-	if got := GhStar(ctx, yes, "gh", "x/y"); got != OutcomeYes {
+	if got := GhStar(ctx, yes, "gh", []string{"x/y"}); got != OutcomeYes {
 		t.Errorf("star exit 0 must be yes, got %v", got)
 	}
 }

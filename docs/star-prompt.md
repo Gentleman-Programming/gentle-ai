@@ -25,7 +25,7 @@ Only two chords are intercepted while the offer is visible — plain typing alwa
 
 ## Starring
 
-By default `Ctrl+G` opens `https://github.com/Gentleman-Programming/gentle-ai` in the browser; nothing touches stored credentials.
+By default `Ctrl+G` stars **both sibling repositories** — it opens `https://github.com/Gentleman-Programming/gentle-ai` and `https://github.com/Gentleman-Programming/gentle-shell` in the browser; nothing touches stored credentials.
 
 To enable the one-chord flow (star directly with the authenticated `gh` account, t3code-style), set `direct_star` in `star-prompt.json` inside the gentle-ai state directory (`~/.gentle-ai/`):
 
@@ -38,4 +38,4 @@ To enable the one-chord flow (star directly with the authenticated `gh` account,
 }
 ```
 
-With `direct_star: true`, the TUI reads starred state and stars through `gh api` after the explicit `Ctrl+G` keypress; if `gh` is missing or fails, it falls back to opening the browser, and if both fail it shows the URL so the chord never dead-ends.
+With `direct_star: true`, the TUI reads starred state and stars both repositories through `gh api` after the explicit `Ctrl+G` keypress (each PUT is an idempotent no-op when already starred); if `gh` is missing or fails, it falls back to opening both URLs in the browser, and if both fail it shows the URLs so the chord never dead-ends.
