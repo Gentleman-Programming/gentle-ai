@@ -2372,10 +2372,10 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	if err != nil {
 		return false, err
 	}
-	task := map[string]any{}
-	agents, _ := root["agent"].(map[string]any)
-	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
+	legacyAgents, _ := root["agent"].(map[string]any)
+	orchestrator, _ := legacyAgents["gentle-orchestrator"].(map[string]any)
 	current, _ := orchestrator["permission"].(map[string]any)
+	task := map[string]any{}
 	// Delegate only to Gentle AI agents: without a wildcard deny the
 	// orchestrator can pick OpenCode's built-in explore/general subagents,
 	// which lack the skill tool. OpenCode applies the last matching rule, and
@@ -2391,8 +2391,32 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	if _, set := current["question"]; !set && !userDeniesQuestion(root, orchestrator) {
 		permission["question"] = "allow"
 	}
+	// Orchestrator delegation grants stay in the legacy `agent` map by design
+	// (#4816): the map merges beside user rules field-wise, and OpenCode V2
+	// normalizes it on native documents too. Refuter and validator entries,
+	// by contrast, are managed wholesale, so on native documents they are
+	// emitted as native `agents` entries instead of legacy duplicates.
 	roles := map[string]any{
 		"gentle-orchestrator": map[string]any{"permission": permission},
+	}
+	overlayKey := "agent"
+	useNative := agent == model.AgentOpenCode && opencodeactivation.NativeConfig(root)
+	if useNative {
+		nativeRoles := map[string]any{}
+		if model.SupportsReceiptDrivenDevelopment(agent) {
+			nativeRoles["review-refuter"] = opencodeagents.NativeRefuter()
+		}
+		nativeRoles["review-validator"] = opencodeagents.NativeValidator()
+		overlay, err := json.Marshal(map[string]any{overlayKey: roles, "agents": nativeRoles})
+		if err != nil {
+			return false, err
+		}
+		merged, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, overlay)
+		if err != nil {
+			return false, err
+		}
+		result, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
+		return result.Changed, err
 	}
 	if model.SupportsReceiptDrivenDevelopment(agent) {
 		roles["review-refuter"] = opencodeagents.Refuter()
@@ -2400,7 +2424,7 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	if agent == model.AgentOpenCode {
 		roles["review-validator"] = opencodeagents.Validator()
 	}
-	overlay, err := json.Marshal(map[string]any{"agent": roles})
+	overlay, err := json.Marshal(map[string]any{overlayKey: roles})
 	if err != nil {
 		return false, err
 	}
@@ -2464,16 +2488,31 @@ func installOpenCodeFamilyParityAgents(settingsPath string, agent model.AgentID)
 	if err != nil {
 		return false, err
 	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return false, err
+	}
+	useNative := opencodeactivation.NativeConfig(root)
 	specs := opencodeagents.Parity(agent)
 	agentsOverlay := make(map[string]any, len(specs))
 	for _, spec := range specs {
-		entry, err := opencodeagents.Entry(spec)
-		if err != nil {
-			return false, err
+		var entry map[string]any
+		var entryErr error
+		if useNative {
+			entry, entryErr = opencodeagents.NativeEntry(spec)
+		} else {
+			entry, entryErr = opencodeagents.Entry(spec)
+		}
+		if entryErr != nil {
+			return false, entryErr
 		}
 		agentsOverlay[spec.Name] = entry
 	}
-	overlay, err := json.Marshal(map[string]any{"agent": agentsOverlay})
+	overlayKey := "agent"
+	if useNative {
+		overlayKey = "agents"
+	}
+	overlay, err := json.Marshal(map[string]any{overlayKey: agentsOverlay})
 	if err != nil {
 		return false, err
 	}

@@ -7,7 +7,9 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeagents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 type InjectionResult struct {
@@ -144,6 +146,29 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 		}
 	}
 
+	// Native V2 documents take the ordered `permissions` rule list: convert
+	// the safety overlay to rules and merge them beside the user's rules.
+	// Everything stays legacy for legacy documents and other adapters.
+	if adapter.Agent() == model.AgentOpenCode {
+		raw, readErr := os.ReadFile(settingsPath)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return InjectionResult{}, readErr
+		}
+		if readErr == nil {
+			nativeOverlay, native, err := openCodeNativeOverlay(raw)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			if native {
+				writeResult, err := mergeJSONFile(settingsPath, nativeOverlay, filemerge.MergeJSONObjectsForPath)
+				if err != nil {
+					return InjectionResult{}, err
+				}
+				return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+			}
+		}
+	}
+
 	merge := filemerge.MergeJSONObjectsForPath
 	switch adapter.Agent() {
 	case model.AgentClaudeCode:
@@ -165,6 +190,43 @@ func InjectAtPath(settingsPath string, adapter agents.Adapter) (InjectionResult,
 	}
 
 	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+}
+
+// openCodeNativeOverlay converts the OpenCode safety overlay into the native
+// ordered `permissions` rule list for documents that already are native V2.
+// Existing user rules keep their order; missing overlay rules are appended
+// (the legacy object evaluator walks patterns in byte order and the emitted
+// rules are sorted by resource, so precedence is preserved exactly). The
+// second return reports whether the document is native; a false value falls
+// back to the legacy object merge.
+func openCodeNativeOverlay(raw []byte) ([]byte, bool, error) {
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	if !opencode.NativeConfig(root) {
+		return nil, false, nil
+	}
+	legacy, err := filemerge.UnmarshalJSONObject(openCodeOverlayJSON)
+	if err != nil {
+		return nil, false, err
+	}
+	permission, _ := legacy["permission"].(map[string]any)
+	rules := opencodeagents.NativeRules(permission)
+	existing, _ := root["permissions"].([]any)
+	current := make([]map[string]any, 0, len(existing))
+	for _, item := range existing {
+		rule, _ := item.(map[string]any)
+		if rule == nil {
+			continue
+		}
+		current = append(current, rule)
+	}
+	overlay, err := json.Marshal(map[string]any{"permissions": opencodeagents.MergeRuleLists(current, rules)})
+	if err != nil {
+		return nil, false, err
+	}
+	return overlay, true, nil
 }
 
 // staleClaudeCodeDenyRules maps the cwd-relative home rules earlier releases

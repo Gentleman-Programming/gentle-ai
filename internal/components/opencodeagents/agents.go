@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
@@ -108,6 +109,121 @@ func Refuter() map[string]any {
 }
 func Validator() map[string]any {
 	return map[string]any{"mode": "subagent", "hidden": true, "description": "Targeted read-only validator for provider-issued review checks", "prompt": "Execute only the Go-issued targeted validation. Do not edit files or delegate. Inspect only the frozen candidate using the provided gentle-ai review inspect-candidate command, not the live worktree. Return exactly the requested JSON.", "permission": map[string]any{"write": "deny", "edit": "deny", "task": "deny", "bash": map[string]any{"gentle-ai review inspect-candidate --purpose targeted-validation *": "allow", "*": "deny"}}}
+}
+
+// nativeActions maps V1 permission actions to their native OpenCode V2 names.
+// Unknown actions pass through unchanged.
+var nativeActions = map[string]string{"bash": "shell", "task": "subagent", "write": "edit", "patch": "edit"}
+
+// NativeRules converts a V1 permission object into the ordered native
+// `permissions` rule list. OpenCode evaluates rule lists in order and the last
+// matching rule wins, while the V1 object evaluator walks patterns in byte
+// order ("*" sorts first), so sorting the emitted rules by resource preserves
+// the exact same precedence.
+func NativeRules(permission map[string]any) []map[string]any {
+	type rule struct{ action, resource, effect string }
+	var rules []rule
+	add := func(action, resource, effect string) {
+		if mapped, ok := nativeActions[action]; ok {
+			action = mapped
+		}
+		rules = append(rules, rule{action, resource, effect})
+	}
+	for action, value := range permission {
+		switch typed := value.(type) {
+		case string:
+			add(action, "*", typed)
+		case bool:
+			if typed {
+				add(action, "*", "allow")
+			} else {
+				add(action, "*", "deny")
+			}
+		case map[string]any:
+			for resource, effect := range typed {
+				switch e := effect.(type) {
+				case string:
+					add(action, resource, e)
+				case bool:
+					if e {
+						add(action, resource, "allow")
+					} else {
+						add(action, resource, "deny")
+					}
+				}
+			}
+		}
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].action != rules[j].action {
+			return rules[i].action < rules[j].action
+		}
+		return rules[i].resource < rules[j].resource
+	})
+	out := make([]map[string]any, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, map[string]any{"action": r.action, "resource": r.resource, "effect": r.effect})
+	}
+	return out
+}
+
+// NativeEntry renders spec as a native OpenCode V2 agent entry: the embedded
+// prompt moves to `system` and the V1 permission object becomes an ordered
+// native `permissions` rule list.
+func NativeEntry(spec Spec) (map[string]any, error) {
+	prompt, err := assets.Read("opencode/agents/" + spec.Name + ".md")
+	if err != nil {
+		return nil, fmt.Errorf("read embedded prompt for %q: %w", spec.Name, err)
+	}
+	return map[string]any{"mode": "subagent", "hidden": true, "description": spec.Description, "system": prompt, "permissions": NativeRules(spec.Permission)}, nil
+}
+
+// NativeRefuter renders the review refuter as a native OpenCode V2 entry.
+func NativeRefuter() map[string]any {
+	refuter := Refuter()
+	rules, _ := refuter["permission"].(map[string]any)
+	return map[string]any{"mode": "subagent", "hidden": true, "description": refuter["description"], "system": refuter["prompt"], "permissions": NativeRules(rules)}
+}
+
+// NativeValidator renders the review validator as a native OpenCode V2 entry.
+func NativeValidator() map[string]any {
+	validator := Validator()
+	rules, _ := validator["permission"].(map[string]any)
+	return map[string]any{"mode": "subagent", "hidden": true, "description": validator["description"], "system": validator["prompt"], "permissions": NativeRules(rules)}
+}
+
+// MergeRuleLists appends incoming rules to existing rules, skipping rules that
+// already exist verbatim (action, resource, effect). Existing rules keep their
+// order so user-authored precedence decisions are preserved.
+func MergeRuleLists(existing, incoming []map[string]any) []map[string]any {
+	key := func(r map[string]any) string {
+		action, _ := r["action"].(string)
+		resource, _ := r["resource"].(string)
+		effect, _ := r["effect"].(string)
+		return action + "\x00" + resource + "\x00" + effect
+	}
+	seen := make(map[string]bool, len(existing)+len(incoming))
+	merged := make([]map[string]any, 0, len(existing)+len(incoming))
+	for _, rule := range existing {
+		if rule == nil {
+			continue
+		}
+		k := key(rule)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		merged = append(merged, rule)
+	}
+	for _, rule := range incoming {
+		k := key(rule)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		merged = append(merged, rule)
+	}
+	return merged
 }
 
 // GentlemanShape recognizes the persona overlay for this runtime, without
