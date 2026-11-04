@@ -160,8 +160,20 @@ func NativeRules(permission map[string]any) []map[string]any {
 		}
 		return rules[i].resource < rules[j].resource
 	})
-	out := make([]map[string]any, 0, len(rules))
+	// V1 maps can carry two actions that map to the same native action (for
+	// example write and edit); drop the resulting duplicate rules.
+	seen := make(map[string]bool, len(rules))
+	unique := rules[:0]
 	for _, r := range rules {
+		key := r.action + "\x00" + r.resource + "\x00" + r.effect
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, r)
+	}
+	out := make([]map[string]any, 0, len(unique))
+	for _, r := range unique {
 		out = append(out, map[string]any{"action": r.action, "resource": r.resource, "effect": r.effect})
 	}
 	return out
