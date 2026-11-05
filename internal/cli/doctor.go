@@ -10,11 +10,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
@@ -123,6 +125,9 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
 		doctor.Check{ID: doctor.CheckInstalledAssetVersion, Run: func(context.Context) doctor.Result { return checkInstalledAssetVersion(homeDir) }},
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
+		doctor.Check{ID: doctor.CheckEngramClaudeAutoAllow, Run: func(context.Context) doctor.Result {
+			return checkEngramClaudeAutoAllow(homeDir, installedAgents, installedState.Components)
+		}},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
 	if installedState.BackgroundIntent == model.OpenCodeBackgroundOn && doctorGOOS != "windows" {
@@ -789,6 +794,59 @@ func checkEngramReachable(ctx context.Context, homeDir string, installedAgents [
 		Name:   id,
 		Status: CheckStatusPass,
 		Detail: "engram MCP (stdio) answered the initialize handshake for persisted configuration: " + strings.Join(sources, ", "),
+	}
+}
+
+// checkEngramClaudeAutoAllow reports whether Claude Code's settings.json
+// already allows Engram's non-destructive memory tools under Claude Code's
+// auto permission mode. It is applicable only when Claude Code is an
+// installed agent and Engram is a configured component; every other install
+// passes trivially.
+//
+// `engram setup claude-code` seeds these allow rules interactively, but
+// gentle-ai invokes it non-interactively, so the prompt is always skipped and
+// the rules are never written by that path (Gentleman-Programming/engram#2231).
+// Install and sync both call permissions.EnsureEngramClaudeAutoAllowRules
+// directly to repair this, but an install predating that fix, or one where
+// sync has not run since, can still be missing the rules — this check
+// surfaces that gap instead of leaving memory writes silently denied.
+func checkEngramClaudeAutoAllow(homeDir string, installedAgents []string, components []model.ComponentID) CheckResult {
+	const id = doctor.CheckEngramClaudeAutoAllow
+
+	if !slices.Contains(installedAgents, string(model.AgentClaudeCode)) || !slices.Contains(components, model.ComponentEngram) {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusPass,
+			Detail: "not applicable: Claude Code or Engram is not configured",
+		}
+	}
+
+	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "could not read " + settingsPath + ": " + err.Error(),
+			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to write the Engram Claude auto-mode allow rules"),
+		}
+	}
+
+	missing := permissions.EngramClaudeAutoAllowRuleGaps(raw)
+	if len(missing) == 0 {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusPass,
+			Detail: "Engram's memory-write tools are allowlisted for Claude Code auto mode",
+		}
+	}
+
+	return CheckResult{
+		Name:   id,
+		Status: CheckStatusWarn,
+		Detail: fmt.Sprintf("%s is missing %d Engram auto-mode allow rule(s) (e.g. %s); Engram memory writes may be denied under Claude Code's auto permission mode",
+			settingsPath, len(missing), missing[0]),
+		Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to write the missing Engram Claude auto-mode allow rules"),
 	}
 }
 

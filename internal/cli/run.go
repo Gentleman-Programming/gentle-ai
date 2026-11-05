@@ -3457,6 +3457,17 @@ func (s componentApplyStep) Run() error {
 			if err != nil {
 				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
 			}
+			// engram setup (above) prompts interactively to add Engram's
+			// memory-write tools to Claude Code's allowlist, but runCommand
+			// invokes it non-interactively with no stdin, so the prompt reads
+			// EOF and always answers "Skipped" (Gentleman-Programming/engram#2231).
+			// Without these rules, Claude Code's auto permission mode denies
+			// every Engram memory write. Write them directly instead.
+			if adapter.Agent() == model.AgentClaudeCode {
+				if allowErr := permissions.EnsureEngramClaudeAutoAllowRules(s.homeDir); allowErr != nil {
+					fmt.Fprintf(os.Stderr, "WARNING: could not ensure Engram Claude auto-mode allow rules: %v\n", allowErr)
+				}
+			}
 		}
 		return nil
 	case model.ComponentContext7:

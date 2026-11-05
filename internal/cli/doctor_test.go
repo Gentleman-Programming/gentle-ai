@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
@@ -1019,9 +1021,10 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
   [ok]  installed:asset_version        no installed binary version recorded in state file — check skipped
   [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake for persisted configuration: %s
+  [ok]  engram:claude_auto_allow       not applicable: Claude Code or Engram is not configured
   [ok]  disk:space                     1024 MB free on %s filesystem
 
-Summary: 8 passed, 0 failed, 0 warnings
+Summary: 9 passed, 0 failed, 0 warnings
 Status:  healthy
 `, configPath, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {
@@ -1805,5 +1808,81 @@ func TestCheckEngramReachable_PiWithUnconfiguredMCPAgentWarns(t *testing.T) {
 	}
 	if got.Remedy == nil {
 		t.Fatal("expected sync remedy when a non-Pi agent lacks Engram MCP")
+	}
+}
+
+// --- checkEngramClaudeAutoAllow ---
+
+func TestCheckEngramClaudeAutoAllow_NotClaudeCodePasses(t *testing.T) {
+	got := checkEngramClaudeAutoAllow(t.TempDir(), []string{"opencode"}, []model.ComponentID{model.ComponentEngram})
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("status = %q, detail = %q; want pass when Claude Code is not installed", got.Status, got.Detail)
+	}
+	if got.Remedy != nil {
+		t.Fatalf("remedy = %+v; want none when inapplicable", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_EngramNotConfiguredPasses(t *testing.T) {
+	got := checkEngramClaudeAutoAllow(t.TempDir(), []string{"claude-code"}, []model.ComponentID{model.ComponentPersona})
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("status = %q, detail = %q; want pass when Engram is not a configured component", got.Status, got.Detail)
+	}
+	if got.Remedy != nil {
+		t.Fatalf("remedy = %+v; want none when inapplicable", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_RulesPresentPasses(t *testing.T) {
+	home := t.TempDir()
+	if err := permissions.EnsureEngramClaudeAutoAllowRules(home); err != nil {
+		t.Fatalf("EnsureEngramClaudeAutoAllowRules() error = %v", err)
+	}
+
+	got := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentEngram})
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("status = %q, detail = %q; want pass once the allow rules are present", got.Status, got.Detail)
+	}
+	if got.Remedy != nil {
+		t.Fatalf("remedy = %+v; want none once the allow rules are present", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_RulesMissingWarns(t *testing.T) {
+	got := checkEngramClaudeAutoAllow(t.TempDir(), []string{"claude-code"}, []model.ComponentID{model.ComponentEngram})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("status = %q, detail = %q; want warn when the allow rules are missing", got.Status, got.Detail)
+	}
+	if got.Remedy == nil {
+		t.Fatal("expected a remedy when the allow rules are missing")
+	}
+	if got.Remedy.ID != doctor.RemedySync {
+		t.Fatalf("remedy = %+v; want RemedySync since sync rewrites the allow rules", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_PartiallyCoveredSettingsWarns(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Only the plain engram server is allowlisted; the plugin-prefixed
+	// server's tools are still missing.
+	if err := os.WriteFile(path, []byte(`{"permissions":{"allow":["mcp__engram"]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentEngram})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("status = %q, detail = %q; want warn when only one server is covered", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "plugin_engram_engram") {
+		t.Fatalf("detail = %q; want it to mention a still-missing plugin_engram_engram rule", got.Detail)
 	}
 }

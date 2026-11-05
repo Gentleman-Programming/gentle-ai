@@ -1512,6 +1512,15 @@ func (s componentSyncStep) Run() error {
 				return fmt.Errorf("sync engram for %q: %w", adapter.Agent(), err)
 			}
 			s.countChanged(boolToInt(res.Changed), res.Files...)
+			if adapter.Agent() == model.AgentClaudeCode {
+				// Heals installs made before this fix existed, and installs
+				// where `engram setup` could not seed the allowlist
+				// non-interactively (Gentleman-Programming/engram#2231).
+				// Errors are intentionally ignored — sync must not fail over
+				// a best-effort permission repair; the doctor check surfaces
+				// a persistently missing allowlist instead.
+				_ = permissions.EnsureEngramClaudeAutoAllowRules(s.homeDir)
+			}
 		}
 		return nil
 
