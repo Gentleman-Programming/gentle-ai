@@ -986,6 +986,12 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Engram is registered for Claude Code, so the claude_auto_allow check applies;
+	// seed settings.json with the server-level allow rules so it passes.
+	allowSeed := `{"permissions":{"allow":["mcp__engram","mcp__plugin_engram_engram"]}}`
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(allowSeed), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	configPath := writeDoctorEngramConfig(t, homeDir, "engram", []string{"mcp", "--tools=agent"})
 
 	lookPathFn = func(name string) (string, error) {
@@ -1021,7 +1027,7 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
   [ok]  installed:asset_version        no installed binary version recorded in state file — check skipped
   [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake for persisted configuration: %s
-  [ok]  engram:claude_auto_allow       not applicable: Claude Code or Engram is not configured
+  [ok]  engram:claude_auto_allow       Engram's memory-write tools are allowlisted for Claude Code auto mode
   [ok]  disk:space                     1024 MB free on %s filesystem
 
 Summary: 9 passed, 0 failed, 0 warnings
