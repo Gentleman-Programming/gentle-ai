@@ -806,6 +806,19 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if settingsPath == "" {
 			break
 		}
+		if adapter.Agent() == model.AgentOpenCode {
+			// Retire a v1 engram.ts plugin adapter left by older installs
+			// (#4795): on OpenCode V2 its export shape fails the plugin
+			// loader at every boot. Fingerprint-matched files only.
+			retired, err := retireStaleOpenCodeV1Adapter(filepath.Dir(settingsPath))
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			if retired != "" {
+				changed = true
+				files = append(files, retired)
+			}
+		}
 		overlay := engramOverlayJSON(adapter.Agent(), stableEngramCommandForMergedConfig(settingsPath, adapter.Agent()))
 		if adapter.Agent() == model.AgentOpenCode {
 			var err error
