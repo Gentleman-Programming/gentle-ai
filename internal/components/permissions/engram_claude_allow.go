@@ -320,18 +320,19 @@ func claudeCodeRuleSetCovers(existingRules []string, server, candidate string, a
 	return false
 }
 
-// hasWildcardMCPServerSegment reports whether rule starts with "mcp__" and
-// has a wildcard character in its server segment: everything up to the next
-// "__", or the whole remainder when there is none. That covers
-// "mcp__*__mem_save", "mcp__eng*" and a bare "mcp__*". Claude Code accepts an
-// allow glob only after a literal "mcp__<server>__" prefix and skips the rest
-// (https://code.claude.com/docs/en/permissions), so counting such a rule as
-// allow coverage would report a tool healthy while Claude Code still does not
-// allow it.
+// hasWildcardMCPServerSegment reports whether an allow glob lacks the literal
+// "mcp__<server>__" anchor Claude Code requires: it has no "mcp__" prefix at
+// all (a bare "*"), or has a wildcard in its server segment, which runs up to
+// the next "__" or to the end of the rule ("mcp__*__mem_save", "mcp__eng*",
+// "mcp__*"). Claude Code skips such allow globs
+// (https://code.claude.com/docs/en/permissions), so counting them as coverage
+// would report a tool healthy while Claude Code still does not allow it.
 func hasWildcardMCPServerSegment(rule string) bool {
 	rest, ok := strings.CutPrefix(rule, "mcp__")
 	if !ok {
-		return false
+		// A glob with no literal "mcp__" prefix at all (a bare "*") is
+		// unanchored too.
+		return true
 	}
 	serverSegment, _, _ := strings.Cut(rest, "__")
 	return strings.ContainsAny(serverSegment, "*?")

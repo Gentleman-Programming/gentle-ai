@@ -464,7 +464,7 @@ func TestEngramClaudeAutoAllowStatusRestrictionWinsOverAllow(t *testing.T) {
 }
 
 func TestEngramClaudeAutoAllowStatusUnanchoredAllowGlobDoesNotCover(t *testing.T) {
-	for _, rule := range []string{"mcp__*", "mcp__eng*", "mcp__*__mem_save"} {
+	for _, rule := range []string{"*", "mcp__*", "mcp__eng*", "mcp__*__mem_save"} {
 		t.Run(rule, func(t *testing.T) {
 			raw := []byte(`{"permissions":{"allow":["` + rule + `"]}}`)
 			report := EngramClaudeAutoAllowStatus(raw)
