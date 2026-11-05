@@ -499,3 +499,20 @@ func TestEngramClaudeAutoAllowStatusFlagsIncompatibleShapes(t *testing.T) {
 		})
 	}
 }
+
+func TestEngramClaudeAutoAllowStatusNonObjectRootIsParsedButIncompatible(t *testing.T) {
+	for _, raw := range []string{`[]`, `"text"`, `42`} {
+		t.Run(raw, func(t *testing.T) {
+			report := EngramClaudeAutoAllowStatus([]byte(raw))
+			if !report.Parsed {
+				t.Fatal("Parsed = false for valid JSON with a non-object root, want true")
+			}
+			if !report.Incompatible {
+				t.Fatal("Incompatible = false, want true")
+			}
+			if len(report.Missing) != 24 {
+				t.Fatalf("len(Missing) = %d, want 24", len(report.Missing))
+			}
+		})
+	}
+}

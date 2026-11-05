@@ -1,6 +1,7 @@
 package permissions
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -95,6 +96,11 @@ type EngramClaudeAutoAllowRuleReport struct {
 func EngramClaudeAutoAllowStatus(raw []byte) EngramClaudeAutoAllowRuleReport {
 	root, err := filemerge.UnmarshalJSONObject(raw)
 	if err != nil {
+		if json.Valid(raw) {
+			// Valid JSON whose root is not an object ("[]", a string, a
+			// number): it parsed, but the repair writer will not touch it.
+			return EngramClaudeAutoAllowRuleReport{Parsed: true, Missing: engramClaudeAutoAllowRules(), Incompatible: true}
+		}
 		return EngramClaudeAutoAllowRuleReport{}
 	}
 	permissionsNode, _ := root["permissions"].(map[string]any)
@@ -265,8 +271,11 @@ func EnsureEngramClaudeAutoAllowRules(homeDir string) (bool, error) {
 	}
 	encoded = append(encoded, '\n')
 
-	if _, err := filemerge.WriteFileAtomic(path, encoded, filemerge.ExistingFileMode(path, 0o644)); err != nil {
-		return false, err
+	// WriteFileAtomic reports Changed=true alongside an error when the new
+	// bytes landed but a later durability step failed, so surface both.
+	res, err := filemerge.WriteFileAtomic(path, encoded, filemerge.ExistingFileMode(path, 0o644))
+	if err != nil {
+		return res.Changed, err
 	}
 	return true, nil
 }

@@ -1982,4 +1982,9 @@ func TestCheckEngramClaudeAutoAllow_ApplicableViaPersistedMCPServerWithoutCompon
 	if got.Status != CheckStatusWarn {
 		t.Fatalf("status = %q, detail = %q; want warn (the allow rules are missing) now that the persisted MCP server makes this applicable", got.Status, got.Detail)
 	}
+	// sync always selects the Engram step, so a plain sync does repair this
+	// (see TestRunSyncRepairsEngramAllowRulesForPersistedMCPRegistration).
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedySync {
+		t.Fatalf("remedy = %+v; want RemedySync", got.Remedy)
+	}
 }

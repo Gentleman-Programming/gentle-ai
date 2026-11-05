@@ -1528,11 +1528,13 @@ func (s componentSyncStep) Run() error {
 				// doctor check only surfaces a persistently missing allowlist
 				// on its own next run, not why this attempt did not fix it.
 				allowChanged, allowErr := permissions.EnsureEngramClaudeAutoAllowRules(s.homeDir)
-				switch {
-				case allowErr != nil && s.skipped != nil:
-					*s.skipped = append(*s.skipped, fmt.Sprintf("WARNING: could not ensure Engram Claude auto-mode allow rules: %v", allowErr))
-				case allowChanged:
+				// The write may have landed even when it also reports an
+				// error, so record the change in either case.
+				if allowChanged {
 					s.countChanged(1, adapter.SettingsPath(s.homeDir))
+				}
+				if allowErr != nil && s.skipped != nil {
+					*s.skipped = append(*s.skipped, fmt.Sprintf("WARNING: could not ensure Engram Claude auto-mode allow rules: %v", allowErr))
 				}
 			}
 		}
