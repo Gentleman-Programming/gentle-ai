@@ -849,6 +849,18 @@ func checkEngramClaudeAutoAllow(homeDir string, installedAgents []string, compon
 		}
 	}
 
+	if report.Incompatible && len(report.Missing) > 0 {
+		// Sync's writer refuses a non-object document/"permissions" or a
+		// non-array "permissions.allow" without writing, so RemedySync would
+		// send the user in a circle here too.
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: settingsPath + " has a \"permissions\" or \"permissions.allow\" value of an unexpected type; Engram's auto-mode allow rules cannot be repaired automatically",
+			Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram, "Make \"permissions\" an object and \"permissions.allow\" an array in "+settingsPath+" by hand, then rerun 'gentle-ai doctor'"),
+		}
+	}
+
 	switch {
 	case len(report.Missing) == 0 && len(report.Restricted) == 0:
 		return CheckResult{

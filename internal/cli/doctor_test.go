@@ -1937,6 +1937,30 @@ func TestCheckEngramClaudeAutoAllow_UnparseableSettingsWarnsWithoutSyncRemedy(t 
 	}
 }
 
+func TestCheckEngramClaudeAutoAllow_IncompatibleShapeWarnsWithoutSyncRemedy(t *testing.T) {
+	for _, seed := range []string{`{"permissions":"x"}`, `{"permissions":{"allow":"x"}}`} {
+		t.Run(seed, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			got := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentEngram})
+
+			if got.Status != CheckStatusWarn {
+				t.Fatalf("status = %q, detail = %q; want warn", got.Status, got.Detail)
+			}
+			if got.Remedy == nil || got.Remedy.ID != doctor.RemedyInspectEngram {
+				t.Fatalf("remedy = %+v; want RemedyInspectEngram: sync refuses this shape without writing, so RemedySync would be a dead end", got.Remedy)
+			}
+		})
+	}
+}
+
 func TestCheckEngramClaudeAutoAllow_ApplicableViaPersistedMCPServerWithoutComponent(t *testing.T) {
 	home := t.TempDir()
 	// Engram is registered in Claude Code's own MCP config but was never

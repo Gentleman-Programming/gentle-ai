@@ -80,6 +80,12 @@ type EngramClaudeAutoAllowRuleReport struct {
 	Parsed     bool
 	Missing    []string
 	Restricted []string
+
+	// Incompatible is true when raw parsed but has a shape the repair writer
+	// refuses to touch (a non-object document or "permissions", or a
+	// non-array "permissions.allow"), so sync cannot resolve the gap and only
+	// a manual edit can.
+	Incompatible bool
 }
 
 // EngramClaudeAutoAllowStatus is EngramClaudeAutoAllowRuleGaps's superset: it
@@ -93,7 +99,36 @@ func EngramClaudeAutoAllowStatus(raw []byte) EngramClaudeAutoAllowRuleReport {
 	}
 	permissionsNode, _ := root["permissions"].(map[string]any)
 	missing, restricted := engramClaudeAutoAllowRuleStatusFor(permissionsNode)
-	return EngramClaudeAutoAllowRuleReport{Parsed: true, Missing: missing, Restricted: restricted}
+	return EngramClaudeAutoAllowRuleReport{
+		Parsed:       true,
+		Missing:      missing,
+		Restricted:   restricted,
+		Incompatible: engramClaudeSettingsShapeIncompatible(root),
+	}
+}
+
+// engramClaudeSettingsShapeIncompatible reports whether root has a shape
+// EnsureEngramClaudeAutoAllowRules refuses to touch: a non-object document, a
+// "permissions" value that is not an object, or a "permissions.allow" value
+// that is not an array.
+func engramClaudeSettingsShapeIncompatible(root map[string]any) bool {
+	if root == nil {
+		return true
+	}
+	rawPermissions, hasPermissions := root["permissions"]
+	if !hasPermissions {
+		return false
+	}
+	permissionsNode, ok := rawPermissions.(map[string]any)
+	if !ok {
+		return true
+	}
+	rawAllow, hasAllow := permissionsNode["allow"]
+	if !hasAllow {
+		return false
+	}
+	_, ok = rawAllow.([]any)
+	return !ok
 }
 
 // engramClaudeAutoAllowRuleGapsFor returns the candidate rules not already
@@ -125,10 +160,13 @@ func engramClaudeAutoAllowRuleStatusFor(permissionsNode map[string]any) (missing
 		for _, tool := range engramClaudeAutoAllowTools {
 			rule := "mcp__" + server + "__" + tool
 			switch {
+			case claudeCodeRuleSetCovers(restrictionRules, server, rule, true):
+				// Claude Code evaluates deny, then ask, then allow, so a
+				// restriction wins even when an allow rule also matches. Keep
+				// the tool out of missing so no conflicting allow is added.
+				restricted = append(restricted, rule)
 			case claudeCodeRuleSetCovers(allowRules, server, rule, false):
 				// Fully allowed; reported in neither slice.
-			case claudeCodeRuleSetCovers(restrictionRules, server, rule, true):
-				restricted = append(restricted, rule)
 			default:
 				missing = append(missing, rule)
 			}
@@ -282,23 +320,19 @@ func claudeCodeRuleSetCovers(existingRules []string, server, candidate string, a
 	return false
 }
 
-// hasWildcardMCPServerSegment reports whether rule has the
-// "mcp__<server>__<tool>" shape with a wildcard character in the server
-// segment, such as "mcp__*__mem_save". Claude Code does not honor that shape
-// as covering a specific server's tool for allow purposes (the matching
-// quirk anthropics/claude-code#73052 reports), so counting it as allow
-// coverage would report a tool healthy while Claude Code still denies it. A
-// rule with no second "__" (a bare "mcp__<server>" or "mcp__*" entry) is not
-// this shape and is left to the caller's existing exact-match and
-// regexp-fallback handling.
+// hasWildcardMCPServerSegment reports whether rule starts with "mcp__" and
+// has a wildcard character in its server segment: everything up to the next
+// "__", or the whole remainder when there is none. That covers
+// "mcp__*__mem_save", "mcp__eng*" and a bare "mcp__*". Claude Code accepts an
+// allow glob only after a literal "mcp__<server>__" prefix and skips the rest
+// (https://code.claude.com/docs/en/permissions), so counting such a rule as
+// allow coverage would report a tool healthy while Claude Code still does not
+// allow it.
 func hasWildcardMCPServerSegment(rule string) bool {
 	rest, ok := strings.CutPrefix(rule, "mcp__")
 	if !ok {
 		return false
 	}
-	serverSegment, _, found := strings.Cut(rest, "__")
-	if !found {
-		return false
-	}
+	serverSegment, _, _ := strings.Cut(rest, "__")
 	return strings.ContainsAny(serverSegment, "*?")
 }

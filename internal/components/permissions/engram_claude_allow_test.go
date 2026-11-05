@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -437,5 +438,64 @@ func TestEngramClaudeAutoAllowStatus(t *testing.T) {
 	}
 	if !foundRestricted {
 		t.Fatalf("Restricted = %v, want mcp__engram__mem_judge restricted by the wildcard-server ask entry", restrictedWildcard.Restricted)
+	}
+}
+
+func TestEngramClaudeAutoAllowStatusRestrictionWinsOverAllow(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{"deny beside exact allow", `{"permissions":{"allow":["mcp__engram__mem_save"],"deny":["mcp__engram__mem_save"]}}`},
+		{"ask beside exact allow", `{"permissions":{"allow":["mcp__engram__mem_save"],"ask":["mcp__engram__mem_save"]}}`},
+		{"deny beside server-level allow", `{"permissions":{"allow":["mcp__engram"],"deny":["mcp__engram__mem_save"]}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := EngramClaudeAutoAllowStatus([]byte(tt.raw))
+			if !slices.Contains(report.Restricted, "mcp__engram__mem_save") {
+				t.Fatalf("Restricted = %v, want it to include mcp__engram__mem_save: deny/ask is evaluated before allow", report.Restricted)
+			}
+			if slices.Contains(report.Missing, "mcp__engram__mem_save") {
+				t.Fatalf("Missing = %v, want mcp__engram__mem_save kept out so no conflicting allow rule is added", report.Missing)
+			}
+		})
+	}
+}
+
+func TestEngramClaudeAutoAllowStatusUnanchoredAllowGlobDoesNotCover(t *testing.T) {
+	for _, rule := range []string{"mcp__*", "mcp__eng*", "mcp__*__mem_save"} {
+		t.Run(rule, func(t *testing.T) {
+			raw := []byte(`{"permissions":{"allow":["` + rule + `"]}}`)
+			report := EngramClaudeAutoAllowStatus(raw)
+			if !slices.Contains(report.Missing, "mcp__engram__mem_save") {
+				t.Fatalf("Missing = %v, want mcp__engram__mem_save still missing: Claude Code skips allow globs without a literal server segment", report.Missing)
+			}
+		})
+	}
+}
+
+func TestEngramClaudeAutoAllowStatusFlagsIncompatibleShapes(t *testing.T) {
+	tests := []struct {
+		name             string
+		raw              string
+		wantIncompatible bool
+	}{
+		{"permissions is a string", `{"permissions":"x"}`, true},
+		{"allow is a string", `{"permissions":{"allow":"x"}}`, true},
+		{"document is null", `null`, true},
+		{"no permissions key", `{}`, false},
+		{"allow is an array", `{"permissions":{"allow":[]}}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := EngramClaudeAutoAllowStatus([]byte(tt.raw))
+			if !report.Parsed {
+				t.Fatalf("Parsed = false for %s, want true", tt.raw)
+			}
+			if report.Incompatible != tt.wantIncompatible {
+				t.Fatalf("Incompatible = %v, want %v", report.Incompatible, tt.wantIncompatible)
+			}
+		})
 	}
 }
