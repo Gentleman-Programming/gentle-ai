@@ -468,6 +468,34 @@ func readPersistedStdioCommand(path string, agentID model.AgentID) (StdioCommand
 	}
 }
 
+// HasClaudeCodeEngramMCPServer reports whether Claude Code's persisted MCP
+// registration (claude.UserConfigPath, ~/.claude.json) already configures an
+// Engram server, under either the bare "engram" name or the
+// "plugin_engram_engram" name a Gentle AI plugin install exposes the same
+// tools under. Unlike components-based applicability checks (which only see
+// Engram when it was a direct install selection), this detects Engram
+// configured any other way too — for example added only as an SDD
+// dependency of another component — so a caller deciding whether Claude
+// Code's Engram-specific settings repairs apply does not miss that case. A
+// read or parse failure reports false: callers already fall back to their
+// own components-based signal.
+func HasClaudeCodeEngramMCPServer(homeDir string) bool {
+	raw, err := os.ReadFile(claude.UserConfigPath(homeDir))
+	if err != nil {
+		return false
+	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return false
+	}
+	mcpServers := nestedJSONObject(root["mcpServers"])
+	if _, ok := mcpServers["engram"]; ok {
+		return true
+	}
+	_, ok := mcpServers["plugin_engram_engram"]
+	return ok
+}
+
 func engramServerFromJSON(root map[string]any, agentID model.AgentID) (map[string]any, bool) {
 	if _, directCommand := root["command"]; directCommand {
 		return root, true

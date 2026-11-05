@@ -67,21 +67,74 @@ func EngramClaudeAutoAllowRuleGaps(raw []byte) []string {
 	return engramClaudeAutoAllowRuleGapsFor(permissionsNode)
 }
 
+// EngramClaudeAutoAllowRuleReport is EngramClaudeAutoAllowStatus's result: it
+// tells the doctor whether raw parsed at all, and when it did, which
+// candidate rules are missing from every permission list versus restricted by
+// an existing ask or deny entry. Claude Code evaluates deny, then ask, then
+// allow, so a rule only an ask/deny entry matches stays blocked or prompts —
+// that is not the same as Pass, but EngramClaudeAutoAllowRuleGaps (and
+// EnsureEngramClaudeAutoAllowRules) correctly leave it out of Missing too,
+// since adding a contradictory allow entry next to the user's own
+// restriction would not change Claude Code's evaluation order.
+type EngramClaudeAutoAllowRuleReport struct {
+	Parsed     bool
+	Missing    []string
+	Restricted []string
+}
+
+// EngramClaudeAutoAllowStatus is EngramClaudeAutoAllowRuleGaps's superset: it
+// additionally tells apart a rule the settings content could not be parsed
+// well enough to verify at all (Parsed is false) from one genuinely covered
+// by an ask/deny restriction rather than by allow (Restricted).
+func EngramClaudeAutoAllowStatus(raw []byte) EngramClaudeAutoAllowRuleReport {
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return EngramClaudeAutoAllowRuleReport{}
+	}
+	permissionsNode, _ := root["permissions"].(map[string]any)
+	missing, restricted := engramClaudeAutoAllowRuleStatusFor(permissionsNode)
+	return EngramClaudeAutoAllowRuleReport{Parsed: true, Missing: missing, Restricted: restricted}
+}
+
 // engramClaudeAutoAllowRuleGapsFor returns the candidate rules not already
-// covered by permissionsNode's allow/ask/deny entries, in deterministic
-// (server, then tool) order.
+// covered by permissionsNode's allow entries or restricted by its ask/deny
+// entries, in deterministic (server, then tool) order.
 func engramClaudeAutoAllowRuleGapsFor(permissionsNode map[string]any) []string {
-	existingRules := claudeCodePermissionRuleStrings(permissionsNode, "allow", "ask", "deny")
-	var missing []string
+	missing, _ := engramClaudeAutoAllowRuleStatusFor(permissionsNode)
+	return missing
+}
+
+// engramClaudeAutoAllowRuleStatusFor partitions every candidate rule into
+// missing (covered by neither allow nor ask/deny), restricted (covered by an
+// ask/deny entry but not by allow), or implicitly allowed (covered by an
+// allow entry, reported in neither slice), in deterministic (server, then
+// tool) order.
+//
+// Allow coverage never counts a glob whose server segment itself is a
+// wildcard (such as "mcp__*__mem_save"): Claude Code does not honor that
+// shape as covering a specific server's tool (Gentleman-Programming/engram
+// issue tracker and anthropics/claude-code#73052), so treating it as allowed
+// would leave the real tool denied while this helper reports it healthy.
+// Ask/deny coverage keeps matching every glob shape, including that one,
+// since a broad restriction is still a restriction regardless of which
+// segment the wildcard sits in.
+func engramClaudeAutoAllowRuleStatusFor(permissionsNode map[string]any) (missing, restricted []string) {
+	allowRules := claudeCodePermissionRuleStrings(permissionsNode, "allow")
+	restrictionRules := claudeCodePermissionRuleStrings(permissionsNode, "ask", "deny")
 	for _, server := range engramClaudeMCPServerNames {
 		for _, tool := range engramClaudeAutoAllowTools {
 			rule := "mcp__" + server + "__" + tool
-			if !claudeCodeRuleSetCovers(existingRules, server, rule) {
+			switch {
+			case claudeCodeRuleSetCovers(allowRules, server, rule, false):
+				// Fully allowed; reported in neither slice.
+			case claudeCodeRuleSetCovers(restrictionRules, server, rule, true):
+				restricted = append(restricted, rule)
+			default:
 				missing = append(missing, rule)
 			}
 		}
 	}
-	return missing
+	return missing, restricted
 }
 
 // EnsureEngramClaudeAutoAllowRules adds the missing Engram auto-mode allow
@@ -109,33 +162,59 @@ func engramClaudeAutoAllowRuleGapsFor(permissionsNode map[string]any) []string {
 // reordered. Repeated calls are idempotent.
 //
 // A settings.json that cannot be parsed as JSON (even after JSONC-style
-// normalization: stripped comments and trailing commas) is left untouched.
-// This is a narrow, additive healer, not a general settings writer, and a
-// file it cannot understand is a file it must not guess at.
-func EnsureEngramClaudeAutoAllowRules(homeDir string) error {
+// normalization: stripped comments and trailing commas), that decodes to a
+// JSON value other than an object (for example a bare `null` document), or
+// whose existing "permissions" or "permissions.allow" value is not the
+// object/array shape this helper expects, is left untouched. This is a
+// narrow, additive healer, not a general settings writer, and a file it
+// cannot understand — or a value it would otherwise have to coerce and
+// silently replace — is a file it must not guess at.
+//
+// It does not guard the publish below against a concurrent editor of the same
+// file: WriteFileAtomic compares only against the bytes this call itself
+// read, so a save landing between that read and this write can be
+// overwritten. Closing that window needs a lock shared with every other
+// settings.json writer in this package, not one added here alone; until that
+// exists, this helper accepts the same narrow race every other writer in
+// this package already has.
+//
+// The returned bool reports whether it rewrote the file, so a best-effort
+// caller such as sync can still record the repair instead of under-reporting
+// "nothing changed".
+func EnsureEngramClaudeAutoAllowRules(homeDir string) (bool, error) {
 	path := filepath.Join(homeDir, ".claude", "settings.json")
 
 	raw, err := osReadFile(path)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	root, err := filemerge.UnmarshalJSONObject(raw)
-	if err != nil {
-		return nil
+	if err != nil || root == nil {
+		return false, nil
 	}
 
-	permissionsNode, _ := root["permissions"].(map[string]any)
+	rawPermissions, hasPermissions := root["permissions"]
+	permissionsNode, permissionsOK := rawPermissions.(map[string]any)
+	if hasPermissions && !permissionsOK {
+		return false, nil
+	}
+
 	missing := engramClaudeAutoAllowRuleGapsFor(permissionsNode)
 	if len(missing) == 0 {
-		return nil
+		return false, nil
+	}
+
+	rawAllow, hasAllow := permissionsNode["allow"]
+	existingAllow, allowOK := rawAllow.([]any)
+	if hasAllow && !allowOK {
+		return false, nil
 	}
 
 	if permissionsNode == nil {
 		permissionsNode = map[string]any{}
 		root["permissions"] = permissionsNode
 	}
-	existingAllow, _ := permissionsNode["allow"].([]any)
 	missingAny := make([]any, len(missing))
 	for i, rule := range missing {
 		missingAny[i] = rule
@@ -144,12 +223,14 @@ func EnsureEngramClaudeAutoAllowRules(homeDir string) error {
 
 	encoded, err := filemerge.MarshalJSONPreservingPermissions(raw, root)
 	if err != nil {
-		return err
+		return false, err
 	}
 	encoded = append(encoded, '\n')
 
-	_, err = filemerge.WriteFileAtomic(path, encoded, filemerge.ExistingFileMode(path, 0o644))
-	return err
+	if _, err := filemerge.WriteFileAtomic(path, encoded, filemerge.ExistingFileMode(path, 0o644)); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // claudeCodePermissionRuleStrings collects every string rule present under
@@ -173,13 +254,22 @@ func claudeCodePermissionRuleStrings(permissionsNode map[string]any, lists ...st
 // covering every tool that server exposes, or any other existing glob rule
 // ("*" spans any run of characters, "?" matches exactly one) that already
 // matches candidate.
-func claudeCodeRuleSetCovers(existingRules []string, server, candidate string) bool {
+//
+// When allowWildcardServer is false, a glob whose own server segment is
+// itself a wildcard (such as "mcp__*__mem_save") is skipped rather than
+// matched: see hasWildcardMCPServerSegment's doc comment for why. Pass true
+// for an ask/deny rule set, where that shape is still a real restriction
+// regardless of which segment the wildcard sits in.
+func claudeCodeRuleSetCovers(existingRules []string, server, candidate string, allowWildcardServer bool) bool {
 	serverRule := "mcp__" + server
 	for _, rule := range existingRules {
 		if rule == candidate || rule == serverRule {
 			return true
 		}
 		if !strings.ContainsAny(rule, "*?") {
+			continue
+		}
+		if !allowWildcardServer && hasWildcardMCPServerSegment(rule) {
 			continue
 		}
 		pattern := regexp.QuoteMeta(rule)
@@ -190,4 +280,25 @@ func claudeCodeRuleSetCovers(existingRules []string, server, candidate string) b
 		}
 	}
 	return false
+}
+
+// hasWildcardMCPServerSegment reports whether rule has the
+// "mcp__<server>__<tool>" shape with a wildcard character in the server
+// segment, such as "mcp__*__mem_save". Claude Code does not honor that shape
+// as covering a specific server's tool for allow purposes (the matching
+// quirk anthropics/claude-code#73052 reports), so counting it as allow
+// coverage would report a tool healthy while Claude Code still denies it. A
+// rule with no second "__" (a bare "mcp__<server>" or "mcp__*" entry) is not
+// this shape and is left to the caller's existing exact-match and
+// regexp-fallback handling.
+func hasWildcardMCPServerSegment(rule string) bool {
+	rest, ok := strings.CutPrefix(rule, "mcp__")
+	if !ok {
+		return false
+	}
+	serverSegment, _, found := strings.Cut(rest, "__")
+	if !found {
+		return false
+	}
+	return strings.ContainsAny(serverSegment, "*?")
 }

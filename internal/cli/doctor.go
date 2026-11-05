@@ -799,8 +799,10 @@ func checkEngramReachable(ctx context.Context, homeDir string, installedAgents [
 
 // checkEngramClaudeAutoAllow reports whether Claude Code's settings.json
 // already allows Engram's non-destructive memory tools under Claude Code's
-// auto permission mode. It is applicable only when Claude Code is an
-// installed agent and Engram is a configured component; every other install
+// auto permission mode. It is applicable when Claude Code is an installed
+// agent and Engram is either a configured component or already registered in
+// Claude Code's own persisted MCP configuration (components alone misses an
+// Engram added only as another component's dependency); every other install
 // passes trivially.
 //
 // `engram setup claude-code` seeds these allow rules interactively, but
@@ -813,7 +815,8 @@ func checkEngramReachable(ctx context.Context, homeDir string, installedAgents [
 func checkEngramClaudeAutoAllow(homeDir string, installedAgents []string, components []model.ComponentID) CheckResult {
 	const id = doctor.CheckEngramClaudeAutoAllow
 
-	if !slices.Contains(installedAgents, string(model.AgentClaudeCode)) || !slices.Contains(components, model.ComponentEngram) {
+	engramConfigured := slices.Contains(components, model.ComponentEngram) || engram.HasClaudeCodeEngramMCPServer(homeDir)
+	if !slices.Contains(installedAgents, string(model.AgentClaudeCode)) || !engramConfigured {
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusPass,
@@ -832,21 +835,50 @@ func checkEngramClaudeAutoAllow(homeDir string, installedAgents []string, compon
 		}
 	}
 
-	missing := permissions.EngramClaudeAutoAllowRuleGaps(raw)
-	if len(missing) == 0 {
+	report := permissions.EngramClaudeAutoAllowStatus(raw)
+	if !report.Parsed {
+		// Sync's own writer leaves unparseable settings.json untouched
+		// (permissions.EnsureEngramClaudeAutoAllowRules), so pointing the
+		// remedy at sync here would send the user in a circle. The file
+		// needs a human to fix its JSON syntax first.
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: settingsPath + " could not be parsed as JSON; Engram's auto-mode allow rules cannot be verified or repaired until it is valid JSON again",
+			Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram, "Fix the JSON syntax in "+settingsPath+" by hand, then rerun 'gentle-ai doctor'"),
+		}
+	}
+
+	switch {
+	case len(report.Missing) == 0 && len(report.Restricted) == 0:
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusPass,
 			Detail: "Engram's memory-write tools are allowlisted for Claude Code auto mode",
 		}
-	}
-
-	return CheckResult{
-		Name:   id,
-		Status: CheckStatusWarn,
-		Detail: fmt.Sprintf("%s is missing %d Engram auto-mode allow rule(s) (e.g. %s); Engram memory writes may be denied under Claude Code's auto permission mode",
-			settingsPath, len(missing), missing[0]),
-		Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to write the missing Engram Claude auto-mode allow rules"),
+	case len(report.Missing) == 0:
+		// Every candidate is covered, but by an ask/deny rule, not by allow:
+		// Claude Code evaluates deny, then ask, then allow, so these tools
+		// still stay blocked or prompt. Sync will not touch an existing
+		// explicit ask/deny entry, so there is no sync remedy to offer here.
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("%s restricts %d Engram auto-mode tool(s) via an existing ask or deny rule (e.g. %s); Claude Code evaluates deny, then ask, then allow, so these tools stay blocked or prompt",
+				settingsPath, len(report.Restricted), report.Restricted[0]),
+		}
+	default:
+		detail := fmt.Sprintf("%s is missing %d Engram auto-mode allow rule(s) (e.g. %s); Engram memory writes may be denied under Claude Code's auto permission mode",
+			settingsPath, len(report.Missing), report.Missing[0])
+		if len(report.Restricted) > 0 {
+			detail += fmt.Sprintf("; %d more tool(s) are additionally restricted by an existing ask or deny rule", len(report.Restricted))
+		}
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: detail,
+			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to write the missing Engram Claude auto-mode allow rules"),
+		}
 	}
 }
 

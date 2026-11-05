@@ -47,8 +47,12 @@ func readAllowList(t *testing.T, path string) []string {
 func TestEnsureEngramClaudeAutoAllowRulesFreshInstall(t *testing.T) {
 	home := t.TempDir()
 
-	if err := EnsureEngramClaudeAutoAllowRules(home); err != nil {
+	changed, err := EnsureEngramClaudeAutoAllowRules(home)
+	if err != nil {
 		t.Fatalf("EnsureEngramClaudeAutoAllowRules() error = %v", err)
+	}
+	if !changed {
+		t.Error("changed = false, want true: a fresh install has every rule missing")
 	}
 
 	allow := readAllowList(t, engramClaudeSettingsPath(home))
@@ -72,7 +76,7 @@ func TestEnsureEngramClaudeAutoAllowRulesNoPermissionsKey(t *testing.T) {
 	home := t.TempDir()
 	writeEngramClaudeSettings(t, home, `{"unrelated":"keep"}`)
 
-	if err := EnsureEngramClaudeAutoAllowRules(home); err != nil {
+	if _, err := EnsureEngramClaudeAutoAllowRules(home); err != nil {
 		t.Fatalf("EnsureEngramClaudeAutoAllowRules() error = %v", err)
 	}
 
@@ -109,7 +113,7 @@ func TestEnsureEngramClaudeAutoAllowRulesSkipsCoveredRules(t *testing.T) {
 }`
 	path := writeEngramClaudeSettings(t, home, seed)
 
-	if err := EnsureEngramClaudeAutoAllowRules(home); err != nil {
+	if _, err := EnsureEngramClaudeAutoAllowRules(home); err != nil {
 		t.Fatalf("EnsureEngramClaudeAutoAllowRules() error = %v", err)
 	}
 
@@ -165,7 +169,7 @@ func TestEnsureEngramClaudeAutoAllowRulesSkipsCoveredRules(t *testing.T) {
 
 func TestEnsureEngramClaudeAutoAllowRulesNeverAddsDestructiveTools(t *testing.T) {
 	home := t.TempDir()
-	if err := EnsureEngramClaudeAutoAllowRules(home); err != nil {
+	if _, err := EnsureEngramClaudeAutoAllowRules(home); err != nil {
 		t.Fatalf("EnsureEngramClaudeAutoAllowRules() error = %v", err)
 	}
 	allow := readAllowList(t, engramClaudeSettingsPath(home))
@@ -179,8 +183,12 @@ func TestEnsureEngramClaudeAutoAllowRulesNeverAddsDestructiveTools(t *testing.T)
 
 func TestEnsureEngramClaudeAutoAllowRulesIsIdempotent(t *testing.T) {
 	home := t.TempDir()
-	if err := EnsureEngramClaudeAutoAllowRules(home); err != nil {
+	firstChanged, err := EnsureEngramClaudeAutoAllowRules(home)
+	if err != nil {
 		t.Fatalf("first call error = %v", err)
+	}
+	if !firstChanged {
+		t.Error("first call changed = false, want true: a fresh install has every rule missing")
 	}
 	path := engramClaudeSettingsPath(home)
 	first, err := os.ReadFile(path)
@@ -188,8 +196,12 @@ func TestEnsureEngramClaudeAutoAllowRulesIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := EnsureEngramClaudeAutoAllowRules(home); err != nil {
+	secondChanged, err := EnsureEngramClaudeAutoAllowRules(home)
+	if err != nil {
 		t.Fatalf("second call error = %v", err)
+	}
+	if secondChanged {
+		t.Error("second call changed = true, want false: every rule is already present")
 	}
 	second, err := os.ReadFile(path)
 	if err != nil {
@@ -230,7 +242,7 @@ func TestEnsureEngramClaudeAutoAllowRulesRefusesLockedSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callErr := EnsureEngramClaudeAutoAllowRules(home)
+	_, callErr := EnsureEngramClaudeAutoAllowRules(home)
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -268,8 +280,12 @@ func TestEnsureEngramClaudeAutoAllowRulesLeavesMalformedSettingsUntouched(t *tes
 	seed := `not valid json at all`
 	path := writeEngramClaudeSettings(t, home, seed)
 
-	if err := EnsureEngramClaudeAutoAllowRules(home); err != nil {
+	changed, err := EnsureEngramClaudeAutoAllowRules(home)
+	if err != nil {
 		t.Fatalf("EnsureEngramClaudeAutoAllowRules() error = %v, want nil (malformed settings are left alone)", err)
+	}
+	if changed {
+		t.Error("changed = true, want false: malformed settings are left alone")
 	}
 
 	content, err := os.ReadFile(path)
@@ -278,6 +294,72 @@ func TestEnsureEngramClaudeAutoAllowRulesLeavesMalformedSettingsUntouched(t *tes
 	}
 	if string(content) != seed {
 		t.Fatalf("malformed settings.json was modified: %q, want unchanged %q", content, seed)
+	}
+}
+
+func TestEnsureEngramClaudeAutoAllowRulesLeavesNullSettingsUntouched(t *testing.T) {
+	home := t.TempDir()
+	seed := `null`
+	path := writeEngramClaudeSettings(t, home, seed)
+
+	changed, err := EnsureEngramClaudeAutoAllowRules(home)
+	if err != nil {
+		t.Fatalf("EnsureEngramClaudeAutoAllowRules() error = %v, want nil (a null document is left alone)", err)
+	}
+	if changed {
+		t.Error("changed = true, want false: a null document is left alone")
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != seed {
+		t.Fatalf("null settings.json was modified: %q, want unchanged %q", content, seed)
+	}
+}
+
+func TestEnsureEngramClaudeAutoAllowRulesLeavesNonObjectPermissionsUntouched(t *testing.T) {
+	home := t.TempDir()
+	seed := `{"permissions":"not an object","unrelated":"keep"}`
+	path := writeEngramClaudeSettings(t, home, seed)
+
+	changed, err := EnsureEngramClaudeAutoAllowRules(home)
+	if err != nil {
+		t.Fatalf("EnsureEngramClaudeAutoAllowRules() error = %v, want nil", err)
+	}
+	if changed {
+		t.Error("changed = true, want false: a non-object permissions value must not be coerced")
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != seed {
+		t.Fatalf("settings.json with a non-object permissions value was modified: %q, want unchanged %q", content, seed)
+	}
+}
+
+func TestEnsureEngramClaudeAutoAllowRulesLeavesNonArrayAllowUntouched(t *testing.T) {
+	home := t.TempDir()
+	seed := `{"permissions":{"allow":"not an array"},"unrelated":"keep"}`
+	path := writeEngramClaudeSettings(t, home, seed)
+
+	changed, err := EnsureEngramClaudeAutoAllowRules(home)
+	if err != nil {
+		t.Fatalf("EnsureEngramClaudeAutoAllowRules() error = %v, want nil", err)
+	}
+	if changed {
+		t.Error("changed = true, want false: a non-array permissions.allow value must not be coerced")
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != seed {
+		t.Fatalf("settings.json with a non-array permissions.allow value was modified: %q, want unchanged %q", content, seed)
 	}
 }
 
@@ -294,5 +376,66 @@ func TestEngramClaudeAutoAllowRuleGaps(t *testing.T) {
 	malformed := []byte(`not json`)
 	if gaps := EngramClaudeAutoAllowRuleGaps(malformed); len(gaps) != 24 {
 		t.Fatalf("gaps for unparseable settings = %d, want 24 (fail closed)", len(gaps))
+	}
+
+	// A wildcard SERVER segment ("mcp__*__mem_save") is not honored by Claude
+	// Code as covering a specific server's tool, so it must not count as a
+	// covered gap either: the real literal rule is still missing.
+	wildcardServer := []byte(`{"permissions":{"allow":["mcp__*__mem_save"]}}`)
+	gaps := EngramClaudeAutoAllowRuleGaps(wildcardServer)
+	foundMissing := false
+	for _, gap := range gaps {
+		if gap == "mcp__engram__mem_save" {
+			foundMissing = true
+		}
+	}
+	if !foundMissing {
+		t.Fatalf("gaps with only a wildcard-server allow entry = %v, want mcp__engram__mem_save still reported missing", gaps)
+	}
+}
+
+func TestEngramClaudeAutoAllowStatus(t *testing.T) {
+	malformed := EngramClaudeAutoAllowStatus([]byte(`not json`))
+	if malformed.Parsed {
+		t.Fatalf("Parsed = true for unparseable content, want false")
+	}
+	if len(malformed.Missing) != 0 || len(malformed.Restricted) != 0 {
+		t.Fatalf("unparseable content report = %+v, want empty Missing and Restricted", malformed)
+	}
+
+	fullyAllowed := EngramClaudeAutoAllowStatus([]byte(`{"permissions":{"allow":["mcp__engram","mcp__plugin_engram_engram"]}}`))
+	if !fullyAllowed.Parsed || len(fullyAllowed.Missing) != 0 || len(fullyAllowed.Restricted) != 0 {
+		t.Fatalf("fully-allowed report = %+v, want Parsed=true and both slices empty", fullyAllowed)
+	}
+
+	// A deny rule restricts mem_save for the plain engram server; nothing
+	// else is covered at all.
+	restricted := EngramClaudeAutoAllowStatus([]byte(`{"permissions":{"deny":["mcp__engram__mem_save"]}}`))
+	if !restricted.Parsed {
+		t.Fatal("Parsed = false, want true")
+	}
+	if len(restricted.Restricted) != 1 || restricted.Restricted[0] != "mcp__engram__mem_save" {
+		t.Fatalf("Restricted = %v, want exactly [mcp__engram__mem_save]", restricted.Restricted)
+	}
+	for _, rule := range restricted.Missing {
+		if rule == "mcp__engram__mem_save" {
+			t.Fatal("mcp__engram__mem_save reported Missing, want it reported only in Restricted")
+		}
+	}
+	if len(restricted.Missing) != 23 {
+		t.Fatalf("len(Missing) = %d, want 23 (every other candidate rule)", len(restricted.Missing))
+	}
+
+	// An ask rule with a wildcard server segment still restricts, even though
+	// the same shape would not count as allow coverage.
+	restrictedWildcard := EngramClaudeAutoAllowStatus([]byte(`{"permissions":{"ask":["mcp__*__mem_judge"]}}`))
+	foundRestricted := false
+	for _, rule := range restrictedWildcard.Restricted {
+		if rule == "mcp__engram__mem_judge" {
+			foundRestricted = true
+		}
+	}
+	if !foundRestricted {
+		t.Fatalf("Restricted = %v, want mcp__engram__mem_judge restricted by the wildcard-server ask entry", restrictedWildcard.Restricted)
 	}
 }
