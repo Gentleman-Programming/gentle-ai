@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // rddOnlyHeadings are the sections receipt-driven development owns. They reach
@@ -66,7 +66,7 @@ var oddContractClauses = []string{
 	"Native Checking Contract",
 	"Lossless Blocking Prompts",
 	"Delegation Rules",
-	"Mandatory Delegation Triggers",
+	"#### Delegation Triggers", // pain-point-iteration S9 C4 dropped "Mandatory" from the heading
 	"Language Domain Contract",
 	"Cost and Context Balance",
 	"Delivery follows work units",
@@ -112,7 +112,7 @@ func TestInstalledPromptCarriesRDDOnlyOnRDDRuntimes(t *testing.T) {
 				for _, want := range []string{
 					"The native RDD refuter owns native review claims; never duplicate or bypass it.",
 					"gentle-ai review mode enable|disable|status",
-					"gentle-ai review assess --cwd <repo> --json",
+					"gentle-ai review assess --cwd <repo> --agent " + string(agent) + " --json",
 					"**RDD on**",
 				} {
 					if !strings.Contains(prompt, want) {

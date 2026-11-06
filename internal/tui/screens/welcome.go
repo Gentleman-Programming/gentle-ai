@@ -5,12 +5,13 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 	"github.com/rivo/uniseg"
 )
 
 const (
+	ShellInstallWelcomeOption      = "Install Gentle Shell"
 	welcomeAdvisoryMaxRegionHeight = 7
 	welcomePrimaryContentHeight    = 44
 	welcomeHelpText                = "j/k: navigate • enter: select • q: quit"
@@ -23,10 +24,11 @@ type WelcomeAdvisory struct {
 }
 
 // WelcomeOptions returns the welcome menu options.
-// Legacy profile discovery does not add a menu action; existing files are preserved.
-// When hasEngines is false, "Create your own Agent" is shown as disabled
-// (labelled "(no agents)") to signal that no supported AI engine is installed.
-func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) []string {
+func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool) []string {
+	return WelcomeOptionsWithShellInstaller(updateResults, updateCheckDone, hasEngines, false)
+}
+
+func WelcomeOptionsWithShellInstaller(updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, shellInstaller bool) []string {
 	upgradeLabel := "Upgrade tools"
 	if updateCheckDone && update.HasUpdates(updateResults) {
 		upgradeLabel = "Upgrade tools ★"
@@ -34,10 +36,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		upgradeLabel = "Upgrade tools (up to date)"
 	}
 
-	agentLabel := "Create your own Agent"
-	if !hasEngines {
-		agentLabel = "Create your own Agent (no agents)"
-	}
+	_ = hasEngines
 
 	opts := []string{
 		"Start installation",
@@ -45,34 +44,49 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		"Sync configs",
 		"Upgrade + Sync",
 		"Configure models",
-		agentLabel,
-		"OpenCode Community Plugins",
+		"Manage Custom Agents",
 	}
-
-	// Slice 3b — standalone launcher for the 4-layer managed uninstall of
-	// OpenCode community plugins. Sits next to the install shortcut above
-	// so the menu pairs install + uninstall as mirror operations.
-	opts = append(opts, "Uninstall OpenCode Plugin")
 
 	opts = append(opts, "Manage backups")
 	opts = append(opts, "Reset review store")
 	opts = append(opts, "Receipt-Driven Development")
 	opts = append(opts, "Managed uninstall")
-	opts = append(opts, "Community Tools/Plugins")
+	opts = append(opts, "Community Tools")
 	opts = append(opts, "Quit")
-
+	if shellInstaller {
+		return append([]string{ShellInstallWelcomeOption}, opts...)
+	}
 	return opts
 }
 
-func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) string {
-	return RenderWelcomeWithWidth(cursor, version, updateBanner, updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, 0)
+func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool) string {
+	return RenderWelcomeWithWidth(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, 0)
 }
 
-func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, width int) string {
-	return RenderWelcomeWithAdvisory(cursor, version, updateBanner, updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, width, 0, WelcomeAdvisory{})
+func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int) string {
+	return RenderWelcomeWithAdvisory(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, 0, WelcomeAdvisory{})
 }
 
-func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
+func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
+	return renderWelcomeWithInstaller(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, height, advisory, false)
+}
+
+func RenderShellWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
+	return renderWelcomeWithInstaller(cursor, version, updateBanner, updateResults, updateCheckDone, hasEngines, width, height, advisory, true)
+}
+
+func renderWelcomeWithInstaller(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, hasEngines bool, width int, height int, advisory WelcomeAdvisory, shellInstaller bool) string {
+	options := WelcomeOptions(updateResults, updateCheckDone, hasEngines)
+	menuCursor := cursor
+	if shellInstaller {
+		menuCursor--
+	}
+	minimum := func() string {
+		if shellInstaller {
+			return renderShellWelcomeMinimum(width, height, cursor, options)
+		}
+		return renderWelcomeMinimum(width, height, cursor)
+	}
 	render := func(includeLogo, includeOptional, compact bool) string {
 		var b strings.Builder
 
@@ -96,8 +110,24 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 			}
 		}
 
-		if !compact && includeLogo {
+		if !compact && includeLogo && !shellInstaller {
 			b.WriteString("\n")
+		}
+		if shellInstaller {
+			heroHeight, heroWidth := height, width
+			if compact {
+				heroHeight = 1
+			} else {
+				heroWidth = welcomeContentWidth(width)
+			}
+			if hero := renderShellWelcomeHero(cursor == 0, heroWidth, heroHeight); hero != "" {
+				b.WriteString(hero)
+				if compact {
+					b.WriteByte('\n')
+				} else {
+					b.WriteString("\n\n")
+				}
+			}
 		}
 		if compact {
 			b.WriteString(renderWelcomeText(styles.HeadingStyle, "Menu", width))
@@ -109,11 +139,10 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 		} else {
 			b.WriteString("\n\n")
 		}
-		options := WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines)
 		if compact {
-			b.WriteString(renderWelcomeOptions(options, cursor, width))
+			b.WriteString(renderWelcomeOptions(options, menuCursor, width))
 		} else {
-			b.WriteString(renderOptions(options, cursor))
+			b.WriteString(renderOptions(options, menuCursor))
 		}
 		if !compact && includeLogo {
 			b.WriteString("\n")
@@ -130,7 +159,7 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 		return welcomeFrameStyle(width).Render(b.String())
 	}
 	if width > 0 && width <= styles.FrameStyle.GetHorizontalBorderSize() {
-		return renderWelcomeMinimum(width, height, cursor)
+		return minimum()
 	}
 	fitsViewport := func(view string) bool {
 		return (width <= 0 || lipgloss.Width(view) <= width) &&
@@ -151,9 +180,91 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 	if !fitsViewport(view) {
 		// A viewport shorter than the compact menu still needs a safe, actionable
 		// state instead of allowing the terminal to clip the rendered content.
-		view = renderWelcomeMinimum(width, height, cursor)
+		view = minimum()
 	}
 	return view
+}
+
+func renderShellWelcomeHero(selected bool, width, height int) string {
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 || height > 8 {
+		height = 8
+	}
+	return RenderShellInstallHero(selected, width, height)
+}
+
+func renderShellWelcomeMinimum(width, height, cursor int, options []string) string {
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 {
+		height = 8
+	}
+
+	atomic := func() string {
+		label := ShellInstallHeroTitle
+		if cursor > 0 && cursor-1 < len(options) {
+			label = options[cursor-1]
+		}
+		return renderWelcomeMinimumLabel(width, height, label, true)
+	}
+
+	// There is no room for meaningful hero content at these dimensions. Keep
+	// the legacy atomic fallback bounded rather than pretending a clipped title
+	// is an actionable hero.
+	if width <= styles.FrameStyle.GetHorizontalBorderSize() || height <= 2 {
+		return atomic()
+	}
+
+	const compactHelp = "j/k, enter, q"
+	helpLabel := compactHelp
+	if lipgloss.Width(helpLabel) > width {
+		helpLabel = "q"
+	}
+	helpLines := wrapWelcomeLine(helpLabel, width)
+
+	var actionLines []string
+	if cursor > 0 {
+		ordinaryCursor := cursor - 1
+		if ordinaryCursor >= 0 && ordinaryCursor < len(options) {
+			actionLines = wrapWelcomeLine(styles.Cursor+shellWelcomeMinimumLabel(options[ordinaryCursor], width), width)
+		}
+	}
+	reserved := len(helpLines) + len(actionLines)
+	if reserved >= height {
+		return atomic()
+	}
+
+	heroHeight := height - reserved
+	hero := renderShellWelcomeHero(cursor == 0, width, heroHeight)
+	lines := strings.Split(hero, "\n")
+	if len(lines) > heroHeight {
+		lines = lines[:heroHeight]
+	}
+	if len(actionLines) > 0 {
+		renderedAction := make([]string, len(actionLines))
+		for i, line := range actionLines {
+			if i > 0 {
+				line = "  " + line
+			}
+			renderedAction[i] = styles.SelectedStyle.Render(line)
+		}
+		lines = append(lines, renderedAction...)
+	}
+	lines = append(lines, styles.HelpStyle.Render(strings.Join(helpLines, "\n")))
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func shellWelcomeMinimumLabel(label string, width int) string {
+	if width > 0 && lipgloss.Width(styles.Cursor+label) > width {
+		return "Go"
+	}
+	return label
 }
 
 func renderWelcomeText(style lipgloss.Style, text string, width int) string {
@@ -185,7 +296,10 @@ func renderWelcomeOptions(options []string, cursor int, width int) string {
 }
 
 func renderWelcomeMinimum(width int, height int, cursor int) string {
-	const primaryAction = "Start installation"
+	return renderWelcomeMinimumLabel(width, height, "Start installation", cursor == 0)
+}
+
+func renderWelcomeMinimumLabel(width int, height int, primaryAction string, selected bool) string {
 	const compactPrimaryAction = "Go"
 	const narrowPrimaryAction = ">"
 	const compactHelp = "j/k, enter, q"
@@ -221,7 +335,7 @@ func renderWelcomeMinimum(width int, height int, cursor int) string {
 		primaryLineCount = len(lines)
 	}
 	primaryStyle := styles.UnselectedStyle
-	if cursor == 0 {
+	if selected {
 		primaryStyle = styles.SelectedStyle
 	}
 	rendered := primaryStyle.Render(strings.Join(lines[:primaryLineCount], "\n"))

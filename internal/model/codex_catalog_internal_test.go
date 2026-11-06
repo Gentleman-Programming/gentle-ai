@@ -125,8 +125,8 @@ func TestDiscoverCodexModels(t *testing.T) {
 				cancel()
 			}
 			got := DiscoverCodexModels(ctx)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("DiscoverCodexModels() = %v, want %v", got, tt.want)
+			if !reflect.DeepEqual(got.Models, tt.want) || got.Capabilities != nil {
+				t.Fatalf("DiscoverCodexModels() = %#v, want models %v without capabilities", got, tt.want)
 			}
 			if called != tt.wantCommand {
 				t.Fatalf("command called = %v, want %v", called, tt.wantCommand)

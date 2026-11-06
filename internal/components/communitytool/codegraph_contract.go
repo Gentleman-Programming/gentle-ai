@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const codeGraphUpstreamVersion = "1.4.1"
@@ -54,6 +54,10 @@ var codeGraphCompatibilityTable = map[model.AgentID]codeGraphCompatibility{
 	// it stays in the table so a future capability claim cannot silently
 	// bypass the exhaustive compatibility contract.
 	model.AgentConductor: excludedCompatibility(model.AgentConductor),
+}
+
+func init() {
+	codeGraphCompatibilityTable[model.AgentGitHubCopilotCLI] = nativeCompatibility(model.AgentGitHubCopilotCLI, "copilot-cli")
 }
 
 func nativeCompatibility(id model.AgentID, target string) codeGraphCompatibility {
@@ -110,6 +114,12 @@ func codeGraphToolWiringPaths(homeDir string, adapter agents.Adapter) []string {
 	}
 }
 
+// userPinnedCodeGraphDetector reports CodeGraph wiring the user pinned to a
+// fixed project; it is configured by the user rather than managed wiring.
+type userPinnedCodeGraphDetector interface {
+	PinnedCodeGraphPath(homeDir string) (path string, pinned bool)
+}
+
 func hasCodeGraphToolWiring(homeDir string, adapter agents.Adapter) (string, bool) {
 	if adapter.Agent() == model.AgentClaudeCode {
 		path := filepath.Join(homeDir, ".claude.json")
@@ -125,7 +135,15 @@ func hasCodeGraphToolWiring(homeDir string, adapter agents.Adapter) (string, boo
 		return path, err == nil && hasCanonicalAntigravityCodeGraphServer(data)
 	}
 	if detector, ok := adapter.(agents.EffectiveCodeGraphWiringDetector); ok {
-		return detector.EffectiveCodeGraphWiring(homeDir)
+		if path, configured := detector.EffectiveCodeGraphWiring(homeDir); configured {
+			return path, true
+		}
+		// A pinned project path is user configuration: count it as configured so
+		// install, status, guidance, and sync never repair or rewrite it.
+		if pinned, ok := adapter.(userPinnedCodeGraphDetector); ok {
+			return pinned.PinnedCodeGraphPath(homeDir)
+		}
+		return "", false
 	}
 	for _, path := range codeGraphToolWiringPaths(homeDir, adapter) {
 		data, err := os.ReadFile(path)

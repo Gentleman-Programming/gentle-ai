@@ -3,7 +3,7 @@ package model_test
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // TestClaudeModelAliasValid verifies that Valid accepts exactly the four
@@ -79,7 +79,7 @@ func TestClaudeEffortsForModelOfficialMatrix(t *testing.T) {
 	}{
 		{"fable", model.ClaudeModelFable, []model.ClaudeEffort{"", "low", "medium", "high", "xhigh", "max"}},
 		{"opus", model.ClaudeModelOpus, []model.ClaudeEffort{"", "low", "medium", "high", "xhigh", "max"}},
-		{"sonnet", model.ClaudeModelSonnet, []model.ClaudeEffort{"", "low", "medium", "high", "max"}},
+		{"sonnet", model.ClaudeModelSonnet, []model.ClaudeEffort{"", "low", "medium", "high", "xhigh", "max"}},
 		{"haiku", model.ClaudeModelHaiku, []model.ClaudeEffort{""}},
 		{"invalid", model.ClaudeModelAlias("bogus"), []model.ClaudeEffort{""}},
 	}

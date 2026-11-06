@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 const ReviewIntegrationRepairSchema = "gentle-ai.review-integration.repair/v1"
@@ -257,7 +257,7 @@ func (err *reviewRepairOperationError) Error() string {
 func (err *reviewRepairOperationError) Unwrap() error { return err.cause }
 
 func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When multiple content-mismatched leaves or multiple historical (outdated) authority entries exist, --preflight enumerates exact selectors; re-run it with one selector before executing its plan.")
+	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When content-mismatched leaves, historical entries, or isolated canonical rejected-validator terminals require selection, --preflight enumerates exact selectors; re-run it with one selector before executing its plan. Rejected-validator disposition preserves the verdict and consumed correction; it releases active authority without approval or an automatic review restart.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", ReviewIntegrationContractV1, "review integration contract")
 	preflight := flags.Bool("preflight", false, "perform deterministic read-only classification without authority mutation")
@@ -275,8 +275,8 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	dispositionAuthorization := flags.String("authorization", "", "exact maintainer authorization binding for an eligible leaf authority disposition plan; never emitted in public output")
 	predecessorLineage := flags.String("predecessor-lineage", "", "exact predecessor lineage for a selected content-mismatched edge")
 	predecessorRevision := flags.String("predecessor-revision", "", "exact predecessor revision for a selected content-mismatched edge")
-	successorLineage := flags.String("successor-lineage", "", "exact successor lineage for a selected content-mismatched edge")
-	successorRevision := flags.String("successor-revision", "", "exact successor revision for a selected content-mismatched edge")
+	successorLineage := flags.String("successor-lineage", "", "exact successor or standalone authority lineage from a preflight selector")
+	successorRevision := flags.String("successor-revision", "", "exact authority revision from the selected preflight entry")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -370,6 +370,12 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 			return reviewPreflightError(planErr)
 		} else if selectors, selectorsErr := reviewtransaction.ListAuthorityDispositionSelectorsAtRepo(ctx, root); selectorsErr == nil && len(selectors) > 1 {
 			result.DispositionSelectors = selectors
+		} else if len(selectors) == 1 {
+			// A lone selector is published only for an eligible rejected-validator
+			// terminal, never for one historical entry beside other diagnostics.
+			if single, err := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", "", selectors[0]); err == nil && single.AnomalyClass == reviewtransaction.RejectedValidatorDispositionClass {
+				result.DispositionSelectors = selectors
+			}
 		}
 		if err := result.Validate(); err != nil {
 			return fmt.Errorf("validate review repair preflight: %w", err)

@@ -60,7 +60,12 @@ func (o *Orchestrator) Execute(plan StagePlan) ExecutionResult {
 	o.indexSteps(plan.Prepare)
 	o.indexSteps(plan.Apply)
 
-	prepareResult := o.runner.Run(StagePrepare, plan.Prepare)
+	// Prepare steps are preflight gates: the first refusal stops the stage
+	// under every failure policy, so a failed gate can never let a later
+	// prepare step mutate anything. WithFailurePolicy governs apply only.
+	prepareRunner := o.runner
+	prepareRunner.FailurePolicy = StopOnError
+	prepareResult := prepareRunner.Run(StagePrepare, plan.Prepare)
 	if !prepareResult.Success {
 		o.Finish()
 		return ExecutionResult{Prepare: prepareResult, Err: prepareResult.Err}

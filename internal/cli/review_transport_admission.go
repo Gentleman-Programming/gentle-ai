@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const reviewTransportCapabilityUnsupportedCode = "review_transport_capability_unsupported"
 
 var reviewTransportCapabilityUnsupportedReason = reviewPreflightReason{
 	Code:       reviewTransportCapabilityUnsupportedCode,
-	Message:    "The active runtime does not advertise review transport capability.",
+	Message:    "The active runtime does not advertise review transport capability; to keep working without receipt review here, run `gentle-ai review mode disable --scope clone --cwd <repo>`.",
 	NextAction: "stop",
 }
 

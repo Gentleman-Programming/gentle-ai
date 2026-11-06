@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *testing.T) {
@@ -210,11 +210,18 @@ func TestNegotiatedReviewStartLargeRepositoryUsesBoundedReferenceAdmission(t *te
 		"--cwd", repo, "--lineage", lineage, "--target", record.State.InitialSnapshot.Identity,
 		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
 	}
-	result.Evidence = []string{"fabricated proof: missing-inventory.go:1"}
+	// Free-form evidence is never path-adjudicated (#5624); proof_refs still
+	// claim the reviewer read a file, so the fabricated reference lives there.
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "main.go:1", Severity: "CRITICAL", Claim: "candidate failure",
+		ProofRefs: []string{"fabricated proof: missing-inventory.go:1"}, EvidenceClass: reviewtransaction.EvidenceInferential,
+		CausalDisposition: reviewtransaction.CausalBehaviorActivated,
+	}}
 	writeReviewCLIJSON(t, input, result)
 	if err := RunReviewCaptureResult(captureArgs, io.Discard); err == nil || !strings.Contains(err.Error(), "outside the frozen repository") {
 		t.Fatalf("invalid immutable-tree reference admission error = %v", err)
 	}
+	result.Findings = []facadeFinding{}
 	result.Evidence = []string{"supporting proof: " + supportingPath + ":1"}
 	writeReviewCLIJSON(t, input, result)
 	if err := RunReviewCaptureResult(captureArgs, io.Discard); err != nil {

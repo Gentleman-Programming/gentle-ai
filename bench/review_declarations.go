@@ -4,6 +4,9 @@ package main
 // lifecycle journeys need the runner's isolated global opt-in; switch journeys are
 // deliberately untouched so they can prove their own mode transition.
 var coreJourneyReviewModes = map[string]ReviewPrecondition{
+	"j3565-skill-registry-dot-cwd":                                              reviewUntouched,
+	"j4772-committed-correction-dirty-commit":                                   reviewOptedIn,
+	"j4773-committed-correction-dirty-amend":                                    reviewOptedIn,
 	"j01-docs-happy-path":                                                       reviewOptedIn,
 	"j03-kill-switch":                                                           reviewUntouched,
 	"j04-size-does-not-escalate":                                                reviewOptedIn,
@@ -29,6 +32,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j14-abandon-needs-a-hand-built-token":                                      reviewOptedIn,
 	"j15-linked-worktree":                                                       reviewOptedIn,
 	"j16-detached-head":                                                         reviewOptedIn,
+	"j1658-native-status-recovery-executes-without-authored-authorization":      reviewOptedIn,
 	"j17-bare-repository":                                                       reviewOptedIn,
 	"j18-space-and-non-ascii-path":                                              reviewOptedIn,
 	"j19-submodule-gitlink":                                                     reviewOptedIn,

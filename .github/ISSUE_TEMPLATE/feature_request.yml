@@ -1,6 +1,6 @@
 name: Feature Request
 description: Suggest a new feature or enhancement for Gentle AI
-labels: ["enhancement", "status:needs-review"]
+labels: ["type:feature", "status:needs-review"]
 
 body:
   - type: markdown
@@ -9,7 +9,7 @@ body:
         ## 📋 How this works
 
         1. **Submit** this feature request → it gets the `status:needs-review` label automatically
-        2. A **maintainer reviews** it and adds `status:approved` (or closes it as out-of-scope/duplicate)
+        2. **Review** precedes approval: adding `status:approved` follows the canonical issue-creation workflow contract, requiring a current direct human instruction for the exact target/action and verified actor `MAINTAIN`/`ADMIN` capability (or a separately authorized closure)
         3. **Only then** should you (or anyone) open a PR to implement it
 
         PRs that implement features without `status:approved` on the linked issue will be automatically rejected.

@@ -8,12 +8,13 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
-// stateDir matches internal/state's own stateDir: telemetry state lives next
-// to the rest of Gentle AI's uncommitted user state, under the same home
-// directory resolution so tests can point both at one temp dir.
+// stateDir is the default folder name under home. Telemetry state lives next
+// to the rest of Gentle AI's uncommitted user state, in state.Dir, so tests
+// can point both at one temp dir.
 const stateDir = ".gentle-ai"
 const stateFile = "telemetry.json"
 
@@ -81,7 +82,7 @@ func (s *State) UnmarshalJSON(data []byte) error {
 // Path returns the absolute path to the telemetry state file for the given
 // home directory.
 func Path(homeDir string) string {
-	return filepath.Join(homeDir, stateDir, stateFile)
+	return filepath.Join(state.Dir(homeDir), stateFile)
 }
 
 // NewState returns a fresh, enabled state with a newly generated install_id.
@@ -160,11 +161,11 @@ func loadForDecision(homeDir string) (State, error) {
 // persisted value instead of each minting their own).
 //
 // Concurrency invariant: EnsureState mints AND saves directly, which is safe
-// only because Update is its sole caller and already holds the state lock
-// across the whole read-modify-write cycle (see lockState). Any future
-// caller must hold that same lock first. Do not call lockState from inside
-// EnsureState to get it: the lock is not re-entrant, so that would
-// self-deadlock every Update.
+// only because its callers (Update and IncrementCounter) already hold the
+// state lock across the whole read-modify-write cycle (see lockState). Any
+// future caller must hold that same lock first. Do not call lockState from
+// inside EnsureState to get it: the lock is not re-entrant, so that would
+// self-deadlock its callers.
 func EnsureState(homeDir string) (State, error) {
 	s, err := Load(homeDir)
 	switch {
@@ -198,7 +199,7 @@ func EnsureState(homeDir string) (State, error) {
 // Save persists the telemetry state file atomically, creating the
 // containing directory if needed.
 func Save(homeDir string, s State) error {
-	dir := filepath.Join(homeDir, stateDir)
+	dir := state.Dir(homeDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // lensContextArgv renders the closed lens-context command form from the flags
@@ -167,8 +167,8 @@ func TestReviewLensContextRefusesUnboundInput(t *testing.T) {
 	}{
 		{name: "missing lens", argv: append([]string{"lens-context"}, lensContextArgv(args, "")[:len(lensContextArgv(args, ""))-2]...), want: "requires the exact provider-issued"},
 		{name: "missing context", argv: []string{"lens-context", "--lens", lens}, want: "requires the exact provider-issued"},
-		{name: "malformed context", argv: append([]string{"lens-context"}, lensContextArgv(replaceArgValue(args, "--repository-context", "not-a-handle"), lens)...), want: "repository_context_"},
-		{name: "unknown context", argv: append([]string{"lens-context"}, lensContextArgv(replaceArgValue(args, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), lens)...), want: "repository_context_"},
+		{name: "malformed context", argv: append([]string{"lens-context"}, lensContextArgv(replaceArgValue(args, "--repository-context", "not-a-handle"), lens)...), want: "rctx2_binding_unusable"},
+		{name: "unknown context", argv: append([]string{"lens-context"}, lensContextArgv(replaceArgValue(args, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), lens)...), want: "rctx2_binding_unusable"},
 		{name: "unselected lens", argv: append([]string{"lens-context"}, lensContextArgv(args, "review-nonexistent")...), want: "lens_context_lens_not_selected"},
 		{name: "positional", argv: append(append([]string{"lens-context"}, lensContextArgv(args, lens)...), "HEAD"), want: "requires the exact provider-issued"},
 		{name: "unknown flag", argv: append(append([]string{"lens-context"}, lensContextArgv(args, lens)...), "--order", "0"), want: "flag provided but not defined"},
@@ -244,6 +244,31 @@ func TestNegotiatedStartRefusesOverBudgetCandidateWithoutPersistingAuthority(t *
 	}
 	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
 		t.Fatalf("over-budget START persisted an artifact: before=%#v after=%#v", homeBefore, after)
+	}
+}
+
+func TestNegotiatedStartRefusesOverBudgetDependencyLocks(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	body := strings.Repeat("oversized dependency evidence\n", 80_000)
+	for _, path := range []string{"package-lock.json", "nested/package-lock.json"} {
+		writeReviewStartCandidate(t, repo, path, body, 0o644)
+	}
+	before := runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all")
+	var output bytes.Buffer
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", "lock-budget",
+	}), &output)
+	var failure *ReviewIntegrationFailureError
+	if !errors.As(err, &failure) || failure.Failure.Code != "lens_context_budget_exceeded" ||
+		failure.Failure.MutationOutcome != ReviewMutationNotStarted {
+		t.Fatalf("oversized dependency locks must refuse before authority creation: %v", err)
+	}
+	if strings.Contains(output.String(), "GENTLE_AI_REVIEW_") {
+		t.Fatal("budget refusal emitted partial reviewer evidence")
+	}
+	if after := runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all"); before != after {
+		t.Fatal("budget refusal changed the candidate")
 	}
 }
 
@@ -443,6 +468,49 @@ func runGeneratedSummaryLensContext(t *testing.T, repo, lineage string) string {
 	return lensContextBlock(t, argv, started.SelectedLenses[0])
 }
 
+// Dependency locks retain semantic evidence even when classified as generated.
+func TestReviewLensContextDependencyLocksKeepFrozenPatches(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	paths := []string{"package-lock.json", "nested/npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "go.sum", "Cargo.lock"}
+	for _, path := range paths {
+		writeReviewStartCandidate(t, repo, path, "base dependency marker\n", 0o644)
+	}
+	runReviewCLIGit(t, repo, "commit", "-qm", "base dependency locks")
+	for _, path := range paths {
+		writeReviewStartCandidate(t, repo, path, "candidate dependency marker\n", 0o644)
+	}
+	started := runNegotiatedReviewStart(t, repo, "dependency-lock-evidence")
+	// Live bytes must never replace the frozen candidate's evidence.
+	for _, path := range paths {
+		writeReviewStartCandidate(t, repo, path, "live dependency marker\n", 0o644)
+	}
+	argv := []string{"--cwd", repo, "--repository-context", started.RepositoryContext.Handle,
+		"--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity,
+		"--expected-revision", started.RepositoryContext.Revision}
+	block := lensContextBlock(t, argv, started.SelectedLenses[0])
+	for _, path := range paths {
+		header := fmt.Sprintf("GENTLE_AI_REVIEW_PATCH %d %s", lensContextManifestIndex(t, block, path), path)
+		_, after, found := strings.Cut(block, header+"\n")
+		if !found {
+			t.Fatalf("dependency lock %q lost its full frozen patch", path)
+		}
+		patch, _, ended := strings.Cut(after, "\nGENTLE_AI_REVIEW_PATCH_END\n")
+		if !ended || !strings.Contains(patch, "-base dependency marker") || !strings.Contains(patch, "+candidate dependency marker") || strings.Contains(patch, "live dependency marker") {
+			t.Fatalf("dependency lock %q does not carry complete frozen evidence: %s", path, patch)
+		}
+		if _, summarized := lensContextGeneratedSection(block, path); summarized {
+			t.Fatalf("dependency lock %q still has an omitted-content summary", path)
+		}
+	}
+	for _, raw := range lensContextPreflight(t, block)["changed_path_manifest"].([]any) {
+		entry := raw.(map[string]any)
+		if entry["generated"] != true {
+			t.Fatalf("lockfile lost generated classification: %v", entry)
+		}
+	}
+}
+
 // lensContextPreflight decodes the capture-context line of a reviewer block.
 func lensContextPreflight(t *testing.T, block string) map[string]any {
 	t.Helper()
@@ -539,12 +607,8 @@ func assertGeneratedSummary(t *testing.T, block string, want generatedSummaryExp
 	}
 }
 
-// TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches is the
-// #4680 T1 behavior: recognized generated paths (existing testdata goldens and
-// the explicit dependency-lockfile basenames) reach the reviewer as a truthful
-// metadata summary -- path, status, numstat, object identifiers, and an
-// explicit omitted-content disclosure -- instead of their full patch, while
-// ordinary authored paths keep their complete evidence in full.
+// Nonsemantic generated outputs retain metadata-only evidence; dependency
+// locks and ordinary authored paths retain complete frozen patches.
 func TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -557,8 +621,6 @@ func TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches(t *testin
 		additions int
 		deletions int
 	}{
-		{path: "go.sum", status: "M", additions: 1, deletions: 0},
-		{path: "web/package-lock.json", status: "A", additions: 200, deletions: 0},
 		{path: "internal/render/testdata/golden/rendered.golden", status: "A", additions: 1, deletions: 0},
 	} {
 		t.Run(test.path, func(t *testing.T) {
@@ -567,6 +629,16 @@ func TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches(t *testin
 				requireNewObjectID: true,
 			})
 		})
+	}
+
+	for _, lock := range []struct{ path, added string }{
+		{"go.sum", "+new dependency line"},
+		{"web/package-lock.json", "+package-lock line"},
+	} {
+		if !strings.Contains(block, fmt.Sprintf("GENTLE_AI_REVIEW_PATCH %d %s\n", lensContextManifestIndex(t, block, lock.path), lock.path)) ||
+			!strings.Contains(block, lock.added) {
+			t.Fatalf("dependency lock %q lost its complete patch", lock.path)
+		}
 	}
 
 	// The ordinary authored path keeps its complete patch.
@@ -601,8 +673,8 @@ func TestReviewLensContextSummarizesGeneratedPathsAndOmitsTheirPatches(t *testin
 }
 
 // TestReviewLensContextGeneratedSummaryKeepsDeletionEvidenceAndNearMissPatches
-// preserves the safety property: a deleted lockfile is still important evidence
-// and keeps its summary with status and object identifiers, while files whose
+// preserves the safety property: a deleted lockfile keeps its full patch,
+// while files whose
 // basename merely resembles a recognized one (go.mod, yarn.lock.example) stay
 // authored evidence with their complete patches.
 func TestReviewLensContextGeneratedSummaryKeepsDeletionEvidenceAndNearMissPatches(t *testing.T) {
@@ -616,9 +688,10 @@ func TestReviewLensContextGeneratedSummaryKeepsDeletionEvidenceAndNearMissPatche
 	writeReviewStartCandidate(t, repo, "docs/yarn.lock.example", "# authored example, not a lockfile\n", 0o644)
 	block := runGeneratedSummaryLensContext(t, repo, "generated-summary-deletion")
 
-	assertGeneratedSummary(t, block, generatedSummaryExpectation{
-		path: "yarn.lock", status: "D", deletions: 80,
-	})
+	if !strings.Contains(block, fmt.Sprintf("GENTLE_AI_REVIEW_PATCH %d yarn.lock\n", lensContextManifestIndex(t, block, "yarn.lock"))) ||
+		!strings.Contains(block, "deleted file mode") || strings.Count(block, "-yarn dependency line\n") != 80 {
+		t.Fatal("deleted dependency lock lost its complete deletion patch")
+	}
 	for _, path := range []string{"tools/go.mod", "docs/yarn.lock.example"} {
 		if _, summarized := lensContextGeneratedSection(block, path); summarized {
 			t.Fatalf("near-miss %q was summarized as generated", path)
@@ -651,6 +724,7 @@ func TestReviewLensContextAfterCollectionClosesNamesTheFindingsSurface(t *testin
 		ProofRefs:     []string{"the changed line deterministically causes the reproduced failure"},
 		EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, &bytes.Buffer{})
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
@@ -903,6 +977,62 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 	}
 }
 
+// TestReviewLensContextInstructionAppliesSeverityRules pins S12: a lens with no
+// installed agent body learns the same severity discipline from the block.
+func TestReviewLensContextInstructionAppliesSeverityRules(t *testing.T) {
+	reviewEnabledHome(t)
+	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	block := lensContextBlock(t, args, args[slices.Index(args, "--lens")+1])
+	instruction, found := lensContextSection(block, "GENTLE_AI_REVIEW_INSTRUCTION")
+	if !found {
+		t.Fatalf("block carries no reviewer instruction:\n%s", block)
+	}
+	for _, required := range []string{
+		"must be caused by this change", "does not already happen at the baseline", "reachable with realistic input",
+		"was not asked to change", "out-of-domain values", "at most WARNING",
+		"ignoring an explicit option or argument while reporting success",
+		"unrequested changes to existing command output or messages",
+		"must also name its observable harm", "a concrete violation of the requested behavior",
+		"a regression on input or state that was valid at the baseline", "is not harm by itself and is at most WARNING",
+		"at most WARNING unless the finding also shows a concrete violation of the requested behavior or a regression on input or state that was valid at the baseline.",
+		"is a regression even when nothing prohibited it",
+		"is not a regression merely because its results differ from the baseline",
+	} {
+		if !strings.Contains(instruction, required) {
+			t.Fatalf("instruction omits severity rule %q:\n%s", required, instruction)
+		}
+	}
+}
+
+// TestReviewProviderRefuterRolePromptRequiresObservableHarm pins S19 on the
+// rendered refuter role prompt of every runtime: the shared harm rules and the
+// refuter decision rule reach the model, not only the source constant.
+func TestReviewProviderRefuterRolePromptRequiresObservableHarm(t *testing.T) {
+	refuter, err := reviewProviderRoleContractFor(reviewProviderRoleRefuter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, runtime := range []model.AgentID{model.AgentCodex, model.AgentClaudeCode, model.AgentPi, model.AgentOpenCode} {
+		prompt, err := reviewProviderRolePrompt(refuter, runtimeBudgetRolePromptRequest(""), string(runtime))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, required := range []string{
+			"must also name its observable harm", "is not harm by itself and is at most WARNING",
+			"at most WARNING unless the finding also shows a concrete violation of the requested behavior or a regression on input or state that was valid at the baseline.",
+			"is a regression even when nothing prohibited it",
+			"ignoring an explicit option or argument while reporting success",
+			"it demonstrates no observable harm",
+			"Inconclusive is not a severity downgrade: it still opens a correction",
+			"only when the supplied evidence cannot decide",
+		} {
+			if !strings.Contains(string(prompt), required) {
+				t.Fatalf("%s refuter role prompt omits %q:\n%s", runtime, required, prompt)
+			}
+		}
+	}
+}
+
 func lensContextSection(block, header string) (string, bool) {
 	_, after, found := strings.Cut(block, "\n"+header+"\n")
 	if !found {
@@ -1041,7 +1171,7 @@ func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testi
 		t.Fatal(err)
 	}
 
-	if reviewLensContextStatusBudgetExhausted(t.Context(), repo, record.State, record.Revision) {
+	if reviewLensContextStatusBudgetExhausted(t.Context(), repo, record.State, record.Revision, "") {
 		t.Fatal("reachable small candidate was classified as over budget")
 	}
 
@@ -1067,7 +1197,7 @@ func TestReviewLensContextBudgetProbeReportsFailureInsteadOfUnderBudget(t *testi
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			outcome, err := reviewLensContextBudgetProbe(t.Context(), test.deps(reviewLensContextDependencies()), repo, record.State, record.Revision)
+			outcome, err := reviewLensContextBudgetProbe(t.Context(), test.deps(reviewLensContextDependencies()), repo, record.State, record.Revision, "")
 			if err == nil {
 				t.Fatalf("probe answered outcome=%v with no cause after it never evaluated the budget", outcome)
 			}

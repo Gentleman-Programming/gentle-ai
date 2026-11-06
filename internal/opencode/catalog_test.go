@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -28,6 +29,160 @@ other/plain
 {"id":"plain","name":"Plain","capabilities":{"toolcall":false,"reasoning":false}}
 `
 
+func discoverV1CatalogWithRunner(ctx context.Context, dir string, runner CommandRunner) (map[string]Provider, error) {
+	return DiscoverCatalogWithRunner(ctx, dir, func(ctx context.Context, command Command) (io.Reader, error) {
+		if strings.Join(command.Args, " ") == "--version" {
+			return strings.NewReader("opencode v1.2.0\n"), nil
+		}
+		return runner(ctx, command)
+	})
+}
+
+func TestDiscoverCatalogV2Models(t *testing.T) {
+	var commands []string
+	runner := func(_ context.Context, command Command) (io.Reader, error) {
+		commands = append(commands, strings.Join(command.Args, " "))
+		switch strings.Join(command.Args, " ") {
+		case "--version":
+			return strings.NewReader("opencode v2.0.18\n"), nil
+		case "api get /api/model?location%5Bdirectory%5D=project":
+			if command.Dir != "project" {
+				t.Fatalf("API directory = %q", command.Dir)
+			}
+			return strings.NewReader(`{"data":[{"id":"gpt-5.5-fast","modelID":"gpt-5.5","providerID":"openai","name":"GPT 5.5 Fast","capabilities":{"tools":true},"enabled":true,"variants":[{"id":"low"},{"id":"high"}],"limit":{"context":128000,"output":8192}},{"id":"text-only","modelID":"text-only","providerID":"openai","name":"Text Only","capabilities":{"tools":false},"enabled":true,"variants":[]},{"id":"disabled","modelID":"disabled","providerID":"openai","name":"Disabled","capabilities":{"tools":true},"enabled":false,"variants":[]},{"id":"qwen/qwen3","modelID":"qwen/qwen3","providerID":"custom","name":"Qwen 3","capabilities":{"tools":true},"enabled":true,"variants":[]}]}`), nil
+		default:
+			t.Fatalf("unsupported command %v", command.Args)
+			return nil, nil
+		}
+	}
+	providers, err := DiscoverCatalogWithRunner(context.Background(), "project", runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(commands, ",") != "--version,api get /api/model?location%5Bdirectory%5D=project" {
+		t.Fatalf("commands = %v", commands)
+	}
+	if providers["openai"].Models["gpt-5.5-fast"].ID != "gpt-5.5-fast" || !providers["openai"].Models["gpt-5.5-fast"].ToolCall || providers["custom"].Models["qwen/qwen3"].ID != "qwen/qwen3" || providers["openai"].Models["text-only"].ToolCall {
+		t.Fatalf("catalog = %+v", providers)
+	}
+	if _, ok := providers["openai"].Models["disabled"]; ok {
+		t.Fatal("disabled model offered")
+	}
+	if got := strings.Join(providers["openai"].Models["gpt-5.5-fast"].Variants, ","); got != "low,high" {
+		t.Fatalf("variants = %q", got)
+	}
+	if got := FilterModelsForSDD(providers["openai"]); len(got) != 1 || got[0].ID != "gpt-5.5-fast" {
+		t.Fatalf("SDD-selectable models = %+v, want only tool-capable model", got)
+	}
+}
+
+func TestParseV2ModelAPIUsesExplicitReasoningCapability(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		capability string
+		want       bool
+	}{
+		{name: "explicit reasoning", capability: `,"reasoning":true`, want: true},
+		{name: "explicit non-reasoning", capability: `,"reasoning":false`},
+		{name: "undisclosed reasoning", capability: ``},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := `{"data":[{"id":"model","modelID":"model","providerID":"openai","name":"Model","enabled":true,"capabilities":{"tools":true` + tt.capability + `},"variants":[]}]}`
+			providers, err := parseV2ModelAPI(strings.NewReader(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			model := providers["openai"].Models["model"]
+			if model.Reasoning != tt.want || len(model.Variants) != 0 {
+				t.Fatalf("model = %+v, want reasoning=%t without variants", model, tt.want)
+			}
+		})
+	}
+}
+
+func TestDiscoverCatalogV2RejectsNonAPIOutput(t *testing.T) {
+	for _, output := range []string{"Available models:\n- openai/gpt-5.5\n", "openai/\n", "openai/gpt-5.5\nplugin log\n"} {
+		t.Run(output, func(t *testing.T) {
+			_, err := DiscoverCatalogWithRunner(context.Background(), "project", func(_ context.Context, command Command) (io.Reader, error) {
+				if strings.Join(command.Args, " ") == "--version" {
+					return strings.NewReader("opencode v2.0.18\n"), nil
+				}
+				return strings.NewReader(output), nil
+			})
+			var catalogErr *CatalogError
+			if !errors.As(err, &catalogErr) || catalogErr.Kind != CatalogErrorMalformed {
+				t.Fatalf("error = %v, want malformed_output", err)
+			}
+		})
+	}
+}
+
+func TestDiscoverCatalogV2RejectsMissingToolCapability(t *testing.T) {
+	for _, payload := range []string{
+		`{"data":[{"id":"model","modelID":"model","providerID":"openai","enabled":true}]}`,
+		`{"data":[{"id":"model","modelID":"model","providerID":"openai","enabled":true,"capabilities":{}}]}`,
+		`{"data":[{"id":"model","modelID":"model","providerID":"openai","enabled":true,"capabilities":{"tools":"true"}}]}`,
+	} {
+		t.Run(payload, func(t *testing.T) {
+			_, err := DiscoverCatalogWithRunner(context.Background(), "project", func(_ context.Context, command Command) (io.Reader, error) {
+				if strings.Join(command.Args, " ") == "--version" {
+					return strings.NewReader("opencode v2.0.18\n"), nil
+				}
+				return strings.NewReader(payload), nil
+			})
+			var catalogErr *CatalogError
+			if !errors.As(err, &catalogErr) || catalogErr.Kind != CatalogErrorUnsupportedSchema {
+				t.Fatalf("error = %v, want unsupported_schema", err)
+			}
+		})
+	}
+}
+
+func TestDiscoverCatalogRejectsUnknownVersionWithoutInvokingModels(t *testing.T) {
+	calledModels := false
+	_, err := DiscoverCatalogWithRunner(context.Background(), "project", func(_ context.Context, command Command) (io.Reader, error) {
+		if strings.Join(command.Args, " ") == "--version" {
+			return strings.NewReader("opencode v3.0.0\n"), nil
+		}
+		calledModels = true
+		return strings.NewReader(""), nil
+	})
+	var catalogErr *CatalogError
+	if !errors.As(err, &catalogErr) || catalogErr.Kind != CatalogErrorUnsupportedSchema || calledModels {
+		t.Fatalf("error = %v, calledModels = %t", err, calledModels)
+	}
+}
+
+func TestDiscoverCatalogRealV2(t *testing.T) {
+	if testing.Short() || os.Getenv("GENTLE_AI_TEST_OPENCODE_V2") == "" {
+		t.Skip("opt-in integration test requires an installed OpenCode V2 binary")
+	}
+	major, err := DetectRuntimeMajor(context.Background())
+	if err != nil || major != RuntimeV2 {
+		t.Skipf("OpenCode V2 unavailable: major = %v, error = %v", major, err)
+	}
+	// Model availability is location-scoped; an empty temporary directory can
+	// legitimately return no models even when the repository has a catalog.
+	projectDir, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers, err := DiscoverCatalog(context.Background(), projectDir)
+	if err != nil {
+		t.Fatalf("DiscoverCatalog(real V2) error = %v", err)
+	}
+	if len(providers) == 0 {
+		t.Fatal("real V2 model list contained no providers")
+	}
+	selectable := 0
+	for _, provider := range providers {
+		selectable += len(FilterModelsForSDD(provider))
+	}
+	if selectable == 0 {
+		t.Fatal("real V2 API catalog contained no tool-capable picker models")
+	}
+}
+
 func TestDiscoverCatalogMapsVerboseOutputAndProjectDirectory(t *testing.T) {
 	var got Command
 	runner := func(_ context.Context, command Command) (io.Reader, error) {
@@ -35,7 +190,7 @@ func TestDiscoverCatalogMapsVerboseOutputAndProjectDirectory(t *testing.T) {
 		return strings.NewReader(verboseCatalog), nil
 	}
 
-	providers, err := DiscoverCatalogWithRunner(context.Background(), `C:\work\project`, runner)
+	providers, err := discoverV1CatalogWithRunner(context.Background(), `C:\work\project`, runner)
 	if err != nil {
 		t.Fatalf("DiscoverCatalogWithRunner() error = %v", err)
 	}
@@ -55,7 +210,7 @@ func TestDiscoverCatalogToleratesLogNoiseAroundRecords(t *testing.T) {
 	noisy := "[skill-registry] skipping refresh: not a project root: /Users/someone/Desktop\n" +
 		verboseCatalog +
 		"[skill-registry] refresh done\n"
-	providers, err := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
+	providers, err := discoverV1CatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
 		return strings.NewReader(noisy), nil
 	})
 	if err != nil {
@@ -74,7 +229,7 @@ func TestDiscoverCatalogOrdersKnownEffortVariantsSemantically(t *testing.T) {
 		`{"id":"model","name":"Model","capabilities":{"toolcall":true},"variants":{"medium":{},"high":{},"low":{}}}` + "\n" +
 		"custom/other\n" +
 		`{"id":"other","name":"Other","capabilities":{"toolcall":true},"variants":{"zeta":{},"alpha":{}}}` + "\n"
-	providers, err := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
+	providers, err := discoverV1CatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
 		return strings.NewReader(out), nil
 	})
 	if err != nil {
@@ -88,6 +243,35 @@ func TestDiscoverCatalogOrdersKnownEffortVariantsSemantically(t *testing.T) {
 	}
 }
 
+func TestSortVariants_ExtendedEffortAndSpeedVariants(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+	}{
+		{
+			name:     "extended effort levels all ordered by rank",
+			input:    []string{"ultra", "max", "xhigh", "high", "medium", "low"},
+			expected: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+		},
+		{
+			name:     "mixed effort and non-effort speed variants",
+			input:    []string{"fast", "high", "ultra", "beta", "low", "alpha"},
+			expected: []string{"low", "high", "ultra", "alpha", "beta", "fast"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			variants := append([]string(nil), tt.input...)
+			sortVariants(variants)
+			if !reflect.DeepEqual(variants, tt.expected) {
+				t.Fatalf("sortVariants(%v) = %v, want %v", tt.input, variants, tt.expected)
+			}
+		})
+	}
+}
+
 func TestDiscoverCatalogParsesLargeOutputAboveOneMegabyte(t *testing.T) {
 	// Generate ~1.5 MiB of valid models (3500 records * ~450 bytes each)
 	payload := string(generateCatalogFixture(3500))
@@ -95,7 +279,7 @@ func TestDiscoverCatalogParsesLargeOutputAboveOneMegabyte(t *testing.T) {
 		t.Fatalf("test payload size = %d, want > 1 MiB", len(payload))
 	}
 
-	providers, err := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
+	providers, err := discoverV1CatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
 		return strings.NewReader(payload), nil
 	})
 	if err != nil {
@@ -112,7 +296,7 @@ func TestDiscoverCatalogDecoderReadAheadDoesNotDropSubsequentHeaders(t *testing.
 	for i := 0; i < 50; i++ {
 		fmt.Fprintf(&b, "prov/model-%02d\n{\"id\":\"model-%02d\",\"capabilities\":{\"toolcall\":true}}\n", i, i)
 	}
-	providers, err := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
+	providers, err := discoverV1CatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
 		return strings.NewReader(b.String()), nil
 	})
 	if err != nil {
@@ -146,7 +330,7 @@ func TestDiscoverCatalogRejectsInvalidOutput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
+			_, err := discoverV1CatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
 				return strings.NewReader(tt.out), nil
 			})
 			var catalogErr *CatalogError
@@ -157,10 +341,10 @@ func TestDiscoverCatalogRejectsInvalidOutput(t *testing.T) {
 	}
 }
 
-// TestProcessStreamReaderReadSurfacesExitStatusAfterEOF pins the Read
-// contract: once the drained stream is exhausted, Read must reap the child
+// TestCatalogFileReaderReadSurfacesExitStatusAfterEOF pins the Read
+// contract: once the captured stream is exhausted, Read must reap the child
 // and return its exit error, never swallow it as a plain io.EOF.
-func TestProcessStreamReaderReadSurfacesExitStatusAfterEOF(t *testing.T) {
+func TestCatalogFileReaderReadSurfacesExitStatusAfterEOF(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("requires a POSIX exit-status fixture")
 	}
@@ -247,7 +431,7 @@ func TestDiscoverCatalogClassifiesCommandFailuresAndEmptyCatalog(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
+			_, err := discoverV1CatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
 				return nil, tt.err
 			})
 			var catalogErr *CatalogError
@@ -256,7 +440,7 @@ func TestDiscoverCatalogClassifiesCommandFailuresAndEmptyCatalog(t *testing.T) {
 			}
 		})
 	}
-	providers, err := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
+	providers, err := discoverV1CatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
 		return strings.NewReader(""), nil
 	})
 	if err != nil || len(providers) != 0 {
@@ -356,6 +540,32 @@ func TestMergeConfiguredCatalogCopiesVariantsDefensively(t *testing.T) {
 	merged["p2"].Models["m2"].Variants[0] = "mutated"
 	if configuredCatalog["p2"].Models["m2"].Variants[0] != "medium" {
 		t.Fatalf("configured model variants was mutated via merged copy")
+	}
+}
+
+func TestMergeConfiguredCatalogMergesAndSortsVariants(t *testing.T) {
+	runtimeCatalog := map[string]Provider{
+		"openai": {
+			ID: "openai",
+			Models: map[string]Model{
+				"gpt-5": {ID: "gpt-5", Name: "GPT-5", Variants: []string{"low", "high"}},
+			},
+		},
+	}
+	configuredCatalog := map[string]Provider{
+		"openai": {
+			ID: "openai",
+			Models: map[string]Model{
+				"gpt-5": {ID: "gpt-5", Variants: []string{"fast", "medium", "low"}},
+			},
+		},
+	}
+
+	merged := MergeConfiguredCatalog(runtimeCatalog, configuredCatalog)
+	gotVariants := merged["openai"].Models["gpt-5"].Variants
+	wantVariants := []string{"low", "medium", "high", "fast"}
+	if !reflect.DeepEqual(gotVariants, wantVariants) {
+		t.Fatalf("merged variants = %v, want %v", gotVariants, wantVariants)
 	}
 }
 
@@ -459,7 +669,7 @@ func TestDiscoverCatalogPrefersCommandFailureOverParseClassification(t *testing.
 			runner := func(context.Context, Command) (io.Reader, error) {
 				return &exitOnCloseReader{r: strings.NewReader(tt.out), waitErr: exitErr}, nil
 			}
-			_, err := DiscoverCatalogWithRunner(context.Background(), "project", runner)
+			_, err := discoverV1CatalogWithRunner(context.Background(), "project", runner)
 			var catalogErr *CatalogError
 			if !errors.As(err, &catalogErr) || catalogErr.Kind != tt.want {
 				t.Fatalf("err = %v, want %v (child exit status must not be masked)", err, tt.want)
@@ -577,40 +787,86 @@ func main() {
 	}
 }
 
-func TestBoundedPipeBufferPreservesNonEOFReadFailure(t *testing.T) {
-	buf := newBoundedPipeBuffer(1024, nil)
-	buf.append([]byte("hello world"))
-	simulatedErr := errors.New("simulated pipe read failure")
-	buf.finish(simulatedErr)
+// TestCatalogFileReaderCapturesRegularFileAndCleansUp pins the transport
+// contract of issue #5833: the catalog child's stdout must be a regular file
+// (OpenCode V2 truncates its own API response when stdout is a pipe), the
+// reader must serve the complete capture, and Close must remove the temp
+// file.
+func TestCatalogFileReaderCapturesRegularFileAndCleansUp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX /proc stdout fixture")
+	}
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "stdout-kind-helper")
+	source := filepath.Join(dir, "main.go")
+	src := `package main
 
-	chunk := make([]byte, 5)
-	n, err := buf.Read(chunk)
-	if err != nil || n != 5 || string(chunk[:n]) != "hello" {
-		t.Fatalf("Read chunk 1 = (%d, %v, %q), want (5, nil, %q)", n, err, string(chunk[:n]), "hello")
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	info, err := os.Stdout.Stat()
+	if err != nil {
+		os.Exit(3)
+	}
+	switch mode := info.Mode(); {
+	case mode&os.ModeCharDevice != 0:
+		fmt.Println("char-device")
+	case mode&os.ModeNamedPipe != 0:
+		fmt.Println("pipe")
+	case mode.IsRegular():
+		fmt.Println("regular")
+	default:
+		fmt.Println("other")
+	}
+	fmt.Println("tail-marker")
+}
+`
+	if err := os.WriteFile(source, []byte(src), 0o600); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	if err := exec.Command("go", "build", "-o", helper, source).Run(); err != nil {
+		t.Fatalf("build helper: %v", err)
 	}
 
-	rest := make([]byte, 100)
-	n, err = buf.Read(rest)
-	if err != nil || n != 6 || string(rest[:n]) != " world" {
-		t.Fatalf("Read chunk 2 = (%d, %v, %q), want (6, nil, %q)", n, err, string(rest[:n]), " world")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
+	if err != nil {
+		t.Fatalf("runCatalogCommand() error = %v", err)
 	}
-
-	// Buffer drained; next read must return the non-EOF readErr.
-	n, err = buf.Read(rest)
-	if !errors.Is(err, simulatedErr) {
-		t.Fatalf("Read after drain err = %v, want %v", err, simulatedErr)
+	out, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("io.ReadAll() error = %v", readErr)
+	}
+	lines := strings.Fields(string(out))
+	if len(lines) != 2 || lines[0] != "regular" || lines[1] != "tail-marker" {
+		t.Fatalf("helper stdout = %q, want [regular tail-marker] (catalog stdout must be a regular file)", string(out))
+	}
+	if closer, ok := r.(io.Closer); ok {
+		if closeErr := closer.Close(); closeErr != nil {
+			t.Fatalf("Close() error = %v", closeErr)
+		}
+	} else {
+		t.Fatal("runCatalogCommand reader does not implement io.Closer")
+	}
+	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "gentle-ai-opencode-catalog-*"))
+	if len(matches) != 0 {
+		t.Fatalf("catalog capture files left behind: %v", matches)
 	}
 }
 
-// TestProcessStreamReaderWaitErrorJoinsStdoutDrain pins the os/exec pipe
-// lifecycle contract: when parsing fails early while the child is still alive
-// and writing, WaitError must join the stdout drain before reaping the child
-// instead of calling Wait under a concurrent pipe reader. The helper emits a
+// TestCatalogFileReaderWaitErrorJoinsChildBeforeReporting pins the lifecycle
+// contract: when parsing fails early while the child is still alive and
+// writing, WaitError must reap the child before reporting instead of racing
+// a concurrent reaper. The helper emits a
 // malformed record first (so the parse fails fast) and keeps writing noise
 // for ~2s before exiting non-zero; discovery must complete promptly with
 // command_failed (the child's exit wins over the parse classification) and
-// must never panic or deadlock on the pipe.
-func TestProcessStreamReaderWaitErrorJoinsStdoutDrain(t *testing.T) {
+// must never panic or deadlock.
+func TestCatalogFileReaderWaitErrorJoinsChildBeforeReporting(t *testing.T) {
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "earlyfail-helper")
 	if runtime.GOOS == "windows" {
@@ -654,7 +910,7 @@ func main() {
 
 	done := make(chan error, 1)
 	go func() {
-		_, discoverErr := DiscoverCatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
+		_, discoverErr := discoverV1CatalogWithRunner(context.Background(), "project", func(context.Context, Command) (io.Reader, error) {
 			return r, nil
 		})
 		done <- discoverErr
@@ -668,6 +924,69 @@ func main() {
 		}
 	case <-time.After(12 * time.Second):
 		t.Fatal("DiscoverCatalogWithRunner blocked; WaitError did not join the stdout drain before reaping")
+	}
+}
+
+// TestCatalogFileReaderDeliversLargeV2Response pins the issue #5833 symptom:
+// a V2 API response large enough to stress pipe buffering must arrive complete
+// through the file transport and parse into the full catalog.
+func TestCatalogFileReaderDeliversLargeV2Response(t *testing.T) {
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "large-v2-helper")
+	if runtime.GOOS == "windows" {
+		helper += ".exe"
+	}
+	source := filepath.Join(dir, "main.go")
+	src := `package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+func main() {
+	var b strings.Builder
+	b.WriteString("{\"data\":[")
+	for i := 0; i < 4000; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		record := "{\"id\":\"model-%04d\",\"modelID\":\"model-%04d\",\"providerID\":\"prov-%03d\",\"name\":\"Model %04d %s\",\"family\":\"fam\",\"enabled\":true,\"capabilities\":{\"tools\":true,\"reasoning\":true},\"variants\":[{\"id\":\"low\"},{\"id\":\"high\"}],\"limit\":{\"context\":128000},\"cost\":[{\"input\":1,\"output\":2}]}"
+		fmt.Fprintf(&b, record, i, i, i/10, i, strings.Repeat("x", 200))
+	}
+	b.WriteString("]}")
+	fmt.Print(b.String())
+}
+`
+	if err := os.WriteFile(source, []byte(src), 0o600); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	if err := exec.Command("go", "build", "-o", helper, source).Run(); err != nil {
+		t.Fatalf("build helper: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r, err := runCatalogCommand(ctx, Command{Path: helper})
+	if err != nil {
+		t.Fatalf("runCatalogCommand() error = %v", err)
+	}
+	if closer, ok := r.(io.Closer); ok {
+		defer closer.Close()
+	}
+	providers, parseErr := parseV2ModelAPI(&countingLimitReader{r: r, limit: maxCatalogOutput, cancel: cancel})
+	if parseErr != nil {
+		t.Fatalf("large V2 response failed to parse through file transport: %v", parseErr)
+	}
+	if len(providers) != 400 {
+		t.Fatalf("parsed providers = %d, want 400", len(providers))
+	}
+	if got := len(providers["prov-007"].Models); got != 10 {
+		t.Fatalf("models in prov-007 = %d, want 10", got)
+	}
+	last := providers["prov-399"].Models["model-3999"]
+	if last.ID != "model-3999" || !last.ToolCall {
+		t.Fatalf("final record incomplete: %+v", last)
 	}
 }
 

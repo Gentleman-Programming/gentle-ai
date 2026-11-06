@@ -5,10 +5,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 func TestCrossRepositoryLifecycleRootConformance(t *testing.T) {
@@ -100,7 +101,7 @@ func TestCrossRepositoryLifecycleRootConformance(t *testing.T) {
 			}
 			if testCase.runtime == model.AgentOpenCode {
 				t.Chdir(sessionRoot)
-				assertOpenCodeBContextAdmitsFromSessionA(t, targetRoot, targetStore, targetStarted)
+				assertOpenCodeBContextAdmitsFromSessionA(t, targetRoot, targetStore, targetStarted, targetContinuation)
 			}
 
 			t.Chdir(targetRoot)
@@ -211,25 +212,35 @@ func assertCrossRepositoryContinuation(t *testing.T, status ReviewTargetStatusRe
 	}
 }
 
-func assertOpenCodeBContextAdmitsFromSessionA(t *testing.T, targetRoot string, store reviewtransaction.CompactStore, started ReviewIntegrationStartResult) {
+func assertOpenCodeBContextAdmitsFromSessionA(t *testing.T, targetRoot string, store reviewtransaction.CompactStore, started ReviewIntegrationStartResult, status ReviewTargetStatusResult) {
 	t.Helper()
 	if started.RepositoryContext == nil {
 		t.Fatal("OpenCode B START has no repository context")
 	}
+	// An OpenCode host assembles its lens frame from the collect input, which
+	// carries the sealed rctx3 handle its relay resolves (#5136, #4516).
+	if status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) == 0 {
+		t.Fatalf("OpenCode B STATUS offered no collect input: %#v", status.NextTransition)
+	}
+	arguments, err := reviewTransitionArgumentMap(status.NextTransition.Collect.Inputs[0].Arguments)
+	if err != nil || !strings.HasPrefix(arguments["repository-context"], "rctx3_") {
+		t.Fatalf("OpenCode B collect input repository context = %q, %v; want rctx3", arguments["repository-context"], err)
+	}
+	handle := arguments["repository-context"]
 	record, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	lens := record.State.SelectedLenses[0]
 	subject := mustArtifactSubject(t, targetRoot, record, lens, 0)
-	binding := hostLensBindingJSON(record.State.LineageID, started.RepositoryContext.TargetIdentity, lens, "0", record.State.CapturePhaseRevision, started.RepositoryContext.Handle, subject.SubjectHash)
+	binding := hostLensBindingJSON(record.State.LineageID, started.RepositoryContext.TargetIdentity, lens, "0", record.State.CapturePhaseRevision, handle, subject.SubjectHash)
 	relay := startOpenCodeTransportRelay(t, targetRoot, openCodeTransportEnvelope{
 		Schema:    openCodeReviewTransportSchema,
 		Operation: "start",
 		Prompt:    reviewLensContextBindingHeader + " " + binding + "\nOpenCode host task.",
 	})
 	taskPrompt, reintercepted, err := decodeOpenCodeTransportMaterialization(relay.prompt.Prompt)
-	if err != nil || !reintercepted || !bytes.Contains([]byte(taskPrompt), []byte(started.RepositoryContext.Handle)) {
+	if err != nil || !reintercepted || !bytes.Contains([]byte(taskPrompt), []byte(handle)) {
 		t.Fatalf("OpenCode B context materialization = %q, reintercepted=%t, err=%v", taskPrompt, reintercepted, err)
 	}
 	if err := relay.closeWithoutCompletion(); err == nil {

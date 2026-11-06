@@ -17,9 +17,10 @@ import (
 	"strings"
 	"time"
 
-	piagent "github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 const (
@@ -42,7 +43,25 @@ var piCodeGraphEffectiveMCPProbe PiCodeGraphEffectiveMCPProbe = probePiCodeGraph
 // verification remains separate capability evidence.
 var ErrPiCodeGraphAdapterHealthUnavailable = errors.New("Pi MCP adapter health is not machine-verifiable")
 
+// piCodeGraphProbeIncompleteError marks a capability probe whose transport
+// closed before any capability verdict was reached (#2146). It deliberately
+// does not satisfy errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable): that
+// sentinel means "capability verified, adapter health unverifiable", and its
+// pending action says exactly that. A probe that never answered verified
+// nothing, so it carries its own pending reason instead of borrowing that
+// claim.
+type piCodeGraphProbeIncompleteError struct {
+	cause error
+}
+
+func (err *piCodeGraphProbeIncompleteError) Error() string { return err.cause.Error() }
+func (err *piCodeGraphProbeIncompleteError) Unwrap() error { return err.cause }
+
 const piCodeGraphPendingAction = "Pi CodeGraph integration remains pending: CodeGraph configuration was installed and preserved, and direct MCP capability was verified. Pi adapter activation health cannot be machine-verified on the detected Pi version."
+
+// piCodeGraphProbeIncompleteAction is the pending reason for a probe that
+// closed before answering. It must not claim capability verification.
+const piCodeGraphProbeIncompleteAction = "Pi CodeGraph integration remains pending: CodeGraph configuration was installed and preserved, but the MCP capability probe did not complete because the CodeGraph MCP server closed during initialization. No capability was verified. Re-run gentle-ai sync once the CodeGraph MCP server starts reliably."
 
 type PiChildClassification string
 
@@ -101,38 +120,54 @@ type PiCodeGraphMCPProbeResult struct {
 	Tools            []PiCodeGraphMCPTool
 }
 
-// PreservePiCodeGraphPending converts only unavailable adapter-health evidence
-// into the manual action used while Pi has no verifiable health signal.
+// PreservePiCodeGraphPending converts an exclusively pending verification
+// failure into the manual action that describes its reason, so the pipeline
+// completes with the configuration preserved. Unavailable adapter health and an
+// incomplete capability probe each carry their own action text.
 func PreservePiCodeGraphPending(result PiCodeGraphResult, err error) (PiCodeGraphResult, error) {
-	if !isExclusivePiCodeGraphPending(err) {
+	action, pending := piCodeGraphPendingManualAction(err)
+	if !pending {
 		return result, err
 	}
-	if !slices.Contains(result.ManualActions, piCodeGraphPendingAction) {
-		result.ManualActions = append(result.ManualActions, piCodeGraphPendingAction)
+	if !slices.Contains(result.ManualActions, action) {
+		result.ManualActions = append(result.ManualActions, action)
 	}
 	return result, nil
 }
 
-func isExclusivePiCodeGraphPending(err error) bool {
+// piCodeGraphPendingManualAction reports whether err is exclusively pending and
+// returns the manual action that describes its reason. A tree that carries any
+// fatal child, or that mixes pending reasons, stays fatal: no single action
+// describes it honestly.
+//
+// The type is inspected at each level rather than with errors.As or errors.Is,
+// so one pending child can never promote a joined error to pending.
+func piCodeGraphPendingManualAction(err error) (string, bool) {
+	if _, ok := err.(*piCodeGraphProbeIncompleteError); ok {
+		return piCodeGraphProbeIncompleteAction, true
+	}
 	if err == ErrPiCodeGraphAdapterHealthUnavailable {
-		return true
+		return piCodeGraphPendingAction, true
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		children := joined.Unwrap()
 		if len(children) == 0 {
-			return false
+			return "", false
 		}
+		action := ""
 		for _, child := range children {
-			if !isExclusivePiCodeGraphPending(child) {
-				return false
+			childAction, childPending := piCodeGraphPendingManualAction(child)
+			if !childPending || (action != "" && action != childAction) {
+				return "", false
 			}
+			action = childAction
 		}
-		return true
+		return action, true
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		return isExclusivePiCodeGraphPending(wrapped.Unwrap())
+		return piCodeGraphPendingManualAction(wrapped.Unwrap())
 	}
-	return false
+	return "", false
 }
 
 // PiCodeGraphEffectiveMCPProbe initializes the configured MCP server through
@@ -146,7 +181,7 @@ type piCodeGraphManifest struct {
 }
 
 // piCodeGraphOwnedFile is a bounded before-image. It lets removal restore a
-// user file exactly and lets sync recreate an owned artifact that was removed.
+// user file exactly.
 type piCodeGraphOwnedFile struct {
 	Before    *string `json:"before,omitempty"`
 	After     string  `json:"after"`
@@ -183,7 +218,7 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 	if manifest.MCP, err = reconcilePiMCP(paths.MCPConfig, journal, changed, manifest.MCP); err != nil {
 		return result, err
 	}
-	if err = restoreMissingPiChildren(manifest.Children, journal, changed); err != nil {
+	if err = releaseStalePiChildren(paths.AgentDir, manifest.Children, journal, changed); err != nil {
 		return result, err
 	}
 	children, err := piagent.DiscoverCodeGraphChildren(options.HomeDir, options.WorkspaceDir)
@@ -192,6 +227,9 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 	}
 	manifest.MCPPath = paths.MCPConfig
 	for _, discovered := range children {
+		if legacyassets.IsRetiredPiAgentPath(paths.AgentDir, discovered.Target) {
+			continue
+		}
 		if safeErr := journal.validate(discovered.Source); safeErr != nil {
 			return result, safeErr
 		}
@@ -258,22 +296,17 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 	if probe == nil {
 		probe = piCodeGraphEffectiveMCPProbe
 		if effectiveMCPPath != paths.MCPConfig {
-			probe = func(mcpPath string) (PiCodeGraphMCPProbeResult, error) {
-				return probePiCodeGraphMCPWithAgentDir(mcpPath, paths.AgentDir)
-			}
+			probe = probePiCodeGraphMCP
 		}
 	}
-	if err = verifyPiCodeGraphWithProbe(effectiveMCPPath, result.Children, probe); err != nil {
+	var verification PiCodeGraphMCPVerification
+	if verification, err = verifyPiCodeGraphCapabilityWithProbe(effectiveMCPPath, result.Children, probe); err != nil {
 		result, err = PreservePiCodeGraphPending(result, err)
 		if err != nil {
 			return result, err
 		}
-	} else {
-		result.MCP, err = verifyPiMCPWithProbe(effectiveMCPPath, probe)
-		if err != nil {
-			return result, err
-		}
 	}
+	result.MCP = verification
 	encoded, marshalErr := json.MarshalIndent(manifest, "", "  ")
 	if marshalErr != nil {
 		return result, marshalErr
@@ -443,30 +476,23 @@ func stripPiCodeGraphBlocks(body string) (string, error) {
 	return body, nil
 }
 
-func verifyPiCodeGraph(mcpPath string, children []PiCodeGraphChild) error {
-	return verifyPiCodeGraphWithProbe(mcpPath, children, piCodeGraphEffectiveMCPProbe)
-}
-
-func verifyPiCodeGraphWithProbe(mcpPath string, children []PiCodeGraphChild, probe PiCodeGraphEffectiveMCPProbe) error {
+func verifyPiCodeGraphCapabilityWithProbe(mcpPath string, children []PiCodeGraphChild, probe PiCodeGraphEffectiveMCPProbe) (PiCodeGraphMCPVerification, error) {
 	for _, child := range children {
 		if child.Classification == PiChildMisconfigured {
-			return fmt.Errorf("Pi child %q is misconfigured: %s", child.Name, child.Reason)
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi child %q is misconfigured: %s", child.Name, child.Reason)
 		}
 		if child.Classification == PiChildUnavailable {
 			continue
 		}
 		body, err := os.ReadFile(child.Target)
 		if err != nil || !strings.Contains(string(body), piCodeGraphGuidanceMarker) {
-			return fmt.Errorf("Pi child %q lacks CodeGraph lazy-init guidance", child.Name)
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi child %q lacks CodeGraph lazy-init guidance", child.Name)
 		}
 		if child.Classification == PiChildCompatible && (!strings.Contains(string(body), piCodeGraphToolMarker) || !slices.Contains(child.Tools, "bash") || !slices.Contains(child.Tools, "mcp")) {
-			return fmt.Errorf("Pi child %q lacks verified CodeGraph tools", child.Name)
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi child %q lacks verified CodeGraph tools", child.Name)
 		}
 	}
-	if _, err := verifyPiMCPWithProbe(mcpPath, probe); err != nil {
-		return err
-	}
-	return nil
+	return verifyPiMCPWithProbe(mcpPath, probe)
 }
 
 func verifyPiMCP(mcpPath string) (PiCodeGraphMCPVerification, error) {
@@ -487,8 +513,24 @@ func verifyPiMCPWithProbe(mcpPath string, probe PiCodeGraphEffectiveMCPProbe) (P
 		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe is not configured")
 	}
 	result, err := probe(mcpPath)
-	if err != nil && !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
-		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", err)
+	if err != nil {
+		failure := piCodeGraphProbeFailure(err)
+		// A transport closure is its own pending reason. Handle it before the
+		// adapter-health tolerance below: errors.Is matches any child of a join,
+		// so a probe that closed AND reported unverifiable health would otherwise
+		// collapse to the sentinel alone and claim a verified capability it never
+		// observed.
+		if failure != err {
+			if errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+				// Two pending reasons have no single honest action, so the join stays
+				// fatal (see piCodeGraphPendingManualAction).
+				return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", errors.Join(ErrPiCodeGraphAdapterHealthUnavailable, failure))
+			}
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", failure)
+		}
+		if !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", failure)
+		}
 	}
 	if !result.AdapterAvailable || !result.Initialized {
 		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe did not observe an available adapter and initialized server")
@@ -503,21 +545,27 @@ func verifyPiMCPWithProbe(mcpPath string, probe PiCodeGraphEffectiveMCPProbe) (P
 	return verification, nil
 }
 
-func probePiCodeGraphMCP(mcpPath string) (PiCodeGraphMCPProbeResult, error) {
-	return probePiCodeGraphMCPWithAgentDir(mcpPath, filepath.Dir(mcpPath))
+// piCodeGraphProbeFailure preserves err and, when the probe transport closed
+// before it could answer, marks it as an incomplete probe. Only a genuine
+// closure counts: an unrelated error whose text merely mentions EOF stays a
+// fatal probe failure.
+func piCodeGraphProbeFailure(err error) error {
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return err
+	}
+	return &piCodeGraphProbeIncompleteError{cause: err}
 }
 
-func probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir string) (PiCodeGraphMCPProbeResult, error) {
+// probePiCodeGraphMCP verifies the configured CodeGraph stdio server directly.
+// Pi >= 0.99.0 runs mcp.json servers through its built-in MCP support, so no
+// extension package on disk is required.
+func probePiCodeGraphMCP(string) (PiCodeGraphMCPProbeResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return probePiCodeGraphMCPWithAgentDirContext(ctx, mcpPath, agentDir)
+	return probePiCodeGraphMCPContext(ctx)
 }
 
-func probePiCodeGraphMCPWithAgentDirContext(ctx context.Context, mcpPath, agentDir string) (probeResult PiCodeGraphMCPProbeResult, returnErr error) {
-	adapterPath := filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts")
-	if _, err := os.Stat(adapterPath); err != nil {
-		return PiCodeGraphMCPProbeResult{}, fmt.Errorf("Pi MCP adapter extension is unavailable at %q: %w", adapterPath, err)
-	}
+func probePiCodeGraphMCPContext(ctx context.Context) (probeResult PiCodeGraphMCPProbeResult, returnErr error) {
 	command := exec.CommandContext(ctx, "codegraph", "serve", "--mcp")
 	system.EnsureCommandDir(command)
 	stdin, err := command.StdinPipe()
@@ -660,30 +708,31 @@ func hasSchemaType(properties map[string]any, name, want string) bool {
 // markers are intentionally not consulted because they cannot prove child MCP
 // tools or per-child lazy-init guidance.
 func PiCodeGraphConfigured(homeDir, workspaceDir string) (bool, string) {
-	configured, reason, _ := inspectPiCodeGraph(homeDir, workspaceDir)
-	return configured, reason
+	status, reason, _ := inspectPiCodeGraph(homeDir, workspaceDir)
+	return status == AgentStatusConfigured, reason
 }
 
-func inspectPiCodeGraph(homeDir, workspaceDir string) (bool, string, []PiCodeGraphChild) {
+func inspectPiCodeGraph(homeDir, workspaceDir string) (AgentStatusKind, string, []PiCodeGraphChild) {
 	paths := piagent.CodeGraphPaths(homeDir)
 	children, err := piagent.DiscoverCodeGraphChildren(homeDir, workspaceDir)
 	if err != nil {
-		return false, err.Error(), nil
+		return AgentStatusMissing, err.Error(), nil
 	}
 	if len(children) == 0 {
 		if _, err := os.Stat(paths.Manifest); err != nil {
-			return false, "no effective Pi children were discovered and no Gentle-AI ownership record exists", nil
+			return AgentStatusMissing, "no effective Pi children were discovered and no Gentle-AI ownership record exists", nil
 		}
-		if err := verifyPiCodeGraph(paths.MCPConfig, nil); err != nil {
-			return false, err.Error(), nil
-		}
-		return true, "verified Pi MCP transport; no effective children were discovered", nil
+		status, reason := inspectPiCodeGraphCapability(paths.MCPConfig, nil)
+		return status, reason, nil
 	}
 	reports := make([]PiCodeGraphChild, 0, len(children))
 	for _, child := range children {
+		if legacyassets.IsRetiredPiAgentPath(paths.AgentDir, child.Target) {
+			continue
+		}
 		body, err := os.ReadFile(child.Target)
 		if err != nil {
-			return false, fmt.Sprintf("cannot read Pi child %q: %v", child.Name, err), reports
+			return AgentStatusMissing, fmt.Sprintf("cannot read Pi child %q: %v", child.Name, err), reports
 		}
 		tools, parseable, malformed := piChildTools(string(body))
 		if malformed {
@@ -695,14 +744,23 @@ func inspectPiCodeGraph(homeDir, workspaceDir string) (bool, string, []PiCodeGra
 			classification = PiChildCompatible
 		}
 		if classification != PiChildCompatible && strings.Contains(string(body), piCodeGraphToolMarker) {
-			return false, fmt.Sprintf("Pi child %q has stale CodeGraph tools without bash support", child.Name), reports
+			return AgentStatusMissing, fmt.Sprintf("Pi child %q has stale CodeGraph tools without bash support", child.Name), reports
 		}
 		reports = append(reports, PiCodeGraphChild{Name: child.Name, Source: child.Source, Target: child.Target, Tools: tools, Classification: classification})
 	}
-	if err := verifyPiCodeGraph(paths.MCPConfig, reports); err != nil {
-		return false, err.Error(), reports
+	status, reason := inspectPiCodeGraphCapability(paths.MCPConfig, reports)
+	return status, reason, reports
+}
+
+func inspectPiCodeGraphCapability(mcpPath string, children []PiCodeGraphChild) (AgentStatusKind, string) {
+	verification, err := verifyPiCodeGraphCapabilityWithProbe(mcpPath, children, piCodeGraphEffectiveMCPProbe)
+	if err == nil {
+		return AgentStatusConfigured, "verified Pi MCP transport and every effective child"
 	}
-	return true, "verified Pi MCP transport and every effective child", reports
+	if _, pending := piCodeGraphPendingManualAction(err); pending && verification.Adapter && verification.ReadOnlyExplore {
+		return AgentStatusPending, "direct MCP capability verified; " + err.Error()
+	}
+	return AgentStatusMissing, err.Error()
 }
 
 // PiCodeGraphPaths returns only files Gentle AI may reconcile or remove.
@@ -882,7 +940,12 @@ func piCodeGraphManifestPermissionsSafe(goos string, mode os.FileMode) bool {
 	return goos == "windows" || mode.Perm()&0o077 == 0
 }
 
-func restoreMissingPiChildren(children map[string]piCodeGraphOwnedFile, journal *piJournal, changed map[string]struct{}) error {
+// releaseStalePiChildren drops ownership of children that no longer exist, so
+// a deleted child is never recreated. Retired SDD agents are released too: when
+// one still holds exactly the recorded overlay, its before-image is restored so
+// the Pi package that installed it can prove ownership and retire it. Any other
+// retired file is left untouched.
+func releaseStalePiChildren(agentDir string, children map[string]piCodeGraphOwnedFile, journal *piJournal, changed map[string]struct{}) error {
 	paths := make([]string, 0, len(children))
 	for path := range children {
 		paths = append(paths, path)
@@ -890,12 +953,27 @@ func restoreMissingPiChildren(children map[string]piCodeGraphOwnedFile, journal 
 	slices.Sort(paths)
 	for _, path := range paths {
 		owned := children[path]
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			delete(children, path)
 			continue
-		} else if !os.IsNotExist(err) {
+		} else if err != nil {
 			return err
 		}
-		if err := journal.writeWithMode(path, []byte(owned.After), os.FileMode(owned.Mode)); err != nil {
+		if !legacyassets.IsRetiredPiAgentPath(agentDir, path) {
+			continue
+		}
+		delete(children, path)
+		if owned.Before == nil || journal.validate(path) != nil {
+			continue
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if hashPiBytes(body) != owned.AfterHash {
+			continue
+		}
+		if err := journal.write(path, []byte(*owned.Before)); err != nil {
 			return err
 		}
 		changed[path] = struct{}{}
@@ -924,9 +1002,6 @@ func newPiJournal(roots ...string) *piJournal {
 	return &piJournal{before: map[string]*piJournalFile{}, roots: roots}
 }
 func (j *piJournal) write(path string, data []byte) error {
-	return j.writeWithMode(path, data, 0)
-}
-func (j *piJournal) writeWithMode(path string, data []byte, mode os.FileMode) error {
 	if err := j.validate(path); err != nil {
 		return err
 	}
@@ -944,9 +1019,7 @@ func (j *piJournal) writeWithMode(path string, data []byte, mode os.FileMode) er
 			return err
 		}
 	}
-	if mode == 0 {
-		mode = 0o600
-	}
+	mode := os.FileMode(0o600)
 	if previous := j.before[path]; previous != nil {
 		mode = previous.mode
 	}

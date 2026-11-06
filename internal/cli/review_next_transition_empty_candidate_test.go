@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // emptyWorkspaceCandidateStatus reproduces the status a clean workspace
@@ -365,6 +365,14 @@ func committedRangeReviewRepo(t *testing.T) string {
 	return repo
 }
 
+// TestNegotiatedStatusExplicitBaseRefPreservesCommitForStart pins the
+// explicit-selector START echo (issue #4924): an explicitly supplied 40-hex
+// commit id is carried verbatim, while an explicitly supplied symbolic ref
+// (origin/main, a branch, HEAD~1) falls back to the frozen base tree so a
+// moving branch cannot change the scope this STATUS already froze. It is the
+// first-START twin of the REVIEWING re-entry echo
+// (reviewStartStatusContinuation), which deliberately keeps the frozen tree in
+// both cases -- see review_committed_correction_test.go.
 func TestNegotiatedStatusExplicitBaseRefPreservesCommitForStart(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := committedRangeReviewRepo(t)
@@ -374,27 +382,44 @@ func TestNegotiatedStatusExplicitBaseRefPreservesCommitForStart(t *testing.T) {
 		t.Fatal("fixture commit and tree must differ")
 	}
 
-	var output bytes.Buffer
-	if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition", "--base-ref", baseCommit, "--committed-only"}, &output); err != nil {
-		t.Fatalf("explicit committed STATUS: %v\n%s", err, output.String())
+	cases := []struct {
+		name    string
+		baseRef string
+		want    string
+	}{
+		{
+			name:    "explicit commit id is echoed verbatim",
+			baseRef: baseCommit,
+			want:    baseCommit,
+		},
+		{
+			name:    "explicit symbolic ref keeps the frozen base tree",
+			baseRef: "origin/main",
+			want:    baseTree,
+		},
 	}
-	var status ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, output.Bytes(), &status)
-	if status.Projection.BaseTree != baseTree {
-		t.Fatalf("projection base_tree = %q, want tree %q", status.Projection.BaseTree, baseTree)
-	}
-	if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
-		t.Fatalf("next_transition = %#v, want executable START", status.NextTransition)
-	}
-	arguments, err := reviewTransitionArgumentMap(status.NextTransition.Execute.Arguments, status.NextTransition.Execute.Operation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if arguments["base-ref"] != baseCommit || arguments["committed-only"] != "true" {
-		t.Fatalf("START selectors = %#v, want original commit %q and committed-only=true", arguments, baseCommit)
-	}
-	if arguments["base-ref"] == baseTree || strings.Contains(status.NextTransition.Execute.Command, "--base-ref="+baseTree) {
-		t.Fatalf("START emitted the base tree %q instead of the explicit commit", baseTree)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition", "--base-ref", testCase.baseRef, "--committed-only"}, &output); err != nil {
+				t.Fatalf("explicit committed STATUS for %q: %v\n%s", testCase.baseRef, err, output.String())
+			}
+			var status ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, output.Bytes(), &status)
+			if status.Projection.BaseTree != baseTree {
+				t.Fatalf("projection base_tree = %q, want tree %q", status.Projection.BaseTree, baseTree)
+			}
+			if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+				t.Fatalf("next_transition = %#v, want executable START", status.NextTransition)
+			}
+			arguments, err := reviewTransitionArgumentMap(status.NextTransition.Execute.Arguments, status.NextTransition.Execute.Operation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if arguments["base-ref"] != testCase.want || arguments["committed-only"] != "true" {
+				t.Fatalf("START selectors = %#v, want base-ref %q and committed-only=true", arguments, testCase.want)
+			}
+		})
 	}
 }
 

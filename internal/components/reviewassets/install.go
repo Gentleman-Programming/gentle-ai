@@ -9,12 +9,13 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/mutationjournal"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mutationjournal"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // NativeAgentManifest is an explicit allowlist: never enumerate the embedded agents directory.
@@ -23,9 +24,11 @@ import (
 // development and ship only to runtimes in model.SupportsReceiptDrivenDevelopment.
 // Judgment Day and Kimi's main agent are not RDD and stay where they are.
 var NativeAgentManifest = map[model.AgentID][]string{
-	model.AgentClaudeCode: {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md", "review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
-	model.AgentKiroIDE:    {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
-	model.AgentKimi:       {"gentleman.yaml"},
+	model.AgentClaudeCode:  {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md", "review-readability.md", "review-refuter.md", "review-reliability.md", "review-resilience.md", "review-risk.md"},
+	model.AgentKiroIDE:     {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
+	model.AgentCursor:      {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
+	model.AgentAntigravity: {"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"},
+	model.AgentKimi:        {"gentleman.yaml"},
 }
 
 // RetiredNativeAgentManifest lists the review agents earlier releases installed
@@ -55,10 +58,11 @@ func NativeAgentFileNames(agent model.AgentID) []string {
 }
 
 type InstallOptions struct {
-	ClaudeModelAssignments    map[string]model.ClaudeModelAlias
-	ClaudePhaseAssignments    map[string]model.ClaudePhaseAssignment
-	KiroModelAssignments      map[string]model.KiroModelAlias
-	CodeGraphGuidanceMarkdown string
+	ClaudeModelAssignments      map[string]model.ClaudeModelAlias
+	ClaudePhaseAssignments      map[string]model.ClaudePhaseAssignment
+	KiroModelAssignments        map[string]model.KiroModelAlias
+	AntigravityModelAssignments map[string]model.AntigravityModelTier
+	CodeGraphGuidanceMarkdown   string
 }
 type InstallResult struct {
 	Changed bool
@@ -71,6 +75,9 @@ var engramToolPlaceholder = regexp.MustCompile(`\{\{ENGRAM_TOOL_PREFIX\}\}([A-Za
 type kiroModelResolver interface {
 	KiroModelID(model.KiroModelAlias) string
 }
+type antigravityModelResolver interface {
+	AntigravityModelID(model.AntigravityModelTier) string
+}
 type claudeModelResolver interface {
 	ClaudeModelID(model.ClaudeModelAlias) string
 }
@@ -78,6 +85,7 @@ type claudeModelResolver interface {
 // InstallNativeAgents installs only retained review, Judgment Day, and Kimi native agents.
 // It never removes legacy SDD files or user-owned agents; it removes only the
 // retired review agents Gentle AI owns (see RetiredNativeAgentManifest).
+// legacyassets.RetireSDDAgents retires SDD agents after this runs.
 func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOptions) (InstallResult, error) {
 	if !NativeAgentsSupported(adapter.Agent()) {
 		return InstallResult{}, fmt.Errorf("unsupported native agent runtime: %s", adapter.Agent())
@@ -144,7 +152,10 @@ func InstallNativeAgents(home string, adapter agents.Adapter, opts InstallOption
 			return result, err
 		}
 		expected, known := ledger.Files[name]
-		owned := exists && known && installedHash(data) == expected
+		// A file a release shipped before the ledger existed (v3 Kimi
+		// gentleman.yaml, which declares every SDD subagent) is owned by
+		// those exact bytes, so retiring SDD can rewrite it (#5253).
+		owned := exists && ((known && installedHash(data) == expected) || legacyassets.OwnsPreLedgerNativeAgent(adapter.Agent(), name, data))
 		if exists && !owned {
 			result.Skipped = append(result.Skipped, path)
 		}
@@ -245,6 +256,10 @@ func renderNativeAgent(adapter agents.Adapter, name string, opts InstallOptions)
 			}
 		}
 		content = strings.ReplaceAll(content, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
+	}
+	if amr, ok := adapter.(antigravityModelResolver); ok {
+		// A missing role keeps agy's default: the agent inherits the session model.
+		content = strings.ReplaceAll(content, "{{ANTIGRAVITY_MODEL}}", amr.AntigravityModelID(opts.AntigravityModelAssignments[phase]))
 	}
 	if cmr, ok := adapter.(claudeModelResolver); ok {
 		assignment := resolveClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, phase)

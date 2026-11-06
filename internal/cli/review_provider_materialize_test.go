@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // piHostRelayCaptureBinding renders the exact binding argument vector the
@@ -208,7 +208,7 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 			// proves separately with a genuine binding.
 			name: "without relay handshake and without a bound transaction", env: "",
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentPi), "--materialize=true"),
-			want: "repository_context_unavailable",
+			want: "rctx2_binding_unusable",
 		},
 	}
 	for _, test := range tests {

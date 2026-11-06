@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // TestImmutableReviewRuntimeMatrix keeps runtime advertisement fail-closed for
@@ -145,6 +145,11 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 						failure.Message != wantMessage {
 						t.Fatalf("unsupported transport failure = %#v", failure)
 					}
+					// next_action stays "stop", so the bounded message must name
+					// the user-owned exit an agent can offer instead of a dead end.
+					if !strings.Contains(failure.Message, "`gentle-ai review mode disable --scope clone --cwd <repo>`") {
+						t.Fatalf("unsupported transport message %q does not name the user-owned exit", failure.Message)
+					}
 				})
 			}
 		})
@@ -273,4 +278,18 @@ func TestPiHostRelayContractHandshakeGatesAdmission(t *testing.T) {
 	if capability := reviewImmutableRuntimeCapability(model.AgentPi); !capability.supportsImmutableReceiptReview() {
 		t.Fatalf("declared handshake refused: %#v", capability)
 	}
+}
+
+// freshOpenCodeRuntimeProbe forgets the process-wide OpenCode runtime answer
+// before and after a test that installs its own `opencode --version` stub, so
+// one test's memoized answer never decides another's.
+func freshOpenCodeRuntimeProbe(t *testing.T) {
+	t.Helper()
+	forget := func() {
+		reviewOpenCodeRuntimeProbe.Lock()
+		defer reviewOpenCodeRuntimeProbe.Unlock()
+		reviewOpenCodeRuntimeProbe.answers = nil
+	}
+	forget()
+	t.Cleanup(forget)
 }

@@ -1,5 +1,8 @@
 # Quick-Fix Readiness: 10 Current Start Candidates
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 The corrected operational answer is: **10 issues are current start candidates, subject to one final live label and PR-collision check immediately before work begins.** A further 13 issues have technically bounded mechanisms but are blocked by workflow state, for **23 technically bounded issues** in total. The other 33 rows are either small but not technically ready, or not quick fixes.
 
 ## Executive Correction Summary

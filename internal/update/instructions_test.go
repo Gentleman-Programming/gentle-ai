@@ -2,24 +2,24 @@ package update
 
 import "testing"
 
-// TestGentleAISourceInstallCommandSameMajorStaysV3 pins the existing
-// same-major stable behavior: when the running binary is v3 (the default
-// seam), "latest" and v3.*.* compose a /v3 path. An unresolved beta commit
-// cannot produce a safe source command without its validated module path.
-func TestGentleAISourceInstallCommandSameMajorStaysV3(t *testing.T) {
+// TestGentleAISourceInstallCommandSameMajorStaysV4 pins current-major
+// stable behavior: an unresolved beta commit cannot produce a safe source
+// command without its validated module path.
+func TestGentleAISourceInstallCommandSameMajorStaysV4(t *testing.T) {
 	origRunning := runningGoMajor
 	t.Cleanup(func() { runningGoMajor = origRunning })
-	runningGoMajor = func() int { return 3 }
+	runningGoMajor = func() int { return 4 }
 
 	tests := []struct {
 		name    string
 		version string
 		want    string
 	}{
-		{name: "empty version uses @latest with running major /v3", version: "", want: "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest"},
+		{name: "empty version uses @latest with running major /v4", version: "", want: "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest"},
 		{name: "unresolved beta commit has no safe source command", version: "main@972997650b51", want: ""},
-		{name: "v3.4.0 uses @v3.4.0 with /v3", version: "v3.4.0", want: "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@v3.4.0"},
-		{name: "3.4.0 (no v prefix) uses @v3.4.0 with /v3", version: "3.4.0", want: "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@v3.4.0"},
+		{name: "v4.0.0 uses @v4.0.0 with /v4", version: "v4.0.0", want: "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0"},
+		{name: "4.0.0 (no v prefix) uses @v4.0.0 with /v4", version: "4.0.0", want: "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0"},
+		{name: "v3.7.0 still composes /v3 for cross-major installs", version: "v3.7.0", want: "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@v3.7.0"},
 	}
 
 	for _, tc := range tests {

@@ -1,5 +1,8 @@
 # What the ratchet measured — the second detection-gap audit
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 > Written 2026-07-27, twenty-six commits after
 > [the first detection-gap audit](2026-07-27-detection-gap-audit.md) (`2f5002ff`), on the
 > same branch and the same day. That audit named two root causes, ranked five fixes, and

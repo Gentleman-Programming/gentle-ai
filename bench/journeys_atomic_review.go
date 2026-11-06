@@ -221,5 +221,124 @@ func atomicReviewJourneys() []Journey {
 			{Name: "all shipped gates are informational, non-deciding, and unmanaged", Requires: validateCapability, Composite: requireAllUnmanagedShippedGates},
 			{Name: "repeat selectorless STATUS for the exact unchanged target: terminal STOP target_already_acknowledged without START", Requires: atomicReviewStatusCapability, Composite: requireAtomicBurnSelectorlessStatusTerminal},
 		},
+	}, {
+		ID: "j1658-native-status-recovery-executes-without-authored-authorization", Review: reviewOptedIn,
+		Title:  "#1658: bound native STATUS recovery runs without authored authorization",
+		Source: "#1658 CLI boundary only, not OpenCode runtime proof: failed criteria over unchanged bytes stop; changed bytes recover with native binding, and explicit wrong/empty/partial inputs and an existing successor fail closed",
+		Steps: []Step{
+			{Name: "fixture: repository", Fixture: baseRepo},
+			{Name: "fixture: high-risk correction candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
+			{Name: "start the exact recovery predecessor", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", nativeRecoveryJourneyLineage)},
+			{Name: "capture all four lenses and a severe finding", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+				return captureAtomicReviewerSlots(r, nativeRecoveryJourneyLineage, true)
+			}},
+			{Name: "capture the native bounded correction plan", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
+				return captureCorrectionPlanFor(r, nativeRecoveryJourneyLineage, 2)
+			}},
+			{Name: "fixture: correct the candidate", Fixture: writeCorrectedCandidate},
+			{Name: "reject original criteria through the CLI relay", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
+				return captureRejectedProviderValidatorSlotFor(r, nativeRecoveryJourneyLineage)
+			}},
+			{Name: "unchanged failed-criteria candidate must stop", Requires: atomicReviewStatusCapability, Composite: requireNativeRecoveryFailedCriteriaStop},
+			{Name: "fixture: change the failed candidate", Fixture: writeNormalCandidateAfterRejectedValidator},
+			{Name: "repeat STATUS, reject explicit wrong/empty/partial inputs, execute printed four-argument recovery, and diagnose an existing successor", Requires: atomicReviewStatusCapability, Composite: executeNativeRecoveryJourney},
+		},
 	}}
+}
+
+const nativeRecoveryJourneyLineage = "native-status-recovery"
+
+func requireNativeRecoveryFailedCriteriaStop(r *journeyRun) error {
+	status, err := readAtomicReviewStatus(r, nativeRecoveryJourneyLineage)
+	if err != nil {
+		return err
+	}
+	if status.Authority.State != "escalated" || status.NextTransition.Kind != "stop" || status.NextTransition.Execute.Command != "" {
+		return fmt.Errorf("unchanged failed criteria did not stop: %+v", status.NextTransition)
+	}
+	return nil
+}
+
+func requireNativeRecoveryRefusal(r *journeyRun, extra ...string) error {
+	args := append([]string{"review", "status", "--contract", reviewContractV2, "--next-transition", "--lineage", nativeRecoveryJourneyLineage}, extra...)
+	observation := r.runAt(r.sandbox.Repo, args, true)
+	var failure struct {
+		Code            string `json:"code"`
+		Cause           string `json:"cause"`
+		MutationOutcome string `json:"mutation_outcome"`
+	}
+	if err := json.Unmarshal([]byte(observation.Stdout), &failure); err != nil {
+		return err
+	}
+	if observation.ExitCode == 0 || failure.Code != "invalid_request" || failure.MutationOutcome != "not_started" {
+		return fmt.Errorf("recovery refusal = exit %d %+v", observation.ExitCode, failure)
+	}
+	_, command, named := strings.Cut(failure.Cause, "re-run: ")
+	if !named || command != "gentle-ai review inspect-authority" {
+		return fmt.Errorf("refusal has no read-only diagnostic: %+v", failure)
+	}
+	printed, err := printedCommandArguments(command)
+	if err != nil {
+		return err
+	}
+	if diagnostic := r.runAt(r.sandbox.Repo, printed, false); diagnostic.ExitCode != 0 {
+		return fmt.Errorf("printed inspection refused: %s", diagnostic.Stderr)
+	}
+	return nil
+}
+
+func executeNativeRecoveryJourney(r *journeyRun) error {
+	status, err := readAtomicReviewStatus(r, nativeRecoveryJourneyLineage)
+	if err != nil {
+		return err
+	}
+	if status.NextTransition.Kind != "execute" || status.NextTransition.Execute.Operation != "review.recover" || len(status.NextTransition.Execute.Arguments) != 4 {
+		return fmt.Errorf("STATUS did not render four-argument recovery: %+v", status.NextTransition)
+	}
+	for _, argument := range status.NextTransition.Execute.Arguments {
+		if argument.Token == "" || argument.Name == "actor" || argument.Name == "reason" || argument.Name == "maintainer-authorization" {
+			return fmt.Errorf("native recovery required authored input: %+v", argument)
+		}
+	}
+	repeated, err := readAtomicReviewStatus(r, nativeRecoveryJourneyLineage)
+	if err != nil || repeated.NextTransition.Execute.Command != status.NextTransition.Execute.Command {
+		return fmt.Errorf("repeated STATUS changed recovery: %v", err)
+	}
+	for _, extra := range [][]string{{"--recovery-authorization="}, {"--recovery-authorization=wrong"}, {"--recovery-actor=partial"}} {
+		if err := requireNativeRecoveryRefusal(r, extra...); err != nil {
+			return err
+		}
+	}
+	observation, err := runPrintedTransitionAt(r, r.sandbox.Repo, status)
+	if err != nil {
+		return err
+	}
+	var recovered struct {
+		LineageID      string `json:"lineage_id"`
+		TargetIdentity string `json:"target_identity"`
+		State          string `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(observation.Stdout), &recovered); err != nil {
+		return err
+	}
+	if observation.ExitCode != 0 || recovered.LineageID != status.executeArgument("successor-lineage") || recovered.TargetIdentity != status.TargetIdentity || recovered.State != "reviewing" {
+		return fmt.Errorf("printed recovery did not create its bound successor: %+v; %s", recovered, observation.Stderr)
+	}
+	if err := requireExplicitAtomicFourLensStatusFor(r, recovered.LineageID); err != nil {
+		return err
+	}
+	if err := requireNativeRecoveryRefusal(r); err != nil {
+		return err
+	}
+	// No next-transition: inspect the predecessor's native binding without
+	// asking to create another successor. Its digest must remain unchanged.
+	readback := r.runAt(r.sandbox.Repo, []string{"review", "status", "--contract", reviewContractV2, "--lineage", nativeRecoveryJourneyLineage}, false)
+	var predecessor statusEnvelope
+	if err := json.Unmarshal([]byte(readback.Stdout), &predecessor); err != nil {
+		return err
+	}
+	if readback.ExitCode != 0 || predecessor.Authority.Revision != status.Authority.Revision {
+		return fmt.Errorf("recovery or diagnostics changed predecessor: %+v", predecessor.Authority)
+	}
+	return nil
 }

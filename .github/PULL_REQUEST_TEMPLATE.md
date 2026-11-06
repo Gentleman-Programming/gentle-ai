@@ -54,7 +54,7 @@ Select exactly one option. Do not check both options.
 
 **Verification performed:**
 
-Trivial formatting, spelling, minor autocomplete, search/navigation, and trivial, non-substantive mechanical transformations do not need to be itemized. See [AI_POLICY.md](../AI_POLICY.md) for the canonical policy.
+Trivial formatting, spelling, minor autocomplete, search/navigation, and trivial, non-substantive mechanical transformations do not need to be itemized. See [AI_POLICY.md](https://github.com/Gentleman-Programming/gentle-ai/blob/main/AI_POLICY.md) for the canonical policy.
 
 ---
 
@@ -77,7 +77,7 @@ cd e2e && ./docker-test.sh
 
 **Benchmark Validation**
 
-See the [benchmark guide](../bench/README.md). Benchmark validation applies to review-lifecycle, gates, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For unrelated changes, explain `N/A` in the Test Plan.
+See the [benchmark guide](https://github.com/Gentleman-Programming/gentle-ai/blob/main/bench/README.md). Benchmark validation applies to review-lifecycle, gates, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For unrelated changes, explain `N/A` in the Test Plan.
 
 - [ ] Unit tests pass (`go test ./...`)
 - [ ] Go format passes (`go run ./internal/gofmtcheck`)
@@ -107,13 +107,13 @@ The following checks run automatically on this PR:
 ## ✅ Contributor Checklist
 
 - [ ] PR is linked to an issue with `status:approved`
-- [ ] PR stays within 400 changed lines, or I have requested/obtained maintainer-applied `size:exception` with rationale documented
-- [ ] I have added the appropriate `type:*` label to this PR
+- [ ] PR stays within 400 changed lines, or canonical `size:exception` authority (current direct human instruction for the exact target/action, verified actor `MAINTAIN`/`ADMIN`, human choice and documented rationale) and observed readback are recorded
+- [ ] Target-host read-back confirms exactly one appropriate `type:*` label; any mutation followed the canonical issue-creation contract and reviewed CONTRIBUTING.md catalog (existing types preserved; conflicts deferred to the human)
 - [ ] Unit tests pass (`go test ./...`)
 - [ ] Go format passes (`go run ./internal/gofmtcheck`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
 - [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
-- [ ] I have updated documentation if necessary
+- [ ] If behavior changed, docs in `docs/` are updated in the same PR (reference docs track `main`)
 - [ ] My commits follow [Conventional Commits](https://www.conventionalcommits.org/) format
 - [ ] I understand, reviewed, and take responsibility for the complete submission
 - [ ] I selected exactly one AI-assistance option and, if material assistance was used, completed all applicable declaration fields
@@ -128,5 +128,5 @@ The following checks run automatically on this PR:
 For production Go changes in `internal/cli` or `internal/reviewtransaction`:
 
 - [ ] Identify any qualifying security, integrity, admission, repair, or governance guard and challenge its legitimate input population against real-world evidence.
-- [ ] Confirm its `guard:population` direction and claim are adjacent and accurate, and that `.guard-population-baseline.txt` changed only when the guard contract intentionally changed.
-- [ ] Do not treat a passing declaration/registry check as proof that no qualifying guard was omitted or that the population claim is semantically complete.
+- [ ] Confirm its `guard:population` direction and claim are adjacent and accurate, and name the behavior tests that exercise the claimed population.
+- [ ] Do not treat a passing declaration check as proof that no qualifying guard was omitted or that the population claim is semantically complete.

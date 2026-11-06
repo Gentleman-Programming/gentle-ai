@@ -2,7 +2,7 @@
 # Regression tests for gentle-ai#4689: scripts/install.sh must derive the
 # go-install module path (and the beta GONOSUMDB/GOPRIVATE/GONOPROXY
 # patterns) from go.mod at the resolved source ref — latest release tag for
-# stable, main commit SHA for beta — instead of hard-coding /v3. A future
+# stable, main commit SHA for beta — instead of hard-coding a major. A future
 # /vN bump must need no installer change.
 #
 # Each test sources install.sh in a fresh subshell (safe: main only runs
@@ -98,8 +98,7 @@ mock_go() {
 
 # ---- tests -------------------------------------------------------------------
 
-# Stable with the current /v3 go.mod: resolve the latest tag, derive the
-# module at that tag, install @<tag>.
+# Historical v3.7.0 fixture: resolve the tag and preserve its /v3 module.
 test_stable_v3_current() {
     reset_mocks; EXPECTED_TAG="v3.7.0"
     curl() { mock_curl "$@"; }; go() { mock_go "$@"; }
@@ -110,8 +109,7 @@ test_stable_v3_current() {
         "${INSTALL_LOG}"
 }
 
-# The issue's recurrence fixture: a future tag whose go.mod declares /v4
-# must be followed without touching the script.
+# Current v4 release fixture: the resolved tag's go.mod declares /v4.
 test_stable_v4_regression() {
     reset_mocks; EXPECTED_TAG="v4.0.0"
     GOMOD_MODULE="github.com/gentleman-programming/gentle-ai/v4"
@@ -176,12 +174,22 @@ test_stdin_execution_runs_main() {
     return 1
 }
 
+# Windows installer: stable must pin the latest release tag, never @latest,
+# which resolves /v4 to an unreleased pseudo-version before a v4.x tag exists.
+test_ps1_stable_pins_release_tag() {
+    local body
+    body="$(sed -n '/^function Install-ViaGo {/,/^}/p' "${SCRIPT_DIR}/install.ps1")"
+    case "${body}" in *'/releases/latest"'*) ;; *) printf '         Install-ViaGo does not resolve the release tag\n' >&2; return 1 ;; esac
+    assert_not_contains "Install-ViaGo" "${body}" '"latest"'
+}
+
 # ---- runner ------------------------------------------------------------------
-run_test "stable channel installs /v3 at the resolved tag"            test_stable_v3_current
-run_test "stable channel follows /v4 when go.mod declares it"         test_stable_v4_regression
+run_test "historical stable v3.7.0 resolves its /v3 module"            test_stable_v3_current
+run_test "current stable v4 resolves its /v4 module"                 test_stable_v4_regression
 run_test "beta channel derives module + env patterns from go.mod"     test_beta_v5_derives_module_and_env
 run_test "bad go.mod resolution fails closed (no install)"            test_go_mod_fail_closed
 run_test "stdin execution (curl | bash) still runs main"              test_stdin_execution_runs_main
+run_test "Windows stable installs the release tag, never @latest"     test_ps1_stable_pins_release_tag
 
 if [ "${TESTS_FAILED}" -eq 0 ]; then
     printf '%sok%s — %d/%d installer module-path tests passed\n' \

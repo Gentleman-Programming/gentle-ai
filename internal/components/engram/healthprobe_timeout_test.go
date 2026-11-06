@@ -1,6 +1,8 @@
 package engram
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -87,5 +89,37 @@ func TestDefaultStdioProbeTimeoutClearsAMeasuredHealthyHandshake(t *testing.T) {
 	}
 	if stdioProbeTimeout < 2*slowestObservedHealthyHandshake {
 		t.Fatalf("default probe timeout %v leaves less than 2x headroom over the slowest observed healthy handshake (%v); a slower machine reproduces #3068", stdioProbeTimeout, slowestObservedHealthyHandshake)
+	}
+}
+
+// TestPersistedJSONTimeoutIsRead reads the timeout through the real settings
+// decoder, which keeps number tokens exact (#1672), not through map literals.
+func TestPersistedJSONTimeoutIsRead(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout string
+		want    time.Duration
+	}{
+		{name: "integer seconds", timeout: "15", want: 15 * time.Second},
+		{name: "decimal seconds", timeout: "2.5", want: 2500 * time.Millisecond},
+		{name: "negative", timeout: "-3", want: 0},
+		{name: "out of float range", timeout: "1e999", want: 0},
+		{name: "unparseable string", timeout: `"soon"`, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			content := `{"mcpServers":{"engram":{"command":"engram","timeout":` + tt.timeout + `}}}`
+			if err := os.WriteFile(filepath.Join(homeDir, ".claude.json"), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			commands, err := ReadPersistedStdioCommands(homeDir, []string{"claude-code"})
+			if err != nil || len(commands) != 1 {
+				t.Fatalf("ReadPersistedStdioCommands() = %#v, %v; want one command", commands, err)
+			}
+			if commands[0].Timeout != tt.want {
+				t.Fatalf("Timeout = %v, want %v", commands[0].Timeout, tt.want)
+			}
+		})
 	}
 }

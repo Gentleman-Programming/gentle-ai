@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // reviewStopHookTestPayload builds one Stop hook stdin payload. Extra fields
@@ -59,10 +62,37 @@ func runReviewStopHookSessionStartTest(t *testing.T, sessionID, repo string) (st
 	return stdout, stderr
 }
 
+// stageReviewStopHookCandidate stages a high-risk candidate: only high risk is
+// review_due, so only it earns a reminder (verify-always-rdd-high S2).
 func stageReviewStopHookCandidate(t *testing.T, repo string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 1;\n", 0o644)
+}
+
+// TestReviewStopHookStaysSilentForAMediumCandidate is verify-always-rdd-high
+// S2: a medium candidate is not review_due, so Stop never blocks on it and
+// records no reminder, even with RDD enabled and START offered.
+func TestReviewStopHookStaysSilentForAMediumCandidate(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	enableReviewStopHookRDD(t, repo)
+
+	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-medium", repo, false, nil))
+	var stdout, stderr bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("Stop run: %v\nstderr: %s", err, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "" {
+		t.Fatalf("Stop reminded about a medium candidate: %s", stdout.String())
+	}
+	if _, err := os.Stat(reviewStopHookStateFile(home, "sess-medium")); !os.IsNotExist(err) {
+		t.Fatalf("Stop recorded a reminder for a medium candidate, stat err=%v", err)
 	}
 }
 
@@ -573,5 +603,114 @@ func TestReviewStopHookRemindsWhenConsentStaleMarkerExpired(t *testing.T) {
 	}
 	if decodeReviewStopHookResult(t, stdout.Bytes()).Decision != "block" {
 		t.Fatalf("expired consent-stale marker must restore the reminder: %s", stdout.String())
+	}
+}
+
+// #4670: with RDD off the stop hook has nothing to check, so a clone-local
+// switch location that fails validation must not turn every turn into an
+// error.
+func TestReviewStopHookSilentWhenRDDOffAndTheCloneOverrideCannotBeValidated(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stageReviewStopHookCandidate(t, repo)
+	if err := RunReviewMode([]string{"disable", "--cwd", repo}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	unvalidatableReviewModeSwitchRoot(t, repo)
+
+	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-off-unvalidatable", repo, false, nil))
+	var stdout, stderr bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("runReviewStopHook: %v\nstderr: %s", err, stderr.String())
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("expected silence, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(reviewStopHookStateFile(home, "sess-off-unvalidatable")); !os.IsNotExist(err) {
+		t.Fatalf("expected no reminder state file while RDD is off, stat err=%v", err)
+	}
+}
+
+// #4670 S3: a review authority that cannot live on this filesystem means no
+// review can start here, so the reminder has nothing to point at. The hook
+// stays quiet for that typed refusal and still fails on anything else.
+func TestReviewStopHookQuietOnlyForAnUnsupportedAuthorityFilesystem(t *testing.T) {
+	unsupported := fmt.Errorf("resolve review mode: %w",
+		&reviewtransaction.UnsupportedAuthorityFilesystemError{Path: `\\server\share\repo\.git`, Remote: true})
+	if !reviewStopHookAuthorityUnsupported(unsupported) {
+		t.Fatalf("typed unsupported-filesystem refusal was not recognised: %v", unsupported)
+	}
+	if reviewStopHookAuthorityUnsupported(errors.New("unsafe RAR authority path")) {
+		t.Fatal("an ordinary resolution failure was silenced")
+	}
+}
+
+// TestReviewStopHookStaysSilentForACommittedUnderBudgetCandidate is issue
+// #4815's regression shape: STATUS derives a committed-range candidate and
+// offers a START with --base-ref --committed-only, so the hook's due gate
+// must assess that same selector set. Before the fix the gate assessed the
+// selectorless current-changes candidate, which is empty on a clean tree, so
+// assess refused and the gate failed open into a reminder for a commit that
+// assess itself reports review_due:false (under_budget).
+func TestReviewStopHookStaysSilentForACommittedUnderBudgetCandidate(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	enableReviewStopHookRDD(t, repo)
+	// STATUS derives a committed-range candidate only against a remote
+	// default branch (ResolveCommittedRangeBase), so the regression shape
+	// needs an origin whose default branch sits below HEAD.
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	runReviewCLIGit(t, repo, "init", "-q", "--bare", origin)
+	runReviewCLIGit(t, repo, "remote", "add", "origin", origin)
+	runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+	runReviewCLIGit(t, repo, "remote", "set-head", "origin", "main")
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "work unit")
+
+	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-committed-medium", repo, false, nil))
+	var stdout, stderr bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("Stop run: %v\nstderr: %s", err, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "" {
+		t.Fatalf("Stop reminded about a committed under_budget candidate: %s", stdout.String())
+	}
+	if _, err := os.Stat(reviewStopHookStateFile(home, "sess-committed-medium")); !os.IsNotExist(err) {
+		t.Fatalf("Stop recorded a reminder for a committed under_budget candidate, stat err=%v", err)
+	}
+}
+
+// TestReviewStopHookRemindsForACommittedHighRiskCandidate pins the other side
+// of the selector-mirroring gate: a committed candidate whose assessment is
+// review_due (high risk) still earns the reminder, so mirroring the START
+// selectors never silences a due candidate.
+func TestReviewStopHookRemindsForACommittedHighRiskCandidate(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	enableReviewStopHookRDD(t, repo)
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	runReviewCLIGit(t, repo, "init", "-q", "--bare", origin)
+	runReviewCLIGit(t, repo, "remote", "add", "origin", origin)
+	runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+	runReviewCLIGit(t, repo, "remote", "set-head", "origin", "main")
+
+	stageReviewStopHookCandidate(t, repo)
+	runReviewCLIGit(t, repo, "add", "-A")
+	runReviewCLIGit(t, repo, "commit", "-qm", "high-risk work unit")
+
+	stdin := strings.NewReader(reviewStopHookTestPayload(t, "sess-committed-high", repo, false, nil))
+	var stdout, stderr bytes.Buffer
+	if err := runReviewStopHook([]string{"--agent", "claude-code"}, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("Stop run: %v\nstderr: %s", err, stderr.String())
+	}
+	if decodeReviewStopHookResult(t, stdout.Bytes()).Decision != "block" {
+		t.Fatalf("expected a block reminder for a committed high-risk candidate: %s", stdout.String())
+	}
+	if _, err := os.Stat(reviewStopHookStateFile(home, "sess-committed-high")); err != nil {
+		t.Fatalf("expected the reminder recorded, stat err=%v", err)
 	}
 }

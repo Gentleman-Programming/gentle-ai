@@ -5,15 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 func TestReviewModeCloneEnableExplainsExplicitGlobalOff(t *testing.T) {
@@ -1044,5 +1047,150 @@ func TestReviewModeCloneScopeEnableInheritsDefaultOnWhileGlobalUnset(t *testing.
 	}
 	if got := output.String(); !strings.Contains(got, "receipt-driven development: on (decided by global)") || strings.Contains(got, "note:") {
 		t.Fatalf("clone enable while global is on must report on without a note:\n%s", got)
+	}
+}
+
+// unvalidatableReviewModeSwitchRoot leaves an override directory where this
+// clone's switch reads it, reached through a symlinked gentle-ai ancestor
+// that RAR path validation refuses. It is the portable stand-in for a #4670
+// common directory the authority checks cannot accept.
+func unvalidatableReviewModeSwitchRoot(t *testing.T, repo string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs a privilege Windows runners do not grant; the UNC refusal is covered in reviewtransaction")
+	}
+	target := filepath.Join(t.TempDir(), "gentle-ai")
+	if err := os.MkdirAll(filepath.Join(target, "review-mode", "rar-authority", "v1", "rdd-mode"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(repo, ".git", "gentle-ai")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// #4670: with the global mode off nothing has to be read from the clone, so an
+// unvalidatable clone-local location must not make status fail.
+func TestReviewModeStatusGlobalOffSucceedsWhenTheCloneOverrideCannotBeValidated(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := RunReviewMode([]string{"disable", "--cwd", repo}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	unvalidatableReviewModeSwitchRoot(t, repo)
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--cwd", repo}, &output); err != nil {
+		t.Fatalf("status with global off failed: %v\n%s", err, output.String())
+	}
+	if !strings.Contains(output.String(), "receipt-driven development: off (decided by global)") {
+		t.Fatalf("status output = %q, want off decided by global", output.String())
+	}
+}
+
+// #4670 S4: a resolution failure is not a clone-local decision. Status still
+// fails closed while the global mode is unset, but it says the mode is
+// unavailable instead of printing an "off (decided by clone_local)" that no
+// stored record made.
+func TestReviewModeStatusReportsAFailedResolutionAsUnavailable(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	unvalidatableReviewModeSwitchRoot(t, repo)
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--cwd", repo}, &output); err == nil {
+		t.Fatalf("status resolved an unvalidatable override without an error:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "decided by") {
+		t.Fatalf("failed resolution reported a deciding source: %q", output.String())
+	}
+	if !strings.Contains(output.String(), "receipt-driven development: unavailable") {
+		t.Fatalf("status output = %q, want the mode marked unavailable", output.String())
+	}
+}
+
+// #5533: a mutation that cannot resolve the clone's mode carries the same
+// fail-closed projection status does, so it must be reported the same way
+// rather than as an "off (decided by clone_local)" beside "clone-local: unset".
+// The JSON result keeps the projection unchanged.
+func TestReviewModeFailedMutationReportsTheModeAsUnavailable(t *testing.T) {
+	for _, operation := range []string{"enable", "disable"} {
+		t.Run(operation, func(t *testing.T) {
+			reviewModeHome(t)
+			repo := initReviewCLIRepo(t)
+			unvalidatableReviewModeSwitchRoot(t, repo)
+
+			var output bytes.Buffer
+			if err := RunReviewMode([]string{operation, "--scope", "clone", "--cwd", repo}, &output); err == nil {
+				t.Fatalf("%s resolved an unvalidatable override without an error:\n%s", operation, output.String())
+			}
+			if got := output.String(); got != "receipt-driven development: unavailable (the review mode could not be resolved)\n" {
+				t.Fatalf("failed %s output = %q, want only the unavailable line", operation, got)
+			}
+
+			output.Reset()
+			if err := RunReviewMode([]string{operation, "--scope", "clone", "--cwd", repo, "--json"}, &output); err == nil {
+				t.Fatalf("%s --json resolved an unvalidatable override without an error", operation)
+			}
+			var result ReviewModeResult
+			if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+				t.Fatalf("failed %s --json output is not a result: %v\n%s", operation, err, output.String())
+			}
+			if result.Status.Effective != reviewtransaction.RDDModeOff {
+				t.Fatalf("failed %s --json status = %#v, want the unchanged fail-closed off projection", operation, result.Status)
+			}
+		})
+	}
+}
+
+// #5533: a refusal returned beside a resolved status is not a failed
+// resolution. A clone write that applied here but could not be published for
+// pre-relocation installs keeps its resolved state and the this-build note.
+func TestReviewModePartiallyAppliedMutationKeepsItsResolvedState(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := RunReviewMode([]string{"disable", "--scope", "clone", "--cwd", repo}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	// A directory in the pre-relocation location's next slot makes its
+	// immutable publish refuse after this build's own root has advanced.
+	blocked := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode", "gen-0000000002.json")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err := RunReviewMode([]string{"enable", "--scope", "clone", "--cwd", repo}, &output)
+	if !errors.Is(err, reviewtransaction.ErrRDDModePartiallyApplied) {
+		t.Fatalf("enable error = %v, want ErrRDDModePartiallyApplied", err)
+	}
+	want := "receipt-driven development: on (decided by default)\n" +
+		"  global:      unset\n" +
+		"  clone-local: unset\n" +
+		"  note:        applied for this gentle-ai only; a gentle-ai installed before the switch moved reads a location this command could not open, and keeps enforcing the value it holds there\n"
+	if got := output.String(); got != want {
+		t.Fatalf("partially applied enable output = %q, want %q", got, want)
+	}
+}
+
+// #4670 S3: an authority filesystem that cannot keep review state private is
+// a typed refusal whose continuation the operator can actually run.
+func TestReviewModeUnsupportedAuthorityFilesystemNamesItsContinuation(t *testing.T) {
+	path := `\\server\share\repo\.git`
+	cause := fmt.Errorf("resolve review mode: %w",
+		&reviewtransaction.UnsupportedAuthorityFilesystemError{Path: path, Remote: true})
+
+	err := reviewModeUnreadable(context.Background(), t.TempDir(), reviewtransaction.RDDGlobalMode{}, cause)
+
+	var unsupported *reviewtransaction.UnsupportedAuthorityFilesystemError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("refusal lost its typed cause: %#v", err)
+	}
+	for _, want := range []string{path, "`gentle-ai review mode disable --scope global`", "local NTFS or ReFS volume"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q does not contain %q", err.Error(), want)
+		}
+	}
+	if strings.Contains(err.Error(), "check the path and rerun") {
+		t.Fatalf("refusal %q still names an unrunnable repair", err.Error())
 	}
 }

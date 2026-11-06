@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 const managedAssetProvenanceRefusal = "managed reviewer assets are outdated; run `gentle-ai sync`"
@@ -58,6 +58,23 @@ func (p managedAssetProvenance) staleAssetIdentities() []string {
 	return []string{p.installedDigest}
 }
 
+// refusal renders the stale-asset refusal naming both digests (#4379): the
+// recorded one and the one this binary embeds. When the sync that ran and the
+// binary that refuses are different builds (a global binary versus a pinned
+// relay), the disagreement is visible in the message instead of leaving the
+// caller to loop on `gentle-ai sync`. The refusing binary's own path travels
+// in the continuation command, which the cause privacy gate does not scrub.
+func (p managedAssetProvenance) refusal() error {
+	recorded, embedded := p.installedDigest, p.expectedDigest
+	if recorded == "" {
+		recorded = "unknown"
+	}
+	if embedded == "" {
+		embedded = "an underivable digest"
+	}
+	return fmt.Errorf("%s (recorded digest %s, this binary embeds %s)", managedAssetProvenanceRefusal, recorded, embedded)
+}
+
 // checkManagedReviewerAssets resolves the installed/expected digest pair
 // authorizeManagedReviewerAssets compares. Callers that must explain *which*
 // asset is stale -- a STATUS preflight or a START refusal's sync continuation
@@ -88,9 +105,29 @@ func checkManagedReviewerAssets() managedAssetProvenance {
 // here, so there is nothing stale to protect against and nothing this refusal
 // could tell the caller to repair. Refusing that shape would block every user
 // who never ran `gentle-ai install` from reviewing at all.
+//
+// #4379: the refusal is the same typed preflight START returns, so a verb that
+// mutates authority (capture-result, repair, ...) reports a not-started
+// managed_assets_outdated refusal with the executable-anchored sync
+// continuation instead of falling through to operation_outcome_unknown. The
+// callers carry no runtime agent, so the continuation syncs every agent.
 func authorizeManagedReviewerAssets() error {
-	if checkManagedReviewerAssets().stale() {
-		return errors.New(managedAssetProvenanceRefusal)
+	// guard:population managed-asset-provenance fail-closed: Only a recorded digest that disagrees with this binary's embedded digest, or one this binary cannot derive to compare, is refused; homes with no state or no recorded digest pass, and the refusal never mutates authority.
+	if provenance := checkManagedReviewerAssets(); provenance.stale() {
+		continuation := managedAssetsContinuation("", provenance.staleAssetIdentities())
+		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, provenance.refusal(), continuation)
 	}
 	return nil
+}
+
+// withPlainReviewContinuation renders a typed refusal's continuation command
+// for a verb with no negotiated failure envelope (review-bundle-import), where
+// the caller only ever sees Error(). The refusal text and digests stay intact
+// and the typed error stays reachable through errors.As.
+func withPlainReviewContinuation(err error) error {
+	var preflight *reviewIntegrationPreflightError
+	if !errors.As(err, &preflight) || preflight.continuation == nil || preflight.continuation.Command == "" {
+		return err
+	}
+	return fmt.Errorf("%w; continue with: %s", err, preflight.continuation.Command)
 }

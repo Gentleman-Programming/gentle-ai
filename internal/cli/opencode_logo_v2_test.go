@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
 )
 
 func TestOpenCodeV2LogoSkippedWithoutWrites(t *testing.T) {
@@ -20,7 +20,6 @@ func TestOpenCodeV2LogoSkippedWithoutWrites(t *testing.T) {
 	changed := []string{}
 	for _, step := range []pipeline.Step{
 		componentApplyStep{id: "logo", component: model.ComponentOpenCodeGentleLogo, homeDir: home, agents: []model.AgentID{model.AgentOpenCode}},
-		openCodePluginInstallStep{id: "plugin-logo", plugin: model.OpenCodePluginGentleLogo, homeDir: home},
 		componentSyncStep{id: "sync-logo", component: model.ComponentOpenCodeGentleLogo, homeDir: home, agents: []model.AgentID{model.AgentOpenCode}, changedFiles: &changed},
 	} {
 		result := (pipeline.Runner{}).Run(pipeline.StageApply, []pipeline.Step{step})

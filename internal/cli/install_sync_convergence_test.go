@@ -5,12 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/statecoord"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // convergenceTestHome prepares an isolated home where every runtime binary
@@ -159,7 +159,7 @@ func TestCodeGraphInstallThenSyncConverges(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			execution, _ := executeTUIInstallWithBackground(home, selection, resolved, ResolveInstallProfile(system.DetectionResult{}), "", "", nil)
+			execution, _, _ := executeTUIInstall(home, selection, resolved, ResolveInstallProfile(system.DetectionResult{}), "", "", nil)
 			if execution.Err != nil {
 				t.Fatalf("TUI install error = %v", execution.Err)
 			}

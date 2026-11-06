@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 type ProgressItem struct {
@@ -45,6 +45,9 @@ func RenderInstalling(progress InstallProgress, spinner string) string {
 		case "skipped":
 			icon = styles.SubtextStyle.Render("−")
 			item.Label += " (skipped)"
+		case "rolled-back":
+			icon = styles.SubtextStyle.Render("↶")
+			item.Label += " (rolled back)"
 		case "failed":
 			icon = styles.ErrorStyle.Render("✗")
 		case "running":

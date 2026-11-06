@@ -1,5 +1,8 @@
 # Non-Interactive Mode
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 Use non-interactive mode for CI, scripts, or reproducible local setup.
 
 ## Command
@@ -16,13 +19,22 @@ go run ./cmd/gentle-ai install [flags]
 - `--persona`: explicit persona id.
 - `--preset`: explicit preset id.
 - `--scope`: `global` (default, writes to each selected agent's global config directory) or `workspace` (writes agent-scoped files to the current project root `./`).
+- `--channel`: `stable` (default), `beta`, or `nightly` (alias for `beta`).
+- `--opencode-background-subagents`, `--pi-background-subagents`: `auto`, `on`, or `off`. Without a flag, env var, or saved choice, `auto` resolves to `off` in non-interactive runs.
+- `--pi-exclude-package`: comma-separated and repeatable managed Pi package sources to skip during the `pi` install, such as `npm:gentle-pi`. Requires the `pi` agent; `npm:gentle-engram` cannot be excluded. Install only.
 - `--dry-run`: render plan without executing.
+
+`gentle-ai sync` accepts the same `--scope` and background-subagent flags and env vars. See [Usage](usage.md#cli-flags-sync).
 
 ## Environment variables
 
 | Variable | Values | Description |
 |----------|--------|-------------|
 | `GENTLE_AI_INSTALL_SCOPE` | `global` \| `workspace` | Sets the install scope without a flag. Useful in CI. Equivalent to `--scope`. Default: `global`. |
+| `GENTLE_AI_CHANNEL` | `stable` \| `beta` \| `nightly` | Equivalent to `--channel`. Default: `stable`. |
+| `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS` | `auto` \| `on` \| `off` | Equivalent to `--opencode-background-subagents`; the flag wins when both are set. |
+| `GENTLE_AI_PI_BACKGROUND_SUBAGENTS` | `auto` \| `on` \| `off` | Equivalent to `--pi-background-subagents`; the flag wins when both are set. |
+| `GENTLE_AI_PI_EXCLUDE_PACKAGES` | comma-separated Pi package sources | Equivalent to `--pi-exclude-package`; a non-empty flag wins, and an empty value counts as unset. Not saved in state. |
 
 `workspace` scope is not Claude-only: it applies to the selected agents' agent-scoped files such as system prompts, skills, agent guidance, and persona files. Global-only integrations, like package installs or agent settings that must live in the tool's global config, remain global.
 

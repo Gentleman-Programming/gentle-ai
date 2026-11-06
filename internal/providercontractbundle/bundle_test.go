@@ -15,21 +15,23 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // currentShapeContractSemver labels fixtures built by generatedFiles/Generate
 // in tests that are not about historical-contract compatibility. Both
 // functions always emit the full current manifest shape (runtimes and
-// orchestration populated) regardless of the semver string passed in, so the
-// label here must be at or after every field's own introduction version
-// (contractSemverIntroducingRuntimesField, contractSemverIntroducingOrchestrationField)
+// orchestration and routing populated) regardless of the semver string passed
+// in, so the label here must be at or after every field's own introduction
+// version (contractSemverIntroducingRuntimesField,
+// contractSemverIntroducingOrchestrationField, contractSemverIntroducingRoutingField)
 // -- otherwise validateEntries correctly refuses a manifest that claims an
 // older contract while still carrying fields that contract never promised
 // (#3256). Tests that exercise pre-1.1.0/pre-1.2.0 compatibility build their
 // own minimal legacy-shaped manifest instead of using this label.
-const currentShapeContractSemver = "1.2.0"
+const currentShapeContractSemver = "1.4.0"
 
 func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
 	first := filepath.Join(t.TempDir(), "first")
@@ -45,6 +47,7 @@ func TestGenerateIsDeterministicAndVerifiable(t *testing.T) {
 		"README.md",
 		"manifest.json",
 		"orchestration/pi.md",
+		"routing/pi.md",
 		"schemas/lens.schema.json",
 		"schemas/refuter.schema.json",
 		"schemas/targeted-validator.schema.json",
@@ -540,7 +543,7 @@ func equalStrings(left, right []string) bool {
 // bound review execution contract, with the runtime placeholder resolved and
 // its capture command named exactly once.
 func TestGeneratedOrchestrationEntryCarriesTheBoundPiContract(t *testing.T) {
-	files, err := generatedFiles("1.2.0")
+	files, err := generatedFiles(currentShapeContractSemver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +613,7 @@ func TestPiFacadeLifecycleValidation(t *testing.T) {
 
 func TestGenerateThenVerifyRoundTripsTheOrchestrationManifestEntry(t *testing.T) {
 	directory := t.TempDir()
-	if err := Generate(directory, "1.2.0"); err != nil {
+	if err := Generate(directory, currentShapeContractSemver); err != nil {
 		t.Fatal(err)
 	}
 	files := readGeneratedFiles(t, directory)
@@ -642,7 +645,7 @@ func TestGenerateThenVerifyRoundTripsTheOrchestrationManifestEntry(t *testing.T)
 // TestVerifyArchiveRejectsATamperedOrchestrationFile proves the orchestration
 // entry is protected by the same sha256 binding as every other bundle file.
 func TestVerifyArchiveRejectsATamperedOrchestrationFile(t *testing.T) {
-	files, err := generatedFiles("1.2.0")
+	files, err := generatedFiles(currentShapeContractSemver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,7 +665,7 @@ func TestVerifyArchiveRejectsATamperedOrchestrationFile(t *testing.T) {
 // and the README's manual-inspection instructions), so there is no caller
 // depending on the older layout staying acceptable.
 func TestVerifyArchiveRejectsAManifestMissingTheOrchestrationEntry(t *testing.T) {
-	files, err := generatedFiles("1.2.0")
+	files, err := generatedFiles(currentShapeContractSemver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +693,7 @@ func TestVerifyArchiveRejectsAManifestMissingTheOrchestrationEntry(t *testing.T)
 // identity list, the same way every other runtime-scoped claim in this bundle
 // is, rather than trusted from the manifest bytes alone.
 func TestVerifyArchiveRejectsAnUnregisteredOrchestrationRuntime(t *testing.T) {
-	files, err := generatedFiles("1.2.0")
+	files, err := generatedFiles(currentShapeContractSemver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -748,6 +751,7 @@ func TestVerifyArchiveAcceptsAGenuinePre110PublishedBundleWithoutRuntimesOrOrche
 	}
 	files["manifest.json"] = append(legacyPayload, '\n')
 	delete(files, "orchestration/pi.md")
+	delete(files, "routing/pi.md")
 
 	if strings.Contains(string(files["manifest.json"]), "runtime") {
 		t.Fatalf("legacy fixture manifest unexpectedly mentions runtimes:\n%s", files["manifest.json"])
@@ -757,5 +761,105 @@ func TestVerifyArchiveAcceptsAGenuinePre110PublishedBundleWithoutRuntimesOrOrche
 	writeArchive(t, archive, files, nil, false)
 	if err := VerifyArchive(archive); err != nil {
 		t.Fatalf("VerifyArchive rejected a genuine pre-1.1.0 published bundle: %v", err)
+	}
+}
+
+// TestGeneratedRoutingEntryIsThePiRoutingBlock locks the routing entry Gentle
+// Shell mirrors: routing/pi.md is exactly the block RenderRouting emits for Pi,
+// referenced by a sorted manifest entry, so Gentle Shell consumes the ODD
+// routing canon from gentle-ai instead of adapting it by hand.
+func TestGeneratedRoutingEntryIsThePiRoutingBlock(t *testing.T) {
+	directory := t.TempDir()
+	if err := Generate(directory, currentShapeContractSemver); err != nil {
+		t.Fatal(err)
+	}
+	files := readGeneratedFiles(t, directory)
+	want, err := agentguidance.RenderRouting(model.AgentPi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(files["routing/pi.md"]); got != want {
+		t.Fatalf("routing/pi.md differs from RenderRouting(pi):\n got: %q\nwant: %q", got, want)
+	}
+	var decoded manifest
+	if err := json.Unmarshal(files["manifest.json"], &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Routing) != 1 {
+		t.Fatalf("manifest routing entries = %d, want 1", len(decoded.Routing))
+	}
+	entry := decoded.Routing[0]
+	if entry.Runtime != "pi" || entry.File.Path != "routing/pi.md" || entry.File.SHA256 != hash([]byte(want)) {
+		t.Fatalf("manifest routing entry = %+v, does not reference the rendered Pi block", entry)
+	}
+	archive := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	writeArchive(t, archive, files, nil, false)
+	if err := VerifyArchive(archive); err != nil {
+		t.Fatalf("VerifyArchive: %v", err)
+	}
+}
+
+// TestVerifyArchiveRejectsATamperedRoutingFile proves the routing entry is
+// bound by the same sha256 and canonical-bytes check as every other file.
+func TestVerifyArchiveRejectsATamperedRoutingFile(t *testing.T) {
+	files, err := generatedFiles(currentShapeContractSemver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := cloneFiles(files)
+	tampered["routing/pi.md"] = append(tampered["routing/pi.md"], '\n')
+	archive := filepath.Join(t.TempDir(), "tampered-routing.tar.gz")
+	writeArchive(t, archive, tampered, nil, false)
+	if err := VerifyArchive(archive); err == nil {
+		t.Fatal("VerifyArchive accepted a tampered routing/pi.md byte")
+	}
+}
+
+// TestVerifyArchiveRoutingFieldFollowsItsIntroducingContract pins the
+// introducing-version rule for "routing": a contract at or after 1.4.0 must
+// carry the entry, and an older contract must not, so a genuine 1.3.0 bundle
+// still verifies.
+func TestVerifyArchiveRoutingFieldFollowsItsIntroducingContract(t *testing.T) {
+	withoutRouting := func(t *testing.T, semver string) map[string][]byte {
+		t.Helper()
+		files, err := generatedFiles(semver)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(files["manifest.json"], &decoded); err != nil {
+			t.Fatal(err)
+		}
+		delete(decoded, "routing")
+		payload, err := json.MarshalIndent(decoded, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		files["manifest.json"] = append(payload, '\n')
+		delete(files, "routing/pi.md")
+		return files
+	}
+	for _, test := range []struct {
+		name  string
+		files func(t *testing.T) map[string][]byte
+		valid bool
+	}{
+		{name: "1.4.0 without routing", files: func(t *testing.T) map[string][]byte { return withoutRouting(t, "1.4.0") }},
+		{name: "1.3.0 without routing", files: func(t *testing.T) map[string][]byte { return withoutRouting(t, "1.3.0") }, valid: true},
+		{name: "1.3.0 with routing", files: func(t *testing.T) map[string][]byte {
+			files, err := generatedFiles("1.3.0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			return files
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			archive := filepath.Join(t.TempDir(), "bundle.tar.gz")
+			writeArchive(t, archive, test.files(t), nil, false)
+			if err := VerifyArchive(archive); (err == nil) != test.valid {
+				t.Fatalf("VerifyArchive() error = %v, want valid %t", err, test.valid)
+			}
+		})
 	}
 }

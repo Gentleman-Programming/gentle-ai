@@ -4,7 +4,7 @@
 > **Current closure and delivery semantics.** A zero-lens START, or the final admitted lens, refuter, or validation capture, closes and burns a review. Delivery always follows ordinary repository policy; review closure is informational.
 
 > [!WARNING]
-> **Historical and superseded guide.** This document preserves the candidate-specific validation procedure for `v2.2.0-rc.1` and PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). It is not current installation or validation guidance for stable [`v2.6.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.6.0) or unreleased `main`. Use the [Quickstart version policy](../quickstart.md#version-policy) for current installation channels and validation entry points.
+> **Historical and superseded guide.** This document preserves the candidate-specific validation procedure for `v2.2.0-rc.1` and PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). It is not current installation or validation guidance for [the latest stable release](https://github.com/Gentleman-Programming/gentle-ai/releases/latest) or unreleased `main`. Use the [Quickstart version policy](../quickstart.md#version-policy) for current installation channels and validation entry points.
 >
 > Community testing guide for the candidate built from PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). Every **Expected** here was validated against real output before publication. The guide uses a throwaway HOME precisely so it does not touch your real config — do not skip the setup.
 
@@ -389,6 +389,16 @@ gentle-ai review start --cwd .
    is the worst outcome and the one worth reporting loudest.
 5. [ ] **Report the mount type and options either way, including a PASS.** This
    path has never run on a network filesystem.
+6. [ ] **Windows only**: put a repository on an SMB share reached by a UNC path
+   (`\\server\share\repo`) or a mapped network drive. With reviews on,
+   `gentle-ai review mode status --cwd <repo>` → **Expected**: it resolves,
+   because the clone holds no override to read. `gentle-ai review mode disable
+   --scope clone --cwd <repo>` → **Expected**: a typed refusal naming the
+   remote filesystem, `gentle-ai review mode disable --scope global`, and a
+   local NTFS or ReFS volume, never "check the path and rerun". Then run
+   `gentle-ai review mode disable --scope global` and `status` again →
+   **Expected**: `off (decided by global)`, exit 0, and the Claude Code stop
+   hook stays silent (#4670).
 
 ### Flow 28: A read-only filesystem — **needs a read-only mount**
 
@@ -641,7 +651,7 @@ echo "exit=$?"
 
 ## Historical reporting instructions
 
-This section is retained to explain the original candidate procedure. Do not open a current issue or comment on PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801) for results from `v2.2.0-rc.1`; that candidate process is complete. For a current concern, first reproduce it against stable [`v2.6.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.6.0), then use the repository's current contribution and issue workflow.
+This section is retained to explain the original candidate procedure. Do not open a current issue or comment on PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801) for results from `v2.2.0-rc.1`; that candidate process is complete. For a current concern, first reproduce it against [the latest stable release](https://github.com/Gentleman-Programming/gentle-ai/releases/latest) (see the [Quickstart version policy](../quickstart.md#version-policy)), then use the repository's current contribution and issue workflow.
 
 ## What is NOT a bug
 

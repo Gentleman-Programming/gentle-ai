@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // IsSDDSkill identifies retired SDD skill IDs retained for compatibility.
@@ -34,6 +35,11 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 	skillDir := adapter.SkillsDir(homeDir)
 	if skillDir == "" {
 		return InjectionResult{Skipped: skillIDs}, nil
+	}
+	if adapter.Agent() == model.AgentCodex {
+		if err := system.ValidateCodexHome(homeDir); err != nil {
+			return InjectionResult{}, err
+		}
 	}
 	result, err := InjectDirectoryWithCapability(skillDir, skillIDs, capability)
 	if err != nil {

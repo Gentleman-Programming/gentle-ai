@@ -3,7 +3,7 @@ package reviewerprovider
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // TestRuntimeBudgetCoversEveryRegisteredRuntime pins the approved per-runtime

@@ -12,7 +12,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 )
 
 // ManifestSchema is the on-disk identity; bump the suffix on incompatible changes.
@@ -82,11 +82,11 @@ type Manifest struct {
 }
 
 func ManifestPath(homeDir string) string {
-	return filepath.Join(homeDir, StateDirName, manifestFileName)
+	return filepath.Join(Dir(homeDir), manifestFileName)
 }
 
 func JournalPath(homeDir string) string {
-	return filepath.Join(homeDir, StateDirName, journalFileName)
+	return filepath.Join(Dir(homeDir), journalFileName)
 }
 
 // ReadManifest decodes the manifest at ManifestPath. Missing file returns
@@ -106,7 +106,7 @@ func ReadManifest(homeDir string) (Manifest, error) {
 // WriteManifestAtomic writes the manifest with the staged+fsync+rename
 // contract so a crash mid-write cannot produce a partial file.
 func WriteManifestAtomic(homeDir string, m Manifest) error {
-	dir := filepath.Join(homeDir, StateDirName)
+	dir := Dir(homeDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ const (
 // AppendJournal appends one entry and caps the file at 1 MiB (older
 // entries are replaced by a single "truncated" marker).
 func AppendJournal(homeDir, op, runID, resource string) error {
-	dir := filepath.Join(homeDir, StateDirName)
+	dir := Dir(homeDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

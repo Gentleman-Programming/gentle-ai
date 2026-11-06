@@ -7,8 +7,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 const reviewLastEventClosureSchema = "gentle-ai.review-last-event-closure/v1"
@@ -215,7 +215,7 @@ func closeReviewOnLastCapturedLens(
 		return nil, err
 	}
 	input := compactReviewInputFromView(view)
-	claims, err := reviewProviderRefuterClaims(state.InitialSnapshot.Identity, input)
+	claims, err := reviewProviderRefuterClaims(state.InitialSnapshot.Identity, input, state.RuntimeAgent)
 	if errors.Is(err, errReviewProviderRefuterNotRequired) {
 		claims = nil
 	} else if err != nil {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // TestLastRecapturedLensDrivesTheCurrentCorrectionPlan ensures the final lens
@@ -27,6 +27,7 @@ func TestLastRecapturedLensDrivesTheCurrentCorrectionPlan(t *testing.T) {
 		var output bytes.Buffer
 		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &output)
 	}
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 
 	current, err := store.Load()
 	if err != nil || current.State.State != reviewtransaction.StateCorrectionRequired {

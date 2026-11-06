@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 // lockFileExclusive is a package-level var so tests can sabotage the
@@ -63,7 +65,7 @@ func lockState(homeDir string) (func(), error) {
 	mu := statePathLock(key)
 	mu.Lock()
 
-	dir := filepath.Join(homeDir, stateDir)
+	dir := state.Dir(homeDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		mu.Unlock()
 		return nil, err
@@ -86,7 +88,8 @@ func lockState(homeDir string) (func(), error) {
 }
 
 // Update locks, loads (creating as EnsureState would), mutates, and saves.
-// Every state writer must go through this to avoid lost updates.
+// Every state writer must hold lockState across this cycle to avoid lost
+// updates. IncrementCounter also holds that lock across its policy check.
 func Update(homeDir string, mutate func(*State)) error {
 	unlock, err := lockState(homeDir)
 	if err != nil {

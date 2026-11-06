@@ -3,24 +3,25 @@ package agents
 import (
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/conductor"
-	cursoradapter "github.com/gentleman-programming/gentle-ai/v3/internal/agents/cursor"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/kiro"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/qwen"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/trae"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/windsurf"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/conductor"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/copilotcli"
+	cursoradapter "github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kiro"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/qwen"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/trae"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/windsurf"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 var defaultAgentIDs = []model.AgentID{
@@ -41,6 +42,7 @@ var defaultAgentIDs = []model.AgentID{
 	model.AgentTrae,
 	model.AgentHermes,
 	model.AgentConductor,
+	model.AgentGitHubCopilotCLI,
 }
 
 func NewAdapter(agent model.AgentID) (Adapter, error) {
@@ -79,6 +81,8 @@ func NewAdapter(agent model.AgentID) (Adapter, error) {
 		return hermes.NewAdapter(), nil
 	case model.AgentConductor:
 		return conductor.NewAdapter(), nil
+	case model.AgentGitHubCopilotCLI:
+		return copilotcli.NewAdapter(), nil
 	default:
 		return nil, AgentNotSupportedError{Agent: agent}
 	}

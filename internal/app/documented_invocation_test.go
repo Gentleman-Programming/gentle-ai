@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/app"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/app"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
 )
 
 // This corpus exists because of #2506: the product states runnable commands
@@ -405,18 +405,14 @@ func TestDocumentedInvocationsRunAsDocumented(t *testing.T) {
 			}
 		}
 	}
-	// Primary entry points must not advertise retired SDD commands or artifacts.
+	// Retired terms across all living docs are guarded by
+	// TestLivingDocsDoNotAdvertiseRetiredTerms.
 	for _, name := range []string{"README.md", "docs/intended-usage.md", "docs/agents.md", "docs/pi.md"} {
 		content, err := os.ReadFile(filepath.Join("..", "..", name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, retired := range []string{"/sdd-", "/gentle-sdd-", "gentle-ai sdd-", "SDD phases", "SDD agents", "OpenSpec"} {
-			if strings.Contains(string(content), retired) {
-				t.Errorf("%s still advertises retired %q", name, retired)
-			}
-		}
-		// Check local Markdown links in the same primary guidance, without
+		// Check local Markdown links in the primary guidance, without
 		// treating remote URLs, mailto links or in-page anchors as files.
 		links := regexp.MustCompile(`\]\(([^)]+)\)`)
 		for _, match := range links.FindAllStringSubmatch(string(content), -1) {

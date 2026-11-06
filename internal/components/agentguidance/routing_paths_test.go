@@ -6,8 +6,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // TestRoutingPathsMatchesEveryPathInjectRoutingWrites is the anti-drift guard.
@@ -117,4 +117,9 @@ func samePathSet(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// RoutingPaths is the default-options routing path plan these tests assert.
+func RoutingPaths(targetDir string, agent model.AgentID) ([]string, error) {
+	return RoutingPathsWithOptions(targetDir, agent, RoutingOptions{})
 }

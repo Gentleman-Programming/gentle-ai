@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestDetect(t *testing.T) {
@@ -147,7 +147,7 @@ func TestConfigPathsCrossPlatform(t *testing.T) {
 		t.Fatalf("MCPConfigPath() = %q, want %q", got, filepath.Join(home, ".gemini", "settings.json"))
 	}
 
-	if got := a.SystemPromptFile(home); got != filepath.Join(home, ".gemini", "GEMINI.md") {
-		t.Fatalf("SystemPromptFile() = %q, want %q", got, filepath.Join(home, ".gemini", "GEMINI.md"))
+	if got := a.SystemPromptFile(home); got != filepath.Join(home, ".gemini", "gentle-ai", "guidance.md") {
+		t.Fatalf("SystemPromptFile() = %q, want the staging file %q", got, filepath.Join(home, ".gemini", "gentle-ai", "guidance.md"))
 	}
 }

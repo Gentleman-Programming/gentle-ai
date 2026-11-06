@@ -12,7 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 const (
@@ -25,8 +26,13 @@ const (
 
 // Excluded skills never appear in the registry. This policy is intentionally
 // hardcoded and applied silently: `_shared` and `skill-registry` are internal
-// plumbing, and `sdd-*` skills are orchestrator-managed via the SDD workflow,
-// not delegator-selected. NOTE: a user skill whose name collides with these
+// plumbing, and `sdd-*` skills belong to the SDD workflow retired in v4.0.0.
+// Install and sync retire the copies Gentle AI can prove it wrote, in the
+// global skill roots and, for a workspace-scoped run, in the workspace ones
+// (<workspace>/.claude/skills, for example). They keep edited copies, copies
+// behind symlinked directories, and everything in roots Gentle AI does not
+// manage (Pi, other project skill directories), so the exclusion keeps those
+// leftovers, which call removed commands, out of delegation. NOTE: a user skill whose name collides with these
 // (e.g. any name starting with `sdd-`) is dropped without warning. Revisit as
 // configuration if that collision ever becomes a real constraint.
 var (
@@ -68,12 +74,13 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".config", "kilo", "skills"),
 		filepath.Join(home, ".claude", "skills"),
 		filepath.Join(home, ".gemini", "skills"),
+		filepath.Join(home, ".gemini", "config", "skills"),
 		filepath.Join(home, ".gemini", "antigravity", "skills"),
 		filepath.Join(home, ".gemini", "antigravity-desktop", "skills"),
 		filepath.Join(home, ".gemini", "antigravity-cli", "skills"),
 		filepath.Join(home, ".cursor", "skills"),
 		filepath.Join(home, ".copilot", "skills"),
-		filepath.Join(home, ".codex", "skills"),
+		filepath.Join(system.CodexConfigDir(home), "skills"),
 		filepath.Join(home, ".codeium", "windsurf", "skills"),
 		filepath.Join(home, ".qwen", "skills"),
 		filepath.Join(home, ".kiro", "skills"),

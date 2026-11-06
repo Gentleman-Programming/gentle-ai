@@ -574,7 +574,7 @@ builds:
       - >-
         -s -w
         -X main.version={{ .Version }}
-        -X github.com/gentleman-programming/gentle-ai/v3/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
+        -X github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
 archives:
   - formats:
       - tar.gz
@@ -606,6 +606,12 @@ archives:
           mtime: "1970-01-01T00:00:00Z"
       - src: .goreleaser-provider-contract/orchestration/*.md
         dst: orchestration
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
+      - src: .goreleaser-provider-contract/routing/*.md
+        dst: routing
         strip_parent: true
         info:
           mode: 0644

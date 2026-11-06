@@ -7,10 +7,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // OrchestratorSectionID is the managed marker section that owns the
@@ -44,6 +44,7 @@ const (
 // share into its ODD-only form. Whole sections are handled separately.
 var nonRDDReplacements = strings.NewReplacer(
 	"| Tests, builds, installs, or native review actions |", "| Tests, builds, installs, or verification actions |",
+	"| High-risk change, or long suites, builds, installs, or native review actions of a large task |", "| High-risk change, or long suites, builds, installs, or verification actions of a large task |",
 	"tests, builds, installs, and native review actors may use fresh workers", "tests, builds, installs, and verification actors may use fresh workers",
 	"run applicable tests, builds, and native review actions as bounded steps", "run applicable tests, builds, and verification actions as bounded steps",
 	"- Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.", "- Let the user and ordinary repository policy decide delivery; do not infer authorization from checking output.",
@@ -146,9 +147,54 @@ func orchestratorAsset(agent model.AgentID) string {
 	}
 }
 
+// selectGenericOrchestrator selects instruction text, never an execution model.
+// Validate both shipped sections before replacing either so malformed assets
+// fail closed rather than silently losing common surrounding content.
+func selectGenericOrchestrator(content, capability string) (string, error) {
+	selected := "capable"
+	if capability == "small" {
+		selected = "small"
+	}
+	type section struct {
+		start, end int
+		body, name string
+	}
+	var sections []section
+	for _, name := range []string{"capable", "small"} {
+		open := "<!-- section:model-" + name + " -->"
+		close := "<!-- /section:model-" + name + " -->"
+		start, end := strings.Index(content, open), strings.Index(content, close)
+		if strings.Count(content, open) != 1 || strings.Count(content, close) != 1 || end < start+len(open) {
+			return "", fmt.Errorf("invalid generic orchestrator model-%s section", name)
+		}
+		sections = append(sections, section{start, end + len(close), content[start+len(open) : end], name})
+	}
+	if sections[0].end > sections[1].start {
+		return "", fmt.Errorf("generic orchestrator model sections overlap or are out of order")
+	}
+	for i := len(sections) - 1; i >= 0; i-- {
+		s := sections[i]
+		body := ""
+		if s.name == selected {
+			body = s.body
+		}
+		content = content[:s.start] + body + content[s.end:]
+	}
+	return content, nil
+}
+
 // RenderOrchestratorWithSource is RenderOrchestrator with an explicit review
 // contract source, which takes precedence over the package-level fallback.
-func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSource) (string, error) {
+// capability selects the generic instruction variant: "small" selects the
+// small-model text and any other value, including empty, selects capable.
+func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSource, capability string) (string, error) {
+	return renderOrchestrator(agent, source, capability, false)
+}
+
+// renderOrchestrator is the single render path. annotate keeps the shared
+// module fragment markers for the internal core/module construction; the
+// public render always strips those exact marker lines.
+func renderOrchestrator(agent model.AgentID, source ReviewContractSource, capability string, annotate bool) (string, error) {
 	if agent == model.AgentPi {
 		return "", fmt.Errorf("render orchestrator for %q: the Pi prompt is owned by Gentle Shell", agent)
 	}
@@ -159,13 +205,25 @@ func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSour
 		return "", fmt.Errorf("render orchestrator for %q: %w", agent, err)
 	}
 
+	if path == "generic/orchestrator.md" {
+		content, err = selectGenericOrchestrator(content, capability)
+		if err != nil {
+			return "", fmt.Errorf("render orchestrator for %q: %w", agent, err)
+		}
+	}
+
 	rdd := model.SupportsReceiptDrivenDevelopment(agent)
-	content, err = expandSharedOrchestratorSections(content, rdd)
+	content, err = expandSharedOrchestratorSections(content, rdd, annotate)
 	if err != nil {
 		return "", fmt.Errorf("render orchestrator for %q: %w", agent, err)
 	}
 
 	content, err = replaceOpenCodeConsentV3QuestionRoute(content, agent)
+	if err != nil {
+		return "", fmt.Errorf("render orchestrator for %q: %w", agent, err)
+	}
+
+	content, err = replaceKiloNativeDelegationRoute(content, agent)
 	if err != nil {
 		return "", fmt.Errorf("render orchestrator for %q: %w", agent, err)
 	}
@@ -192,6 +250,9 @@ func RenderOrchestratorWithSource(agent model.AgentID, source ReviewContractSour
 	content = strings.ReplaceAll(content, runtimeAgentIDPlaceholder, string(agent))
 	if strings.Contains(content, "{{GENTLE_AI_") {
 		return "", fmt.Errorf("render orchestrator for %q: unresolved template placeholder in %s", agent, path)
+	}
+	if !annotate && strings.Contains(content, orchestratorFragmentMarkerToken) {
+		return "", fmt.Errorf("render orchestrator for %q: malformed module fragment marker survived the render", agent)
 	}
 	return strings.TrimSpace(content) + "\n", nil
 }
@@ -225,7 +286,8 @@ func stripReceiptDrivenDevelopment(content string) (string, error) {
 // a nested reference. An unknown section fails rather than shipping a prompt
 // with a literal template token in it. Without receipt-driven development, a
 // section's "(ODD only)" variant replaces its canonical body when one exists.
-func expandSharedOrchestratorSections(content string, rdd bool) (string, error) {
+// annotate keeps the module fragment markers inside the canonical bodies.
+func expandSharedOrchestratorSections(content string, rdd, annotate bool) (string, error) {
 	shared, err := assets.Read(sharedOrchestratorSectionsAsset)
 	if err != nil {
 		return "", err
@@ -233,12 +295,16 @@ func expandSharedOrchestratorSections(content string, rdd bool) (string, error) 
 	var missing []string
 	expanded := sharedOrchestratorSectionPlaceholder.ReplaceAllStringFunc(content, func(match string) string {
 		name := sharedOrchestratorSectionPlaceholder.FindStringSubmatch(match)[1]
+		section := sharedOrchestratorSection
+		if annotate {
+			section = annotatedSharedOrchestratorSection
+		}
 		body := ""
 		if !rdd {
-			body = sharedOrchestratorSection(shared, name+oddOnlySectionSuffix)
+			body = section(shared, name+oddOnlySectionSuffix)
 		}
 		if body == "" {
-			body = sharedOrchestratorSection(shared, name)
+			body = section(shared, name)
 		}
 		if body == "" {
 			missing = append(missing, name)
@@ -252,15 +318,25 @@ func expandSharedOrchestratorSections(content string, rdd bool) (string, error) 
 	return expanded, nil
 }
 
+// sharedOrchestratorSection returns a canonical body without its module
+// fragment marker lines, byte for byte the body before the markers existed.
 func sharedOrchestratorSection(shared, name string) string {
-	open := "<!-- sdd-orchestrator-section:" + name + ":start -->"
-	closing := "<!-- sdd-orchestrator-section:" + name + ":end -->"
+	return strings.TrimSpace(stripOrchestratorFragmentMarkers(rawSharedOrchestratorSection(shared, name)))
+}
+
+func annotatedSharedOrchestratorSection(shared, name string) string {
+	return strings.TrimSpace(rawSharedOrchestratorSection(shared, name))
+}
+
+func rawSharedOrchestratorSection(shared, name string) string {
+	open := "<!-- odd-orchestrator-section:" + name + ":start -->"
+	closing := "<!-- odd-orchestrator-section:" + name + ":end -->"
 	start := strings.Index(shared, open)
 	end := strings.Index(shared, closing)
 	if start < 0 || end < start {
 		return ""
 	}
-	return strings.TrimSpace(shared[start+len(open) : end])
+	return shared[start+len(open) : end]
 }
 
 // sectionBounds returns the byte range of the section that opens at heading and
@@ -362,6 +438,23 @@ func replaceOpenCodeConsentV3QuestionRoute(content string, agent model.AgentID) 
 	}
 	content = strings.Replace(content, openCodeNativeQuestionSourceRoute, openCodeConsentV3QuestionRoute, 1)
 	return strings.ReplaceAll(content, openCodeFallbackSourceClause, openCodeConsentV3FallbackClause), nil
+}
+
+const openCodeInstalledAgentRoute = "Route read-only mapping to the installed `gentle-ai-explore` agent, implementation or command execution to the installed `gentle-ai-worker` agent, and read-only technical verification to the installed `gentle-ai-verify` agent."
+
+const kiloNativeDelegationRoute = "Use Kilo's native subagent delegation for delegated-direct work. Summarize any needed handoff explicitly."
+
+// replaceKiloNativeDelegationRoute routes Kilo's delegated-direct work to its
+// native subagents: Kilo shares the OpenCode asset but never installs the
+// gentle-ai-* agents that asset names (#5254).
+func replaceKiloNativeDelegationRoute(content string, agent model.AgentID) (string, error) {
+	if agent != model.AgentKilocode {
+		return content, nil
+	}
+	if count := strings.Count(content, openCodeInstalledAgentRoute); count != 1 {
+		return "", fmt.Errorf("OpenCode installed-agent route clause count = %d, want 1", count)
+	}
+	return strings.Replace(content, openCodeInstalledAgentRoute, kiloNativeDelegationRoute, 1), nil
 }
 
 // injectOrchestratorSection merges the orchestrator block into existing

@@ -1,5 +1,8 @@
 # Community Roadmap
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 Where to find work that is ready to be picked up, and what "ready" means here.
 
 ## Start here
@@ -75,7 +78,7 @@ into applying a decision rather than making one.
 
 ## Where the design lives
 
-Before changing review, delivery or SDD behaviour, read:
+Before changing review, delivery or routing behaviour, read:
 
 - [Organic RDD architecture](architecture/organic-rdd.md) — how a candidate is
   reviewed as evidence while ordinary repository policy controls delivery

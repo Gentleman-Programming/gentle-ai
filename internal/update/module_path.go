@@ -82,8 +82,8 @@ func repoSegmentInsertPoint(base, repo string) int {
 // unsuffixed) returns 0 so callers using ModulePathForVersion produce an
 // unsuffixed path; major >= 2 returns the parsed integer.
 //
-// Package-level var so tests can pin the running-major seam (e.g. to 3 in
-// the repo's v3 unit tests) without rebuilding. Beta upgrade paths do not
+// Package-level var so tests can pin the running-major seam (e.g. to 4 in
+// the current-major unit tests) without rebuilding. Beta upgrade paths do not
 // use this seam; they require a checked commit's validated go.mod directive.
 var runningGoMajor = func() int {
 	info, ok := debug.ReadBuildInfo()

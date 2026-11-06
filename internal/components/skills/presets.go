@@ -1,6 +1,6 @@
 package skills
 
-import "github.com/gentleman-programming/gentle-ai/v3/internal/model"
+import "github.com/gentleman-programming/gentle-ai/v4/internal/model"
 
 // Retained orchestration skill installed by every non-custom preset.
 var orchestrationSkills = []model.SkillID{model.SkillJudgmentDay}

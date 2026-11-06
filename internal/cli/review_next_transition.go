@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -8,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/pathquote"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 const (
@@ -221,6 +222,17 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 				return reviewStopTransition("rdd_disabled")
 			}
 			if status.Action == reviewtransaction.TargetStatusActionStop && status.Replayability == reviewtransaction.ReplayabilityNotReplayable {
+				if status.passiveDeltaAfterAcknowledgement {
+					return reviewStopTransition("acknowledged_predecessor_passive_delta")
+				}
+				if status.acknowledgedBoundaryReachesHead {
+					// Issue #5638: the reviewed boundary advances on
+					// acknowledgement, and here it reaches HEAD -- every commit
+					// since the boundary was empty, so nothing unreviewed
+					// remains and the stale-span offer is replaced by the
+					// truthful stop (#4628's reviewed fully-integrated shape).
+					return reviewStopTransition("acknowledged_boundary_reaches_head")
+				}
 				return reviewStopTransition("target_already_acknowledged")
 			}
 			if input.Selector != nil && input.Selector.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
@@ -346,11 +358,15 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 		if artifactErr != nil {
 			return reviewStopTransition("captured_artifacts_unverifiable")
 		}
+		openCodeBinding, err := reviewOpenCodeTransitionBinding(status.repositoryRoot, captureBinding, input.RuntimeAgent)
+		if err != nil {
+			return reviewStopTransition("captured_artifacts_unverifiable")
+		}
 		if len(artifacts) != len(selectedLenses) {
-			return reviewMissingCaptureTransition(captureBinding, selectedLenses, artifacts, input.CaptureContext, input.UnachievableLensAttempts, input.RuntimeAgent)
+			return reviewMissingCaptureTransition(openCodeBinding, selectedLenses, artifacts, input.CaptureContext, input.UnachievableLensAttempts, input.RuntimeAgent)
 		}
 		if input.ProviderRole == reviewerprovider.RoleRefuter {
-			return reviewProviderRoleTransition("provider_refuter_required", captureBinding, input.ProviderRole, input.RuntimeAgent, nil)
+			return reviewProviderRoleTransition("provider_refuter_required", openCodeBinding, input.ProviderRole, input.RuntimeAgent, nil)
 		}
 		return reviewStopTransition("manual_intervention_required")
 	case reviewtransaction.StateCorrectionRequired:
@@ -372,7 +388,11 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 				if input.CapturedProviderTargetedValidatorInconclusive {
 					reason = reviewInconclusiveTargetedValidationReason
 				}
-				return reviewProviderRoleTransition(reason, validationBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
+				openCodeBinding, err := reviewOpenCodeTransitionBinding(status.repositoryRoot, validationBinding, input.RuntimeAgent)
+				if err != nil {
+					return reviewStopTransition("captured_artifacts_unverifiable")
+				}
+				return reviewProviderRoleTransition(reason, openCodeBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
 			}
 			if input.CapturedProviderTargetedValidatorInconclusive || input.CapturedProviderTargetedValidator {
 				return reviewStopTransition("manual_intervention_required")
@@ -816,6 +836,7 @@ func newReviewLensProviderTask(arguments []ReviewTransitionArgument, subject *re
 type reviewNextTransitionInput struct {
 	Gate                                           reviewtransaction.GateKind
 	Successor, Reason, Actor, Authorization        string
+	RecoveryInputsProvided                         bool
 	RepairActor, RepairReason, RepairAuthorization string
 	StartLineage                                   string
 	RuntimeAgent                                   model.AgentID
@@ -902,6 +923,11 @@ func reviewStatusTargetEvidenceToken(status ReviewTargetStatusResult) string {
 	return token
 }
 
+// reviewBaseRefCommitIDHexLength is the 40-character width of a hexadecimal
+// git object id. It is only a spelling width: the guard below asks whether the
+// caller's spelling could be an object id, never which object type it names.
+const reviewBaseRefCommitIDHexLength = 40
+
 func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID, intended reviewIntendedUntrackedScope) []ReviewTransitionArgument {
 	contract := status.Contract
 	if contract == "" {
@@ -927,8 +953,26 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 		baseRef := status.Projection.BaseTree
 		// Preserve a caller's immutable commit object, but keep symbolic refs
 		// pinned to the frozen tree so moving branches cannot change START scope.
+		// This is a commit id spelling guard, not an object-type check:
+		// hex.DecodeString accepts any 40-hex value, so a tree id spelled here is
+		// echoed exactly like a commit id. An explicit symbolic selector
+		// (origin/main, a branch, HEAD~1) therefore still emits
+		// Projection.BaseTree, which is the same frozen tree.
+		//
+		// This deliberately diverges from the REVIEWING re-entry echo, where
+		// reviewStartStatusContinuation replays the frozen
+		// InitialSnapshot.BaseTree even for a 40-hex selector, because that
+		// continuation must rebind the exact scope the reviewer artifacts were
+		// captured against (pinned by review_committed_correction_test.go).
+		//
+		// decision.Selector.BaseRef reaches this point already rebound to the
+		// caller's own spelling by bindTargetStatusDecisionBaseRef
+		// (reviewtransaction/target_status.go) for every base-diff or overlay
+		// STATUS that requested one; without that rebinding it is the frozen
+		// base tree seeded by projectTargetStatusDecision, so this guard is a
+		// no-op there.
 		selectorRef := status.decision.Selector.BaseRef
-		if len(selectorRef) == len(status.Projection.BaseTree) {
+		if len(selectorRef) == reviewBaseRefCommitIDHexLength {
 			if _, err := hex.DecodeString(selectorRef); err == nil {
 				baseRef = selectorRef
 			}
@@ -954,6 +998,9 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 		arguments = append(arguments, ReviewTransitionArgument{Name: "consent", Value: string(reviewConsentModeRelay)})
 	}
 	arguments = append(arguments, reviewStartIntendedUntrackedArguments(intended)...)
+	// rdd-risk-gated S17: preflighted START options ride last, so a STATUS
+	// without them renders the exact vector it always did.
+	arguments = append(arguments, status.startOptions.arguments()...)
 	return arguments
 }
 
@@ -1142,9 +1189,15 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 			})
 		}
 	}
-	if input.recoveryAuthorized(binding) {
-		arguments := []ReviewTransitionArgument{{Name: "predecessor-lineage", Value: binding.LineageID}, {Name: "expected-predecessor-revision", Value: binding.Revision}, {Name: "successor-lineage", Value: input.Successor}, {Name: "disposition", Value: string(disposition)}, {Name: "reason", Value: input.Reason}, {Name: "actor", Value: input.Actor}, {Name: "maintainer-authorization", Value: input.Authorization}}
-		transition := reviewExecuteTransition("recovery_authorized", "review.recover", append(arguments, selectorArguments...), []ReviewTransitionArgument{{Name: "state", Value: string(status.Authority.State)}, {Name: "recovery_authorization", Value: "provided"}}, binding, nil)
+	explicit := input.RecoveryInputsProvided || input.Reason != "" || input.Actor != "" || input.Authorization != ""
+	if input.Successor != "" && (!explicit || input.recoveryAuthorized(binding)) {
+		arguments := []ReviewTransitionArgument{{Name: "predecessor-lineage", Value: binding.LineageID}, {Name: "expected-predecessor-revision", Value: binding.Revision}, {Name: "successor-lineage", Value: input.Successor}, {Name: "disposition", Value: string(disposition)}}
+		authorization := "native"
+		if explicit {
+			arguments = append(arguments, ReviewTransitionArgument{Name: "reason", Value: input.Reason}, ReviewTransitionArgument{Name: "actor", Value: input.Actor}, ReviewTransitionArgument{Name: "maintainer-authorization", Value: input.Authorization})
+			authorization = "provided"
+		}
+		transition := reviewExecuteTransition("recovery_authorized", "review.recover", append(arguments, selectorArguments...), []ReviewTransitionArgument{{Name: "state", Value: string(status.Authority.State)}, {Name: "recovery_authorization", Value: authorization}}, binding, nil)
 		if input.Selector != nil && !input.Selector.SelectorFreeAccountingOnlyRecovery {
 			transition.Execute.SelectorArguments = reviewTransitionSelectorArguments(selectorArguments)
 		}
@@ -1256,6 +1309,38 @@ func reviewBindingArguments(binding ReviewTransitionBinding) []ReviewTransitionA
 // before running it again". Both collect the same input through the same
 // capture operation and submission descriptor.
 const reviewInconclusiveTargetedValidationReason = "targeted_validation_inconclusive_recapture_required"
+
+// reviewRepositoryContextKeyUnsafeReason classifies an OpenCode-driven STATUS
+// that cannot seal its reviewer Task because this user's private sealing key
+// is unusable. It is an environment fault that wrote nothing, and its exit is
+// repairing the key file, which the cause names.
+var reviewRepositoryContextKeyUnsafeReason = reviewPreflightReason{
+	Code:       "repository_context_key_unsafe",
+	Message:    "This user's private review context key cannot be used, so the OpenCode reviewer Task cannot be sealed; the cause names the key file and its repair.",
+	NextAction: "stop",
+}
+
+// reviewOpenCodeTransitionBinding gives the inputs an OpenCode host collects
+// the sealed rctx3 handle its relay resolves. The relay runs in the host
+// session directory, which names nothing about the review (#5136, #4516), so
+// the handle has to carry its own root. The runtime is the one this STATUS
+// renders for (reviewEffectiveRuntime: the declared --agent, else Pi under its
+// relay handshake, else the lineage's frozen runtime), so
+// a lineage driven by another runtime is reissued in that runtime's format.
+// Every other runtime keeps the unchanged rctx2 digest.
+func reviewOpenCodeTransitionBinding(root string, binding ReviewTransitionBinding, runtime model.AgentID) (ReviewTransitionBinding, error) {
+	if runtime != model.AgentOpenCode || binding.RepositoryContext == "" {
+		return binding, nil
+	}
+	handle, err := reviewtransaction.DeriveOpenCodeReviewRepositoryContextHandle(context.Background(), root, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
+	})
+	if err != nil {
+		return ReviewTransitionBinding{}, err
+	}
+	binding.RepositoryContext = handle
+	return binding, nil
+}
 
 func reviewTransitionBinding(authority *ReviewTargetStatusAuthority, target, repositoryRoot string, repositoryContext ...string) ReviewTransitionBinding {
 	contextHandle := ""
@@ -1428,6 +1513,8 @@ func reviewReasonDescription(reason string) string {
 		return "Committed base-diff has no paths; empty-root bootstrap is required"
 	case "lens_context_budget_exceeded":
 		return "Frozen reviewer context exceeds the native evidence budget"
+	case "acknowledged_boundary_reaches_head":
+		return "The reviewed boundary advances on acknowledgement and reaches HEAD: every commit since the acknowledged boundary was empty, so nothing unreviewed remains between the boundary and the live candidate"
 	case reviewCorrectionContextBudgetCode:
 		return "Correction evidence and findings exceed the native context budget"
 	case "corrupted_or_unverifiable_authority":

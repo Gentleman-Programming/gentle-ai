@@ -111,6 +111,9 @@ func TestRestoreHelpAnswersBeforeHomeResolution(t *testing.T) {
 				t.Fatalf("restore %s returned %v, want success", flagName, err)
 			}
 			output := stdout.String()
+			if !strings.Contains(output, "CODEX_HOME may authorize its existing directory for CLI restore, not its parent") {
+				t.Fatalf("restore %s usage omits the Codex root scope: %s", flagName, output)
+			}
 			for _, want := range []string{
 				"gentle-ai restore [--list | latest | <id>] [--yes]",
 				"list available backups without restoring",

@@ -35,7 +35,7 @@ func TestIssueCreationSkillHasSanitizationRule(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(content, `version: "1.4"`) {
-		t.Errorf("issue-creation skill must preserve canonical version 1.4")
+	if !strings.Contains(content, `version: "1.6"`) {
+		t.Errorf("issue-creation skill must preserve canonical version 1.6")
 	}
 }

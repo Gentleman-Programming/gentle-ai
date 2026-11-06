@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const strictTDDContent = "Strict TDD Mode: enabled"
@@ -73,7 +73,7 @@ func InjectStrictTDDWithOptions(targetDir string, agent model.AgentID, enabled b
 		if err != nil {
 			return Result{}, err
 		}
-		merged, err := filemerge.MergeJSONObjects(raw, overlay)
+		merged, err := filemerge.MergeJSONObjectsForPath(path, raw, overlay)
 		if err != nil {
 			return Result{}, err
 		}

@@ -3,6 +3,9 @@ package system
 import (
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/copilotconfig"
 )
 
 // ConfigState records the filesystem presence of an agent's global config directory.
@@ -23,6 +26,9 @@ type ConfigState struct {
 // Most entries mirror Adapter.GlobalConfigDir(). Kiro is an intentional
 // exception: we scan `~/.kiro` (managed artifacts root) instead of
 // `%APPDATA%/kiro/User` (settings root) due to Kiro's split-root layout.
+// Antigravity is another exception: we scan the CLI variant directory
+// `~/.gemini/antigravity-cli` as presence evidence, while GlobalConfigDir is
+// the shared customization root `~/.gemini/config`.
 // Kimi is resolved through kimiConfigState: it prefers the current
 // kimi-code v0.11+ root `~/.kimi-code` when it exists as a directory and
 // falls back to the legacy `~/.kimi` root.
@@ -38,7 +44,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "gemini-cli", Path: filepath.Join(homeDir, ".gemini")},
 		{Agent: "cursor", Path: filepath.Join(homeDir, ".cursor")},
 		{Agent: "vscode-copilot", Path: vscodeCopilotGlobalConfigDir(homeDir)},
-		{Agent: "codex", Path: filepath.Join(homeDir, ".codex")},
+		{Agent: "codex", Path: CodexConfigDir(homeDir)},
 		{Agent: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity-cli")},
 		{Agent: "windsurf", Path: filepath.Join(homeDir, ".codeium", "windsurf")},
 		{Agent: "kimi", Path: kimiConfigDir(homeDir)},
@@ -49,6 +55,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "trae-ide", Path: filepath.Join(homeDir, ".trae")},
 		{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")},
 		{Agent: "conductor", Path: filepath.Join(homeDir, ".conductor")},
+		{Agent: "github-copilot-cli", Path: copilotconfig.Root(homeDir)},
 	}
 }
 
@@ -83,15 +90,36 @@ func vscodeCopilotGlobalConfigDir(homeDir string) string {
 	return filepath.Join(homeDir, ".copilot")
 }
 
+// IsCopilotExtensionDir reports whether name is a VS Code Copilot extension
+// directory (e.g. "github.copilot" or "github.copilot-1.2.3").
+func IsCopilotExtensionDir(name string) bool {
+	return name == "github.copilot" || strings.HasPrefix(name, "github.copilot-")
+}
+
+// hasVSCodeCopilotExtension checks for github.copilot extension under .vscode/extensions.
+func hasVSCodeCopilotExtension(homeDir string) (bool, bool) {
+	entries, _ := os.ReadDir(filepath.Join(homeDir, ".vscode", "extensions"))
+	for _, entry := range entries {
+		if entry.IsDir() && IsCopilotExtensionDir(entry.Name()) {
+			return true, true
+		}
+	}
+	return false, false
+}
+
 // ScanConfigs returns the presence state of every known managed agent's global
-// This is a compatibility shim: it preserves the ConfigState contract for TUI
-// and validation callers while the canonical discovery (agents.DiscoverInstalled)
-// is used by sync and upgrade flows. Full delegation is deferred until the
-// system ← agents import cycle is resolved (follow-up change).
+// configuration directory.
 func ScanConfigs(homeDir string) []ConfigState {
 	states := knownAgentConfigDirs(homeDir)
 
 	for idx := range states {
+		if states[idx].Agent == "vscode-copilot" {
+			exists, isDir := hasVSCodeCopilotExtension(homeDir)
+			states[idx].Exists = exists
+			states[idx].IsDirectory = isDir
+			continue
+		}
+
 		info, err := os.Stat(states[idx].Path)
 		if err != nil {
 			continue

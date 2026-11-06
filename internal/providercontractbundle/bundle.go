@@ -23,8 +23,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v3/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v3/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
 )
 
 const (
@@ -40,9 +41,9 @@ const (
 	bundleFixedFileCount = 8
 	// maxBundleFileCount bounds the raw tar header pre-check before the
 	// canonical inventory is known: the fixed files plus one entry per closed
-	// orchestration runtime. It must grow only alongside
-	// orchestrationRuntimeIdentities.
-	maxBundleFileCount = bundleFixedFileCount + 1
+	// orchestration runtime and one per closed routing runtime. It must grow
+	// only alongside orchestrationRuntimeIdentities and routingRuntimeIdentities.
+	maxBundleFileCount = bundleFixedFileCount + 1 + 1
 )
 
 var bundleTimestamp = time.Unix(0, 0).UTC()
@@ -61,6 +62,12 @@ var contractSemverIntroducingRuntimesField = contractSemverComponents{major: 1, 
 // applies: a bundle published before it never shipped an orchestration/*.md
 // file, so an empty inventory there is correct, not incomplete.
 var contractSemverIntroducingOrchestrationField = contractSemverComponents{major: 1, minor: 2, patch: 0}
+
+// contractSemverIntroducingRoutingField is the first contract_semver whose
+// manifest carries a "routing" inventory (CONTRACT_SEMVER 1.4.0). The same
+// backward-compatibility rule applies: a bundle published before it never
+// shipped a routing/*.md file, so an empty inventory there is correct.
+var contractSemverIntroducingRoutingField = contractSemverComponents{major: 1, minor: 4, patch: 0}
 
 type contractSemverComponents struct{ major, minor, patch int }
 
@@ -132,6 +139,10 @@ type orchestrationManifest struct {
 	File    fileReference `json:"file"`
 }
 
+// routingManifest shares the orchestration entry shape: one closed runtime and
+// its file reference.
+type routingManifest = orchestrationManifest
+
 type manifest struct {
 	Schema              string                  `json:"schema"`
 	ContractSemver      string                  `json:"contract_semver"`
@@ -140,6 +151,7 @@ type manifest struct {
 	README              fileReference           `json:"readme"`
 	Roles               []roleManifest          `json:"roles"`
 	Orchestration       []orchestrationManifest `json:"orchestration"`
+	Routing             []routingManifest       `json:"routing"`
 }
 
 // orchestrationRuntimeIdentities is deliberately closed, the same discipline
@@ -152,8 +164,9 @@ type manifest struct {
 // through an installed system prompt (issue #4056).
 var orchestrationRuntimeIdentities = []string{"pi"}
 
-// orchestrationEntry is one closed runtime's bound review execution contract,
-// materialized once so Generate and Verify read the exact same bytes.
+// orchestrationEntry is one closed runtime's bundled file (its bound review
+// execution contract or its routing block), materialized once so Generate and
+// Verify read the exact same bytes.
 type orchestrationEntry struct {
 	runtime string
 	content []byte
@@ -193,6 +206,35 @@ func canonicalOrchestrationEntries() ([]orchestrationEntry, error) {
 			}
 		}
 		entries = append(entries, orchestrationEntry{runtime: runtime, content: []byte(strings.TrimSpace(content) + "\n")})
+	}
+	return entries, nil
+}
+
+// routingRuntimeIdentities is closed like orchestrationRuntimeIdentities: a
+// runtime is added only when Gentle AI renders its ODD routing block but does
+// not install it, so this bundle is the block's sole channel. Pi is first:
+// Gentle Shell owns Pi's prompt and mirrors routing/pi.md into it.
+var routingRuntimeIdentities = []string{"pi"}
+
+// canonicalRoutingEntries renders the ODD routing block of every closed routing
+// runtime, in sorted runtime order, as the one source Generate and Verify read.
+func canonicalRoutingEntries() ([]orchestrationEntry, error) {
+	runtimes := slices.Clone(routingRuntimeIdentities)
+	sort.Strings(runtimes)
+	entries := make([]orchestrationEntry, 0, len(runtimes))
+	for index, runtime := range runtimes {
+		if index > 0 && runtimes[index-1] == runtime {
+			return nil, fmt.Errorf("%w: routing runtime %q is duplicated", errInvalidBundle, runtime)
+		}
+		agent := model.AgentID(runtime)
+		if !reviewerprovider.RegisteredRuntime(agent) {
+			return nil, fmt.Errorf("%w: routing runtime %q is not a registered review runtime", errInvalidBundle, runtime)
+		}
+		content, err := agentguidance.RenderRouting(agent)
+		if err != nil {
+			return nil, fmt.Errorf("%w: routing runtime %q: %v", errInvalidBundle, runtime, err)
+		}
+		entries = append(entries, orchestrationEntry{runtime: runtime, content: []byte(content)})
 	}
 	return entries, nil
 }
@@ -239,6 +281,13 @@ prompt, for a runtime whose adapter has no system prompt to splice it into.
 It carries no executable content, same as every other file in this bundle: a
 runtime mirrors and delivers the text as-is and still relies on Go for every
 review decision, prompt, receipt, and delivery gate.
+
+## Routing
+
+manifest.json's routing array lists, for closed runtimes only, one
+routing/<runtime>.md file: the exact ODD implementation-routing block Gentle
+AI renders for that runtime, whose prompt Gentle AI does not install. It is
+data only as well: a runtime mirrors and delivers the text as-is.
 
 Go remains the admission authority for prompts, results, receipts, and delivery gates.
 `)
@@ -327,6 +376,19 @@ func generatedFiles(contractSemver string) (map[string][]byte, error) {
 			File:    fileReference{Path: filePath, SHA256: hash(files[filePath])},
 		})
 	}
+	routingSources, err := canonicalRoutingEntries()
+	if err != nil {
+		return nil, err
+	}
+	routing := make([]routingManifest, 0, len(routingSources))
+	for _, entry := range routingSources {
+		filePath := path.Join("routing", entry.runtime+".md")
+		files[filePath] = entry.content
+		routing = append(routing, routingManifest{
+			Runtime: entry.runtime,
+			File:    fileReference{Path: filePath, SHA256: hash(files[filePath])},
+		})
+	}
 	manifestPayload, err := json.MarshalIndent(manifest{
 		Schema:              bundleSchema,
 		ContractSemver:      contractSemver,
@@ -335,12 +397,13 @@ func generatedFiles(contractSemver string) (map[string][]byte, error) {
 		README:              fileReference{Path: "README.md", SHA256: hash(files["README.md"])},
 		Roles:               roles,
 		Orchestration:       orchestration,
+		Routing:             routing,
 	}, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode manifest: %v", errInvalidBundle, err)
 	}
 	files["manifest.json"] = append(manifestPayload, '\n')
-	if want := bundleFixedFileCount + len(orchestrationSources); len(files) != want {
+	if want := bundleFixedFileCount + len(orchestrationSources) + len(routingSources); len(files) != want {
 		return nil, fmt.Errorf("%w: generated inventory has %d files, want %d", errInvalidBundle, len(files), want)
 	}
 	return files, nil
@@ -625,33 +688,28 @@ func validateEntries(entries map[string][]byte) error {
 		expected[schemaPath] = struct{}{}
 		expected[vectorPath] = struct{}{}
 	}
-	if contractSemverAtLeast(decoded.ContractSemver, contractSemverIntroducingOrchestrationField) {
-		orchestrationSources, err := canonicalOrchestrationEntries()
+	for _, inventory := range []struct {
+		name       string
+		introduced contractSemverComponents
+		decoded    []orchestrationManifest
+		canonical  func() ([]orchestrationEntry, error)
+	}{
+		{"orchestration", contractSemverIntroducingOrchestrationField, decoded.Orchestration, canonicalOrchestrationEntries},
+		{"routing", contractSemverIntroducingRoutingField, decoded.Routing, canonicalRoutingEntries},
+	} {
+		if !contractSemverAtLeast(decoded.ContractSemver, inventory.introduced) {
+			if len(inventory.decoded) != 0 {
+				return fmt.Errorf("%w: manifest %s inventory is not empty for a contract older than the field it names", errInvalidBundle, inventory.name)
+			}
+			continue
+		}
+		sources, err := inventory.canonical()
 		if err != nil {
 			return err
 		}
-		if len(decoded.Orchestration) != len(orchestrationSources) {
-			return fmt.Errorf("%w: manifest orchestration inventory is incomplete", errInvalidBundle)
+		if err := validateRuntimeFiles(entries, inventory.name, inventory.decoded, sources, expected); err != nil {
+			return err
 		}
-		for index, source := range orchestrationSources {
-			entry := decoded.Orchestration[index]
-			if index > 0 && decoded.Orchestration[index-1].Runtime >= entry.Runtime {
-				return fmt.Errorf("%w: manifest orchestration entries are not strictly sorted", errInvalidBundle)
-			}
-			if entry.Runtime != source.runtime {
-				return fmt.Errorf("%w: manifest orchestration runtime %q does not match the canonical registry", errInvalidBundle, entry.Runtime)
-			}
-			if !reviewerprovider.RegisteredRuntime(model.AgentID(entry.Runtime)) {
-				return fmt.Errorf("%w: manifest orchestration runtime %q is not a registered review runtime", errInvalidBundle, entry.Runtime)
-			}
-			filePath := path.Join("orchestration", entry.Runtime+".md")
-			if err := validateFileReference(entries, entry.File, filePath, source.content); err != nil {
-				return err
-			}
-			expected[filePath] = struct{}{}
-		}
-	} else if len(decoded.Orchestration) != 0 {
-		return fmt.Errorf("%w: manifest orchestration inventory is not empty for a contract older than the field it names", errInvalidBundle)
 	}
 	if len(entries) != len(expected) {
 		return fmt.Errorf("%w: archive inventory has %d files, want %d", errInvalidBundle, len(entries), len(expected))
@@ -660,6 +718,33 @@ func validateEntries(entries map[string][]byte) error {
 		if _, found := expected[name]; !found {
 			return fmt.Errorf("%w: archive has unexpected file %q", errInvalidBundle, name)
 		}
+	}
+	return nil
+}
+
+// validateRuntimeFiles checks one closed runtime-file inventory (orchestration
+// or routing): strictly sorted entries matching the canonical sources, each a
+// registered review runtime whose <name>/<runtime>.md bytes match exactly.
+func validateRuntimeFiles(entries map[string][]byte, name string, decoded []orchestrationManifest, sources []orchestrationEntry, expected map[string]struct{}) error {
+	if len(decoded) != len(sources) {
+		return fmt.Errorf("%w: manifest %s inventory is incomplete", errInvalidBundle, name)
+	}
+	for index, source := range sources {
+		entry := decoded[index]
+		if index > 0 && decoded[index-1].Runtime >= entry.Runtime {
+			return fmt.Errorf("%w: manifest %s entries are not strictly sorted", errInvalidBundle, name)
+		}
+		if entry.Runtime != source.runtime {
+			return fmt.Errorf("%w: manifest %s runtime %q does not match the canonical registry", errInvalidBundle, name, entry.Runtime)
+		}
+		if !reviewerprovider.RegisteredRuntime(model.AgentID(entry.Runtime)) {
+			return fmt.Errorf("%w: manifest %s runtime %q is not a registered review runtime", errInvalidBundle, name, entry.Runtime)
+		}
+		filePath := path.Join(name, entry.Runtime+".md")
+		if err := validateFileReference(entries, entry.File, filePath, source.content); err != nil {
+			return err
+		}
+		expected[filePath] = struct{}{}
 	}
 	return nil
 }
