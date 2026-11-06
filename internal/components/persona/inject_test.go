@@ -769,7 +769,9 @@ func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 
 func TestInjectAntigravityGentlemanWritesMarkedPersonaSection(t *testing.T) {
 	home := t.TempDir()
-	promptPath := filepath.Join(home, ".gemini", "GEMINI.md")
+	// Antigravity stages guidance outside GEMINI.md; antigravityrules
+	// publishes the marker sections as agy rules (#5676, #5608).
+	promptPath := antigravityAdapter().SystemPromptFile(home)
 	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -797,7 +799,7 @@ func TestInjectAntigravityGentlemanWritesMarkedPersonaSection(t *testing.T) {
 		"<!-- /gentle-ai:persona -->",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("GEMINI.md missing %q; got:\n%s", want, text)
+			t.Fatalf("staged prompt missing %q; got:\n%s", want, text)
 		}
 	}
 
@@ -815,6 +817,9 @@ func TestInjectAntigravityGentlemanWritesMarkedPersonaSection(t *testing.T) {
 	}
 	if got := strings.Count(string(content), "<!-- gentle-ai:persona -->"); got != 1 {
 		t.Fatalf("persona marker count = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gemini", "GEMINI.md")); !os.IsNotExist(err) {
+		t.Fatalf("Antigravity persona must not write GEMINI.md; stat err = %v", err)
 	}
 }
 
@@ -1646,7 +1651,7 @@ func TestInjectGeminiGentlemanWritesSystemPromptWithRealContent(t *testing.T) {
 		t.Fatal("Inject(gemini, gentleman) changed = false")
 	}
 
-	path := filepath.Join(home, ".gemini", "GEMINI.md")
+	path := geminiAdapter.SystemPromptFile(home)
 	content, readErr := os.ReadFile(path)
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q) error = %v", path, readErr)

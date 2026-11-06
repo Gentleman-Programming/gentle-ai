@@ -39,7 +39,7 @@ func userReadPNPMManifest(ctx context.Context, root string, manifest userManifes
 			identity = userOwnedIdentity
 		}
 		actual, err := identity(path)
-		if err != nil || actual != expected {
+		if err != nil || !userIdentityMatches(expected, actual) {
 			return fail(err)
 		}
 	}

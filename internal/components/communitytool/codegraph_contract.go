@@ -114,6 +114,12 @@ func codeGraphToolWiringPaths(homeDir string, adapter agents.Adapter) []string {
 	}
 }
 
+// userPinnedCodeGraphDetector reports CodeGraph wiring the user pinned to a
+// fixed project; it is configured by the user rather than managed wiring.
+type userPinnedCodeGraphDetector interface {
+	PinnedCodeGraphPath(homeDir string) (path string, pinned bool)
+}
+
 func hasCodeGraphToolWiring(homeDir string, adapter agents.Adapter) (string, bool) {
 	if adapter.Agent() == model.AgentClaudeCode {
 		path := filepath.Join(homeDir, ".claude.json")
@@ -129,7 +135,15 @@ func hasCodeGraphToolWiring(homeDir string, adapter agents.Adapter) (string, boo
 		return path, err == nil && hasCanonicalAntigravityCodeGraphServer(data)
 	}
 	if detector, ok := adapter.(agents.EffectiveCodeGraphWiringDetector); ok {
-		return detector.EffectiveCodeGraphWiring(homeDir)
+		if path, configured := detector.EffectiveCodeGraphWiring(homeDir); configured {
+			return path, true
+		}
+		// A pinned project path is user configuration: count it as configured so
+		// install, status, guidance, and sync never repair or rewrite it.
+		if pinned, ok := adapter.(userPinnedCodeGraphDetector); ok {
+			return pinned.PinnedCodeGraphPath(homeDir)
+		}
+		return "", false
 	}
 	for _, path := range codeGraphToolWiringPaths(homeDir, adapter) {
 		data, err := os.ReadFile(path)

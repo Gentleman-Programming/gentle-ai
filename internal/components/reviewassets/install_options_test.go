@@ -93,6 +93,8 @@ func TestNativeAgentOwnedModelUpdates(t *testing.T) {
 		{model.AgentClaudeCode, "jd-judge-a.md", reviewassets.InstallOptions{ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{"jd-judge-a": {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortHigh}}}, "effort: high"},
 		{model.AgentClaudeCode, "jd-judge-a.md", reviewassets.InstallOptions{ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{"jd-judge-a": {Model: model.ClaudeModelSonnet, Effort: model.ClaudeEffortXHigh}}}, "effort: xhigh"},
 		{model.AgentKiroIDE, "jd-judge-a.md", reviewassets.InstallOptions{KiroModelAssignments: map[string]model.KiroModelAlias{"jd-judge-a": model.KiroModelOpus}}, "model: claude-opus"},
+		{model.AgentAntigravity, "jd-judge-a.md", reviewassets.InstallOptions{AntigravityModelAssignments: map[string]model.AntigravityModelTier{"jd-judge-a": model.AntigravityModelPro}}, "\nmodel: pro\n"},
+		{model.AgentAntigravity, "jd-fix-agent.md", reviewassets.InstallOptions{AntigravityModelAssignments: map[string]model.AntigravityModelTier{"jd-fix-agent": model.AntigravityModelFlashLite}}, "\nmodel: flash_lite\n"},
 	} {
 		t.Run(string(tc.agent), func(t *testing.T) {
 			adapter, err := agents.NewAdapter(tc.agent)
@@ -122,6 +124,51 @@ func TestNativeAgentOwnedModelUpdates(t *testing.T) {
 			ledger := readOwnershipLedger(t, filepath.Join(adapter.SubAgentsDir(home), reviewassets.OwnershipLedgerFilename))
 			if ledger.Files[tc.name] != fmt.Sprintf("%x", sha256.Sum256(after)) {
 				t.Fatal("model update hash does not match installed bytes")
+			}
+		})
+	}
+}
+
+// Engram reaches Claude Code under two namespaces: the user-scope MCP server
+// registered by `engram setup claude-code` (mcp__engram__*) and the older
+// plugin-namespaced one (mcp__plugin_engram_engram__*). Assets declare Engram
+// tools through {{ENGRAM_TOOL_PREFIX}} so both are granted; a template that
+// hardcodes one namespace silently strips the agents' Engram access.
+func TestClaudeAgentsGrantBothEngramNamespaces(t *testing.T) {
+	adapter, err := agents.NewAdapter(model.AgentClaudeCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	if _, err := reviewassets.InstallNativeAgents(home, adapter, reviewassets.InstallOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"jd-judge-a.md", "jd-judge-b.md", "jd-fix-agent.md"} {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(adapter.SubAgentsDir(home), name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rendered := string(data)
+			if strings.Contains(rendered, "ENGRAM_TOOL_PREFIX") {
+				t.Fatal("unrendered Engram tool placeholder shipped to the runtime")
+			}
+			var tools string
+			for _, line := range strings.Split(rendered, "\n") {
+				if strings.HasPrefix(line, "tools:") {
+					tools = line
+				}
+			}
+			if tools == "" {
+				t.Fatal("agent grants no tools line")
+			}
+			for _, tool := range []string{"mem_search", "mem_get_observation"} {
+				if !strings.Contains(tools, "mcp__engram__"+tool) {
+					t.Errorf("%s missing user-scope mcp__engram__%s: %s", name, tool, tools)
+				}
+				if !strings.Contains(tools, "mcp__plugin_engram_engram__"+tool) {
+					t.Errorf("%s missing plugin-scoped mcp__plugin_engram_engram__%s: %s", name, tool, tools)
+				}
 			}
 		})
 	}
