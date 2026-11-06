@@ -776,11 +776,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 	case model.StrategySeparateMCPFiles:
 		if adapter.Agent() == model.AgentClaudeCode && userScope {
 			result, err := injectClaudeUserConfig(configHomeDir, adapter)
-			if err != nil {
-				return InjectionResult{}, err
-			}
+			// A landed mutation is reported even alongside the error: the managed
+			// legacy config is deleted before its empty parent is pruned.
 			changed = changed || result.Changed
 			files = append(files, result.Files...)
+			if err != nil {
+				return InjectionResult{Changed: changed, Files: files}, err
+			}
 			break
 		}
 		// Engram v1.10.3+ writes an absolute path for the command field when
@@ -1099,7 +1101,14 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	}
 	removed, err := RemoveManagedLegacyClaudeConfig(legacyPath)
 	if err != nil {
-		return InjectionResult{}, err
+		// The managed legacy file is deleted before its empty parent is pruned,
+		// so a prune failure still lands a mutation. Report the removed path
+		// alongside the error instead of claiming nothing changed.
+		if removed {
+			result.Changed = true
+			result.Files = append(result.Files, legacyPath)
+		}
+		return result, err
 	}
 	if !removed {
 		return result, nil
