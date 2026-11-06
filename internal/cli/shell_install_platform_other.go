@@ -30,6 +30,9 @@ func shellInstallPlatformFlags(flags *flag.FlagSet, _ *shellinstaller.UserInstal
 }
 
 func shellEntryValues(req shellinstaller.UserInstallRequest) []string {
+	if req.Experience != nil {
+		return nil // Unsupported preferences must never become legacy worker arguments.
+	}
 	return []string{req.Destination, req.Mode, req.SharedPrefix, req.SharedAgent, req.Confirmation}
 }
 
@@ -43,15 +46,18 @@ func shellInstallInspected(stdout io.Writer, req shellinstaller.UserInstallReque
 }
 
 func runShellInstallTUI(ctx context.Context, cancel context.CancelFunc, self string, stdout io.Writer) error {
-	model := shellInstallModel{cancel: cancel, req: shellinstaller.UserInstallRequest{Mode: "separate"}}
+	model := NewShellInstallModel(cancel)
 	final, err := tea.NewProgram(model, tea.WithInput(os.Stdin), tea.WithOutput(stdout)).Run()
 	if err != nil {
 		return err
 	}
-	selection := final.(shellInstallModel)
-	if !selection.confirmed {
-		return selection.err
+	selection, err := ShellInstallOutcome(final)
+	if err != nil || !selection.Confirmed {
+		return err
+	}
+	if err := shellinstaller.RootRiskGate(); err != nil {
+		return err
 	}
 	// Run only after Bubble Tea has restored the terminal and released stdin.
-	return shellinstaller.RunUserEntry(ctx, self, append([]string{"install"}, shellEntryValues(selection.req)...), os.Stdin, stdout, os.Stderr)
+	return shellinstaller.RunUserEntry(ctx, self, ShellInstallArguments(selection), os.Stdin, stdout, os.Stderr)
 }

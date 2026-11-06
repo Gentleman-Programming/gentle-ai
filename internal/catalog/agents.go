@@ -23,7 +23,7 @@ var allAgents = []Agent{
 	{ID: model.AgentCodex, Name: "Codex", Tier: model.TierFull, ConfigPath: "~/.codex"},
 	{ID: model.AgentCursor, Name: "Cursor", Tier: model.TierFull, ConfigPath: "~/.cursor"},
 	{ID: model.AgentVSCodeCopilot, Name: "VS Code Copilot", Tier: model.TierFull, ConfigPath: "~/.copilot"},
-	{ID: model.AgentAntigravity, Name: "Google Antigravity", Tier: model.TierFull, ConfigPath: "~/.gemini/antigravity-cli"},
+	{ID: model.AgentAntigravity, Name: "Google Antigravity", Tier: model.TierFull, ConfigPath: "~/.gemini/config"},
 	{ID: model.AgentWindsurf, Name: "Windsurf", Tier: model.TierFull, ConfigPath: "~/.codeium/windsurf"},
 	{ID: model.AgentKimi, Name: "Kimi Code", Tier: model.TierFull, ConfigPath: "~/.kimi-code (or legacy ~/.kimi)"},
 	{ID: model.AgentQwenCode, Name: "Qwen Code", Tier: model.TierFull, ConfigPath: "~/.qwen"},
@@ -32,6 +32,7 @@ var allAgents = []Agent{
 	{ID: model.AgentPi, Name: "Pi", Tier: model.TierFull, ConfigPath: "~/.pi"},
 	{ID: model.AgentTrae, Name: "Trae IDE", Tier: model.TierFull, ConfigPath: "~/.trae"},
 	{ID: model.AgentHermes, Name: "Hermes", Tier: model.TierFull, ConfigPath: "~/.hermes"},
+	{ID: model.AgentGitHubCopilotCLI, Name: "GitHub Copilot CLI", Tier: model.TierFull, ConfigPath: "~/.copilot"},
 	// Conductor is detection/catalog-only: its workspaces inherit Claude Code
 	// configuration, and Gentle AI writes no Conductor-specific files. The note
 	// sets that expectation before the user confirms the install.

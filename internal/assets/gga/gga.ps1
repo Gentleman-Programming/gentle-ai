@@ -5,7 +5,7 @@ if (-not $gitCmd) {
 }
 $gitDir = Split-Path $gitCmd.Source
 $gitRoot = Split-Path $gitDir
-if ((Split-Path $gitDir -Leaf) -ieq "bin" -and (Split-Path $gitRoot -Leaf) -ieq "mingw64") {
+if ((Split-Path $gitDir -Leaf) -ieq "bin" -and (Split-Path $gitRoot -Leaf) -in @("mingw64", "ucrt64", "clang64")) {
     $gitRoot = Split-Path $gitRoot
 }
 

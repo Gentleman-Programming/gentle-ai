@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/gemini"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
@@ -79,6 +81,11 @@ func TestMain(m *testing.M) {
 	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
 		return runtimeopencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
 	}
+	// The Codex GPT-5.6 runtime check shells out to `codex --version` on its
+	// own exec boundary, past every LookPathOverride. Pin a supported version
+	// so a missing, broken, or older host codex never decides these tests;
+	// tests that exercise the requirement set their own probe.
+	_ = codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil)
 	// Subprocess stand-in (#4434 regression): re-executed with the CLI
 	// arguments of an emitted continuation command, this test binary must
 	// run the real CLI dispatch (flag parsing, agent selection, sync
@@ -137,6 +144,10 @@ func TestMain(m *testing.M) {
 	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
 		panic(err)
 	}
+	// Go derives its module and build caches from HOME. Pin them to the
+	// developer's existing caches before HOME moves, so tests that build the
+	// real CLI (TestCursorJudgmentDayCLISmoke) never need the network.
+	pinGoCachesBeforeHomeIsolation()
 	testHome, err := os.MkdirTemp("", "gentle-ai-cli-test-home-*")
 	if err != nil {
 		panic(err)
@@ -185,4 +196,22 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(testHome)
 	os.Exit(code)
+}
+
+// pinGoCachesBeforeHomeIsolation keeps explicit GOPATH/GOMODCACHE/GOCACHE
+// values and otherwise records Go's HOME-derived defaults as explicit values,
+// so swapping HOME for a temporary directory does not empty the caches.
+func pinGoCachesBeforeHomeIsolation() {
+	if home, err := os.UserHomeDir(); err == nil && os.Getenv("GOPATH") == "" {
+		if err := os.Setenv("GOPATH", filepath.Join(home, "go")); err != nil {
+			panic(err)
+		}
+	}
+	if os.Getenv("GOCACHE") == "" {
+		if cache, err := os.UserCacheDir(); err == nil {
+			if err := os.Setenv("GOCACHE", filepath.Join(cache, "go-build")); err != nil {
+				panic(err)
+			}
+		}
+	}
 }

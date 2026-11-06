@@ -57,7 +57,7 @@ A `stop` ends its transition, never approves delivery. `D` means the human disab
 | `correction_context_budget_exceeded` | Terminal: this authority has to be released rather than left in place, and invalidation refuses here. The maintainer runs the release command the stop's `continuation` names, exactly as printed; it is the preparatory step its `detail` describes, and its refusal prints the binding the full release needs. A stop with no `continuation` means the authority is not releasable in its current state: the maintainer inspects it, or `D`. Then review as smaller candidates, or `D`. |
 | `managed_assets_outdated` | Run the `gentle-ai sync` command from the stop's `continuation`, then `S`. |
 | `staged_workspace_overlay_recovery_unavailable` | Call facade `recover` with the retained `lineageId`, or start a fresh transaction; otherwise `D`. |
-| `corrected_candidate_unavailable` | Change the correction candidate, then `S`; do not reuse the pre-correction target. |
+| `corrected_candidate_unavailable` | Change the correction candidate, then `S`. For committed-only review, commit or amend the bounded correction; unrelated tracked worktree edits are ignored. Do not recapture the accepted forecast or reuse the pre-correction target. |
 | `correction_repository_verification_failed` | Change the correction candidate within the same open budget, then `S`. |
 | `original_finalize_request_required` | Run the exact original-finalize replay bound to the stop. |
 | `staged_delivery_candidate_required` | Stage every reviewed path exactly as reviewed, then `S`. |

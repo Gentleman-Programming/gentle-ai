@@ -477,7 +477,11 @@ func TestCodexAdapterProbeConfinementComparesCanonicalPathsNotPrefixes(t *testin
 	if _, err := codexProbeAdapterForTest(t, &commandArguments).Review(context.Background(), invocation); err != nil {
 		t.Fatalf("probe with a prefix-sharing sibling temp dir: %v", err)
 	}
-	if relative, err := filepath.Rel(sibling, materialized); err != nil || strings.HasPrefix(relative, "..") {
+	canonicalSibling, err := filepath.EvalSymlinks(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relative, err := filepath.Rel(canonicalSibling, materialized); err != nil || strings.HasPrefix(relative, "..") {
 		t.Fatalf("probe scratch %q is not under the sibling temp dir %q", materialized, sibling)
 	}
 

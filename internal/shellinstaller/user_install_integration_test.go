@@ -6,10 +6,56 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+// The provision scripts stay the source of truth for the network-bound npm
+// budget (NPM_NETWORK_TIMEOUT). The shellinstaller deadline bounds mirror
+// that value; this parser keeps the mirror honest without duplicating drift.
+func userScriptsNpmNetworkTimeout(t *testing.T) time.Duration {
+	t.Helper()
+	pattern := regexp.MustCompile(`NPM_NETWORK_TIMEOUT = (\d+);`)
+	timeout := time.Duration(0)
+	for _, script := range []string{
+		"scripts/provision-gentle-shell-windows.mjs",
+		"scripts/provision-gentle-shell-private-global.mjs",
+	} {
+		data, err := os.ReadFile(filepath.Join("..", "..", script))
+		if err != nil {
+			t.Fatalf("read %s: %v", script, err)
+		}
+		match := pattern.FindSubmatch(data)
+		if match == nil {
+			t.Fatalf("NPM_NETWORK_TIMEOUT not declared in %s", script)
+		}
+		ms, err := strconv.ParseInt(string(match[1]), 10, 64)
+		if err != nil {
+			t.Fatalf("parse NPM_NETWORK_TIMEOUT in %s: %v", script, err)
+		}
+		if timeout == 0 {
+			timeout = time.Duration(ms) * time.Millisecond
+		} else if time.Duration(ms)*time.Millisecond != timeout {
+			t.Fatalf("NPM_NETWORK_TIMEOUT diverges between provision scripts: %s vs %s", script, "previous")
+		}
+	}
+	return timeout
+}
+
+// Both provision scripts must keep declaring the same network-bound npm
+// budget; a divergence means one install channel can hang twice as long as
+// the other before any external deadline fires.
+func TestProvisionScriptsDeclareSharedNpmNetworkTimeout(t *testing.T) {
+	if userScriptsNpmNetworkTimeout(t) <= 0 {
+		t.Fatal("provision scripts declare no positive NPM_NETWORK_TIMEOUT")
+	}
+}
 
 // Linux and Windows share one package; the internal entry must never accept
 // a selector that the running platform would silently drop.

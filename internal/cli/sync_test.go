@@ -2214,6 +2214,114 @@ func TestSyncBackupTargetsOpenClawSkillsUseGlobalRoot(t *testing.T) {
 	}
 }
 
+func TestCodeGraphGuidanceSyncStepNativePreservation(t *testing.T) {
+	for _, tt := range []struct {
+		name, entry string
+		wantError   bool
+	}{
+		{"no watch", `{"type":"local","command":["codegraph","serve","--mcp","--no-watch"]}`, false},
+		{"invalid native", `{"type":"local","command":["wrong-program","serve","--mcp"]}`, true},
+		{"disabled native", `{"type":"local","command":["codegraph","serve","--mcp"],"disabled":true}`, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", "")
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+			agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+			settingsBefore := "{\n// keep native comment\n\"userMetadata\":\"keep\",\"mcp\":{\"codegraph\":{\"type\":\"local\",\"command\":[\"codegraph\",\"serve\",\"--mcp\"]},\"servers\":{\"codegraph\":" + tt.entry + "}}}\n"
+			guidanceBefore := "custom notes\n<!-- gentle-ai:codegraph-guidance -->\nstale\n<!-- /gentle-ai:codegraph-guidance -->\n"
+			mustWriteFile(t, settingsPath, []byte(settingsBefore))
+			mustWriteFile(t, agentsPath, []byte(guidanceBefore))
+			restoreLookPath := cmdLookPath
+			t.Cleanup(func() { cmdLookPath = restoreLookPath })
+			cmdLookPath = func(string) (string, error) { return "/bin/codegraph", nil }
+			calls := 0
+			var changed []string
+			step := codeGraphGuidanceSyncStep{
+				id:      "sync:community-tool:codegraph-guidance",
+				homeDir: home,
+				runner: communitytool.RunnerFunc(func(string, ...string) error {
+					calls++
+					return nil
+				}),
+				changedFiles: &changed,
+			}
+			err := step.Run()
+			if tt.wantError {
+				if err == nil {
+					t.Error("Run() must refuse unmet native wiring")
+				} else {
+					for _, want := range []string{settingsPath, "mcp.servers.codegraph"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("Run() diagnostic %q missing %q", err, want)
+						}
+					}
+				}
+				if len(changed) != 0 {
+					t.Errorf("failed native reconcile reported changes: %v", changed)
+				}
+				body, readErr := os.ReadFile(agentsPath)
+				if readErr != nil || string(body) != guidanceBefore {
+					t.Errorf("failed Run() did not preserve guidance: %q, error=%v", body, readErr)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Run() valid no-watch native wiring: %v", err)
+				}
+				if !reflect.DeepEqual(changed, []string{agentsPath}) {
+					t.Errorf("changed files = %v, want only guidance %q", changed, agentsPath)
+				}
+			}
+			if calls != 0 {
+				t.Errorf("native sync called installer %d times, want zero", calls)
+			}
+			body, readErr := os.ReadFile(settingsPath)
+			if readErr != nil || string(body) != settingsBefore {
+				t.Fatalf("Run() changed native config bytes: %q, error=%v", body, readErr)
+			}
+			if err := step.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+			for path, want := range map[string]string{settingsPath: settingsBefore, agentsPath: guidanceBefore} {
+				body, readErr := os.ReadFile(path)
+				if readErr != nil || string(body) != want {
+					t.Errorf("Rollback() did not restore %q: %q, error=%v", path, body, readErr)
+				}
+			}
+		})
+	}
+}
+
+func TestCodeGraphGuidanceSyncStepSkipsPinnedNativePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	settingsBefore := "{\n// pinned project stays user-owned\n\"mcp\":{\"servers\":{\"codegraph\":{\"type\":\"local\",\"command\":[\"codegraph\",\"serve\",\"--mcp\",\"--path\",\"/other\"]}}}}\n"
+	mustWriteFile(t, settingsPath, []byte(settingsBefore))
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+	cmdLookPath = func(string) (string, error) { return "/bin/codegraph", nil }
+	calls := 0
+	step := codeGraphGuidanceSyncStep{
+		id:      "sync:community-tool:codegraph-guidance",
+		homeDir: home,
+		runner: communitytool.RunnerFunc(func(string, ...string) error {
+			calls++
+			return nil
+		}),
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() with pinned native path: %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("pinned native path called installer %d times, want zero", calls)
+	}
+	body, err := os.ReadFile(settingsPath)
+	if err != nil || string(body) != settingsBefore {
+		t.Fatalf("Run() changed pinned native config bytes: %q, error=%v", body, err)
+	}
+}
+
 func TestCodeGraphGuidanceSyncStepRefreshesOldMarkerWhenConfigured(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -4641,6 +4749,7 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 			"review-risk": "glm",
 			"default":     "auto",
 		},
+		AntigravityModelAssignments: map[string]string{"jd-fix-agent": "flash_lite", "jd-judge-a": "ultra"},
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"review-risk": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
@@ -4669,6 +4778,9 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	}
 	if got := result.Selection.KiroModelAssignments["default"]; got != model.KiroModelAuto {
 		t.Errorf("KiroModelAssignments[default] = %q, want %q", got, model.KiroModelAuto)
+	}
+	if got, want := result.Selection.AntigravityModelAssignments, (map[string]model.AntigravityModelTier{"jd-fix-agent": model.AntigravityModelFlashLite}); !reflect.DeepEqual(got, want) {
+		t.Errorf("AntigravityModelAssignments = %v, want %v (unknown tiers dropped)", got, want)
 	}
 
 	// OpenCode assignments must be loaded.
@@ -5967,6 +6079,25 @@ func TestRenderSyncReportIncludesChangedFilePaths(t *testing.T) {
 	}
 }
 
+// TestRenderSyncReportNoOpManualActionWording preserves ordinary no-op output
+// and uses neutral guidance without hiding action-specific recovery details.
+func TestRenderSyncReportNoOpManualActionWording(t *testing.T) {
+	action := nativeReviewPreservedAction("/managed/jd-judge-a.md")
+	for _, manual := range []bool{false, true} {
+		result := SyncResult{NoOp: true, Agents: []model.AgentID{model.AgentOpenCode}}
+		want := "gentle-ai sync — no managed sync actions needed\nAgents: opencode\n"
+		if manual {
+			result.ManualActions = []string{action}
+			want += "No managed files changed; review the manual actions below.\nManual actions required:\n- " + action
+		} else {
+			want += "All managed assets are already up to date. No files changed."
+		}
+		if got := RenderSyncReport(result); got != want {
+			t.Fatalf("manual=%v report = %q, want %q", manual, got, want)
+		}
+	}
+}
+
 // TestRenderSyncReportNoOpOmitsChangedFilePaths verifies that RenderSyncReport
 // does not list individual file path bullets in the no-op case.
 func TestRenderSyncReportNoOpOmitsChangedFilePaths(t *testing.T) {
@@ -7256,7 +7387,7 @@ func TestPostSyncVerificationRequiresEveryRetiredPluginRemoved(t *testing.T) {
 	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "sdd-task-result-artifacts.ts")
 	mustWriteFile(t, stale, []byte("stale"))
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
-	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	report := runPostSyncVerificationWithState(home, t.TempDir(), ScopeGlobal, selection, nil)
 	for _, check := range report.Checks {
 		if check.ID == "verify:sync:file:"+stale {
 			if check.Status != verify.CheckStatusFailed {
@@ -7277,7 +7408,7 @@ func TestPostSyncVerificationRequiresKilocodeRetiredPluginRemoved(t *testing.T) 
 	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "background-agents.ts")
 	mustWriteFile(t, stale, []byte("stale"))
 	selection := model.Selection{Agents: []model.AgentID{model.AgentKilocode}}
-	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	report := runPostSyncVerificationWithState(home, t.TempDir(), ScopeGlobal, selection, nil)
 	for _, check := range report.Checks {
 		if check.ID == "verify:sync:file:"+stale {
 			if check.Status != verify.CheckStatusFailed {

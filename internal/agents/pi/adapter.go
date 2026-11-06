@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
@@ -75,6 +76,26 @@ func ManagedPackageSources() []string {
 	return slices.Clone(managedPackageSources)
 }
 
+// ValidateExcludedPackageSources accepts only exact managed sources a caller
+// may skip at install time. The Engram source is required by the stack.
+func ValidateExcludedPackageSources(values []string) error {
+	allowed := make([]string, 0, len(managedPackageSources))
+	for _, source := range managedPackageSources {
+		if source != piGentleEngramPackageSource {
+			allowed = append(allowed, source)
+		}
+	}
+	for _, value := range values {
+		if value == piGentleEngramPackageSource {
+			return fmt.Errorf("package %q cannot be excluded: it provides Engram memory for the Pi stack", value)
+		}
+		if !slices.Contains(allowed, value) {
+			return fmt.Errorf("unknown Pi package %q; allowed values: %s", value, strings.Join(allowed, ", "))
+		}
+	}
+	return nil
+}
+
 // UninstallPackageSources returns every Pi package source an uninstall should
 // remove: the managed sources plus the retired pi-mcp-adapter, which older
 // Gentle AI releases installed and which may still be present.
@@ -109,10 +130,10 @@ type CodeGraphPathSet struct {
 // cross-contamination with the default global Pi manifest.
 func CodeGraphPaths(homeDir string) CodeGraphPathSet {
 	agentDir := AgentConfigPath(homeDir)
-	manifest := filepath.Join(homeDir, ".gentle-ai", "pi-codegraph.json")
+	manifest := filepath.Join(state.Dir(homeDir), "pi-codegraph.json")
 	if defaultDir := filepath.Join(ConfigPath(homeDir), "agent"); filepath.Clean(agentDir) != filepath.Clean(defaultDir) {
 		sum := sha256.Sum256([]byte(filepath.Clean(agentDir)))
-		manifest = filepath.Join(homeDir, ".gentle-ai", fmt.Sprintf("pi-codegraph-%x.json", sum[:8]))
+		manifest = filepath.Join(state.Dir(homeDir), fmt.Sprintf("pi-codegraph-%x.json", sum[:8]))
 	}
 	return CodeGraphPathSet{
 		AgentDir:  agentDir,
@@ -293,11 +314,15 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 // PrepareInstall preserves the configured Engram source before Pi can replace
 // it. Compatible duplicates are normalized; conflicting declarations abort
 // without writes. The caller must snapshot settings before this preparation.
-func (a *Adapter) PrepareInstall(profile system.PlatformProfile, homeDir string) ([][]string, error) {
+// Excluded sources (validated by ValidateExcludedPackageSources) are skipped.
+func (a *Adapter) PrepareInstall(profile system.PlatformProfile, homeDir string, excluded ...string) ([][]string, error) {
 	commands, err := a.InstallCommand(profile)
 	if err != nil {
 		return nil, err
 	}
+	commands = slices.DeleteFunc(commands, func(command []string) bool {
+		return slices.Contains(excluded, command[2])
+	})
 	settings, packages, source, err := a.readInstallSettings(homeDir)
 	if err != nil {
 		return nil, err

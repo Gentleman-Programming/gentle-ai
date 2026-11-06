@@ -23,6 +23,23 @@ ODD (Organic Driven Development) is shared routing guidance, not a separate comp
 
 > **Since v4.0.0:** the SDD (Spec-Driven Development) component and its `sdd-*` skills are retired in favor of ODD. A legacy `sdd` selection persisted in state is still read, but install and sync no longer write its assets. A global install or sync also removes the native `sdd-*` sub-agents earlier releases rendered for Claude Code, Kiro, Cursor, and Kimi, proven by comparing each file with every released template; edited files are preserved and reported as manual actions. A Kimi `gentleman.yaml` inherited from v3.x declares every SDD subagent by path: when its bytes match a release, sync rewrites it first so the cleanup completes; when it was edited, sync keeps every SDD agent it references and reports one manual action naming it. For OpenCode and Kilocode, install and sync remove the `sdd-*` agent entries (including profile copies and the 3.7.0 plural `agents` map) and the `prompts/sdd/` files releases wrote; see [OpenCode compatibility](opencode-compatibility.md). For every runtime except Pi, install and sync also remove the retired `sdd-*` skills, the shared `_shared/sdd-*.md` and `_shared/openspec-convention.md` references (including the shared `~/.agents/skills` root outside Windows), the `/sdd-*` and `/gentle-sdd-*` slash commands, and the Claude Code `PreToolUse` hook that runs the removed `gentle-ai sdd-preflight-hook` command, each only when it matches what a release wrote. A workspace-scoped sync handles the workspace copies, including the Windsurf `.windsurf/workflows/sdd-new.md` workflow. An edited SDD skill keeps its whole directory and the shared SDD references it reads. A skills, skill, or `_shared` directory that is a symlink is never entered, and Claude Code settings that are a symlink or not strict JSON are never rewritten; both are reported with the exact file or hook to remove. Claude Code's `_shared/sdd-orchestrator-workflow.md` was rendered per installation: it is removed when it matches what a release's own writer renders with no model assignments or with one of that release's model presets, and kept and reported otherwise, for example when it carries model assignments you customized. For Codex, install and sync remove the `sdd-strong`, `sdd-mid`, and `sdd-cheap` `.config.toml` profiles when they hold exactly what a release wrote (only the `model` and `model_reasoning_effort` values may differ); a profile with anything else, including a profile left by downgrading to v1.36–v1.38, is kept and reported. They also remove the `<!-- gentle-ai:sdd-orchestrator -->` block from the lowercase `~/.codex/agents.md` that v1.7.10 to v1.31.0 wrote, when it is a separate file from `AGENTS.md`; a file that held only the block is left empty. For Kimi, they remove `~/.kimi/sdd-orchestrator.md` when it matches a release's render and the exact `{% include "sdd-orchestrator.md" ignore missing %}` line from `~/.kimi/KIMI.md`. A workspace-scoped sync retires the same Codex and Kimi files a workspace-scoped install wrote under the project and, since it refreshes no routing guidance for Claude Code or Codex, removes the v3.7.0 SDD orchestrator block from their project prompt files. Only one block whose markers each fill a line is removed; a file with an unmatched, repeated, or nested marker is kept unchanged and reported. Prompt files that are symlinks, or that sit in a symlinked `~/.codex` or `~/.kimi`, are never rewritten and are reported. Removed files are captured in the sync backup.
 
+## Claude Code permission customization
+
+For Claude Code, the `permissions` component seeds `permissions.deny` only when
+that key is absent. Later installs or permission-enabled syncs preserve an existing
+list, including its order and an explicit empty list (`[]`), without appending
+managed defaults. Other permission settings retain their existing merge behavior.
+
+Edit `~/.claude/settings.json` to customize the deny list. Remove the `deny` key
+and rerun `gentle-ai install --agent claude-code --component permissions` to restore
+the current default list. An empty list disables these default deny guardrails;
+it does not request a reset.
+
+The default `.env.*` rules are unchanged and still match `.env.schema` and
+`.env.example`. Existing default lists are not automatically narrowed. Preserving
+custom rules does not establish that files named as schemas or examples are
+secret-free.
+
 ## Explicit install modifiers
 
 Explicit `--persona` and `--skill` / `--skills` options require their consumer
@@ -62,6 +79,14 @@ This first delivery covers the 15 non-Pi primary instruction carriers, not every
 
 `gentle-ai install --component gga` installs/provisions the `gga` binary globally on your machine.
 
+Install and sync preserve an existing literal `PROVIDER`, including custom/future names such as `ollama:my-model`, regardless of selected agents. Only a missing provider is initialized from known mappings, in priority order: Claude Code → `claude`, OpenCode → `opencode`, Gemini CLI / Antigravity → `gemini`, Codex → `codex`.
+
+With only unmapped agents (for example Pi or Cursor), or an empty agent selection, an existing literal provider leaves the **entire config byte-for-byte unchanged**, including custom patterns, timeout, comments and formatting. No provider change is needed. Mapped selections still regenerate the managed defaults while preserving the literal provider; this is not a general config merge.
+
+If no provider is configured and no mapping exists, the config stays unchanged or absent; guidance asks you to set a literal provider or select a mapped agent. Runtime assets and the starter `AGENTS.md` can still refresh in either case. GGA notices appear once in CLI output or in the TUI completion screen's manual actions, not as stray TUI stderr.
+
+GGA config is shell-sourced, but Gentle AI never sources or evaluates it. It recognizes simple standalone literal assignments (optionally `export`) and comments. Ambiguous, dynamic, malformed, duplicate, or unsupported syntax preserves the **entire config byte-for-byte**, with guidance even on repeat/no-op syncs. For example, `PROVIDER='ollama:my-model'` is literal; `PROVIDER="$MODEL"` and `PROVIDER=$(choose-provider)` require manual simplification. Unreadable config is an error, not permission to replace it. Other managed config defaults continue to refresh when the config is safe to update.
+
 It does **not** run project-level hook setup automatically (`gga init` / `gga install`) because that should be an explicit decision per repository.
 
 After global install, enable GGA per project with:
@@ -81,11 +106,23 @@ Community Tools are opt-in and are not included by presets or automatic detectio
 |---|---|---|
 | CodeGraph | Installs its CLI and configures supported agent MCP/guidance integration. | Use CodeGraph’s upstream lifecycle commands. |
 
+### OpenCode CodeGraph wiring
+
+Existing native `mcp.servers.codegraph` wiring is preserved byte-for-byte, including JSONC comments. A local string-array command may use `codegraph serve --mcp`, an absolute `codegraph` executable path (including Windows `.exe`/`.cmd`), and the supported `--no-watch` option.
+
+An entry, native or legacy `mcp.codegraph`, whose local `codegraph serve --mcp` command pins a project with a non-empty `--path <directory>`, `--path=<directory>`, or `-p <directory>` serves that fixed project regardless of the client's workspace, so it is not managed wiring. Install, status, and sync treat it as configured by the user: they never run the installer, fail, or rewrite that entry, whatever its enable flags. A pin that is not a valid CodeGraph serve command (another program, a non-local type, or a missing or empty path value) still gets the native diagnostic or the legacy installer path.
+
+When both `opencode.jsonc` and `opencode.json` exist, the CodeGraph entry in JSONC takes priority; JSON is consulted only if JSONC has no CodeGraph entry. An invalid or disabled higher-priority entry never falls back to the lower-priority file.
+
+If a native entry is disabled or has an unsupported type or command, sync stops and names the configuration path, key, and unmet condition instead of repeatedly invoking a legacy installer. Correct unsupported wiring to complete sync. For a disabled native entry, enable or remove that entry to complete sync; leaving it disabled keeps sync blocked. Disabled native entries never fall back to legacy wiring. Missing or ineffective legacy-only wiring still uses CodeGraph's upstream installer.
+
 ### CodeGraph initialization workspace
 
 For project initialization, the explicit agent working directory is the target—not an enclosing Git repository. Check its local `.git` (directory or worktree file) and `.codegraph/` first. Ancestor Git-root discovery is only appropriate for an already-selected existing repository.
 
 `gentle-ai codegraph init --cwd <project-root>` requires that target to be a Git root and rejects unsafe locations. For a new nested project without local Git, initialize Git there first (`git -C <project-root> init`) as part of the requested project setup, then retry CodeGraph initialization at the same target. Do not substitute the parent repository or initialize Git merely to answer a codebase question.
+
+After each successful initialization, including one over an existing index, the command appends `.codegraph/` once to the worktree's local exclude file (`git rev-parse --git-path info/exclude`, shared by linked worktrees). CodeGraph's own `.codegraph/.gitignore` un-ignores itself, so without this the index directory would show up as untracked and leak into agents' diffs. Tracked files and `.gitignore` are never edited. When Git is unavailable or the target is not a Git work tree, the command prints a warning to stderr and initialization still succeeds.
 
 ---
 
@@ -108,8 +145,8 @@ Skill files organized by category, embedded in the binary and injected into your
 | Go Testing | `go-testing` | Go testing patterns including Bubbletea TUI testing |
 | Skill Creator | `skill-creator` | Create new AI agent skills following the Agent Skills spec |
 | Skill Improver | `skill-improver` | Audit and improve existing skills against the repository style guide |
-| Branch & PR | `branch-pr` | PR creation workflow with conventional commits, branch naming, and issue-first enforcement |
-| Issue Creation | `issue-creation` | Issue filing workflow with bug report and feature request templates |
+| Branch & PR | `branch-pr` | PR preparation following the destination repository's issue, label, naming and template policy |
+| Issue Creation | `issue-creation` | Issue filing using the target's YAML forms, Markdown templates or supported no-template policy |
 | Skill Registry | `skill-registry` | Build an index of installed skills with triggers, scopes, and exact `SKILL.md` paths |
 | Chained PR | `chained-pr` | Plan and create reviewable stacked/chained pull requests |
 | Cognitive Doc Design | `cognitive-doc-design` | Write docs that reduce review and onboarding cognitive load |
@@ -117,7 +154,7 @@ Skill files organized by category, embedded in the binary and injected into your
 | Work Unit Commits | `work-unit-commits` | Split implementation into reviewable work units |
 | RDD Defect Workflow | `rdd-defect-workflow` | Guide receipt-driven defect work with truthful evidence and authority boundaries |
 
-Of these, `go-testing`, `skill-creator`, `skill-improver`, `skill-registry`, `chained-pr`, `cognitive-doc-design` and `work-unit-commits` are installed by default with both the `full-gentleman` (Dev Stack + Polish) and `ecosystem-only` (Dev Stack) presets. `branch-pr`, `issue-creation`, `comment-writer` and `rdd-defect-workflow` are repository-contributor workflow skills: they remain selectable with an explicit `--skills <id>`, but no default preset installs them.
+Of these, `go-testing`, `skill-creator`, `skill-improver`, `skill-registry`, `chained-pr`, `cognitive-doc-design` and `work-unit-commits` are installed by default with both the `full-gentleman` (Dev Stack + Polish) and `ecosystem-only` (Dev Stack) presets. `branch-pr`, `issue-creation`, `comment-writer` and `rdd-defect-workflow` are opt-in collaboration/workflow skills: they remain selectable with an explicit `--skills <id>`, but no default preset installs them. The portable contribution skills follow the destination repository's policy; installing them does not require an issue before every PR, Gentle AI labels, naming regexes or YAML forms in unrelated projects. Gentle AI's own repository-specific contribution skill still enforces this repository's rules.
 
 ### Coding Skills (separate repository)
 

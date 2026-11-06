@@ -186,13 +186,20 @@ func TestRetireSDDOrchestratorBlockRemovesOnlyTheManagedBlock(t *testing.T) {
 	content := "# Mine\n\n<!-- gentle-ai:engram-protocol -->\nengram\n<!-- /gentle-ai:engram-protocol -->\n\n<!-- gentle-ai:sdd-orchestrator -->\n# SDD Orchestrator\n<!-- /gentle-ai:sdd-orchestrator -->\n\n## After\n"
 	writeFixture(t, prompt, []byte(content))
 
-	res, err := RetireSDDOrchestratorBlock(dir, prompt, filepath.Join(dir, "AGENTS.md"))
+	// The removal target must not alias the active prompt on case-insensitive
+	// filesystems; active-file identity preservation is covered separately.
+	active := filepath.Join(dir, "active-prompt.md")
+	writeFixture(t, active, []byte("# Active\n"))
+	res, err := RetireSDDOrchestratorBlock(dir, prompt, active)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "# Mine\n\n<!-- gentle-ai:engram-protocol -->\nengram\n<!-- /gentle-ai:engram-protocol -->\n\n## After\n"
 	if got, _ := os.ReadFile(prompt); string(got) != want || !res.Removed {
 		t.Fatalf("prompt = %q (removed %v), want %q", got, res.Removed, want)
+	}
+	if got, err := os.ReadFile(active); err != nil || string(got) != "# Active\n" {
+		t.Fatalf("active prompt = %q, %v; want unchanged", got, err)
 	}
 	again, err := RetireSDDOrchestratorBlock(dir, prompt, "")
 	if err != nil || again.Removed {

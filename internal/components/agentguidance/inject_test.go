@@ -159,8 +159,8 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 			}
 		})
 	}
-	if covered != 15 {
-		t.Fatalf("covered %d non-Pi clients, want 15", covered)
+	if covered != 16 {
+		t.Fatalf("covered %d non-Pi clients, want 16", covered)
 	}
 }
 
@@ -236,7 +236,7 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 			if !strings.Contains(written, "<!-- /gentle-ai:"+RoutingSectionID+" -->") {
 				t.Fatalf("InjectRouting(%q) did not close the managed section:\n%s", agent.ID, written)
 			}
-			if !strings.Contains(written, "First establish whether the requested outcome explicitly authorizes a change.") {
+			if !strings.Contains(written, piStep(agent.ID, "First establish whether the requested outcome explicitly authorizes a change.")) {
 				t.Fatalf("InjectRouting(%q) did not deliver the outcome-authorization guard:\n%s", agent.ID, written)
 			}
 		})

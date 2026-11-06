@@ -35,6 +35,12 @@ func TestRunDoctor_AssetVersionRemediation(t *testing.T) {
 	availableBytesFn = func(string) (int64, error) { return 1024 * 1024 * 1024, nil }
 
 	simple := filepath.ToSlash(filepath.Join(home, "pinned", "gentle-ai"))
+	// Temp dirs can contain characters outside the bare allowlist (the "~" of
+	// Windows 8.3 names such as RUNNER~1), which the continuation must quote.
+	simpleWord := simple
+	if !managedAssetsBareExecutable.MatchString(simple) {
+		simpleWord = "'" + simple + "'"
+	}
 	spaces := filepath.Join(home, "pinned build", "gentle-ai")
 	apostrophe := filepath.Join(home, "user's build", "gentle-ai")
 	other := filepath.Join(home, "homebrew", "gentle-ai")
@@ -43,8 +49,8 @@ func TestRunDoctor_AssetVersionRemediation(t *testing.T) {
 		execErr                             error
 		matching                            bool
 	}{
-		{name: "different PATH build", invoked: simple, pathCopy: other, goos: "linux", want: simple + " sync"},
-		{name: "same PATH build", invoked: simple, pathCopy: simple, goos: "linux", want: simple + " sync"},
+		{name: "different PATH build", invoked: simple, pathCopy: other, goos: "linux", want: simpleWord + " sync"},
+		{name: "same PATH build", invoked: simple, pathCopy: simple, goos: "linux", want: simpleWord + " sync"},
 		{name: "POSIX spaces", invoked: spaces, pathCopy: other, goos: "linux", want: "'" + spaces + "' sync"},
 		{name: "POSIX apostrophe", invoked: apostrophe, pathCopy: other, goos: "linux", want: "'" + strings.ReplaceAll(apostrophe, "'", `'\''`) + "' sync"},
 		{name: "Windows spaces", invoked: spaces, pathCopy: other, goos: "windows", want: "\"" + spaces + "\" sync"},

@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,7 +184,10 @@ func TestCursorJudgmentDayCLISmoke(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if output := run("sync", "--agent", "cursor"); !strings.Contains(output, "preserved native agents were not updated") {
+	// Exact public wording of nativeReviewPreservedAction(userJudge); this
+	// external-package smoke test cannot call the private helper.
+	wantPreservedAction := fmt.Sprintf("Native review agent %s was preserved, not updated: ownership cannot be verified (missing ledger entry or differing recorded hash). This does not mean you customized the file. Keeping it unchanged is valid. To opt into management, back up this file and verify the backup, remove only this warned file, then rerun your existing gentle-ai install or gentle-ai sync command with the same runtime, scope, and model choices. See docs/rollback.md for per-file recovery. Gentle AI will not adopt or delete it automatically.", userJudge)
+	if output := run("sync", "--agent", "cursor"); !strings.Contains(output, "No managed files changed; review the manual actions below.\n") || !strings.Contains(output, wantPreservedAction) {
 		t.Fatalf("sync did not report preserved native agent: %s", output)
 	}
 	for _, path := range []string{userJudge, userAgent} {

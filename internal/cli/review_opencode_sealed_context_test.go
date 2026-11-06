@@ -132,6 +132,8 @@ func TestOpenCodeSealedCollectArgumentsResolveFromAnUnrelatedCwd(t *testing.T) {
 }
 
 func TestSharedResolverRefusesATamperedSealedHandleWithoutAuthorityMutation(t *testing.T) {
+	// Exercise OpenCode sealing even when the test runs inside a Pi host.
+	t.Setenv(reviewPiHostRelayContractEnvironment, "")
 	if testing.Short() {
 		t.Skip("requires git fixtures")
 	}
@@ -139,6 +141,9 @@ func TestSharedResolverRefusesATamperedSealedHandleWithoutAuthorityMutation(t *t
 	repo, started, store, record := openCodeSealedLineage(t, "opencode-sealed-tamper")
 	_, status := openCodeSealedStatus(t, repo, started.LineageID, "")
 	args := sealedCollectArgumentsFrom(t, repo, record, openCodeSealedCollectInput(t, status))
+	if !strings.HasPrefix(args.context, "rctx3_") {
+		t.Fatalf("issued repository context = %q, want a sealed rctx3 handle before tampering", args.context)
+	}
 	index := len(args.context) - 7
 	replacement := byte('A')
 	if args.context[index] == 'A' {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -545,6 +546,9 @@ func TestValidateSettingsForWritersRefusesUnsafeOpenCodeSettings(t *testing.T) {
 	})
 
 	t.Run("locked settings path", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("mode 0 only sets the read-only attribute on Windows")
+		}
 		settingsPath := filepath.Join(t.TempDir(), "opencode.jsonc")
 		if err := os.WriteFile(settingsPath, []byte(`{"agent":{}}`), 0o000); err != nil {
 			t.Fatal(err)

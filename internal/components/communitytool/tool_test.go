@@ -286,6 +286,8 @@ func TestInstallWithHomeReportsEffectiveMCPAdapterSchema(t *testing.T) {
 	}
 }
 
+// TestInstallWithHomeFailsClosedForEmptyPiSettingsWithoutMCPProcess verifies that
+// installation fails when Pi settings exist but the MCP process probe fails.
 func TestInstallWithHomeFailsClosedForEmptyPiSettingsWithoutMCPProcess(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("PATH", t.TempDir())
@@ -310,6 +312,8 @@ func TestInstallWithHomeFailsClosedForEmptyPiSettingsWithoutMCPProcess(t *testin
 	}
 }
 
+// TestCodeGraphGuidanceContainsLazyInitAndUsageRules verifies that the CodeGraph
+// guidance block contains mandatory ordering, initialization, and worktree placement rules.
 func TestCodeGraphGuidanceContainsLazyInitAndUsageRules(t *testing.T) {
 	guidance := CodeGraphGuidanceMarkdown()
 	for _, want := range []string{
@@ -317,6 +321,8 @@ func TestCodeGraphGuidanceContainsLazyInitAndUsageRules(t *testing.T) {
 		"hard ordering rule",
 		"Create Git worktrees that may need CodeGraph under the user's home directory",
 		"<repo-parent>/<repo-name>-worktrees/<worktree-name>",
+		"immediate parent directory of the repository root",
+		"repo `~/Projects/Rust/foo` → `~/Projects/Rust/foo-worktrees/<worktree-name>`",
 		"Never place a CodeGraph-dependent worktree under `/tmp`, `/var/tmp`, or `/tmp/opencode`",
 		"generic temporary-work guidance does not override this rule",
 		"Every worktree needs its own `.codegraph/` index",
@@ -421,6 +427,8 @@ func TestCodeGraphGuidancePreservesExplicitInitializationWorkspace(t *testing.T)
 	}
 }
 
+// TestCodeGraphGuidanceInjectsForRepresentativeAgents verifies that CodeGraph guidance
+// is correctly injected into configuration files for representative supported agents.
 func TestCodeGraphGuidanceInjectsForRepresentativeAgents(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{"agent":{"worker":{"prompt":"use codegraph_explore"}}}`)

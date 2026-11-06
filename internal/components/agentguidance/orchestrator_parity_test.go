@@ -34,6 +34,7 @@ var gentleShellParityHeadings = []string{
 	// assets/orchestrator.md
 	"Identity Contract",
 	"Core Role",
+	"Authorized work continuity",
 	"Mental Model",
 	"Safety",
 	// assets/orchestrator-delegation.md
@@ -63,6 +64,59 @@ var gentleShellOnlyContent = []string{
 	"Pi Subagent Model Routing",
 	"Background Subagent Policy",
 	"Pi Runtime Overlays",
+}
+
+// TestInstalledApprovalContinuity checks delivered prompt content, not model
+// behavior, on both initial installation and an unchanged sync.
+func TestInstalledApprovalContinuity(t *testing.T) {
+	type carrier struct {
+		name    string
+		agent   model.AgentID
+		options RoutingOptions
+	}
+	var carriers []carrier
+	for _, agent := range orchestratorRuntimes(t) {
+		carriers = append(carriers, carrier{string(agent), agent, RoutingOptions{}})
+	}
+	carriers = append(carriers, carrier{"small-generic", model.AgentVSCodeCopilot, RoutingOptions{OrchestratorCapability: "small"}})
+
+	for _, carrier := range carriers {
+		t.Run(carrier.name, func(t *testing.T) {
+			root := t.TempDir()
+			var first string
+			for _, phase := range []string{"install", "sync"} {
+				result, err := InjectRoutingWithOptions(root, carrier.agent, carrier.options)
+				if err != nil {
+					t.Fatalf("%s: %v", phase, err)
+				}
+				prompt := strings.Join(strings.Fields(deliveredGuidance(t, result.Files[0])), " ")
+				if phase == "install" {
+					first = prompt
+				} else if prompt != first {
+					t.Error("identical sync changed guidance")
+				}
+				if carrier.name == "small-generic" && !strings.Contains(prompt, "Orchestrator Instructions (Small Model)") {
+					t.Error("small capability did not select the small-model variant")
+				}
+				for _, want := range []string{
+					"Interpret short replies such as \"yes\", \"go ahead\", or \"eso mismo\" against the immediately preceding proposal.",
+					"When the human unambiguously accepts a concrete implementation action they already understand, execute that action within its agreed scope without asking again.",
+					"Confirming a preference alone does not authorize implementation; genuinely unclear change intent still requires one focused question.",
+					"Contextual approval never substitutes for provider-owned consent, exact-token authorization, or separate publishing and destructive-action permission.",
+					"Resolving an incident or subdecision does not complete or cancel the original authorized objective",
+					"using judgment for proportionate recovery and respecting explicit user dispositions",
+					"Investigate pending technical uncertainty rather than treating it alone as a new human decision.",
+					"Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule.",
+					"Clarify scope, constraints, acceptance criteria, and non-goals when needed for the human to understand the action or to resolve consequential uncertainty.",
+					"after informed approval, proceed without repeating the clarification unless new consequential uncertainty appears.",
+				} {
+					if !strings.Contains(prompt, want) {
+						t.Errorf("%s guidance missing %q", phase, want)
+					}
+				}
+			}
+		})
+	}
 }
 
 // Exercises the real installation carrier for every non-Pi runtime, then
@@ -173,10 +227,11 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 				"Parallel writers follow the **Parallel writers** rule under `## Implementation Routing`: another repository's work goes in a fresh worktree based on its main",
 				// S5 explore only to decide or route.
 				"never explore files you will read anyway before writing inline",
-				// S8 verification timing and bounds.
-				"**Verification timing**: when the same model wrote several deliveries of one feature inline, run one independent verifier at the feature's end",
-				"verify per unit only when that unit is really high risk",
-				"always when a smaller-model profile wrote the code",
+				// S8 verification timing and bounds. pain-point-iteration S9 C1
+				// retired the smaller-model clause: per-unit verification follows
+				// a named high-risk item, never the writer's model.
+				"**Verification timing**: when several deliveries of one feature were written inline, run one independent verifier at the feature's end",
+				"verify per unit only when that unit names a high-risk item",
 				"**Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers",
 				"A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one.",
 				"A writer's self-review follows the same bound, then reports `partial`.",
@@ -252,8 +307,9 @@ func TestInstalledSmallGenericOrchestratorCarriesVerificationDiscipline(t *testi
 		"mktemp -d",
 		"never inside the workspace",
 		"silently ignoring an explicit option",
-		// S8 timing and bounds.
-		"**Verification timing**: when the same model wrote several deliveries of one feature inline, run one independent verifier at the feature's end",
+		// S8 timing and bounds; pain-point-iteration S9 C1 dropped "the same
+		// model" because the writer's model no longer decides verification.
+		"**Verification timing**: when several deliveries of one feature were written inline, run one independent verifier at the feature's end",
 		"**Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers",
 		"A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one.",
 	} {

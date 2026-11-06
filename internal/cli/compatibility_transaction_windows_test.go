@@ -62,17 +62,23 @@ func TestRunSyncWithSelectionRefreshesCompatibilityAndOpenCodeAssetsOnWindows(t 
 	for _, path := range compatibilityFiles {
 		writeStale(t, path)
 	}
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
-	writeStale(t, pluginPath)
+	// Managed plugins are replaced only when their bytes match a released
+	// Gentle AI version, so the stale plugin is a real older release.
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts")
+	stalePlugin := releasedOpenCodePlugin(t, "v3.7.0/plugins/opencode-review-transport.ts")
+	mustWriteFile(t, pluginPath, stalePlugin)
 
 	if _, err := RunSyncWithSelection(home, windowsCompatibilitySelection()); err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
-	for _, path := range append(compatibilityFiles, pluginPath) {
+	for _, path := range compatibilityFiles {
 		content, err := os.ReadFile(path)
 		if err != nil || string(content) == "stale" {
 			t.Fatalf("managed asset %q was not refreshed: content=%q error=%v", path, content, err)
 		}
+	}
+	if content, err := os.ReadFile(pluginPath); err != nil || string(content) == string(stalePlugin) {
+		t.Fatalf("managed plugin %q was not refreshed: error=%v", pluginPath, err)
 	}
 	if closeCount != 1 {
 		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)

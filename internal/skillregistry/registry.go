@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 const (
@@ -73,12 +74,13 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".config", "kilo", "skills"),
 		filepath.Join(home, ".claude", "skills"),
 		filepath.Join(home, ".gemini", "skills"),
+		filepath.Join(home, ".gemini", "config", "skills"),
 		filepath.Join(home, ".gemini", "antigravity", "skills"),
 		filepath.Join(home, ".gemini", "antigravity-desktop", "skills"),
 		filepath.Join(home, ".gemini", "antigravity-cli", "skills"),
 		filepath.Join(home, ".cursor", "skills"),
 		filepath.Join(home, ".copilot", "skills"),
-		filepath.Join(home, ".codex", "skills"),
+		filepath.Join(system.CodexConfigDir(home), "skills"),
 		filepath.Join(home, ".codeium", "windsurf", "skills"),
 		filepath.Join(home, ".qwen", "skills"),
 		filepath.Join(home, ".kiro", "skills"),

@@ -326,6 +326,9 @@ func TestActivationRefusesUserOwnedCollision(t *testing.T) {
 }
 
 func TestActivationRollsBackLauncherWritesWhenPathUpdateFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("simulates POSIX launcher modes; TestWindowsActivationRollback* cover Windows hosts")
+	}
 	home := t.TempDir()
 	target := filepath.Join(t.TempDir(), "opencode")
 	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {

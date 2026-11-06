@@ -14,6 +14,27 @@ For Shared, use `--mode shared` and supply `--prefix /owned/selected-prefix --ag
 
 Or run `gentle-ai shell install` with no flags for the installer TUI: Enter reviews, `y` confirms and closes the TUI before installation starts, Escape aborts. Launch `TARGET/bin/gentle-shell` or `TARGET/bin/pi`; `TARGET/bin/gentle-shell install` reopens the installer.
 
+## Installing from the gentle-ai TUI
+
+The main `gentle-ai` menu entry **Install Gentle-Shell, our own agent** installs Separate into `~/.local/share/gentle-shell/install` and publishes `~/.local/bin/gentle-shell`. On macOS it writes the same canonical preference files as Linux amd64; **Manage → Apply preferences** rewrites those same files in place.
+
+In Manage, a component change (CodeGraph, or any change on an **On my existing Pi** install) shows **COMPONENT CHANGES** and offers **Update installation**: it reinstalls the target with the selected profile, including the preference changes of the same summary. Preference-only changes keep **Apply preferences**. **On my existing Pi** never offers CodeGraph ON: choosing it turns CodeGraph off with "CodeGraph needs a Separate install; it stays off for On my existing Pi".
+
+| Option | macOS |
+| --- | --- |
+| Persona: Gentleman, Neutral, Custom | Supported. Custom leaves `config/persona.json` untouched. |
+| Background subagents, Strict TDD | Supported, ON or OFF (`config/background-subagents.json`, `config/strict-tdd.json`, both with their `schema`). |
+| Global RDD | Supported, ON or OFF (`home/.gentle-ai/state.json` `rdd_mode`). |
+| Context7 | Supported, ON or OFF (`agent/mcp.json` `context7` entry with `url`, `enabled` and `exposure`). |
+| CodeGraph | Supported, ON (the default) or OFF. ON stages the pinned `@colbymchenry/codegraph` 1.4.1 darwin-arm64 library under `runtime/codegraph`, records `"codegraph": true` in `installation.json` and puts `runtime/codegraph/bin/codegraph` on the launched Separate shell's PATH. Adding or removing CodeGraph on a managed install uses Manage → Update installation. |
+| SDK source | Stable or Main preview, exactly as on Linux amd64. Main preview keeps stock Pi installed and composes the latest Gentle Shell `main` snapshot as a private package under `runtime/main-sdk` (with the pinned darwin-arm64 stock native member and the `runtime/node_modules -> ../prefix/lib/node_modules` link), then selects it in `agent/settings.json`. `installation.json` records it under `main_sdk`. Every other option above works with either channel. |
+
+Stable installs gentle-pi at the newest release of the reviewed supplier list and detects new reviewed releases at every update check without a gentle-ai rebuild; see [the Stable trust boundary](gentle-shell-stable-trust-boundary.md) for which authority admits supplier code and what an attacker would need.
+
+### Switching Stable and Main preview
+
+On an installed Separate target, **Manage → SDK source → Apply preferences** records the channel in `config/update-channel.json` (`{"channel":"main"}` or `{"channel":"stable"}`), then **Update now** applies it with the in-place channel overlay, as on Linux amd64. The overlay changes only the SDK declaration and `installation.json` `main_sdk`. Node, `fd`, `rg`, CodeGraph, preferences, the agent home and the supervisor stay untouched. Going back to Stable removes `runtime/main`, `runtime/main-source`, `runtime/main-sdk` and `runtime/node_modules`. If any step fails, every overlay path is removed again, the previous `settings.json` and `installation.json` bytes come back, and the next attempt starts clean.
+
 ## Requirements
 
 | Check | Requirement |
@@ -33,7 +54,27 @@ Or run `gentle-ai shell install` with no flags for the installer TUI: Enter revi
 | Separate | New private prefix, runtime, HOME, agent and state; an existing personal Pi is untouched. |
 | Shared (`--mode shared`) | Explicit existing owned global Pi prefix and agent on the target's filesystem; both new bindings use those same objects. Inspect previews the `settings.json` `packages` and `npmCommand` changes exactly as on Linux. |
 
-The installer does not modify PATH or shell files, replace an unrelated `pi`, or require a root installation. It writes pinned `fd` and `rg` (the `aarch64-apple-darwin` builds below) into `AGENT/bin`, which stock Pi prefers over PATH: the private agent (Separate) or the selected `--agent` (Shared). Shared never replaces personal tools: an existing `fd` or `rg` (including links), or an `AGENT/bin` that is not an owned physical `0700`/`0755` directory with clean metadata, refuses at inspect and confirmation before any change.
+Separate publishes `~/.local/bin/gentle-shell` and `~/.local/bin/gs`. When `~/.local/bin` is not on the PATH of the terminal that started the install, it appends one marked line, `export PATH="$HOME/.local/bin:$PATH" # gentle-ai: gentle-shell launcher`, to the startup file your shell reads for new terminals: `$ZDOTDIR/.zshrc` (or `~/.zshrc`) for zsh, the first existing of `~/.bash_profile`, `~/.bash_login` and `~/.profile` (else a new `~/.bash_profile`) for bash, `conf.d/gentle-ai-shell.fish` (the same line in fish syntax) for fish, and `~/.profile` otherwise. It never writes through a symlink, never adds the line twice, and prints the line to add by hand when it may not edit that file. Uninstall removes exactly that line and deletes the file only when nothing at all is left in it (0 bytes). The installer does not otherwise modify PATH or shell files, replace an unrelated `pi`, or require a root installation. It writes pinned `fd` and `rg` (the `aarch64-apple-darwin` builds below) into `AGENT/bin`, which stock Pi prefers over PATH: the private agent (Separate) or the selected `--agent` (Shared). Shared never replaces personal tools: an existing `fd` or `rg` (including links), or an `AGENT/bin` that is not an owned physical `0700`/`0755` directory with clean metadata, refuses at inspect and confirmation before any change.
+
+"On my existing Pi" reuses your Pi agent (`~/.pi/agent`, `0755` as Pi creates it) and follows the same agent checks and rollback as on Linux. See [On my existing Pi](gentle-shell-linux-install.md#on-my-existing-pi-agent-checks-and-rollback). Pi's own `bin/fd` and `bin/rg` are set aside inside the installation, replaced by the pinned builds below, and restored by uninstall. A failure before publication restores them with the rest of the agent. Uninstall restores `settings.json` and `mcp.json` with their original bytes and modes, and removes an `mcp.json` that did not exist before. Every refusal happens before any write, and a failure after the first write restores the agent exactly.
+
+## Persistent memory (Engram)
+
+Separate provisions Engram from the gentle-pi it installs, never from a second version list. The `gentle-engram` companion joins the verified npm composition at that gentle-pi's exact pin and is declared in the private agent's `settings.json` exactly as bundled Gentle Shell declares it (`npm:gentle-engram@<version>`). The SHA-256-pinned Engram core is published to `AGENT/bin/engram` (mode `0700`). Memory is shared like the bundled install: a launch reuses a verified Engram server on `127.0.0.1:7437`, or starts one on your real `~/.engram` store, so every agent sees the same memory. If a piece is missing or cannot be verified, the install still succeeds and Shell runs without memory. Engram memory comes with the Stable channel's Separate install; a Main preview install runs without it until its frozen composition includes the companion. Shared and "On my existing Pi" get nothing new: no `gentle-engram` package, no `pi-engram` command, no Engram core and no settings change, so they keep their existing memory setup.
+
+### How each launch decides memory
+
+A Separate installation shares your global Engram memory, the same way the bundled Gentle Shell and your other agents do. Each launch decides memory once, in the supervisor before it starts the launched Pi's process group, and never fails the launch because memory is unavailable:
+
+- **Version and help runs never probe or start a server**: a launch with `--version`, `-v`, `--help` or `-h` runs with `ENGRAM_STARTUP_POLICY=disabled` and no notice, as in the bundled Gentle Shell.
+- **You already chose Engram settings.** If your environment sets `ENGRAM_BIN`, `ENGRAM_URL`, `ENGRAM_DATA_DIR`, `ENGRAM_PORT`, `ENGRAM_SOCKET`, `ENGRAM_DATABASE_URL` or `ENGRAM_SERVER_MODE` (or an `ENGRAM_STARTUP_POLICY` other than `allow`), those exact values are passed to the session unchanged, nothing is probed or started, and memory runs disabled for that launch, as in the bundled Gentle Shell. An explicit `ENGRAM_BIN` or `ENGRAM_URL` is never replaced; without your own `ENGRAM_BIN`, the session gets the installation's verified core instead of any `engram` on `PATH`.
+- **A verified server is running.** A server on `127.0.0.1:7437` whose `/compatibility` answer proves a startup-verified store is reused through `ENGRAM_URL=http://127.0.0.1:7437`.
+- **Nothing is listening.** The installation's verified Engram core (`AGENT/bin/engram`) starts `engram serve` in its own session (`setsid`), outside the owned group, with your real home, so the store is your usual `~/.engram`. This store is the only thing a Separate installation writes outside its own folder; the server keeps running after the session ends, like any shared Engram server.
+- **Anything else disables memory for that launch.** A listener that does not prove compatibility, a store migrated by a newer Engram than the installation's core, a missing core, or a server that does not report ready within about 10 seconds starts nothing. The session starts with `ENGRAM_STARTUP_POLICY=disabled` and a one-line notice explaining why. Gentle Shell never stops or replaces a server already listening on `127.0.0.1:7437`, and rechecks on every launch.
+
+Shared and agent installations keep their existing memory setup; this decision applies to Separate only. Apart from your own Engram selections, your `PATH`, tokens and other settings are never passed to the session or the server.
+
+See also: [Gentle Shell on Linux](gentle-shell-linux-install.md) and [Gentle Shell on Windows](gentle-shell-windows-install.md).
 
 ## Undo Shared changes
 
@@ -79,6 +120,13 @@ Each archive pin equals its publisher's checksum. Member pins are derived from t
 | `fd-v10.5.0-aarch64-apple-darwin.tar.gz` | 1334374 | `b67e1836c468e42e411984b56e52fa7abec08c2bd22c867398e7cc134aac5e12` |
 | `ripgrep-15.2.0-aarch64-apple-darwin.tar.gz` | 1764284 | `3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4` |
 
+CodeGraph ON adds two npm archives of the same 1.4.1 release as Linux, each pinned to its registry `dist.integrity` (SHA-512). The bundled `node` member of the darwin-arm64 archive (120573328 bytes) is never written; the library runs on the pinned Node above.
+
+| Artifact (registry.npmjs.org) | Bytes | Integrity |
+| --- | --- | --- |
+| `@colbymchenry/codegraph-1.4.1.tgz` | 210435 | `sha512-xZayboJt6T3QBzBsBsI0eJ3J/tN4vYs6LMuvrxJVdM71yQFjrFKFeV3KsbicAgkj6AHnTXxUNk26g9BYwkNMgg==` |
+| `@colbymchenry/codegraph-darwin-arm64-1.4.1.tgz` | 50996796 | `sha512-USSpExjuxZWN0OeNexZp2V5fCfOI4ZekqE79CJiBdGdPbqGTB+857ImIqzWGyF/rAyyED94Wc0Cd82t+uWD30w==` |
+
 Stock Pi and its npm graph come from the same frozen lock as Linux, with the darwin arm64 optional packages selected.
 
 ## Node bootstrap publication
@@ -92,5 +140,3 @@ Do not reinstall into a damaged target. Keep it, its agent data and evidence; in
 ## Safety limits
 
 Stock Pi's updater is retained. Readback accepts only complete known graphs; unknown versions, bytes or placement fail closed and keep evidence. Package lifecycle scripts stay disabled. Never delete uncertain roots, stages or evidence to retry.
-
-See also: [Gentle Shell on Linux](gentle-shell-linux-install.md) and [Gentle Shell on Windows](gentle-shell-windows-install.md).

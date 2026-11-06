@@ -259,6 +259,11 @@ FLAGS
                                      auto inherits managed on/off and never enables by itself; only managed policy files are ever overwritten
   --dry-run                          Preview plan without executing
   --help, -h                         Show this help
+
+OPENCODE REFERENCES
+  Prompt files still referenced by remaining settings entries are kept.
+  Missing {file:...} targets fail sync and roll back managed changes.
+  Restore the named file or correct its reference, then rerun sync.
 `)
 }
 
@@ -477,7 +482,7 @@ type syncRuntime struct {
 // created because the shared compatibility tree is global-only.
 func newSyncRuntimeWithScope(homeDir string, selection model.Selection, scope InstallScope) (*syncRuntime, error) {
 	workspaceDir, _ := os.Getwd()
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	backupRoot := state.BackupsDir(homeDir)
 	state := &runtimeState{}
 	if scope == ScopeWorkspace {
 		snapshotDir, err := os.MkdirTemp("", "gentle-ai-rollback-*")
@@ -552,7 +557,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		}}, prepare...)
 	}
 	apply := []pipeline.Step{
-		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir},
+		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, codexHomeDir: codexRollbackRoot(r.homeDir, r.agentIDs)},
 	}
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "sync:opencode:telemetry-runtime", configDir: telemetryDir, changedFiles: &r.changedFiles, state: r.state})
@@ -563,6 +568,8 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	if r.piBackgroundProjection != nil {
 		apply = append(apply, piBackgroundProjectionStep{id: "sync:pi:background-projection", plan: r.piBackgroundProjection})
 	}
+	// Before every prompt writer.
+	apply = append(apply, geminiLegacyRootSteps("sync:agent:gemini-legacy-root", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles)...)
 
 	for _, component := range installOrderedComponents(r.selection.Components) {
 		apply = append(apply, componentSyncStep{
@@ -683,6 +690,10 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles, manualActions: &r.piCodeGraphActions})
 	}
 
+	// After every prompt writer, including CodeGraph guidance.
+	apply = append(apply, geminiModulesSteps("sync:agent:gemini-modules", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles)...)
+	apply = append(apply, antigravityRulesSteps("sync:agent:antigravity-rules", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles)...)
+
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
 }
 
@@ -721,6 +732,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 			}
 		}
 		if component == model.ComponentEngram {
+			for _, path := range antigravityLegacyEngramPluginPaths(homeDir, workspaceDir, scope, componentAdapters) {
+				paths[path] = struct{}{}
+			}
 			for _, adapter := range componentAdapters {
 				if adapter.Agent() == model.AgentClaudeCode {
 					// Scope the declared engram MCP target like the sync step
@@ -886,6 +900,12 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 			paths[path] = struct{}{}
 		}
 	}
+	for _, path := range antigravityRulesBackupPaths(homeDir, workspaceDir, scope, selection.Agents) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range geminiModulesBackupPaths(homeDir, workspaceDir, scope, selection.Agents) {
+		paths[path] = struct{}{}
+	}
 	if !workspace && containsAgent(selection.Agents, model.AgentOpenCode) {
 		for _, path := range opencodeactivation.LauncherPaths(homeDir, runtime.GOOS) {
 			paths[path] = struct{}{}
@@ -1047,7 +1067,7 @@ func syncPersonaPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Ins
 			if scope == ScopeWorkspace {
 				continue
 			}
-			paths = append(paths, persona.PiPersonaConfigPath(homeDir))
+			paths = append(paths, persona.PiGlobalPersonaConfigPath(homeDir))
 			continue
 		}
 		targetDir := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
@@ -1558,6 +1578,10 @@ func (s componentSyncStep) Run() error {
 		if err != nil {
 			return fmt.Errorf("sync gga config: %w", err)
 		}
+		s.state.recordGGAInjection(res)
+		if s.skipped != nil {
+			*s.skipped = append(*s.skipped, res.Notices...)
+		}
 		// Count GGA files changed based on individual Changed flags.
 		total := boolToInt(res.ConfigChanged) + boolToInt(res.AgentsChanged)
 		var ggaFiles []string
@@ -1596,7 +1620,7 @@ func (s componentSyncStep) Run() error {
 		// remains an install-only concern.
 		for _, adapter := range adapters {
 			if adapter.Agent() == model.AgentPi {
-				res, err := persona.InjectPiPersona(s.homeDir, s.selection.Persona)
+				res, err := persona.InjectPiPersonaAt(persona.PiGlobalPersonaConfigPath(s.homeDir), s.selection.Persona)
 				if err != nil {
 					return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
 				}
@@ -2145,8 +2169,22 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	}
 
 	// Post-apply verification reuses the same component paths as install.
-	result.Verify = runPostSyncVerificationScoped(homeDir, rt.workspaceDir, scope, selection)
-	configChecks := verify.RunChecks(context.Background(), openCodeConfigChecks(homeDir, rt.workspaceDir, agentIDs))
+	result.Verify = runPostSyncVerificationWithState(homeDir, rt.workspaceDir, scope, selection, rt.state)
+	configCheckList := openCodeConfigChecks(homeDir, rt.workspaceDir, agentIDs)
+	for _, target := range retiredOpenCodeSDDTargets(homeDir, rt.workspaceDir, scope, agentIDs) {
+		if target.agent != model.AgentOpenCode {
+			continue
+		}
+		for _, settingsPath := range target.settingsPaths() {
+			configCheckList = append(configCheckList, verify.Check{
+				ID: "verify:opencode:file-references:" + settingsPath, Description: "OpenCode file references exist",
+				Run: func(context.Context) error {
+					return opencodeactivation.ValidateSettingsFileReferences(settingsPath, homeDir)
+				},
+			})
+		}
+	}
+	configChecks := verify.RunChecks(context.Background(), configCheckList)
 	result.Verify = verify.BuildReport(append(result.Verify.Checks, configChecks...))
 	result.Verify = withFailedSyncVerificationNote(result.Verify)
 	result.BackgroundPolicyEnabled = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
@@ -2326,6 +2364,9 @@ func RunSync(args []string) (SyncResult, error) {
 			m[k] = model.KiroModelAlias(v)
 		}
 		selection.KiroModelAssignments = m
+	}
+	if len(selection.AntigravityModelAssignments) == 0 {
+		selection.AntigravityModelAssignments = model.AntigravityModelTiersFromStrings(persistedState.AntigravityModelAssignments)
 	}
 	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
 		workspaceDir, _ := os.Getwd()
@@ -2587,7 +2628,7 @@ func RenderSyncReport(result SyncResult) string {
 			if len(result.ManualActions) == 0 {
 				fmt.Fprintln(&b, "All managed assets are already up to date. No files changed.")
 			} else {
-				fmt.Fprintln(&b, "No managed files changed; preserved native agents were not updated.")
+				fmt.Fprintln(&b, "No managed files changed; review the manual actions below.")
 			}
 		}
 		renderSyncSkippedAgents(&b, result.SkippedAgents)
@@ -2695,12 +2736,10 @@ func withFailedSyncVerificationNote(report verify.Report) verify.Report {
 	return report
 }
 
-// runPostSyncVerification verifies that managed files exist after sync.
-// runPostSyncVerificationScoped verifies that the files a scoped sync writes
-// exist after the run. Under ScopeWorkspace, globally-managed components are
-// skipped and any declared path that still resolves under the home root is
-// dropped, because a workspace sync never writes there (issue #1074).
-func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection) verify.Report {
+// runPostSyncVerificationWithState verifies the files a scoped sync writes,
+// accounting for actual component outcomes. Workspace scope excludes globally
+// managed components and paths belonging only to the global home (issue #1074).
+func runPostSyncVerificationWithState(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, state *runtimeState) verify.Report {
 	workspace := scope == ScopeWorkspace
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(selection.Agents)
@@ -2722,6 +2761,9 @@ func runPostSyncVerificationScoped(homeDir, workspaceDir string, scope InstallSc
 			paths = verificationComponentPaths(homeDir, workspaceDir, scope, selection, componentAdapters, component)
 		}
 		for _, path := range paths {
+			if state.skipsGGAConfigVerification(homeDir, component, path) {
+				continue
+			}
 			if workspace && pathUnderHomeOnly(path, homeDir, workspaceDir) {
 				continue
 			}

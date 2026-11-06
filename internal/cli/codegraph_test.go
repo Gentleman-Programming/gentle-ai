@@ -35,6 +35,9 @@ func TestRunCodeGraphHelpAndInvalidArgumentsDoNotInitialize(t *testing.T) {
 			if !strings.Contains(output.String(), "USAGE\n  gentle-ai codegraph init --cwd <project-root>\n") {
 				t.Fatalf("missing help in stdout: %q", output.String())
 			}
+			if !strings.Contains(output.String(), "adds .codegraph/ to the worktree's local Git exclude file") {
+				t.Fatalf("help does not describe the local exclusion: %q", output.String())
+			}
 		})
 	}
 	for _, args := range [][]string{
@@ -258,6 +261,226 @@ func TestRunCodeGraphInitDoesNotCrossNestedWorkspaceBoundary(t *testing.T) {
 	if content, err := os.ReadFile(marker); err != nil || string(content) != "parent index unchanged" {
 		t.Fatalf("parent index changed: %q, %v", content, err)
 	}
+}
+
+// C7: CodeGraph writes a self-negating `.codegraph/.gitignore` (`*` plus
+// `!.gitignore`), so the index directory stays untracked and enters agents'
+// diffs unless init excludes it in the worktree's local exclude file.
+func TestRunCodeGraphInitExcludesIndexLocally(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires Git")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("Git unavailable")
+	}
+
+	t.Run("linked worktree", func(t *testing.T) {
+		workspace := t.TempDir()
+		mainRoot := filepath.Join(workspace, "main")
+		linked := filepath.Join(workspace, "linked")
+		commitCodeGraphFixture(t, mainRoot)
+		runCodeGraphTestGit(t, mainRoot, "worktree", "add", "--quiet", "-b", "feature", linked)
+		stubCodeGraphIndexWriter(t, workspace)
+		exclude := codeGraphTestExcludePath(t, linked)
+		before := readCodeGraphTestFile(t, exclude)
+
+		for run := 1; run <= 2; run++ {
+			var output bytes.Buffer
+			if err := RunCodeGraph([]string{"init", "--cwd", linked}, &output); err != nil {
+				t.Fatalf("run %d: RunCodeGraph() error = %v", run, err)
+			}
+			if want := "CodeGraph initialized: " + canonicalCodeGraphTestPath(t, linked) + "\n"; output.String() != want {
+				t.Fatalf("run %d: stdout = %q, want %q", run, output.String(), want)
+			}
+		}
+
+		if got, want := readCodeGraphTestFile(t, exclude), withCodeGraphExcludeLine(before); got != want {
+			t.Fatalf("exclude file = %q, want one appended .codegraph/ line: %q", got, want)
+		}
+		assertCodeGraphTestStatusClean(t, linked)
+		assertCodeGraphTestStatusClean(t, mainRoot)
+		for _, root := range []string{mainRoot, linked} {
+			if _, err := os.Stat(filepath.Join(root, ".gitignore")); !os.IsNotExist(err) {
+				t.Fatalf("init created or touched %s/.gitignore: %v", root, err)
+			}
+		}
+	})
+
+	t.Run("main checkout keeps existing exclude entries", func(t *testing.T) {
+		workspace := t.TempDir()
+		root := filepath.Join(workspace, "project")
+		commitCodeGraphFixture(t, root)
+		stubCodeGraphIndexWriter(t, workspace)
+		exclude := codeGraphTestExcludePath(t, root)
+		if err := os.WriteFile(exclude, []byte("# local\nbuild/"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		for run := 1; run <= 2; run++ {
+			if err := RunCodeGraph([]string{"init", "--cwd", root}, &bytes.Buffer{}); err != nil {
+				t.Fatalf("run %d: RunCodeGraph() error = %v", run, err)
+			}
+		}
+
+		if got, want := readCodeGraphTestFile(t, exclude), "# local\nbuild/\n.codegraph/\n"; got != want {
+			t.Fatalf("exclude file = %q, want %q", got, want)
+		}
+		assertCodeGraphTestStatusClean(t, root)
+	})
+
+	t.Run("existing entry is left untouched", func(t *testing.T) {
+		workspace := t.TempDir()
+		root := filepath.Join(workspace, "project")
+		commitCodeGraphFixture(t, root)
+		stubCodeGraphIndexWriter(t, workspace)
+		exclude := codeGraphTestExcludePath(t, root)
+		if err := os.WriteFile(exclude, []byte("/.codegraph\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := RunCodeGraph([]string{"init", "--cwd", root}, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+
+		if got := readCodeGraphTestFile(t, exclude); got != "/.codegraph\n" {
+			t.Fatalf("exclude file = %q, want it unchanged", got)
+		}
+		assertCodeGraphTestStatusClean(t, root)
+	})
+}
+
+func TestRunCodeGraphInitReportsAndContinuesWhenIndexCannotBeExcluded(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		noGitBin bool
+	}{
+		{name: "not a git work tree"},
+		{name: "git unavailable", noGitBin: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.noGitBin {
+				if _, err := exec.LookPath("git"); err != nil {
+					t.Skip("Git unavailable")
+				}
+			}
+			workspace := t.TempDir()
+			root := filepath.Join(workspace, "project")
+			if err := os.Mkdir(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stubCodeGraphIndexWriter(t, workspace)
+			originalRoot, originalWarnings := codeGraphGitTopLevel, codeGraphWarnings
+			t.Cleanup(func() { codeGraphGitTopLevel, codeGraphWarnings = originalRoot, originalWarnings })
+			codeGraphGitTopLevel = func(path string) (string, error) { return path, nil }
+			var warnings bytes.Buffer
+			codeGraphWarnings = &warnings
+			if tc.noGitBin {
+				t.Setenv("PATH", "")
+			}
+
+			var output bytes.Buffer
+			if err := RunCodeGraph([]string{"init", "--cwd", root}, &output); err != nil {
+				t.Fatalf("RunCodeGraph() error = %v, want init to continue", err)
+			}
+			if want := "CodeGraph initialized: " + canonicalCodeGraphTestPath(t, root) + "\n"; output.String() != want {
+				t.Fatalf("stdout = %q, want %q", output.String(), want)
+			}
+			if !strings.HasPrefix(warnings.String(), "WARNING: could not exclude .codegraph/ from git locally: ") {
+				t.Fatalf("warnings = %q, want the exclusion failure reported", warnings.String())
+			}
+			if _, err := os.Stat(filepath.Join(root, ".git")); !os.IsNotExist(err) {
+				t.Fatalf("init created .git in a non-repository: %v", err)
+			}
+		})
+	}
+}
+
+// stubCodeGraphIndexWriter replaces the CodeGraph binary with one that writes
+// the same self-negating .gitignore the real index carries.
+func stubCodeGraphIndexWriter(t *testing.T, workspace string) {
+	t.Helper()
+	originalInit, originalHome, originalTemp := codeGraphInit, codeGraphUserHomeDir, codeGraphTempDir
+	t.Cleanup(func() {
+		codeGraphInit, codeGraphUserHomeDir, codeGraphTempDir = originalInit, originalHome, originalTemp
+	})
+	codeGraphUserHomeDir = func() (string, error) { return filepath.Join(workspace, "home"), nil }
+	codeGraphTempDir = func() string { return filepath.Join(workspace, "temporary") }
+	codeGraphInit = func(name string, args ...string) error {
+		index := filepath.Join(args[len(args)-1], ".codegraph")
+		if err := os.MkdirAll(index, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(index, ".gitignore"), []byte("*\n!.gitignore\n"), 0o644); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(index, "codegraph.db"), []byte("index"), 0o644)
+	}
+}
+
+func commitCodeGraphFixture(t *testing.T, root string) {
+	t.Helper()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runCodeGraphTestGit(t, root, "init", "--quiet")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCodeGraphTestGit(t, root, "add", "README.md")
+	runCodeGraphTestGit(t, root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture")
+}
+
+func runCodeGraphTestGit(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	output, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+	return string(output)
+}
+
+func codeGraphTestExcludePath(t *testing.T, root string) string {
+	t.Helper()
+	path := strings.TrimSpace(runCodeGraphTestGit(t, root, "rev-parse", "--git-path", "info/exclude"))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func readCodeGraphTestFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return string(content)
+}
+
+func withCodeGraphExcludeLine(content string) string {
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	return content + ".codegraph/\n"
+}
+
+func assertCodeGraphTestStatusClean(t *testing.T, root string) {
+	t.Helper()
+	if status := runCodeGraphTestGit(t, root, "status", "--short", "--untracked-files=all"); status != "" {
+		t.Fatalf("git status in %s = %q, want clean", root, status)
+	}
+}
+
+func canonicalCodeGraphTestPath(t *testing.T, path string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }
 
 func assertSameFile(t *testing.T, got, want string) {

@@ -31,13 +31,24 @@ verification cost or external side effects, accepted residual risk, or delivery.
 | Route | Use it when | What happens |
 |---|---|---|
 | **Direct inline** | The task is **small**: understood within the inline evidence budget, risk contained, and resumable from the request plus `git diff`, whatever the number of files. | Read, edit, and run the focused test and suite inline. |
-| **Delegated direct** | Understanding exceeds the inline evidence budget; or a writer has a named reason (two or more independent units with disjoint edit surfaces launched together, or the long-session context backstop), so reading that prepares that write delegates with it; or the change is **high risk** and needs an independent verifier. Size, a large task alone, file count, or a price ratio never decides it. | Delegate the narrow exploration, one bounded writer per unit with a reason, and/or the verifier needed for that action. |
+| **Delegated direct** | Understanding exceeds the inline evidence budget; or a writer has a named reason (two or more independent units of behavior with disjoint edit surfaces launched together, each with its code, tests, and docs and several minutes of work, or the long-session context backstop), so reading that prepares that write delegates with it; or the change names a **high-risk** item and needs an independent verifier. Size, a large task alone, file count, or a price ratio never decides it. | Delegate the narrow exploration, one bounded writer per unit with a reason, and/or the verifier needed for that action. |
 
 File count never decides the route or the task size. High risk takes a task
-out of the small path and adds an independent verifier after the change's own
-checks. The feature document still comes only from a failed resume test; a
-large task without a writer reason stays inline, following its logbook. When receipt-driven development is on and native assess returns a
-risk tier, that tier wins; the agent may only raise it.
+out of the small path; a named high-risk item adds an independent verifier
+after the change's own checks. The verifier runs as rarely as possible: a native
+risk tier, an unclear or failed assessment, and the writer's model or effort
+never add one by themselves. The feature document still comes only from a failed resume test; a
+large task without a writer reason stays inline, following its logbook. When receipt-driven development is on, the native assess tier
+decides native review and the agent may only raise it; it never adds an
+independent verifier by itself.
+
+A delegation trigger holds only when its condition truly holds; none holds by
+default, and when in doubt the parent works inline. A writer unit is one
+independent piece of behavior with its code, tests, and docs together: one
+behavior is never split into test, docs, and code writers, a delivery that
+depends on another is not independent, and several small independent changes
+run inline, one after another, because a subagent spends one to two minutes
+reading before it writes.
 
 Delegation also applies per action. Tests, builds, installs, and native review
 actors may use fresh workers without changing the implementation route.
@@ -189,3 +200,10 @@ Review mode is implemented in
 [`internal/cli/review_mode.go`](../internal/cli/review_mode.go). The current
 authority and recovery behavior is documented in the
 [Organic RDD architecture](architecture/organic-rdd.md).
+
+Pi is the one runtime whose ODD steps differ: it renders Gentle Shell's own
+steps (the visible `todo` projection, routing through its orchestrator's
+Mechanisms, phase reporting, and its asset pointers) in place of the canonical
+ones, and the rest of its block stays canonical. Gentle AI installs nothing
+into Pi's prompt; it publishes the rendered Pi block as `routing/pi.md` in the
+provider contract bundle (contract 1.4.0), for gentle-pi to mirror in a follow-up change.

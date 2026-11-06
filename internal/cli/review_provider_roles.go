@@ -844,14 +844,10 @@ func reviewProviderTargetedValidatorCorrection(ctx context.Context, repo string,
 	if state.State != reviewtransaction.StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() {
 		return reviewtransaction.Snapshot{}, errors.New("provider targeted validator request requires an open correction") // refusal:by-design world-action: validator evidence applies only to one open forecasted correction
 	}
-	view, err := state.CompactReviewView()
-	if err != nil {
+	if _, err := state.CompactReviewView(); err != nil {
 		return reviewtransaction.Snapshot{}, fmt.Errorf("derive provider targeted validator scope from admitted authority: %w", err)
 	}
-	return (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(ctx, reviewtransaction.Target{
-		Kind: reviewtransaction.TargetFixDiff, Projection: state.InitialSnapshot.Projection, BaseRef: state.CurrentSnapshot.CandidateTree,
-		IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: view.FixFindingIDs,
-	})
+	return reviewtransaction.BuildTargetedValidationCorrection(ctx, repo, state)
 }
 
 func canonicalProviderRoleResult(result any) ([]byte, error) {

@@ -99,6 +99,19 @@ find "$stage/original" -type l -exec sh -c '
 ' sh "$stage/original" {} + >"$stage/diagnostic" 2>&1 || fail 'archive symlink escaped'
 test -z "$(find "$stage/original" ! -type f ! -type d ! -type l -print -quit)" || fail 'nonregular archive object'
 cp -RL "$stage/original/." "$stage/node/" >"$stage/diagnostic" 2>&1 || fail 'physical normalization failed'
+# Dereferencing stock npm/npx links relocates their relative JavaScript imports.
+# Keep the all-regular layout, but invoke each unchanged canonical package entry.
+for name in npm npx; do
+    test -f "$stage/node/lib/node_modules/npm/bin/$name-cli.js" || fail 'stock npm entry absent'
+    cat > "$stage/node/bin/$name" <<'LAUNCHER'
+#!/bin/sh
+bin=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P) || exit 1
+name=${0##*/}
+case "$name" in npm|npx) ;; *) exit 1;; esac
+exec "$bin/node" "$bin/../lib/node_modules/npm/bin/$name-cli.js" "$@"
+LAUNCHER
+    chmod 700 "$stage/node/bin/$name"
+done
 test -z "$(find "$stage/node" ! -type f ! -type d -print -quit)" || fail 'nonregular Node object'
 # Restrict names to the complete stock inventory grammar used by the installer.
 (cd "$stage/node" && find .) | awk '
@@ -114,14 +127,18 @@ probe() {
         XDG_CONFIG_HOME="$stage/config" XDG_STATE_HOME="$stage/state" \
         PATH="$stage/node/bin:/usr/bin:/bin" NPM_CONFIG_USERCONFIG="$stage/config/user.npmrc" \
         NPM_CONFIG_GLOBALCONFIG="$stage/config/global.npmrc" \
-        "$node" --max-old-space-size=256 "$@"
+        "$@"
 }
 # Outer Bash supplies per-UID PID limits. This portable shell supplies CPU time.
 ulimit -t 60
-probe --version >"$stage/probe" 2>"$stage/diagnostic" || fail 'stock Node probe failed'
+probe "$node" --max-old-space-size=256 --version >"$stage/probe" 2>"$stage/diagnostic" || fail 'stock Node probe failed'
 test "$(cat "$stage/probe")" = v24.18.0 || fail 'stock Node version differs'
-probe "$npm" --version >"$stage/probe" 2>"$stage/diagnostic" || fail 'stock npm probe failed'
+probe "$node" --max-old-space-size=256 "$npm" --version >"$stage/probe" 2>"$stage/diagnostic" || fail 'stock npm probe failed'
 test "$(cat "$stage/probe")" = 11.16.0 || fail 'stock npm version differs'
+for name in npm npx; do
+    probe "$stage/node/bin/$name" --version >"$stage/probe" 2>"$stage/diagnostic" || fail 'stock package launcher probe failed'
+    test "$(cat "$stage/probe")" = 11.16.0 || fail 'stock package launcher version differs'
+done
 # DATA provenance and full regular-file inventory are not execution authority.
 printf 'accepted-archive-sha256=%s\nbytes=%s\nNode=24.18.0\nnpm=11.16.0\n' "$accepted" "$bytes" \
     > "$stage/node/BOOTSTRAP-PROVENANCE"
