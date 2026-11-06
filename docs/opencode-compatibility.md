@@ -40,9 +40,11 @@ resolved executable and reuses that answer, failures included, at every review
 gate (assess, STATUS, START, consent, relay, capture), so eligibility cannot
 change between steps of one invocation. The supported-runtime list in a refusal
 never probes: it names what the binary supports, and an OpenCode refusal states
-the host condition that failed. A probe that times out (3 seconds) is reported
-as a timeout, not as an unsupported runtime; re-run once `opencode --version`
-answers promptly.
+the host condition that failed. Runtime-major detection allows up to 15 seconds
+for `opencode --version`, accommodating slow external CLI startup while keeping
+the probe bounded. A timeout reports the elapsed budget and that managed runtime
+assets were not selected; it is not reported as an unsupported runtime. Re-run
+once `opencode --version` answers within that budget.
 
 Proven scope, on a real OpenCode 2.0.19 host with SDK 2.0.4 and external network
 denied: the managed V2 review plugin and the real Go relay admit the lens,
@@ -135,11 +137,48 @@ removed by a later sync. A workspace sync edits only the project settings
 file. The settings file and prompts are in the install, sync, and upgrade
 snapshots.
 
+The managed `gentle-orchestrator` relays blocking prompts through the native
+`question` tool, which OpenCode 1.x denies to custom agents, so install and sync
+set its `permission.question` to `"allow"` on both majors (OpenCode and Kilo,
+#4816). They write nothing when the user already set a question rule for it, or
+has a deny that covers the tool, globally or on the orchestrator (`agent` or
+native `agents` entry):
+
+- `permission` set to `"deny"`, or a `"*"` or `question` rule of `"deny"`;
+- a `question` pattern map with `"*": "deny"`;
+- `tools` with `question: false`;
+- a native `permissions` rule with action `"*"` or `question`, effect `"deny"`,
+  and resource `"*"` or no resource.
+
+Agent rules are evaluated after global ones and the last match wins, so an
+agent-level `"allow"` would override that deny. Uninstall removes the `"allow"`
+only when the
+orchestrator's permission object still has the shape install wrote, `question`
+beside a `task` map of Gentle AI delegation grants. Otherwise it keeps the
+value and lists it under manual actions.
+
+The orchestrator delegates only to Gentle AI agents. Install and sync write its
+`permission.task` as `"*": "deny"` followed by an `"allow"` for every Gentle AI
+agent; the wildcard comes first because the last matching rule wins. Without it,
+OpenCode 2 can route delegation to its built-in `explore` or `general` subagent,
+which has no skill tool. A wildcard task rule the user already set is kept, and
+uninstall removes the wildcard deny once the Gentle AI grants are gone.
+
+Every install and sync writer of `opencode.jsonc` rewrites only the top-level
+values it owns (the managed agents, `default_agent`, `share`, `mcp`,
+`permission`, `theme`), so comments and trailing commas elsewhere survive on
+both runtime majors. Before any file changes, install and sync refuse a document
+those writers cannot edit that way: malformed JSONC, duplicate keys, or an
+escaped key spelling or a comment inside a value a selected writer touches. Move
+the comment outside that value, or spell the key plainly, and retry. Kilocode
+goes through the same writers, but its `opencode.json` is strict JSON.
+
 Before writing V2 managed plugins, install and sync check the SDK installed in
 the OpenCode config directory. Any 2.x release at or above 2.0.4 is accepted, so
 an SDK that matches a newer OpenCode runtime is kept as is. A missing SDK, an older
 release, a prerelease or another major is refused, and the refusal names the
-version it found. The printed command pins the minimum exactly
+version it found. `gentle-ai sync --dry-run` reports the same refusal as a
+`Would stop:` line without installing anything. The printed command pins the minimum exactly
 (`npm install --save-exact ... @opencode/plugin@2.0.4` or
 `bun add --exact @opencode/plugin@2.0.4`), so a later routine install or update in
 that directory cannot float it. Newer 2.x releases are accepted by semantic

@@ -40,6 +40,34 @@ func TestDetectRuntimeMajorBounded(t *testing.T) {
 	}
 }
 
+func TestDetectRuntimeMajorAllowsSlowSupportedRuntime(t *testing.T) {
+	old := VersionRunnerOverride
+	t.Cleanup(func() { VersionRunnerOverride = old })
+	for _, tt := range []struct {
+		version string
+		want    RuntimeMajor
+	}{
+		{"1.18.31\n", RuntimeV1},
+		{"2.0.4\n", RuntimeV2},
+	} {
+		t.Run(tt.version, func(t *testing.T) {
+			VersionRunnerOverride = func(ctx context.Context, _ Command) (CommandOutput, error) {
+				timer := time.NewTimer(3500 * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+					return CommandOutput{Stdout: []byte(tt.version)}, nil
+				case <-ctx.Done():
+					return CommandOutput{}, ctx.Err()
+				}
+			}
+			if got, err := DetectRuntimeMajor(context.Background()); got != tt.want || err != nil {
+				t.Fatalf("slow supported runtime = %v, %v; want %v, nil", got, err, tt.want)
+			}
+		})
+	}
+}
+
 // A probe that outlives its deadline is reported as a timeout, distinct from
 // an absent or unsupported runtime, through the real deadline path.
 func TestDetectRuntimeMajorReportsTimeoutDistinctly(t *testing.T) {
@@ -50,8 +78,8 @@ func TestDetectRuntimeMajorReportsTimeoutDistinctly(t *testing.T) {
 		<-ctx.Done()
 		return CommandOutput{}, errors.New("signal: killed")
 	}
-	if _, err := DetectRuntimeMajor(context.Background()); !errors.Is(err, ErrRuntimeVersionTimeout) {
-		t.Fatalf("timed-out probe error = %v, want ErrRuntimeVersionTimeout", err)
+	if got, err := DetectRuntimeMajor(context.Background()); got != RuntimeUnknown || !errors.Is(err, ErrRuntimeVersionTimeout) || err.Error() != "`opencode --version` timed out after 10ms; managed runtime assets were not selected" {
+		t.Fatalf("timed-out probe = %v, %v; want unknown runtime and explicit 10ms timeout", got, err)
 	}
 	VersionRunnerOverride = func(context.Context, Command) (CommandOutput, error) { return CommandOutput{}, errors.New("missing") }
 	if _, err := DetectRuntimeMajor(context.Background()); err == nil || errors.Is(err, ErrRuntimeVersionTimeout) {

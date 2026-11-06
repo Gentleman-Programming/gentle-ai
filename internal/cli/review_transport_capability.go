@@ -35,7 +35,7 @@ const reviewImmutableTransportUnsupportedCode = "immutable_review_transport_unsu
 
 var reviewImmutableTransportUnsupportedReason = reviewPreflightReason{
 	Code:       reviewImmutableTransportUnsupportedCode,
-	Message:    "The active runtime cannot provide immutable receipt-review transport.",
+	Message:    "The active runtime cannot provide immutable receipt-review transport; to keep working without receipt review here, run `gentle-ai review mode disable --scope clone --cwd <repo>`.",
 	NextAction: "stop",
 }
 

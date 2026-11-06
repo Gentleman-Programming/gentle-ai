@@ -38,6 +38,7 @@ func TestCorrectionPlanStatusIsStableAcrossRestart(t *testing.T) {
 		}
 		captureCLIReviewerResultWithFindings(t, repo, legacy, order, findings, &bytes.Buffer{})
 	}
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)

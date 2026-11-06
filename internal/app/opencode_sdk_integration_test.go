@@ -632,7 +632,8 @@ func TestSDKOfflineHelperStartupWithoutGo(t *testing.T) {
 			}
 			cmd := exec.CommandContext(ctx, binary, args...)
 			cmd.Env = []string{
-				"PATH=" + root, "HOME=" + root, "TMPDIR=" + root,
+				"PATH=" + root, "HOME=" + root, "USERPROFILE=" + root,
+				"TMPDIR=" + root, "TEMP=" + root, "TMP=" + root,
 				"GOMODCACHE=" + filepath.Join(root, "modules"),
 				"GOCACHE=" + filepath.Join(root, "build"),
 				"GENTLE_AI_REAL_NPM_OFFLINE=" + tc.optIn,

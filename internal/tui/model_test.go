@@ -2130,7 +2130,7 @@ func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	}
 }
 
-func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
+func TestWelcomeMenu_UninstallNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
 	m.Cursor = 9
@@ -2143,7 +2143,7 @@ func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
 	}
 }
 
-func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
+func TestWelcomeMenu_UninstallNavigation_WithOpenCodeDetected(t *testing.T) {
 	m := NewModel(system.DetectionResult{
 		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
 	}, "dev")
@@ -2158,17 +2158,12 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 	}
 }
 
-// TestWelcomeMenu_OptionCount verifies legacy discovery does not change the menu.
+// TestWelcomeMenu_OptionCount verifies the 12 retained welcome options.
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	// Legacy discovery does not change the 12 retained options.
-	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true)
 	if len(opts) != 12 {
-		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 12; got %v", len(opts), opts)
-	}
-	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 2, true)
-	if len(optsWithProfiles) != 12 || !reflect.DeepEqual(opts, optsWithProfiles) {
-		t.Fatalf("legacy profile discovery changed welcome menu: %v", optsWithProfiles)
+		t.Fatalf("WelcomeOptions() len = %d, want 12; got %v", len(opts), opts)
 	}
 }
 
@@ -2461,7 +2456,7 @@ func TestUninstallModeScreen_CleanInstallNavigatesToConfirm(t *testing.T) {
 	}
 }
 
-func TestUninstallModeScreen_FullWithProfilesSkipsProfileSelection(t *testing.T) {
+func TestUninstallModeScreen_FullSkipsEngramScopeSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
 	m.Screen = ScreenUninstallMode
 	m.Cursor = 1 // Full Uninstall option
@@ -2472,8 +2467,8 @@ func TestUninstallModeScreen_FullWithProfilesSkipsProfileSelection(t *testing.T)
 	if state.Screen != ScreenUninstallConfirm {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
 	}
-	if len(state.UninstallProfilesToRemove) != 0 {
-		t.Fatalf("legacy profiles selected for deletion: %v", state.UninstallProfilesToRemove)
+	if state.UninstallEngramScopeSelected {
+		t.Fatal("full uninstall must not mark the Engram scope as selected")
 	}
 }
 
@@ -2507,7 +2502,7 @@ func TestUninstallComponents_ContinueNavigatesToConfirm(t *testing.T) {
 	}
 }
 
-func TestUninstallComponents_ContinueWithProfilesSkipsProfileSelection(t *testing.T) {
+func TestUninstallComponents_ContinueWithoutEngramSkipsScopeSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}}}, "dev")
 	m.Screen = ScreenUninstallComponents
 	m.UninstallMode = model.UninstallModePartial
@@ -2518,23 +2513,24 @@ func TestUninstallComponents_ContinueWithProfilesSkipsProfileSelection(t *testin
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallConfirm || len(state.UninstallProfilesToRemove) != 0 {
-		t.Fatalf("partial component uninstall selected legacy profiles: screen=%v profiles=%v", state.Screen, state.UninstallProfilesToRemove)
+	if state.Screen != ScreenUninstallConfirm || state.UninstallEngramScopeSelected {
+		t.Fatalf("partial component uninstall without Engram: screen=%v scopeSelected=%v", state.Screen, state.UninstallEngramScopeSelected)
 	}
 }
 
-func TestUninstallProfiles_ContinueNavigatesToConfirm(t *testing.T) {
+func TestUninstallEngramScope_ContinueNavigatesToConfirm(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenUninstallProfiles
-	m.UninstallProfilesAvailable = []string{"cheap"}
-	m.UninstallProfilesToRemove = []string{"cheap"}
-	m.Cursor = len(m.UninstallProfilesAvailable)
+	m.Screen = ScreenUninstallEngramScope
+	m.Cursor = 0
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallConfirm {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallConfirm)
+	}
+	if !state.UninstallEngramScopeSelected {
+		t.Fatal("continuing from the Engram scope screen must mark the scope as selected")
 	}
 }
 
@@ -2729,27 +2725,24 @@ func TestStartUninstall_FullRemoveNonBrewRemovesBinary(t *testing.T) {
 	}
 }
 
-func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
+func TestStartUninstall_UsesEngramScopeUninstallWhenSelected(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.UninstallMode = model.UninstallModePartial
 	m.UninstallAgents = []model.AgentID{model.AgentOpenCode}
-	m.UninstallComponents = []model.ComponentID{model.ComponentSDD}
-	m.UninstallProfilesToRemove = []string{"cheap"}
-	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+	m.UninstallComponents = []model.ComponentID{model.ComponentEngram}
+	m.UninstallEngramScopeSelected = true
+	m.UninstallEngramScope = model.EngramUninstallScopeProject
 
 	called := false
-	m.UninstallWithProfilesFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+	m.UninstallWithEngramScopeFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
 		called = true
-		if !reflect.DeepEqual(profileNames, []string{"cheap"}) {
-			t.Fatalf("profileNames = %v, want [cheap]", profileNames)
-		}
-		if engramScope != model.EngramUninstallScopeGlobal {
-			t.Fatalf("engramScope = %q, want %q", engramScope, model.EngramUninstallScopeGlobal)
+		if engramScope != model.EngramUninstallScopeProject {
+			t.Fatalf("engramScope = %q, want %q", engramScope, model.EngramUninstallScopeProject)
 		}
 		return componentuninstall.Result{}, nil
 	}
 	m.UninstallFn = func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
-		t.Fatalf("UninstallFn should not be called when UninstallWithProfilesFn is configured")
+		t.Fatalf("UninstallFn should not be called when UninstallWithEngramScopeFn is configured")
 		return componentuninstall.Result{}, nil
 	}
 
@@ -2758,7 +2751,7 @@ func TestStartUninstall_UsesProfileAwareUninstallWhenConfigured(t *testing.T) {
 		t.Fatalf("UninstallDoneMsg.Err = %v, want nil", msg.Err)
 	}
 	if !called {
-		t.Fatal("UninstallWithProfilesFn was not called")
+		t.Fatal("UninstallWithEngramScopeFn was not called")
 	}
 }
 
@@ -2780,8 +2773,8 @@ func TestUninstallComponents_ContinueWithEngramProjectScopeNavigatesToSubSelecti
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenUninstallProfiles {
-		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallProfiles)
+	if state.Screen != ScreenUninstallEngramScope {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenUninstallEngramScope)
 	}
 	if !state.UninstallEngramProjectScopeAvailable {
 		t.Fatal("UninstallEngramProjectScopeAvailable = false, want true")
@@ -2919,19 +2912,19 @@ func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
 	}
 }
 
-// TestModelConfig_BackNavigation verifies that selecting cursor 4 (Back) from
+// TestModelConfig_BackNavigation verifies that selecting cursor 5 (Back) from
 // ScreenModelConfig returns to ScreenWelcome.
-// Index 3 is now "Configure Codex models"; Back moved to index 4.
+// Index 4 is now "Configure Antigravity models"; Back moved to index 5.
 func TestModelConfig_BackNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelConfig
-	m.Cursor = 4 // Back is now at index 4
+	m.Cursor = 5 // Back is now at index 5
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenWelcome {
-		t.Fatalf("ModelConfig cursor=4 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+		t.Fatalf("ModelConfig cursor=5 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
 	}
 }
 
@@ -3131,7 +3124,7 @@ func TestModelConfig_OpenCodePickerBackReturnsToModelConfig(t *testing.T) {
 // makeDetectionWithAgents builds a DetectionResult with the specified agents
 // marked as Exists=true. All other agents are absent.
 func makeDetectionWithAgents(present ...string) system.DetectionResult {
-	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code", "hermes"}
+	known := []string{"claude-code", "opencode", "gemini-cli", "cursor", "vscode-copilot", "codex", "antigravity", "windsurf", "qwen-code", "hermes", "github-copilot-cli"}
 	presentSet := make(map[string]bool, len(present))
 	for _, p := range present {
 		presentSet[p] = true
@@ -3847,6 +3840,7 @@ func TestPreselectedAgents_AllKnownAgentsMappedCorrectly(t *testing.T) {
 		{"vscode-copilot", model.AgentVSCodeCopilot},
 		{"codex", model.AgentCodex},
 		{"hermes", model.AgentHermes},
+		{"github-copilot-cli", model.AgentGitHubCopilotCLI},
 	}
 
 	for _, tt := range tests {
@@ -7739,5 +7733,149 @@ func TestMarkPendingSyncUnderLockReReadsLatestStateAfterLockContention(t *testin
 	}
 	if got.RDDMode != string(reviewtransaction.RDDModeOn) {
 		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
+	}
+}
+
+func TestCompletionViewOmitsGGAInstalledWhenInstallDeferred(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenComplete
+	m.Selection.Components = []model.ComponentID{model.ComponentGGA}
+
+	if view := m.View(); !strings.Contains(view, "GGA was installed globally") {
+		t.Fatalf("view without a deferred install should report GGA as installed:\n%s", view)
+	}
+
+	m.Execution.DeferredComponents = []model.ComponentID{model.ComponentGGA}
+	m.Execution.ManualActions = []string{cli.GGAHomebrewDeferredAction}
+	view := m.View()
+	if strings.Contains(view, "GGA was installed globally") {
+		t.Fatalf("view reports GGA as installed although its install was deferred:\n%s", view)
+	}
+	if !strings.Contains(view, "Install Homebrew") {
+		t.Fatalf("view is missing the Homebrew manual action:\n%s", view)
+	}
+}
+
+func TestInstalledComponentCountExcludesDeferredComponents(t *testing.T) {
+	selected := []model.ComponentID{model.ComponentPersona, model.ComponentGGA}
+
+	if got := installedComponentCount(selected, nil); got != 2 {
+		t.Fatalf("installedComponentCount() without deferrals = %d, want 2", got)
+	}
+	if got := installedComponentCount(selected, []model.ComponentID{model.ComponentGGA}); got != 1 {
+		t.Fatalf("installedComponentCount() with GGA deferred = %d, want 1", got)
+	}
+}
+
+func TestInstallerShowsAntigravityModelPickerOnlyWhenAntigravitySelected(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		agents []model.AgentID
+		want   Screen
+	}{
+		{"Antigravity", []model.AgentID{model.AgentAntigravity}, ScreenAntigravityModelPicker},
+		{"Antigravity with Claude", []model.AgentID{model.AgentClaudeCode, model.AgentAntigravity}, ScreenAntigravityModelPicker},
+		{"Claude only", []model.AgentID{model.AgentClaudeCode}, ScreenDependencyTree},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenPreset
+			m.Selection.Agents = tt.agents
+			m.Cursor = presetCursor(t, model.PresetFullGentleman)
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if got := updated.(Model).Screen; got != tt.want {
+				t.Fatalf("Preset confirm: screen = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInstallerAntigravityPickerConfirmContinuesInstallFlow(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPreset
+	m.InstallFlowActive = true
+	m.Selection.Agents = []model.AgentID{model.AgentAntigravity}
+	m.Cursor = presetCursor(t, model.PresetFullGentleman)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	m.Cursor = 1 // performance
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenCommunityTools || m.PendingSyncOverrides != nil {
+		t.Fatalf("picker confirm: screen = %v, overrides %+v; want community tools without sync", m.Screen, m.PendingSyncOverrides)
+	}
+	if !reflect.DeepEqual(m.Selection.AntigravityModelAssignments, model.AntigravityModelPresetPerformance()) {
+		t.Fatalf("Selection.AntigravityModelAssignments = %v", m.Selection.AntigravityModelAssignments)
+	}
+	if back := m.goBackFromCommunityTools(); back.Screen != ScreenAntigravityModelPicker {
+		t.Fatalf("community tools back: screen = %v, want Antigravity picker", back.Screen)
+	}
+	m.Screen = ScreenAntigravityModelPicker
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := updated.(Model).Screen; got != ScreenPreset {
+		t.Fatalf("picker Esc: screen = %v, want Preset", got)
+	}
+}
+
+func TestInstallerCustomPresetRoutesThroughAntigravityPicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenDependencyTree
+	m.Selection.Preset = model.PresetCustom
+	m.Selection.Agents = []model.AgentID{model.AgentAntigravity}
+	m.Cursor = len(screens.AllComponents())
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenAntigravityModelPicker {
+		t.Fatalf("custom continue: screen = %v, want Antigravity picker", m.Screen)
+	}
+	m.Cursor = 0
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := updated.(Model).Screen; got == ScreenAntigravityModelPicker || got == ScreenSync {
+		t.Fatalf("custom picker confirm stayed or synced: screen = %v", got)
+	}
+}
+
+func TestInstallerAntigravityPickerPreloadsPersistedTiers(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{
+		AntigravityModelAssignments: map[string]string{"jd-judge-a": "pro", "jd-judge-b": "ultra"},
+	})
+	m.Screen = ScreenPreset
+	m.Selection.Agents = []model.AgentID{model.AgentAntigravity}
+	m.Cursor = presetCursor(t, model.PresetFullGentleman)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	picker := updated.(Model).AntigravityModelPicker
+	if want := map[string]model.AntigravityModelTier{"jd-judge-a": model.AntigravityModelPro}; picker.Preset != screens.AntigravityPresetCustom || !reflect.DeepEqual(picker.CustomAssignments, want) {
+		t.Fatalf("picker = %+v, want custom %v (unknown tiers dropped)", picker, want)
+	}
+}
+
+func TestModelConfigAntigravityPickerSyncsSelectedTiers(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{
+		AntigravityModelAssignments: map[string]string{"jd-fix-agent": "flash"},
+	})
+	m.Screen = ScreenModelConfig
+	m.Cursor = 4
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenAntigravityModelPicker || !m.ModelConfigMode || m.AntigravityModelPicker.CustomAssignments["jd-fix-agent"] != model.AntigravityModelFlash {
+		t.Fatalf("ModelConfig cursor=4: screen = %v, mode %t, picker %+v", m.Screen, m.ModelConfigMode, m.AntigravityModelPicker)
+	}
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyEnter}} {
+		back := m
+		back.Cursor = screens.AntigravityModelPickerOptionCount(back.AntigravityModelPicker) - 1
+		updated, _ = back.Update(key)
+		if got := updated.(Model); got.Screen != ScreenModelConfig || got.ModelConfigMode {
+			t.Fatalf("%s from picker: screen = %v, mode %t; want ModelConfig", key, got.Screen, got.ModelConfigMode)
+		}
+	}
+	m.Cursor = 1 // performance
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	want := &model.SyncOverrides{
+		TargetAgents:                []model.AgentID{model.AgentAntigravity},
+		AntigravityModelAssignments: model.AntigravityModelPresetPerformance(),
+	}
+	if m.Screen != ScreenSync || !reflect.DeepEqual(m.PendingSyncOverrides, want) {
+		t.Fatalf("picker confirm: screen = %v, overrides %+v; want sync with %+v", m.Screen, m.PendingSyncOverrides, want)
 	}
 }

@@ -61,6 +61,10 @@ jobs:
   # That puts the worst shard near 1000s on Windows, roughly half the go-test
   # timeout, instead of 1% over it.
   #
+  # By 2026-10-12 cli-n-o had grown past the 1800s go-test timeout on Windows
+  # (TestNegotiated* alone is 131 tests), so it is split into cli-n and cli-o,
+  # measured locally at 112s and 117s against 230s for the combined selector.
+  #
   # Intra-package t.Parallel() would be the deeper fix, but internal/cli has 89
   # os.Setenv/t.Setenv sites and t.Setenv panics in a parallel test, so that is
   # a refactor of shared global state and not a CI change.
@@ -80,9 +84,12 @@ jobs:
           - name: cli-a-m
             packages: ./internal/cli
             run: ^Test[A-M]
-          - name: cli-n-o
+          - name: cli-n
             packages: ./internal/cli
-            run: ^Test[N-O]
+            run: ^TestN
+          - name: cli-o
+            packages: ./internal/cli
+            run: ^TestO
           - name: cli-p-q-s-z
             packages: ./internal/cli
             run: ^Test[P-Q]|^Test[S-Z]

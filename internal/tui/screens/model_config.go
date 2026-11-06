@@ -13,12 +13,13 @@ func ModelConfigOptions() []string {
 		"Configure OpenCode models",
 		"Configure Kiro models",
 		"Configure Codex models",
+		"Configure Antigravity models",
 		"Back",
 	}
 }
 
 // RenderModelConfig renders the model configuration entry screen.
-// It shows a 4-option menu: Claude models, OpenCode models, Kiro models, Back.
+// It lists the Claude, OpenCode, Kiro, Codex, and Antigravity pickers, then Back.
 // cursor indicates which option is currently highlighted.
 func RenderModelConfig(cursor int) string {
 	var b strings.Builder

@@ -36,12 +36,9 @@ const gitObjectPermissionStderr = "fatal: cannot access the object database: Per
 
 // TestOpaqueRepositoryContextResolutionNamesDistinctCauses covers the widest
 // collapse point, reviewRepositoryContextResolutionFailure in
-// review_incident.go. Every non-trust resolution failure answered with the same
-// repository_context_unavailable sentence, and resolution front-runs authority
-// discovery (ResolveReviewRepositoryContext itself loads the compact record
-// through validateLiveReviewRepositoryContext), so an environmental Git
-// refusal, an absent authority record and an unparsable one all converge here.
-// Four genuinely different roots, one string.
+// review_incident.go. Underlying V2 resolution failures share a code but must
+// retain distinct scrubbed causes: an environmental Git refusal, an absent
+// authority record and an unparsable one all converge here.
 func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 	reviewEnabledHome(t)
 	cases := []struct {
@@ -90,7 +87,7 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 				t.Fatal("preflight succeeded despite an unresolvable repository context")
 			}
 			message := err.Error()
-			assertOpaqueFailureNamesCause(t, message, "repository_context_unavailable", tt.want, repo)
+			assertOpaqueFailureNamesCause(t, message, "rctx2_resolution_failed", tt.want, repo)
 			messages[tt.name] = message
 		})
 	}

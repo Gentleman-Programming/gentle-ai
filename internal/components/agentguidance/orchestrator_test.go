@@ -458,6 +458,59 @@ func TestRenderOrchestratorOpenCodeCarriesConsentV3QuestionRoute(t *testing.T) {
 	}
 }
 
+// TestRenderOrchestratorKiloRoutesToNativeDelegation pins #5254: Kilo shares
+// the OpenCode asset but never installs the gentle-ai-* ODD trio, so its
+// orchestrator must route delegated work to native subagents instead.
+func TestRenderOrchestratorKiloRoutesToNativeDelegation(t *testing.T) {
+	t.Parallel()
+
+	kilo, err := RenderOrchestrator(model.AgentKilocode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(kilo, "gentle-ai-") {
+		t.Fatalf("Kilo orchestrator names an agent Kilo never installs:\n%s", kilo)
+	}
+	if !strings.Contains(kilo, kiloNativeDelegationRoute) {
+		t.Fatal("Kilo orchestrator lost the native delegation route")
+	}
+
+	opencode, err := RenderOrchestrator(model.AgentOpenCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"gentle-ai-explore", "gentle-ai-worker", "gentle-ai-verify"} {
+		if !strings.Contains(opencode, "`"+name+"`") {
+			t.Errorf("OpenCode orchestrator lost its installed %s route", name)
+		}
+	}
+	if strings.Contains(opencode, kiloNativeDelegationRoute) {
+		t.Error("OpenCode orchestrator received the Kilo-only native delegation route")
+	}
+}
+
+func TestReplaceKiloNativeDelegationRouteFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"missing clause", "no routing here"},
+		{"duplicated clause", openCodeInstalledAgentRoute + "\n" + openCodeInstalledAgentRoute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := replaceKiloNativeDelegationRoute(tc.content, model.AgentKilocode); err == nil {
+				t.Fatal("replaceKiloNativeDelegationRoute error = nil, want clause count failure")
+			}
+			if got, err := replaceKiloNativeDelegationRoute(tc.content, model.AgentOpenCode); err != nil || got != tc.content {
+				t.Fatalf("OpenCode content changed: got %q err %v", got, err)
+			}
+		})
+	}
+}
+
 // Not parallel: it swaps the package-level contract source and restores it
 // before any parallel test resumes.
 func TestRenderOrchestratorFailsClosedWithoutReviewContractSource(t *testing.T) {

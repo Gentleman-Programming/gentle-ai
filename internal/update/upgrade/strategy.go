@@ -2,13 +2,11 @@ package upgrade
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -17,7 +15,6 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
@@ -42,11 +39,6 @@ var engramBetaInstallFn = func(profile system.PlatformProfile) (string, error) {
 // Package-level var for testability.
 var scriptHTTPClient = &http.Client{Timeout: 2 * time.Minute}
 
-var (
-	openCodeHomeDir = os.UserHomeDir
-	lookPathCommand = exec.LookPath
-)
-
 // maxScriptSize is the maximum number of bytes read from a downloaded install.sh.
 // This prevents unbounded memory use if the server returns an unexpectedly large body.
 // Note: HTTPS provides transport security but NOT content integrity — a compromised
@@ -54,8 +46,7 @@ var (
 const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 
 type strategyOutcome struct {
-	exitRequested   bool
-	observedVersion string
+	exitRequested bool
 }
 
 // runStrategy executes the upgrade for a single tool using the appropriate strategy
@@ -69,11 +60,10 @@ type strategyOutcome struct {
 //   - script method + linux/darwin + gga → ggaScriptUpgrade (git clone approach)
 //   - script method + linux/darwin + other → scriptUpgrade (curl | bash install.sh)
 //   - script method + windows → manualFallback
-//   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
 func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
 	ownership := update.HomebrewNone
-	if profile.PackageManager == "brew" && r.Tool.InstallMethod != update.InstallOpenCodePlugin {
+	if profile.PackageManager == "brew" {
 		var err error
 		ownership, err = homebrewOwnershipDetector(r.Tool.Name)
 		if err != nil {
@@ -106,9 +96,6 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 			return false, ggaScriptUpgrade(ctx, r)
 		}
 		return false, scriptUpgrade(ctx, r, profile)
-	case update.InstallOpenCodePlugin:
-		_, err := opencodePluginUpgrade(ctx, r)
-		return false, err
 	default:
 		return false, &ManualFallbackError{
 			Hint: fmt.Sprintf("upgrade %q: unsupported install method %q — please update manually. See: https://github.com/Gentleman-Programming/%s",
@@ -118,300 +105,8 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 }
 
 func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (strategyOutcome, error) {
-	if effectiveMethod(r.Tool, profile) == update.InstallOpenCodePlugin {
-		observedVersion, err := opencodePluginUpgrade(ctx, r)
-		return strategyOutcome{observedVersion: observedVersion}, err
-	}
 	exitRequested, err := runStrategy(ctx, r, profile, preflightDestination...)
 	return strategyOutcome{exitRequested: exitRequested}, err
-}
-
-func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, error) {
-	major, err := opencode.DetectRuntimeMajor(ctx)
-	if err != nil {
-		return "", &ManualFallbackError{Hint: err.Error()}
-	}
-	if major == opencode.RuntimeV2 {
-		return "", &ManualFallbackError{Hint: "OpenCode community plugin V2 compatibility is unverified; package and user configuration preserved."}
-	}
-	sdk, err := major.PluginDependency()
-	if err != nil {
-		return "", err
-	}
-
-	pkg := strings.TrimSpace(r.Tool.NpmPackage)
-	if pkg == "" {
-		return "", &ManualFallbackError{Hint: openCodePluginManualHint(r)}
-	}
-
-	homeDir, err := openCodeHomeDir()
-	if err != nil || strings.TrimSpace(homeDir) == "" {
-		return "", &ManualFallbackError{Hint: fmt.Sprintf("%s Could not resolve the user home directory; update %s manually.", openCodePluginManualHint(r), pkg)}
-	}
-
-	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
-	info, err := os.Stat(opencodeDir)
-	if err != nil || !info.IsDir() {
-		return "", &ManualFallbackError{Hint: fmt.Sprintf("%s OpenCode config directory was not found at %s; %s is not installed/materialized yet.", openCodePluginManualHint(r), opencodeDir, pkg)}
-	}
-
-	materialized, registered, err := openCodePluginRegisteredOrMaterialized(opencodeDir, pkg)
-	if err != nil {
-		return "", fmt.Errorf("inspect OpenCode plugin %s: %w", pkg, err)
-	}
-	if !materialized && !registered && r.Status != update.RegisteredNotMaterialized {
-		return "", &ManualFallbackError{Hint: fmt.Sprintf("%s %s is not registered in tui.json and is not present in node_modules; start/reload OpenCode first so it materializes the plugin.", openCodePluginManualHint(r), pkg)}
-	}
-
-	pm, err := selectOpenCodePackageManager(opencodeDir)
-	if err != nil {
-		return "", &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s can be upgraded from %s, but no supported package manager is available in PATH. Install bun or npm, then run update tools again.", pkg, opencodeDir)}
-	}
-
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	default:
-	}
-
-	expectedVersion := strings.TrimSpace(r.LatestVersion)
-	if expectedVersion == "" {
-		return "", &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s upgrade cannot be pinned because the expected version is empty; rerun the update check and try again.", pkg)}
-	}
-	targets := []string{pkg + "@" + expectedVersion, sdk}
-	var cmd *exec.Cmd
-	switch pm {
-	case "bun":
-		cmd = execCommand("bun", append([]string{"add"}, targets...)...)
-	case "npm":
-		cmd = execCommand("npm", append([]string{"install", "--save", "--no-audit", "--no-fund"}, targets...)...)
-	default:
-		return "", &ManualFallbackError{Hint: fmt.Sprintf("unsupported OpenCode package manager %q for %s", pm, pkg)}
-	}
-	cmd.Dir = opencodeDir
-	cmd.Stdin = nil
-	cmd.Env = openCodePluginUpgradeEnv(cmd.Env)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		outStr := string(out)
-		if pm == "npm" && npmErrorCode(outStr) == "ERESOLVE" {
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			default:
-			}
-			fmt.Fprintln(os.Stderr, "WARNING: npm reported an ERESOLVE peer dependency conflict; retrying with --legacy-peer-deps")
-			retryCmd := execCommand("npm", append([]string{"install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps"}, targets...)...)
-			retryCmd.Dir = opencodeDir
-			retryCmd.Stdin = nil
-			retryCmd.Env = openCodePluginUpgradeEnv(retryCmd.Env)
-			if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
-				return "", fmt.Errorf("%s upgrade %s in %s: retry with --legacy-peer-deps failed: %w (retry output: %s); original error: %v (original output: %s)", pm, pkg, opencodeDir, retryErr, string(retryOut), err, outStr)
-			}
-		} else {
-			return "", fmt.Errorf("%s upgrade %s in %s: %w (output: %s)", pm, pkg, opencodeDir, err, outStr)
-		}
-	}
-	if err := clearOpenCodePluginPackageCache(homeDir, pkg); err != nil {
-		return "", fmt.Errorf("clear OpenCode package cache for %s: %w", pkg, err)
-	}
-
-	observedVersion, err := inspectOpenCodePluginVersion(opencodeDir, pkg)
-	if err != nil || observedVersion != expectedVersion {
-		// A successful package-manager command crosses the mutation boundary. A
-		// failed materialization check is therefore a real failed postcondition,
-		// not a no-op manual fallback.
-		return "", fmt.Errorf("OpenCode plugin %s materialization failed after %s mutation: %s", pkg, pm, openCodePluginVerificationHint(r, pkg, opencodeDir, observedVersion, err))
-	}
-	return observedVersion, nil
-}
-
-func inspectOpenCodePluginVersion(opencodeDir, pkg string) (string, error) {
-	manifestPath := filepath.Join(opencodeDir, "node_modules", pkg, "package.json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("installed manifest is absent at %s", manifestPath)
-		}
-		return "", fmt.Errorf("installed manifest could not be read at %s: %w", manifestPath, err)
-	}
-
-	var manifest struct {
-		Version string `json:"version"`
-	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return "", fmt.Errorf("installed manifest is invalid at %s: %w", manifestPath, err)
-	}
-	version := strings.TrimSpace(manifest.Version)
-	if version == "" {
-		return "", fmt.Errorf("installed manifest is invalid at %s: version is missing", manifestPath)
-	}
-	return version, nil
-}
-
-func openCodePluginVerificationHint(r update.UpdateResult, pkg, opencodeDir, observedVersion string, verificationErr error) string {
-	observed := strings.TrimSpace(observedVersion)
-	if observed == "" {
-		observed = "absent or invalid"
-	}
-	detail := ""
-	if verificationErr != nil {
-		detail = fmt.Sprintf(" (%s)", verificationErr)
-	}
-	return fmt.Sprintf("OpenCode plugin %s upgrade was not verified: expected version %q but observed %q%s. No automatic rollback is available for package-manager state; package metadata, lockfiles, or node_modules may have changed. Inspect %s/node_modules/%s/package.json and the package-manager files in %s, restore or correct them, then rerun the upgrade.", pkg, strings.TrimSpace(r.LatestVersion), observed, detail, opencodeDir, pkg, opencodeDir)
-}
-
-func npmErrorCode(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 4 && fields[0] == "npm" && fields[1] == "error" && fields[2] == "code" {
-			return fields[3]
-		}
-	}
-	return ""
-}
-
-func openCodePluginRegisteredOrMaterialized(opencodeDir, pkg string) (bool, bool, error) {
-	if info, err := os.Stat(filepath.Join(opencodeDir, "node_modules", pkg)); err == nil && info.IsDir() {
-		return true, false, nil
-	}
-	if _, ok := openCodePackageJSONDependencyVersion(opencodeDir, pkg); ok {
-		return false, true, nil
-	}
-
-	data, err := os.ReadFile(filepath.Join(opencodeDir, "tui.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, false, nil
-		}
-		return false, false, err
-	}
-	if strings.TrimSpace(string(data)) == "" {
-		return false, false, nil
-	}
-
-	var root struct {
-		Plugin []string `json:"plugin"`
-	}
-	if err := json.Unmarshal(data, &root); err != nil {
-		return false, false, fmt.Errorf("parse tui.json: %w", err)
-	}
-	for _, plugin := range root.Plugin {
-		if strings.TrimSpace(plugin) == pkg {
-			return false, true, nil
-		}
-	}
-	return false, false, nil
-}
-
-func openCodePackageJSONDependencyVersion(opencodeDir, pkg string) (string, bool) {
-	data, err := os.ReadFile(filepath.Join(opencodeDir, "package.json"))
-	if err != nil || strings.TrimSpace(string(data)) == "" {
-		return "", false
-	}
-
-	var manifest struct {
-		Dependencies    map[string]string `json:"dependencies"`
-		DevDependencies map[string]string `json:"devDependencies"`
-	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return "", false
-	}
-	if version, ok := manifest.Dependencies[pkg]; ok {
-		return version, true
-	}
-	if version, ok := manifest.DevDependencies[pkg]; ok {
-		return version, true
-	}
-	return "", false
-}
-
-func clearOpenCodePluginPackageCache(homeDir, pkg string) error {
-	return os.RemoveAll(filepath.Join(homeDir, ".cache", "opencode", "packages", pkg+"@latest"))
-}
-
-func selectOpenCodePackageManager(opencodeDir string) (string, error) {
-	candidates := make([]string, 0, 2)
-	if pm := openCodePackageManagerFromMetadata(opencodeDir); pm != "" {
-		candidates = append(candidates, pm)
-	}
-	for _, pm := range []string{"bun", "npm"} {
-		if !stringInSlice(candidates, pm) {
-			candidates = append(candidates, pm)
-		}
-	}
-
-	for _, pm := range candidates {
-		if _, err := lookPathCommand(pm); err == nil {
-			return pm, nil
-		}
-	}
-	return "", fmt.Errorf("bun/npm not found")
-}
-
-func openCodePackageManagerFromMetadata(opencodeDir string) string {
-	packageJSON := filepath.Join(opencodeDir, "package.json")
-	if data, err := os.ReadFile(packageJSON); err == nil {
-		var manifest struct {
-			PackageManager string `json:"packageManager"`
-		}
-		if json.Unmarshal(data, &manifest) == nil {
-			pm := strings.ToLower(strings.TrimSpace(manifest.PackageManager))
-			switch {
-			case strings.HasPrefix(pm, "bun@") || pm == "bun":
-				return "bun"
-			case strings.HasPrefix(pm, "npm@") || pm == "npm":
-				return "npm"
-			}
-		}
-	}
-
-	for _, lockfile := range []string{"bun.lock", "bun.lockb"} {
-		if _, err := os.Stat(filepath.Join(opencodeDir, lockfile)); err == nil {
-			return "bun"
-		}
-	}
-	for _, lockfile := range []string{"package-lock.json", "npm-shrinkwrap.json"} {
-		if _, err := os.Stat(filepath.Join(opencodeDir, lockfile)); err == nil {
-			return "npm"
-		}
-	}
-	return ""
-}
-
-func openCodePluginUpgradeEnv(existing []string) []string {
-	env := existing
-	if len(env) == 0 {
-		env = os.Environ()
-	}
-	return append(env,
-		"CI=1",
-		"npm_config_yes=true",
-		"npm_config_audit=false",
-		"npm_config_fund=false",
-	)
-}
-
-func stringInSlice(items []string, item string) bool {
-	for _, candidate := range items {
-		if candidate == item {
-			return true
-		}
-	}
-	return false
-}
-
-func openCodePluginManualHint(r update.UpdateResult) string {
-	if strings.TrimSpace(r.UpdateHint) != "" {
-		return r.UpdateHint
-	}
-	if strings.TrimSpace(r.Tool.NpmPackage) != "" {
-		return fmt.Sprintf("OpenCode manages %s from tui.json. Restart or reload OpenCode so it refreshes the plugin package.", r.Tool.NpmPackage)
-	}
-	return "OpenCode manages TUI plugin packages from tui.json. Restart or reload OpenCode so it refreshes plugins."
-}
-
-func openCodePluginRegisteredPendingHint(pkg string) string {
-	return fmt.Sprintf("OpenCode plugin %s is registered in ~/.config/opencode/tui.json but is not materialized in node_modules yet. Restart or reload OpenCode to materialize it; if it remains pending, check OpenCode logs for package or peer dependency errors before retrying upgrade.", pkg)
 }
 
 // brewUpgrade runs `brew update` (non-fatal) then `brew upgrade <toolName>`.
@@ -734,6 +429,9 @@ func prependGoPattern(existing, pattern string) string {
 // works on all platforms including Windows. Other Windows binary upgrades return
 // ManualFallbackError so the executor surfaces them as UpgradeSkipped.
 func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
+	if needsSourceBuildManualUpgrade(r, profile) {
+		return &ManualFallbackError{Hint: gentleAISourceBuildUpgradeHint(r)}
+	}
 	if profile.OS == "windows" && r.Tool.Name == "gentle-ai" {
 		return &ManualFallbackError{Hint: gentleAIWindowsSourceInstallHint(r)}
 	}
@@ -759,6 +457,25 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 
 	// For Linux/macOS binary installs: delegate to the download package.
 	return downloadAndReplace(ctx, r, profile)
+}
+
+// isUnanchoredSourceBuild recognizes the intentional source-build sentinel,
+// never a failed key parse or signature verification.
+func isUnanchoredSourceBuild(profile system.PlatformProfile) bool {
+	return (profile.OS == "linux" || profile.OS == "darwin") && releaseMinisignPublicKeys == unsetReleaseMinisignPublicKeys
+}
+
+func needsSourceBuildManualUpgrade(r update.UpdateResult, profile system.PlatformProfile) bool {
+	return r.Tool.Name == "gentle-ai" && isUnanchoredSourceBuild(profile) &&
+		!isBetaGentleAIUpgrade(r) && effectiveMethod(r.Tool, profile) == update.InstallBinary &&
+		(!profile.GoAvailable || r.Tool.GoImportPath == "")
+}
+
+func gentleAISourceBuildUpgradeHint(r update.UpdateResult) string {
+	return "This source build has no embedded release trust anchor. " +
+		"Automatic source upgrade requires Go on PATH and a declared Go import path. " +
+		"No files were changed. Install/update from source with Go 1.25.10+:\n  " +
+		gentleAISourceCommandForResult(r)
 }
 
 func gentleAIWindowsSourceInstallHint(r update.UpdateResult) string {

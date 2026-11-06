@@ -11,8 +11,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
-// UpdateCheckTTL is the minimum time between remote update checks. Launches
-// within this window reuse the cached state and skip the GitHub API call.
+// UpdateCheckTTL is the minimum time between automatic remote update checks.
+// Launches within this window skip the GitHub API call; results are not cached.
 const UpdateCheckTTL = 6 * time.Hour
 
 // checkAllFn is the function type that matches CheckAll's signature, used to
@@ -20,6 +20,27 @@ const UpdateCheckTTL = 6 * time.Hour
 type checkAllFn func(ctx context.Context, currentVersion string, profile system.PlatformProfile) []UpdateResult
 
 type installStateWriter func(string, state.InstallState) error
+
+// CheckState distinguishes verified results from omitted or failed checks.
+type CheckState int
+
+const (
+	CheckCompleted CheckState = iota
+	CheckSkipped
+	CheckUnsuccessful
+)
+
+// CheckReport preserves the provenance of an update result set.
+type CheckReport struct {
+	Results []UpdateResult
+	State   CheckState
+}
+
+// CheckAllWithCooldownReport is the status-aware variant of CheckAllWithCooldown.
+// A zero ttl forces a fresh check, while retaining successful-check persistence.
+func CheckAllWithCooldownReport(ctx context.Context, currentVersion string, profile system.PlatformProfile, homeDir string, ttl time.Duration, nowFn func() time.Time, checkFn checkAllFn) CheckReport {
+	return checkAllWithCooldownReport(ctx, currentVersion, profile, homeDir, ttl, nowFn, checkFn, persistLastUpdateCheck)
+}
 
 // CheckAllWithCooldown gates CheckAll behind a TTL-based cooldown. It reads
 // LastUpdateCheck from state.json in homeDir; if the elapsed time since the
@@ -56,6 +77,10 @@ func checkAllWithCooldown(
 	checkFn checkAllFn,
 	persistTimestamp func(string, time.Time) error,
 ) []UpdateResult {
+	return checkAllWithCooldownReport(ctx, currentVersion, profile, homeDir, ttl, nowFn, checkFn, persistTimestamp).Results
+}
+
+func checkAllWithCooldownReport(ctx context.Context, currentVersion string, profile system.PlatformProfile, homeDir string, ttl time.Duration, nowFn func() time.Time, checkFn checkAllFn, persistTimestamp func(string, time.Time) error) CheckReport {
 	now := nowFn()
 
 	// When homeDir is empty (home resolution failed), skip both state read and
@@ -69,8 +94,8 @@ func checkAllWithCooldown(
 			// A future LastUpdateCheck (negative elapsed from clock skew) must
 			// not suppress the check.
 			if elapsed >= 0 && elapsed < ttl {
-				// Cache is fresh — skip network call.
-				return nil
+				// Only the timestamp is fresh; no verified results are cached.
+				return CheckReport{State: CheckSkipped}
 			}
 		}
 		// err != nil means no state file (first run) → always check.
@@ -87,7 +112,11 @@ func checkAllWithCooldown(
 		_ = persistTimestamp(homeDir, now)
 	}
 
-	return results
+	status := CheckCompleted
+	if !checkSucceeded(results) {
+		status = CheckUnsuccessful
+	}
+	return CheckReport{Results: results, State: status}
 }
 
 func persistLastUpdateCheck(homeDir string, timestamp time.Time) error {

@@ -140,6 +140,85 @@ func TestPublishedLastEventClosureSchemaAcceptsTerminalRefuterCapture(t *testing
 	validatePublishedReviewSchema(t, schema, output.Bytes())
 }
 
+func TestPublishedLastEventClosureSchemaAcceptsRejectedTargetedValidatorCapture(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedPayload, err := json.Marshal(facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash,
+		CorrectionTargetIdentity:      request.CorrectionTargetIdentity,
+		OriginalCriteria: facadeValidationCheck{Passed: false, Evidence: []string{
+			"the exact corrected candidate still fails the original criterion",
+		}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{
+			"the bounded correction introduced no unrelated regression",
+		}},
+		FollowUps: []reviewtransaction.FollowUp{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pi host relay submits its own raw result through --input (#4611):
+	// Go never spawns anything for this capture.
+	failedResultFile := writeReviewCLIRawInput(t, failedPayload)
+
+	var output bytes.Buffer
+	if err := RunReviewCaptureValidation([]string{
+		"--cwd", repo,
+		"--lineage", lineage,
+		"--target", request.CorrectionTargetIdentity,
+		"--expected-revision", record.State.CapturePhaseRevision,
+		"--request-hash", request.RequestHash,
+		"--agent", "pi",
+		"--input", failedResultFile,
+	}, &output); err != nil {
+		t.Fatalf("capture rejected targeted validator: %v\\n%s", err, output.String())
+	}
+
+	schema := compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json")
+	validatePublishedReviewSchema(t, schema, output.Bytes())
+
+	var closure map[string]any
+	if err := json.Unmarshal(output.Bytes(), &closure); err != nil {
+		t.Fatal(err)
+	}
+	evidence, ok := closure["targeted_validator_evidence"].(map[string]any)
+	if !ok {
+		t.Fatalf("rejected targeted-validator closure omitted evidence: %#v", closure)
+	}
+	evidence["unexpected"] = true
+	if err := schema.Validate(closure); err == nil {
+		t.Fatalf("published last-event closure schema accepted unknown targeted validator evidence: %#v", closure)
+	}
+	delete(evidence, "unexpected")
+	check, ok := evidence["original_criteria"].(map[string]any)
+	if !ok {
+		t.Fatalf("targeted validator evidence omitted original criteria: %#v", evidence)
+	}
+	check["evidence"] = []any{}
+	if err := schema.Validate(closure); err == nil {
+		t.Fatalf("published last-event closure schema accepted empty targeted validator evidence: %#v", closure)
+	}
+	check["evidence"] = []any{"the exact corrected candidate still fails the original criterion"}
+	closure["operation"] = "review/capture-result"
+	if err := schema.Validate(closure); err == nil {
+		t.Fatalf("published last-event closure schema accepted targeted validator evidence outside capture validation: %#v", closure)
+	}
+	closure["operation"] = "review/capture-validation"
+	closure["state"] = string(reviewtransaction.StateCorrectionRequired)
+	if err := schema.Validate(closure); err == nil {
+		t.Fatalf("published last-event closure schema accepted targeted validator evidence outside escalated state: %#v", closure)
+	}
+}
+
 func TestPublishedLastEventClosureSchemaRejectsNonStatusCorrectionContinuation(t *testing.T) {
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
@@ -170,5 +249,28 @@ func TestPublishedLastEventClosureSchemaRejectsNonStatusCorrectionContinuation(t
 
 	if err := schema.Validate(closure); err == nil {
 		t.Fatalf("published last-event closure schema accepted non-STATUS correction continuation: %#v", closure)
+	}
+}
+
+func TestPublishedReviewAcknowledgedSchemaValidatesBurnEnvelope(t *testing.T) {
+	var output bytes.Buffer
+	if err := encodeReviewJSON(&output, reviewAcknowledgedResult{
+		Schema: reviewAcknowledgedSchema, Operation: "review/acknowledge-approved", Action: "acknowledged",
+		LineageID: "review-0123456789abcdef", TargetIdentity: "sha256:" + string(bytes.Repeat([]byte("a"), 64)),
+		ConsumedRevision: "sha256:" + string(bytes.Repeat([]byte("b"), 64)), Authority: "burned",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	schema := compileWholePublishedReviewSchema(t, "v2", "review-acknowledged.schema.json")
+	validatePublishedReviewSchema(t, schema, output.Bytes())
+	envelope := decodeJSONObjectCopy(t, output.Bytes())
+	envelope["authority"] = "active"
+	if err := schema.Validate(envelope); err == nil {
+		t.Fatal("published review-acknowledged schema accepted an unburned authority")
+	}
+	envelope = decodeJSONObjectCopy(t, output.Bytes())
+	delete(envelope, "consumed_revision")
+	if err := schema.Validate(envelope); err == nil {
+		t.Fatal("published review-acknowledged schema accepted an envelope without consumed_revision")
 	}
 }

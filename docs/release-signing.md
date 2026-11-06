@@ -51,7 +51,7 @@ The workflow validates the complete repository-variable value, exports a separat
 github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade.releaseMinisignPublicKeys
 ```
 
-Source/test builds retain `UNSET`; their binary self-updater refuses network replacement. There is no grace version and no unsigned fallback.
+Source/test builds retain `UNSET`; their binary downloader refuses network replacement. On Linux/macOS, `gentle-ai upgrade` routes these source builds through `go install` when Go is on `PATH` and a Go import path is declared, pinned to the exact target release with the normal Go checksum database settings. Without those prerequisites, it prints a manual source-install command before creating backups or changing files. Run `gentle-ai sync` after a manual binary update. There is no grace version or unsigned binary fallback; empty/malformed configured keys and failed signatures never trigger a Go fallback.
 
 The updater caps a release archive at **128 MiB**. It rejects both oversized `Content-Length` declarations and chunked or otherwise unknown-length responses that cross the same ceiling, deleting partial downloads without changing the installed binary.
 
@@ -99,9 +99,10 @@ unsigned executable and never executes a remote update script. Instead:
 - Without Go on `PATH`, the upgrader fails closed to `go install` guidance and
   performs no download or execution at all.
 
-Linux and macOS are unaffected by this: they continue to download the signed
-release archive and verify it with minisign, and they never route through
-`go install`.
+Linux and macOS official release builds continue to download the signed release
+archive and verify it with minisign, even when Go is available. Source builds
+with the exact `UNSET` trust-anchor sentinel instead use the pinned Go path
+described above. Homebrew-owned installations continue to upgrade with Homebrew.
 
 Restore Windows distribution only after all of these conditions are enforced:
 

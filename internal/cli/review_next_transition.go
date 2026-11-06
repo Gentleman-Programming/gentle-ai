@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -220,6 +221,17 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 				return reviewStopTransition("rdd_disabled")
 			}
 			if status.Action == reviewtransaction.TargetStatusActionStop && status.Replayability == reviewtransaction.ReplayabilityNotReplayable {
+				if status.passiveDeltaAfterAcknowledgement {
+					return reviewStopTransition("acknowledged_predecessor_passive_delta")
+				}
+				if status.acknowledgedBoundaryReachesHead {
+					// Issue #5638: the reviewed boundary advances on
+					// acknowledgement, and here it reaches HEAD -- every commit
+					// since the boundary was empty, so nothing unreviewed
+					// remains and the stale-span offer is replaced by the
+					// truthful stop (#4628's reviewed fully-integrated shape).
+					return reviewStopTransition("acknowledged_boundary_reaches_head")
+				}
 				return reviewStopTransition("target_already_acknowledged")
 			}
 			if input.Selector != nil && input.Selector.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
@@ -345,11 +357,15 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 		if artifactErr != nil {
 			return reviewStopTransition("captured_artifacts_unverifiable")
 		}
+		openCodeBinding, err := reviewOpenCodeTransitionBinding(status.repositoryRoot, captureBinding, input.RuntimeAgent)
+		if err != nil {
+			return reviewStopTransition("captured_artifacts_unverifiable")
+		}
 		if len(artifacts) != len(selectedLenses) {
-			return reviewMissingCaptureTransition(captureBinding, selectedLenses, artifacts, input.CaptureContext, input.UnachievableLensAttempts, input.RuntimeAgent)
+			return reviewMissingCaptureTransition(openCodeBinding, selectedLenses, artifacts, input.CaptureContext, input.UnachievableLensAttempts, input.RuntimeAgent)
 		}
 		if input.ProviderRole == reviewerprovider.RoleRefuter {
-			return reviewProviderRoleTransition("provider_refuter_required", captureBinding, input.ProviderRole, input.RuntimeAgent, nil)
+			return reviewProviderRoleTransition("provider_refuter_required", openCodeBinding, input.ProviderRole, input.RuntimeAgent, nil)
 		}
 		return reviewStopTransition("manual_intervention_required")
 	case reviewtransaction.StateCorrectionRequired:
@@ -371,7 +387,11 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 				if input.CapturedProviderTargetedValidatorInconclusive {
 					reason = reviewInconclusiveTargetedValidationReason
 				}
-				return reviewProviderRoleTransition(reason, validationBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
+				openCodeBinding, err := reviewOpenCodeTransitionBinding(status.repositoryRoot, validationBinding, input.RuntimeAgent)
+				if err != nil {
+					return reviewStopTransition("captured_artifacts_unverifiable")
+				}
+				return reviewProviderRoleTransition(reason, openCodeBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
 			}
 			if input.CapturedProviderTargetedValidatorInconclusive || input.CapturedProviderTargetedValidator {
 				return reviewStopTransition("manual_intervention_required")
@@ -946,6 +966,9 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 		arguments = append(arguments, ReviewTransitionArgument{Name: "consent", Value: string(reviewConsentModeRelay)})
 	}
 	arguments = append(arguments, reviewStartIntendedUntrackedArguments(intended)...)
+	// rdd-risk-gated S17: preflighted START options ride last, so a STATUS
+	// without them renders the exact vector it always did.
+	arguments = append(arguments, status.startOptions.arguments()...)
 	return arguments
 }
 
@@ -1255,6 +1278,38 @@ func reviewBindingArguments(binding ReviewTransitionBinding) []ReviewTransitionA
 // capture operation and submission descriptor.
 const reviewInconclusiveTargetedValidationReason = "targeted_validation_inconclusive_recapture_required"
 
+// reviewRepositoryContextKeyUnsafeReason classifies an OpenCode-driven STATUS
+// that cannot seal its reviewer Task because this user's private sealing key
+// is unusable. It is an environment fault that wrote nothing, and its exit is
+// repairing the key file, which the cause names.
+var reviewRepositoryContextKeyUnsafeReason = reviewPreflightReason{
+	Code:       "repository_context_key_unsafe",
+	Message:    "This user's private review context key cannot be used, so the OpenCode reviewer Task cannot be sealed; the cause names the key file and its repair.",
+	NextAction: "stop",
+}
+
+// reviewOpenCodeTransitionBinding gives the inputs an OpenCode host collects
+// the sealed rctx3 handle its relay resolves. The relay runs in the host
+// session directory, which names nothing about the review (#5136, #4516), so
+// the handle has to carry its own root. The runtime is the one this STATUS
+// renders for (reviewEffectiveRuntime: the declared --agent, else Pi under its
+// relay handshake, else the lineage's frozen runtime), so
+// a lineage driven by another runtime is reissued in that runtime's format.
+// Every other runtime keeps the unchanged rctx2 digest.
+func reviewOpenCodeTransitionBinding(root string, binding ReviewTransitionBinding, runtime model.AgentID) (ReviewTransitionBinding, error) {
+	if runtime != model.AgentOpenCode || binding.RepositoryContext == "" {
+		return binding, nil
+	}
+	handle, err := reviewtransaction.DeriveOpenCodeReviewRepositoryContextHandle(context.Background(), root, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
+	})
+	if err != nil {
+		return ReviewTransitionBinding{}, err
+	}
+	binding.RepositoryContext = handle
+	return binding, nil
+}
+
 func reviewTransitionBinding(authority *ReviewTargetStatusAuthority, target, repositoryRoot string, repositoryContext ...string) ReviewTransitionBinding {
 	contextHandle := ""
 	if len(repositoryContext) > 0 {
@@ -1426,6 +1481,8 @@ func reviewReasonDescription(reason string) string {
 		return "Committed base-diff has no paths; empty-root bootstrap is required"
 	case "lens_context_budget_exceeded":
 		return "Frozen reviewer context exceeds the native evidence budget"
+	case "acknowledged_boundary_reaches_head":
+		return "The reviewed boundary advances on acknowledgement and reaches HEAD: every commit since the acknowledged boundary was empty, so nothing unreviewed remains between the boundary and the live candidate"
 	case reviewCorrectionContextBudgetCode:
 		return "Correction evidence and findings exceed the native context budget"
 	case "corrupted_or_unverifiable_authority":

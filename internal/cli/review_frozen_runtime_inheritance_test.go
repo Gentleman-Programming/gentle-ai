@@ -77,6 +77,9 @@ func frozenRuntimeStatusTransition(t *testing.T, repo, lineage string, extra ...
 }
 
 func TestStatusWithoutAgentInheritsFrozenCompiledRuntime(t *testing.T) {
+	// Inheritance applies only without the Pi relay handshake; a Pi host
+	// running this test must not turn the STATUS into a Pi-driven one.
+	t.Setenv(reviewPiHostRelayContractEnvironment, "")
 	for _, runtime := range []model.AgentID{model.AgentClaudeCode, model.AgentCodex} {
 		for _, phase := range []struct {
 			name            string

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -59,8 +58,8 @@ func DiscoverCatalog(ctx context.Context, projectDir string) (map[string]Provide
 }
 
 // waitErrorReader is the contract for stream readers that surface the child's
-// wait error on Close, mirroring processStreamReader. It lets the discovery
-// pipeline honor the child's exit status instead of masking it with a parse
+// wait error, mirroring catalogFileReader. It lets the discovery pipeline
+// honor the child's exit status instead of masking it with a parse
 // classification.
 type waitErrorReader interface {
 	io.Reader
@@ -577,14 +576,19 @@ func sortVariants(variants []string) {
 	})
 }
 
-// runCatalogCommand starts `opencode models --verbose` and returns a reader
-// over its stdout. Both pipes are drained concurrently into bounded state so
-// a slow consumer can never make the child block or die on a full pipe:
-// OpenCode's catalog writer aborts when its stdout pipe drains too slowly,
-// which would otherwise truncate the catalog mid-record. Stdout is retained
-// up to the defensive ceiling; stderr is discarded because CatalogError never
-// exposes command output. The returned reader must be Closed to cancel the
-// process and reap the child.
+// catalogSizeCheckInterval bounds how often the capture-file size monitor
+// samples the child's output while it runs.
+const catalogSizeCheckInterval = 100 * time.Millisecond
+
+// runCatalogCommand starts the OpenCode catalog command and returns a reader
+// over its captured stdout. The child writes to a regular temp file, never a
+// pipe: OpenCode V2's API command can truncate its own response when stdout is
+// a pipe while the identical command through a regular file parses cleanly
+// (issue #5833), so discovery always uses the file transport. Stderr goes to
+// /dev/null because CatalogError never exposes command output, and a size
+// monitor cancels the child if the capture file grows past the defensive
+// ceiling. The returned reader must be Closed to cancel the process, reap the
+// child, and remove the capture file.
 func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
@@ -592,262 +596,212 @@ func runCatalogCommand(ctx context.Context, command Command) (io.Reader, error) 
 	cmd.WaitDelay = catalogWaitDelay
 	afterStart, release := configureProcessGroup(cmd)
 
-	stdoutPipe, err := cmd.StdoutPipe()
+	capture, err := os.CreateTemp("", "gentle-ai-opencode-catalog-")
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		_ = stdoutPipe.Close()
-		cancel()
-		return nil, err
-	}
+	cmd.Stdout = capture
+	cmd.Stderr = nil
 
 	if err := cmd.Start(); err != nil {
+		_ = capture.Close()
+		_ = os.Remove(capture.Name())
 		if release != nil {
 			release()
 		}
-		_ = stdoutPipe.Close()
-		_ = stderrPipe.Close()
 		cancel()
 		return nil, err
 	}
 	if afterStart != nil {
 		afterStart()
 	}
+	// The child inherited its own descriptor for the capture file; the
+	// parent's write handle is no longer needed. The reader reopens the path
+	// so it reads from the beginning with an independent file offset.
+	_ = capture.Close()
 
-	stream := newBoundedPipeBuffer(maxCatalogOutput, cancel)
-	stderrDone := make(chan struct{})
-	stdoutDone := make(chan struct{})
-
-	// Drain stdout at full speed into the bounded buffer. The drain owns
-	// stdoutDone: it is closed after the read loop ends so closeAndReap can
-	// join the drain after cmd.Wait reaps the process and closes descriptors.
-	// The deferred close also runs on the overflow path, where cancel drives
-	// the pipe to EOF and the loop exits.
-	go func() {
-		defer close(stdoutDone)
-		var chunk [8192]byte
-		var drainErr error
-		for {
-			n, readErr := stdoutPipe.Read(chunk[:])
-			if n > 0 {
-				if overflow := stream.append(chunk[:n]); overflow {
-					cancel()
-					readErr = io.EOF
-				}
-			}
-			if readErr != nil {
-				drainErr = readErr
-				break
-			}
-		}
-		stream.finish(drainErr)
-	}()
-
-	// Drain stderr concurrently so a chatty child can never fill its pipe and
-	// deadlock. Discarded on purpose: CatalogError never exposes command
-	// output, so there is nothing to retain.
-	go func() {
-		_, _ = io.Copy(io.Discard, stderrPipe)
-		close(stderrDone)
-	}()
-
-	// Monitor context cancellation. When the context is done (e.g. deadline
-	// exceeded), give the dying child a brief bounded window to flush, then
-	// close the pipe descriptors so an escaped descendant holding stdout/stderr
-	// cannot keep discovery blocked indefinitely.
-	go func() {
-		select {
-		case <-ctx.Done():
-			time.Sleep(catalogWaitDelay)
-			_ = stdoutPipe.Close()
-			_ = stderrPipe.Close()
-		case <-stdoutDone:
-		}
-	}()
-
-	return &processStreamReader{
-		cmd:        cmd,
-		stream:     stream,
-		stdoutPipe: stdoutPipe,
-		stderrPipe: stderrPipe,
-		stderrDone: stderrDone,
-		stdoutDone: stdoutDone,
-		release:    release,
-		cancel:     cancel,
-	}, nil
+	reader := newCatalogFileReader(cmd, capture.Name(), release, cancel)
+	// Reap the child in the background as soon as it exits so reads can wait
+	// on either new data or the child's termination without blocking on a
+	// synchronous Wait.
+	go reader.reap()
+	go reader.monitorSize()
+	return reader, nil
 }
 
-// boundedPipeBuffer accumulates a child's stdout up to a defensive ceiling so
-// the child can write at full speed while consumers parse at their own pace.
-// Reads block until data is available or the drain goroutine finishes.
-type boundedPipeBuffer struct {
-	mu       sync.Mutex
-	cond     *sync.Cond
-	buf      []byte
-	pos      int64
-	finished bool
-	overflow bool
-	limit    int64
-	cancel   context.CancelFunc
-	readErr  error
-}
-
-func newBoundedPipeBuffer(limit int64, cancel context.CancelFunc) *boundedPipeBuffer {
-	b := &boundedPipeBuffer{limit: limit, cancel: cancel}
-	b.cond = sync.NewCond(&b.mu)
-	return b
-}
-
-// append stores one drained chunk. It reports overflow — and stops accepting
-// further bytes — once the ceiling is exceeded.
-func (b *boundedPipeBuffer) append(data []byte) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.overflow {
-		return true
-	}
-	if int64(len(b.buf))+int64(len(data)) > b.limit {
-		b.overflow = true
-		b.cond.Broadcast()
-		return true
-	}
-	b.buf = append(b.buf, data...)
-	b.cond.Broadcast()
-	return false
-}
-
-// finish marks the drain as complete and records any non-EOF read error that
-// terminated the drain, so blocked and future readers observe it.
-func (b *boundedPipeBuffer) finish(readErr error) {
-	b.mu.Lock()
-	b.finished = true
-	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, fs.ErrClosed) && !errors.Is(readErr, io.ErrClosedPipe) {
-		b.readErr = readErr
-	}
-	b.cond.Broadcast()
-	b.mu.Unlock()
-}
-
-// Read serves buffered bytes, blocking while the drain is still running and
-// no data is available.
-func (b *boundedPipeBuffer) Read(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for b.pos == int64(len(b.buf)) && !b.finished {
-		b.cond.Wait()
-	}
-	if b.overflow {
-		if b.cancel != nil {
-			b.cancel()
-		}
-		return 0, &CatalogError{Kind: CatalogErrorOutputTooLarge}
-	}
-	n := copy(p, b.buf[b.pos:])
-	b.pos += int64(n)
-	if b.pos == int64(len(b.buf)) && b.finished {
-		if b.readErr != nil {
-			if n > 0 {
-				return n, nil
-			}
-			return 0, b.readErr
-		}
-		if n == 0 {
-			return 0, io.EOF
-		}
-		return n, nil
-	}
-	return n, nil
-}
-
-// processStreamReader owns the started child process: it exposes the drained
-// stdout buffer as an io.Reader, drains stderr on a background goroutine, and
-// on Close cancels the process and waits for both drains and the child.
-type processStreamReader struct {
-	cmd        *exec.Cmd
-	stream     *boundedPipeBuffer
-	stdoutPipe io.Closer
-	stderrPipe io.Closer
-	stderrDone chan struct{}
-	stdoutDone chan struct{}
-	// release frees platform process-tree state (the Windows Job Object
-	// handle); nil on Unix where there is nothing to release.
+// catalogFileReader serves the catalog child's stdout captured to a regular
+// temp file. Reads stream whatever the child has written so far; at end of
+// file with the child still running, the reader waits for either new data or
+// the child's exit (bounded by context cancellation) before deciding the
+// stream is complete. Once the child is reaped, a terminal read reports its
+// wait error when it exited non-zero, io.EOF otherwise. The wait error is
+// also available through WaitError for callers that stop reading early, so a
+// non-zero exit is never masked by a downstream parse classification.
+//
+// Concurrency: the background reaper goroutine owns the child lifecycle and
+// publishes completion exclusively through the childDone and sizeDone channel
+// closes; consumers therefore read the child's wait error only after
+// observing childDone (or via sync.Once), which gives the required
+// happens-before ordering without extra locking.
+type catalogFileReader struct {
+	cmd     *exec.Cmd
+	path    string
 	release func()
 	cancel  context.CancelFunc
-	closed  bool
-	waitErr error
+
+	waitOnce sync.Once
+	waitErr  error
+	// childDone is closed once the child has been reaped.
+	childDone chan struct{}
+	// sizeDone is closed once the child has been reaped, stopping the size
+	// monitor.
+	sizeDone chan struct{}
+	// grew carries a token whenever the monitor observes the capture file
+	// grow, waking a reader blocked at end of file. Capacity one: signals
+	// coalesce and each wake re-checks the file.
+	grew      chan struct{}
+	lastKnown int64 // monitor goroutine only
+	file      *os.File
+	// exhausted marks the capture file as removed; consumer goroutine only.
+	exhausted bool
 }
 
-// Read serves drained stdout bytes. Once the stream is exhausted it reaps
-// the child and returns its exit error (typed as a CatalogError when the
-// caller supplied no custom reader), or io.EOF when the child exited
-// cleanly. Stream-level failures other than EOF propagate unchanged.
-func (p *processStreamReader) Read(buf []byte) (int, error) {
-	n, err := p.stream.Read(buf)
-	if n > 0 {
-		return n, nil
+func newCatalogFileReader(cmd *exec.Cmd, path string, release func(), cancel context.CancelFunc) *catalogFileReader {
+	return &catalogFileReader{
+		cmd:       cmd,
+		path:      path,
+		release:   release,
+		cancel:    cancel,
+		childDone: make(chan struct{}),
+		sizeDone:  make(chan struct{}),
+		grew:      make(chan struct{}, 1),
 	}
-	if err != nil && !errors.Is(err, io.EOF) {
+}
+
+// monitorSize watches the capture file while the child runs. It cancels the
+// child when the file grows past the defensive ceiling, preserving the
+// write-side bound the in-memory pipe buffer enforced before the file
+// transport, and signals growth so a reader parked at end of file wakes
+// promptly.
+func (r *catalogFileReader) monitorSize() {
+	ticker := time.NewTicker(catalogSizeCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.sizeDone:
+			return
+		case <-ticker.C:
+			info, err := os.Stat(r.path)
+			if err != nil {
+				continue
+			}
+			if info.Size() > maxCatalogOutput {
+				r.cancel()
+				return
+			}
+			if info.Size() > r.lastKnown {
+				r.lastKnown = info.Size()
+				select {
+				case r.grew <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
+}
+
+// reap joins the child exactly once, stopping the size monitor and waking
+// parked readers. It returns the child's wait error, which is empty for a
+// clean exit.
+func (r *catalogFileReader) reap() error {
+	r.waitOnce.Do(func() {
+		r.waitErr = r.cmd.Wait()
+		close(r.sizeDone)
+		if r.release != nil {
+			r.release()
+		}
+		close(r.childDone)
+	})
+	return r.waitErr
+}
+
+// Read serves captured stdout bytes. End of file is only final once the child
+// has been reaped: while it runs, the reader waits for either new data or the
+// child's exit before reporting the terminal state.
+func (r *catalogFileReader) Read(p []byte) (int, error) {
+	n, err := r.readFile(p)
+	if !errors.Is(err, io.EOF) {
 		return n, err
 	}
-	p.closeAndReap()
-	if p.waitErr != nil {
-		return 0, p.waitErr
+	for {
+		select {
+		case <-r.childDone:
+			// The child is reaped and the capture can no longer grow: one
+			// last read drains the tail, then the stream is final.
+			n, err = r.readFile(p)
+			if !errors.Is(err, io.EOF) {
+				return n, err
+			}
+			r.cleanup()
+			if r.waitErr != nil {
+				return 0, r.waitErr
+			}
+			return 0, io.EOF
+		case <-r.grew:
+			n, err = r.readFile(p)
+			if !errors.Is(err, io.EOF) {
+				return n, err
+			}
+			// Stale growth signal; keep waiting for data or child exit.
+		}
 	}
-	return 0, io.EOF
 }
 
-// Close cancels the underlying command and reaps the child process exactly
-// once. Cancellation is honored even when descendants inherited the pipes:
-// the child is reaped first (it dies with the context), and only then the
-// stderr drain is awaited.
-func (p *processStreamReader) Close() error {
-	p.cancel()
-	p.closeAndReap()
+// readFile opens the capture path lazily and serves bytes from an independent
+// read handle, so the child's writes never move the reader's offset.
+func (r *catalogFileReader) readFile(p []byte) (int, error) {
+	if r.exhausted {
+		return 0, io.EOF
+	}
+	if r.file == nil {
+		f, err := os.Open(r.path)
+		if err != nil {
+			return 0, err
+		}
+		r.file = f
+	}
+	return r.file.Read(p)
+}
+
+// Close cancels the underlying command, reaps the child, and removes the
+// capture file exactly once.
+func (r *catalogFileReader) Close() error {
+	r.cancel()
+	_ = r.reap()
+	r.cleanup()
 	return nil
 }
 
-// WaitError reports the child's wait error after the stream was reaped. It
+// WaitError reports the child's wait error, reaping the child first. It
 // implements waitErrorReader so discovery can classify a non-zero exit even
 // when the parse itself failed.
-func (p *processStreamReader) WaitError() error {
-	p.closeAndReap()
-	return p.waitErr
+func (r *catalogFileReader) WaitError() error {
+	_ = r.reap()
+	return r.waitErr
 }
 
-// closeAndReap performs the idempotent shutdown sequence: reap the child with
-// cmd.Wait, which closes the parent's pipe file descriptors once the direct
-// child exits (bounded by cmd.WaitDelay), thereby unblocking any background
-// pipe drains even if an escaped descendant retained inherited pipes. Then it
-// joins stdoutDone and stderrDone and releases platform job/group state.
-//
-// Concurrency note: the consumer side (Read, Close, WaitError) runs on a single
-// goroutine. The stdout and stderr drain goroutines synchronize through
-// boundedPipeBuffer's lock and stdoutDone/stderrDone; they never touch p.closed
-// or p.waitErr. Nil channels are skipped defensively so a zero-value reader
-// fails closed instead of hanging.
-func (p *processStreamReader) closeAndReap() {
-	if p.closed {
-		return
+// cleanup releases the read handle and the capture file. Removal is
+// best-effort: an escaped descendant may still hold the file open, and on
+// Windows that keeps the remove failing harmlessly.
+func (r *catalogFileReader) cleanup() {
+	if r.file != nil {
+		_ = r.file.Close()
+		r.file = nil
 	}
-	p.closed = true
-	if p.stdoutPipe != nil {
-		_ = p.stdoutPipe.Close()
-	}
-	if p.stderrPipe != nil {
-		_ = p.stderrPipe.Close()
-	}
-	p.waitErr = p.cmd.Wait()
-	if p.stdoutDone != nil {
-		<-p.stdoutDone
-	}
-	if p.stderrDone != nil {
-		<-p.stderrDone
-	}
-	if p.release != nil {
-		p.release()
+	if !r.exhausted {
+		_ = os.Remove(r.path)
+		r.exhausted = true
 	}
 }
 

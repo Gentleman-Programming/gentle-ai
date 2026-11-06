@@ -256,8 +256,8 @@ func applyFlowAction(t *testing.T, state Model, action flowAction) Model {
 	return state
 }
 
-// These snapshots inline representative screens because the prior Strict TDD
-// golden fixtures are stale and outside this work unit's edit surface.
+// These snapshots inline representative screens; the TUI keeps no golden
+// fixture files.
 const customComponentsSnapshot = `Select Components
 
 Toggle components with enter or space.

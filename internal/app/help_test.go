@@ -59,6 +59,16 @@ func TestHelpPresentsFlatReviewCommandsAsCompatibilityPaths(t *testing.T) {
 	}
 }
 
+func TestHelpDescribesGGAProviderPreservation(t *testing.T) {
+	var buf bytes.Buffer
+	printHelp(&buf, "test")
+	for _, phrase := range []string{"preserves existing literal providers", "initializes only from mapped agents", "leave config unchanged with guidance"} {
+		if !strings.Contains(buf.String(), phrase) {
+			t.Errorf("help missing GGA guidance %q", phrase)
+		}
+	}
+}
+
 func TestHelpContainsVersion(t *testing.T) {
 	var buf bytes.Buffer
 	printHelp(&buf, "v1.2.3")

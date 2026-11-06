@@ -12,7 +12,7 @@ const reviewTransportCapabilityUnsupportedCode = "review_transport_capability_un
 
 var reviewTransportCapabilityUnsupportedReason = reviewPreflightReason{
 	Code:       reviewTransportCapabilityUnsupportedCode,
-	Message:    "The active runtime does not advertise review transport capability.",
+	Message:    "The active runtime does not advertise review transport capability; to keep working without receipt review here, run `gentle-ai review mode disable --scope clone --cwd <repo>`.",
 	NextAction: "stop",
 }
 

@@ -75,7 +75,7 @@ func RunReviewAbandon(args []string, stdout io.Writer) error {
 	}
 	root, err := resolveReviewOperationRoot(context.Background(), *cwd, reviewtransaction.RDDOperationAbandon)
 	if err != nil {
-		return fmt.Errorf("resolve review repository root: %w", err)
+		return withPlainReviewContinuation(fmt.Errorf("resolve review repository root: %w", err))
 	}
 	record, err := reviewtransaction.AbandonPristineCompactStore(context.Background(), root, reviewtransaction.CompactAbandonRequest{
 		LineageID: *lineage, ExpectedRevision: *expected,

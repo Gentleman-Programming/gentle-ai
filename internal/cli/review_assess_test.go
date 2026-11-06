@@ -305,13 +305,12 @@ func TestReviewAssessHumanReadableOutputNamesDueTransition(t *testing.T) {
 	}
 }
 
-// TestReviewAssessMediumAtBudgetReviewDueSliceBudgetReached proves the ODD
-// slice-budget rule directly: a medium-risk candidate whose changed_lines
-// reaches reviewtransaction.LargeChangeLines is review_due=true with reason
-// slice_budget_reached, and its next_transition carries the exact tokens
-// review status --next-transition needs, with --base-ref echoed verbatim and
-// --agent present only when the caller supplied one.
-func TestReviewAssessMediumAtBudgetReviewDueSliceBudgetReached(t *testing.T) {
+// TestReviewAssessMediumAtBudgetIsNotReviewDue is verify-always-rdd-high
+// S2/S10: automatic review is for high risk only. A medium-risk candidate stays
+// review_due=false (under_budget) and carries no next_transition even when its
+// changed_lines reaches reviewtransaction.LargeChangeLines; size is a prompt
+// budget, not risk, and verify covers medium by the risk tier.
+func TestReviewAssessMediumAtBudgetIsNotReviewDue(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	baseRef := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
@@ -348,13 +347,12 @@ func TestReviewAssessMediumAtBudgetReviewDueSliceBudgetReached(t *testing.T) {
 			if result.ChangedLines < reviewtransaction.LargeChangeLines {
 				t.Fatalf("medium-at-budget review assess changed_lines = %d, want >= %d", result.ChangedLines, reviewtransaction.LargeChangeLines)
 			}
-			if !result.ReviewDue || result.ReviewDueReason != "slice_budget_reached" {
-				t.Fatalf("medium-at-budget review_due = %v/%q, want true/slice_budget_reached", result.ReviewDue, result.ReviewDueReason)
+			if result.ReviewDue || result.ReviewDueReason != "under_budget" || result.NextTransition != nil {
+				t.Fatalf("medium-at-budget review_due = %v/%q next=%#v, want false/under_budget without a transition", result.ReviewDue, result.ReviewDueReason, result.NextTransition)
 			}
 			if result.Candidate.Consumed {
 				t.Fatalf("fresh medium-at-budget candidate reported consumed: %#v", result.Candidate)
 			}
-			assertReviewAssessNextTransition(t, result.NextTransition, repo, test.agent, baseRef)
 		})
 	}
 }

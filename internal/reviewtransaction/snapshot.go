@@ -139,6 +139,7 @@ func (builder SnapshotBuilder) BuildStagedWorkspaceOverlayRecovery(ctx context.C
 }
 
 func (builder SnapshotBuilder) BuildStoredSnapshot(ctx context.Context, target Target) (Snapshot, error) {
+	defer StartStatusPhase(ctx, StatusPhaseSnapshotConstruction)()
 	if target.Kind == TargetBaseWorkspaceOverlay && target.Projection == ProjectionStaged {
 		return builder.BuildStagedWorkspaceOverlayRecovery(ctx, target)
 	}
@@ -299,14 +300,12 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 	if err != nil {
 		return "", "", err
 	}
-	// Keep the private index beside Git's writable control files. A restricted
-	// integration environment may not provide an accessible process temp dir.
-	temp, err := os.CreateTemp(gitDir, ".gentle-ai-review-index-*")
+	temp, cleanup, err := createSnapshotIndex(gitDir)
 	if err != nil {
 		return "", "", err
 	}
 	tempIndex := temp.Name()
-	defer os.Remove(tempIndex)
+	defer cleanup()
 	if err := temp.Close(); err != nil {
 		return "", "", err
 	}
@@ -326,6 +325,35 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 	candidateTree := strings.TrimSpace(string(output))
 	proof, err := builder.untrackedProof(ctx, candidateTree, intended)
 	return candidateTree, proof, err
+}
+
+// createSnapshotIndex keeps ordinary inspection scratch outside the caller's
+// Git directory. A private directory also contains Git's sibling index lock.
+// Restricted hosts without usable process temporaries retain the repository
+// fallback required by #2044 and #2132.
+func createSnapshotIndex(gitDir string) (*os.File, func(), error) {
+	base, baseErr := filepath.Abs(os.TempDir())
+	if baseErr == nil && snapshotTempBaseSafe(base) {
+		directory, err := os.MkdirTemp(base, ".gentle-ai-review-index-*")
+		if err == nil {
+			err = validatePrivateRARDirectory(directory)
+			if err == nil {
+				var file *os.File
+				file, err = createPrivateRARTempFile(directory)
+				if err == nil {
+					return file, func() { _ = os.RemoveAll(directory) }, nil
+				}
+			}
+			if removeErr := os.Remove(directory); removeErr != nil {
+				return nil, nil, errors.Join(err, removeErr)
+			}
+		}
+	}
+	file, err := os.CreateTemp(gitDir, ".gentle-ai-review-index-*")
+	if err != nil {
+		return nil, nil, err
+	}
+	return file, func() { _ = os.Remove(file.Name()) }, nil
 }
 
 // ValidateEvidence binds snapshot metadata to repository object evidence.
@@ -785,6 +813,7 @@ func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) (
 
 // IntendedUntrackedInventory returns the canonical digest-bound eligible workspace inventory.
 func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) ([]string, string, error) {
+	defer StartStatusPhase(ctx, StatusPhaseSnapshotConstruction)()
 	paths, err := builder.DiscoverUnignoredUntracked(ctx)
 	if err != nil {
 		return nil, "", err
@@ -1214,14 +1243,12 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 			return "", "", "", fmt.Errorf("intended-untracked path %q must name a file or symlink, not a directory", logicalPath)
 		}
 	}
-	// Keep the private index beside Git's writable control files. A restricted
-	// integration environment may not provide an accessible process temp dir.
-	temp, err := os.CreateTemp(filepath.Dir(indexPath), ".gentle-ai-review-index-*")
+	temp, cleanup, err := createSnapshotIndex(filepath.Dir(indexPath))
 	if err != nil {
 		return "", "", "", err
 	}
 	tempIndex := temp.Name()
-	defer os.Remove(tempIndex)
+	defer cleanup()
 	if err := temp.Close(); err != nil {
 		return "", "", "", err
 	}

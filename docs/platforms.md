@@ -37,7 +37,7 @@ The activation report and `gentle-ai doctor` state whether activation is effecti
 |--------|---------|
 | `ready` | New login shells run the managed launcher. |
 | `pending` | Activation is not applied yet, or no startup file puts `~/.gentle-ai/bin/` on `PATH`. |
-| `shadowed` | A startup file adds another OpenCode directory ahead of the launcher. The OpenCode installer does this when it appends `export PATH=~/.opencode/bin:$PATH` to `~/.zshrc` or `~/.bashrc`, which run after the login profile. The report names the file; remove that line or add the `export PATH=...` line after it. Gentle AI never edits rc files. |
+| `shadowed` | A startup file adds another OpenCode directory ahead of the launcher. The OpenCode installer does this when it appends `export PATH=~/.opencode/bin:$PATH` to `~/.zshrc` or `~/.bashrc`, which run after the login profile. The report names the file; remove that line or add the `export PATH=...` line after it. The OpenCode launcher activation never edits rc files. |
 | `unknown` | Gentle AI cannot verify which `opencode` new shells run. This is informational: either the OpenCode runtime could not be probed (execution stays in the foreground), the shell's startup cannot be modeled (fish, unset `SHELL`), or a startup file read after the managed block contains something that may change `PATH` but cannot be replayed statically — `eval` (for example `brew shellenv` or `mise activate`), command substitution in a `PATH` value, `PATH` changes inside a function, `case`, loop, or `else` body (pnpm, nvm), or a sourced file that cannot be resolved or read. The reason names the file; run `command -v opencode` in a new login shell to check it prints the managed launcher. |
 | `unsupported` | The OpenCode version is too old, or (on Windows) its path cannot be used safely; execution stays in the foreground. |
 | `off` | Background subagents are turned off. |
@@ -65,6 +65,16 @@ Restart OpenCode after enabling managed activation. Start a new login shell so t
 - **Validation Evidence:** Manually tested and verified on Fedora Linux 44.20260827.0 (Silverblue) with `rpm-ostree` 2026.2 (Git: 2a87ed0ffc35fd62bf2c0040cf372f33b139afa4).
 
 ---
+
+## Gentle Shell installer
+
+`gentle-ai shell install` has its own platform contract, separate from the table above:
+
+| Platform | Guide |
+| --- | --- |
+| Linux amd64 | [Gentle Shell on Linux](gentle-shell-linux-install.md) |
+| macOS 14+ on Apple silicon | [Gentle Shell on macOS](gentle-shell-macos-install.md) |
+| Windows 11 x64 | [Gentle Shell on Windows](gentle-shell-windows-install.md) |
 
 ## Windows Notes
 
@@ -97,7 +107,7 @@ Restart OpenCode after enabling managed activation. Start a new login shell so t
 | Codex | `%USERPROFILE%\.codex\` |
 | Windsurf | `%USERPROFILE%\.codeium\windsurf\` (skills, MCP, rules) + `%APPDATA%\Windsurf\User\` (settings) |
 | Kimi | `%USERPROFILE%\.kimi-code\` (kimi-code v0.11+: `config.toml`, `AGENTS.md` system prompt, skills, MCP) with legacy fallback to `%USERPROFILE%\.kimi\` (`config.toml`, `KIMI.md`, YAML agents) |
-| Antigravity | `%USERPROFILE%\.gemini\antigravity\` |
+| Antigravity | `%USERPROFILE%\.gemini\config\` (shared CLI/desktop root: skills, `mcp_config.json`) + `%USERPROFILE%\.gemini\antigravity-cli\settings.json` (private settings; `antigravity-desktop\settings.json` instead when that desktop directory exists) + `%USERPROFILE%\.gemini\GEMINI.md` (rules) |
 | Kiro IDE | `%USERPROFILE%\.kiro\steering\` (prompts) + `%USERPROFILE%\.kiro\skills\` (skills) + `%USERPROFILE%\.kiro\agents\` (Judgment Day agents) + `%APPDATA%\kiro\User\settings.json` (settings) + `%USERPROFILE%\.kiro\settings\mcp.json` (MCP) |
 | OpenClaw | `%USERPROFILE%\.openclaw\openclaw.json` (global MCP/settings) + active workspace from `agents.defaults.workspace` for `AGENTS.md` / `SOUL.md` / workspace-scoped skills |
 | Trae | `%USERPROFILE%\.trae\` (skills) + `%APPDATA%\Trae\User\user_rules.md` (rules) + `%APPDATA%\Trae\User\mcp.json` (MCP) |

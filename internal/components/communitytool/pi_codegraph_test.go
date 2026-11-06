@@ -40,9 +40,19 @@ func TestPiCodeGraphReconcileInjectsOnlyCompatibleToolsAndGuidanceForEveryChild(
 	writePiFile(t, filepath.Join(home, ".pi", "agent", "subagents", "compatible.md"), "---\ntools: bash\n---\nwork\n")
 	writePiFile(t, filepath.Join(home, ".pi", "agent", "subagents", "limited.md"), "---\ntools: read\n---\nwork\n")
 
-	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, WorkspaceDir: workspace, Selected: true, EffectiveMCPProbe: piProbeForTest})
+	probeCalls := 0
+	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, WorkspaceDir: workspace, Selected: true, EffectiveMCPProbe: func(path string) (PiCodeGraphMCPProbeResult, error) {
+		probeCalls++
+		return piProbeForTest(path)
+	}})
 	if err != nil {
 		t.Fatalf("ReconcilePiCodeGraph() error = %v", err)
+	}
+	if probeCalls != 1 {
+		t.Fatalf("capability probe calls = %d, want exactly one per reconciliation", probeCalls)
+	}
+	if !result.MCP.Adapter || !result.MCP.ReadOnlyExplore || !slices.Equal(result.MCP.Tools, []string{"codegraph_explore"}) {
+		t.Fatalf("MCP = %#v, want verified healthy capability", result.MCP)
 	}
 	if len(result.Children) != 2 || result.Children[0].Classification != PiChildCompatible || result.Children[1].Classification != PiChildGuidanceOnly {
 		t.Fatalf("children = %#v", result.Children)
@@ -555,8 +565,8 @@ func TestVerifyPiCodeGraphRejectsNonCanonicalMCP(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, "mcp.json")
 	writePiFile(t, mcpPath, `{"mcpServers":{"not-codegraph":{"command":"other codegraph"}}}`)
-	if err := verifyPiCodeGraph(mcpPath, nil); err == nil {
-		t.Fatal("verifyPiCodeGraph() accepted substring-only MCP evidence")
+	if _, err := verifyPiCodeGraphCapabilityWithProbe(mcpPath, nil, piCodeGraphEffectiveMCPProbe); err == nil {
+		t.Fatal("verifyPiCodeGraphCapabilityWithProbe() accepted substring-only MCP evidence")
 	}
 }
 
@@ -725,6 +735,9 @@ func TestPiCodeGraphPendingProbePreservesConfiguredFiles(t *testing.T) {
 	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true})
 	if err != nil {
 		t.Fatalf("ReconcilePiCodeGraph() error = %v, want pending success", err)
+	}
+	if !result.MCP.Adapter || !result.MCP.ReadOnlyExplore || !slices.Equal(result.MCP.Tools, []string{"codegraph_explore"}) {
+		t.Fatalf("MCP = %#v, want verified capability despite pending health", result.MCP)
 	}
 	if len(result.ManualActions) != 1 {
 		t.Fatalf("ManualActions = %#v, want one pending action", result.ManualActions)

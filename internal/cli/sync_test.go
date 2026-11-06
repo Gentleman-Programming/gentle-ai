@@ -597,54 +597,6 @@ func TestParseSyncFlagsSDDMode(t *testing.T) {
 	}
 }
 
-func TestParseSyncFlagsSDDProfileStrategy(t *testing.T) {
-	tests := []struct {
-		name    string
-		args    []string
-		want    string
-		wantErr bool
-	}{
-		{
-			name: "absent defaults to empty(auto)",
-			args: []string{},
-			want: "",
-		},
-		{
-			name:    "generated-multi",
-			args:    []string{"--sdd-profile-strategy", "generated-multi"},
-			wantErr: true,
-		},
-		{
-			name:    "external-single-active",
-			args:    []string{"--sdd-profile-strategy", "external-single-active"},
-			wantErr: true,
-		},
-		{
-			name:    "invalid returns error",
-			args:    []string{"--sdd-profile-strategy", "invalid"},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			flags, err := ParseSyncFlags(tt.args)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("ParseSyncFlags() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				if !strings.Contains(err.Error(), "sdd-profile-strategy") {
-					t.Fatalf("error = %q, want retired flag named", err)
-				}
-				return
-			}
-			if flags.SDDProfileStrategy != tt.want {
-				t.Errorf("SDDProfileStrategy = %q, want %q", flags.SDDProfileStrategy, tt.want)
-			}
-		})
-	}
-}
-
 func TestParseSyncFlagsIncludePermissionsAndTheme(t *testing.T) {
 	flags, err := ParseSyncFlags([]string{"--include-permissions", "--include-theme"})
 	if err != nil {
@@ -2261,6 +2213,114 @@ func TestSyncBackupTargetsOpenClawSkillsUseGlobalRoot(t *testing.T) {
 	}
 }
 
+func TestCodeGraphGuidanceSyncStepNativePreservation(t *testing.T) {
+	for _, tt := range []struct {
+		name, entry string
+		wantError   bool
+	}{
+		{"no watch", `{"type":"local","command":["codegraph","serve","--mcp","--no-watch"]}`, false},
+		{"invalid native", `{"type":"local","command":["wrong-program","serve","--mcp"]}`, true},
+		{"disabled native", `{"type":"local","command":["codegraph","serve","--mcp"],"disabled":true}`, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", "")
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+			agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+			settingsBefore := "{\n// keep native comment\n\"userMetadata\":\"keep\",\"mcp\":{\"codegraph\":{\"type\":\"local\",\"command\":[\"codegraph\",\"serve\",\"--mcp\"]},\"servers\":{\"codegraph\":" + tt.entry + "}}}\n"
+			guidanceBefore := "custom notes\n<!-- gentle-ai:codegraph-guidance -->\nstale\n<!-- /gentle-ai:codegraph-guidance -->\n"
+			mustWriteFile(t, settingsPath, []byte(settingsBefore))
+			mustWriteFile(t, agentsPath, []byte(guidanceBefore))
+			restoreLookPath := cmdLookPath
+			t.Cleanup(func() { cmdLookPath = restoreLookPath })
+			cmdLookPath = func(string) (string, error) { return "/bin/codegraph", nil }
+			calls := 0
+			var changed []string
+			step := codeGraphGuidanceSyncStep{
+				id:      "sync:community-tool:codegraph-guidance",
+				homeDir: home,
+				runner: communitytool.RunnerFunc(func(string, ...string) error {
+					calls++
+					return nil
+				}),
+				changedFiles: &changed,
+			}
+			err := step.Run()
+			if tt.wantError {
+				if err == nil {
+					t.Error("Run() must refuse unmet native wiring")
+				} else {
+					for _, want := range []string{settingsPath, "mcp.servers.codegraph"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("Run() diagnostic %q missing %q", err, want)
+						}
+					}
+				}
+				if len(changed) != 0 {
+					t.Errorf("failed native reconcile reported changes: %v", changed)
+				}
+				body, readErr := os.ReadFile(agentsPath)
+				if readErr != nil || string(body) != guidanceBefore {
+					t.Errorf("failed Run() did not preserve guidance: %q, error=%v", body, readErr)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Run() valid no-watch native wiring: %v", err)
+				}
+				if !reflect.DeepEqual(changed, []string{agentsPath}) {
+					t.Errorf("changed files = %v, want only guidance %q", changed, agentsPath)
+				}
+			}
+			if calls != 0 {
+				t.Errorf("native sync called installer %d times, want zero", calls)
+			}
+			body, readErr := os.ReadFile(settingsPath)
+			if readErr != nil || string(body) != settingsBefore {
+				t.Fatalf("Run() changed native config bytes: %q, error=%v", body, readErr)
+			}
+			if err := step.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+			for path, want := range map[string]string{settingsPath: settingsBefore, agentsPath: guidanceBefore} {
+				body, readErr := os.ReadFile(path)
+				if readErr != nil || string(body) != want {
+					t.Errorf("Rollback() did not restore %q: %q, error=%v", path, body, readErr)
+				}
+			}
+		})
+	}
+}
+
+func TestCodeGraphGuidanceSyncStepSkipsPinnedNativePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	settingsBefore := "{\n// pinned project stays user-owned\n\"mcp\":{\"servers\":{\"codegraph\":{\"type\":\"local\",\"command\":[\"codegraph\",\"serve\",\"--mcp\",\"--path\",\"/other\"]}}}}\n"
+	mustWriteFile(t, settingsPath, []byte(settingsBefore))
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+	cmdLookPath = func(string) (string, error) { return "/bin/codegraph", nil }
+	calls := 0
+	step := codeGraphGuidanceSyncStep{
+		id:      "sync:community-tool:codegraph-guidance",
+		homeDir: home,
+		runner: communitytool.RunnerFunc(func(string, ...string) error {
+			calls++
+			return nil
+		}),
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() with pinned native path: %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("pinned native path called installer %d times, want zero", calls)
+	}
+	body, err := os.ReadFile(settingsPath)
+	if err != nil || string(body) != settingsBefore {
+		t.Fatalf("Run() changed pinned native config bytes: %q, error=%v", body, err)
+	}
+}
+
 func TestCodeGraphGuidanceSyncStepRefreshesOldMarkerWhenConfigured(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -3818,17 +3878,9 @@ func TestSyncActionsExecutedReflectsChangedFiles(t *testing.T) {
 	}
 }
 
-// ─── Task 5.5: Profile sync integration ───────────────────────────────────────
-
-// TestRunSyncWithProfilesIntegration is the Task 5.5 integration test.
-// It verifies the full profile sync flow:
-// 1. Creates a temp home directory with a minimal opencode.json
-// 2. Runs sync with 3 named profiles (cheap, premium, balanced)
-// 3. Asserts all 33 profile agent keys are in the resulting opencode.json (11 × 3)
-// 4. Asserts model assignments are set correctly on the orchestrators
-// 5. Asserts prompt files exist in ~/.config/opencode/prompts/sdd/
-// 6. Runs sync AGAIN with no changes → asserts filesChanged=0 (idempotent)
-func TestRunSyncWithProfilesIntegration(t *testing.T) {
+// TestRunSyncOpenCodeIsIdempotentWithoutSDDAgents verifies that an OpenCode
+// sync never recreates retired SDD agents and that a repeat sync is a no-op.
+func TestRunSyncOpenCodeIsIdempotentWithoutSDDAgents(t *testing.T) {
 	home := t.TempDir()
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
@@ -3839,34 +3891,6 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 
-	// Build 3 profiles with distinct orchestrator models.
-	profiles := []model.Profile{
-		{
-			Name: "cheap",
-			OrchestratorModel: model.ModelAssignment{
-				ProviderID: "anthropic",
-				ModelID:    "claude-haiku-3-5-20241022",
-			},
-			PhaseAssignments: map[string]model.ModelAssignment{
-				"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-haiku-3-5-20241022"},
-			},
-		},
-		{
-			Name: "premium",
-			OrchestratorModel: model.ModelAssignment{
-				ProviderID: "anthropic",
-				ModelID:    "claude-opus-4-5",
-			},
-		},
-		{
-			Name: "balanced",
-			OrchestratorModel: model.ModelAssignment{
-				ProviderID: "anthropic",
-				ModelID:    "claude-sonnet-4-5",
-			},
-		},
-	}
-
 	sel := model.Selection{
 		Agents: []model.AgentID{model.AgentOpenCode},
 		Components: []model.ComponentID{
@@ -3875,7 +3899,6 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 			model.ComponentGGA,
 			model.ComponentSkills,
 		},
-		Profiles: profiles,
 	}
 
 	// Run 1: fresh home.
@@ -3899,16 +3922,13 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 	settingsStr := string(settingsData)
 
 	if strings.Contains(settingsStr, `"sdd-orchestrator-cheap"`) || strings.Contains(settingsStr, `"sdd-init"`) {
-		t.Fatalf("retired SDD profiles recreated: %s", settingsStr)
+		t.Fatalf("retired SDD agents recreated: %s", settingsStr)
 	}
 	if slashHome := filepath.ToSlash(home); strings.Contains(settingsStr, slashHome) {
 		t.Errorf("opencode.json should not contain temp home path %q", slashHome)
 	}
 
 	// Run 2: same selection → all assets already current → filesChanged=0.
-	// Note: The second sync with profiles will re-generate the overlay, but since
-	// DetectProfiles is called when no explicit profiles are provided (normal re-sync),
-	// we run with the SAME selection (profiles still provided) to test idempotency.
 	result2, err := RunSyncWithSelection(home, sel)
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() run2 error = %v", err)
@@ -3918,96 +3938,6 @@ func TestRunSyncWithProfilesIntegration(t *testing.T) {
 	}
 	if !result2.NoOp {
 		t.Errorf("run2: NoOp = false, want true (all assets already current)")
-	}
-}
-
-// TestRunSyncDetectsExistingProfilesOnRegularSync verifies Task 5.3 behavior:
-// when no explicit profiles are provided (normal sync), DetectProfiles is called
-// to find existing profiles and their prompts are regenerated.
-func TestRunSyncDetectsExistingProfilesOnRegularSync(t *testing.T) {
-	home := t.TempDir()
-	restoreCommand := runCommand
-	restoreLookPath := cmdLookPath
-	t.Cleanup(func() {
-		runCommand = restoreCommand
-		cmdLookPath = restoreLookPath
-	})
-	runCommand = func(string, ...string) error { return nil }
-	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
-
-	// Run 1: sync with a profile to establish it in opencode.json.
-	selWithProfile := model.Selection{
-		Agents: []model.AgentID{model.AgentOpenCode},
-		Components: []model.ComponentID{
-			model.ComponentEngram,
-			model.ComponentContext7,
-			model.ComponentGGA,
-			model.ComponentSkills,
-		},
-		Profiles: []model.Profile{
-			{
-				Name: "test-profile",
-				OrchestratorModel: model.ModelAssignment{
-					ProviderID: "anthropic",
-					ModelID:    "claude-haiku-3-5-20241022",
-				},
-				PhaseAssignments: map[string]model.ModelAssignment{
-					"jd-judge-a": {
-						ProviderID: "anthropic",
-						ModelID:    "claude-opus-4-5",
-						Effort:     "high",
-					},
-					"jd-fix-agent": {
-						ProviderID: "anthropic",
-						ModelID:    "claude-sonnet-4-20250514",
-					},
-				},
-			},
-		},
-	}
-
-	_, err := RunSyncWithSelection(home, selWithProfile)
-	if err != nil {
-		t.Fatalf("RunSyncWithSelection() run1 error = %v", err)
-	}
-
-	// Verify the profile was created.
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
-	settingsData, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile error = %v", err)
-	}
-	if strings.Contains(string(settingsData), `"sdd-orchestrator-test-profile"`) {
-		t.Fatalf("run1 recreated retired profile: %s", settingsData)
-	}
-
-	// Run 2: normal sync (no explicit profiles) → DetectProfiles should find the
-	// existing profile and regenerate it. The result should be no-op since the
-	// regenerated content is identical.
-	selNoProfiles := model.Selection{
-		Agents: []model.AgentID{model.AgentOpenCode},
-		Components: []model.ComponentID{
-			model.ComponentEngram,
-			model.ComponentContext7,
-			model.ComponentGGA,
-			model.ComponentSkills,
-		},
-		// No profiles: ordinary repeat sync.
-	}
-
-	result2, err := RunSyncWithSelection(home, selNoProfiles)
-	if err != nil {
-		t.Fatalf("RunSyncWithSelection() run2 (no explicit profiles) error = %v", err)
-	}
-
-	// The detected profile should be regenerated. Since content is identical,
-	// the sync should still detect the profile key exists.
-	settingsData2, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile run2 error = %v", err)
-	}
-	if !bytes.Equal(settingsData, settingsData2) || result2.FilesChanged != 0 {
-		t.Fatalf("regular sync did not converge: changed=%d", result2.FilesChanged)
 	}
 }
 
@@ -4595,36 +4525,6 @@ func TestParseSyncFlagsProfilePhaseUnknownPhaseReturnsError(t *testing.T) {
 	}
 }
 
-// TestBuildSyncSelectionProfilesForwarded verifies that Profiles from SyncFlags
-// are forwarded to the model.Selection's overrides for use in the sync pipeline.
-func TestBuildSyncSelectionProfilesForwarded(t *testing.T) {
-	profile := model.Profile{
-		Name: "cheap",
-		OrchestratorModel: model.ModelAssignment{
-			ProviderID: "anthropic",
-			ModelID:    "claude-haiku-3-5-20241022",
-		},
-	}
-	flags := SyncFlags{Profiles: []model.Profile{profile}}
-
-	sel := BuildSyncSelection(flags, []model.AgentID{model.AgentOpenCode})
-
-	if len(sel.Profiles) != 1 {
-		t.Fatalf("BuildSyncSelection() Profiles length = %d, want 1", len(sel.Profiles))
-	}
-	if sel.Profiles[0].Name != "cheap" {
-		t.Errorf("Selection.Profiles[0].Name = %q, want %q", sel.Profiles[0].Name, "cheap")
-	}
-}
-
-func TestBuildSyncSelectionSDDProfileStrategyForwarded(t *testing.T) {
-	flags := SyncFlags{SDDProfileStrategy: string(model.SDDProfileStrategyExternalSingleActive)}
-	sel := BuildSyncSelection(flags, []model.AgentID{model.AgentOpenCode})
-	if sel.SDDProfileStrategy != model.SDDProfileStrategyExternalSingleActive {
-		t.Fatalf("Selection.SDDProfileStrategy = %q, want %q", sel.SDDProfileStrategy, model.SDDProfileStrategyExternalSingleActive)
-	}
-}
-
 // ─── Issue #3430: persisted component selection must not drop explicit SDD
 // profile/model-assignment work ───────────────────────────────────────────
 
@@ -4815,6 +4715,7 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 			"review-risk": "glm",
 			"default":     "auto",
 		},
+		AntigravityModelAssignments: map[string]string{"jd-fix-agent": "flash_lite", "jd-judge-a": "ultra"},
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"review-risk": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
@@ -4843,6 +4744,9 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	}
 	if got := result.Selection.KiroModelAssignments["default"]; got != model.KiroModelAuto {
 		t.Errorf("KiroModelAssignments[default] = %q, want %q", got, model.KiroModelAuto)
+	}
+	if got, want := result.Selection.AntigravityModelAssignments, (map[string]model.AntigravityModelTier{"jd-fix-agent": model.AntigravityModelFlashLite}); !reflect.DeepEqual(got, want) {
+		t.Errorf("AntigravityModelAssignments = %v, want %v (unknown tiers dropped)", got, want)
 	}
 
 	// OpenCode assignments must be loaded.
@@ -6141,6 +6045,25 @@ func TestRenderSyncReportIncludesChangedFilePaths(t *testing.T) {
 	}
 }
 
+// TestRenderSyncReportNoOpManualActionWording preserves ordinary no-op output
+// and uses neutral guidance without hiding action-specific recovery details.
+func TestRenderSyncReportNoOpManualActionWording(t *testing.T) {
+	action := nativeReviewPreservedAction("/managed/jd-judge-a.md")
+	for _, manual := range []bool{false, true} {
+		result := SyncResult{NoOp: true, Agents: []model.AgentID{model.AgentOpenCode}}
+		want := "gentle-ai sync — no managed sync actions needed\nAgents: opencode\n"
+		if manual {
+			result.ManualActions = []string{action}
+			want += "No managed files changed; review the manual actions below.\nManual actions required:\n- " + action
+		} else {
+			want += "All managed assets are already up to date. No files changed."
+		}
+		if got := RenderSyncReport(result); got != want {
+			t.Fatalf("manual=%v report = %q, want %q", manual, got, want)
+		}
+	}
+}
+
 // TestRenderSyncReportNoOpOmitsChangedFilePaths verifies that RenderSyncReport
 // does not list individual file path bullets in the no-op case.
 func TestRenderSyncReportNoOpOmitsChangedFilePaths(t *testing.T) {
@@ -7011,7 +6934,7 @@ func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *test
 		t.Fatalf("syncBackupTargets() error = %v", err)
 	}
 
-	routing, err := agentguidance.RoutingPaths(home, agent)
+	routing, err := agentguidance.RoutingPathsWithOptions(home, agent, agentguidance.RoutingOptions{})
 	if err != nil {
 		t.Fatalf("RoutingPaths(%q) error = %v", agent, err)
 	}
@@ -7430,7 +7353,7 @@ func TestPostSyncVerificationRequiresEveryRetiredPluginRemoved(t *testing.T) {
 	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "sdd-task-result-artifacts.ts")
 	mustWriteFile(t, stale, []byte("stale"))
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
-	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	report := runPostSyncVerificationWithState(home, t.TempDir(), ScopeGlobal, selection, nil)
 	for _, check := range report.Checks {
 		if check.ID == "verify:sync:file:"+stale {
 			if check.Status != verify.CheckStatusFailed {
@@ -7451,7 +7374,7 @@ func TestPostSyncVerificationRequiresKilocodeRetiredPluginRemoved(t *testing.T) 
 	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "background-agents.ts")
 	mustWriteFile(t, stale, []byte("stale"))
 	selection := model.Selection{Agents: []model.AgentID{model.AgentKilocode}}
-	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	report := runPostSyncVerificationWithState(home, t.TempDir(), ScopeGlobal, selection, nil)
 	for _, check := range report.Checks {
 		if check.ID == "verify:sync:file:"+stale {
 			if check.Status != verify.CheckStatusFailed {
@@ -7461,4 +7384,47 @@ func TestPostSyncVerificationRequiresKilocodeRetiredPluginRemoved(t *testing.T) 
 		}
 	}
 	t.Fatalf("no post-sync check for retired Kilocode plugin %s; checks = %v", stale, report.Checks)
+}
+
+// Issue #5393: a hand-edited managed OpenCode plugin is refused and preserved,
+// but the refusal is scoped to that agent's managed plugins. Every other sync
+// step still runs, and the run ends as a partial sync naming the plugin.
+func TestSyncDriftedOpenCodePluginIsScopedAndTheRestOfSyncRuns(t *testing.T) {
+	home, _ := partialSyncTestHome(t, "1.18.30", nil)
+	if _, err := RunSync([]string{"--agents", "claude-code,opencode"}); err != nil {
+		t.Fatalf("first RunSync() error = %v", err)
+	}
+	plugin := filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts")
+	drifted := append([]byte(readTextFile(t, plugin)), []byte("// my local edit\n")...)
+	mustWriteFile(t, plugin, drifted)
+	claudePrompt := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.Remove(claudePrompt); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := RunSync([]string{"--agents", "claude-code,opencode"})
+	var partial *PartialSyncError
+	if !errors.As(err, &partial) {
+		t.Fatalf("sync error = %v, want *PartialSyncError", err)
+	}
+	for _, want := range []string{"opencode managed plugins were skipped", plugin, "does not match any Gentle AI release", "then re-run `gentle-ai sync`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("partial sync error missing %q: %s", want, err)
+		}
+	}
+	if got, readErr := os.ReadFile(plugin); readErr != nil || !bytes.Equal(got, drifted) {
+		t.Errorf("drifted plugin bytes were not preserved: %v", readErr)
+	}
+	if _, statErr := os.Stat(claudePrompt); statErr != nil {
+		t.Errorf("a later sync step did not run after the plugin refusal: %v", statErr)
+	}
+	if len(result.SkippedAgents) != 1 || result.SkippedAgents[0].Agent != model.AgentOpenCode || result.SkippedAgents[0].Part != "managed plugins" {
+		t.Errorf("skipped agents = %#v, want OpenCode managed plugins", result.SkippedAgents)
+	}
+	report := RenderSyncReport(result)
+	for _, want := range []string{"Agents skipped: opencode (managed plugins)", "does not match any Gentle AI release"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("sync report missing %q:\n%s", want, report)
+		}
+	}
 }

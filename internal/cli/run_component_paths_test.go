@@ -30,8 +30,13 @@ func TestNativeReviewPostApplyErrorsRestoreDeduplicatedSnapshot(t *testing.T) {
 	for _, branch := range []string{"install digest", "sync comparison", "sync digest"} {
 		t.Run(branch, func(t *testing.T) {
 			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("USERPROFILE", home)
+			for _, key := range []string{"HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "PI_CODING_AGENT_DIR", "TEMP", "TMP"} {
+				t.Setenv(key, home)
+			}
+			originalAddPath, originalPrioritizePath := addUserPath, ensureUserPathFirst
+			addUserPath = func(string) error { return nil }
+			ensureUserPathFirst = func(string) error { return nil }
+			t.Cleanup(func() { addUserPath, ensureUserPathFirst = originalAddPath, originalPrioritizePath })
 			originalHome, originalCommand, originalLookPath := osUserHomeDir, runCommand, cmdLookPath
 			osUserHomeDir = func() (string, error) { return home, nil }
 			runCommand = func(string, ...string) error { return nil }
@@ -97,7 +102,17 @@ func TestNativeReviewPostApplyErrorsRestoreDeduplicatedSnapshot(t *testing.T) {
 			var runErr error
 			if branch == "install digest" {
 				installStagePlan = func(rt *installRuntime) pipeline.StagePlan {
-					return planFor(rt.backupRoot, rt.workspaceDir, rt.state, selection, nil)
+					plan := planFor(rt.backupRoot, rt.workspaceDir, rt.state, selection, nil)
+					// Keep the real component outcome: unmapped Kiro deliberately
+					// leaves GGA config absent, which verification must observe.
+					for _, step := range originalInstall(rt).Apply {
+						if component, ok := step.(componentApplyStep); ok && component.component == model.ComponentGGA {
+							plan.Apply = append(plan.Apply, step)
+							return plan
+						}
+					}
+					t.Fatal("normal install plan has no GGA apply step")
+					return plan
 				}
 				_, runErr = RunInstall([]string{"--agent", "kiro-ide"}, system.DetectionResult{})
 			} else {
@@ -1413,6 +1428,48 @@ func TestInstallRoutingGuidanceWorkspaceScopeDeliversOpenCodeToHome(t *testing.T
 	}
 }
 
+// TestRoutingLegacyTriggerCleanupStripsKilocodeSettings covers the Kilocode
+// branch of the legacy trigger-rule cleanup: Kilo keeps its orchestrator prompt
+// in its own settings document, not in a system prompt file.
+func TestRoutingLegacyTriggerCleanupStripsKilocodeSettings(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "kilo", "opencode.json")
+	seeded := filemerge.InjectMarkdownSection("# My own notes\n", "trigger-rules", "Retired WorkRun ceremony\n")
+	payload, err := json.Marshal(map[string]any{
+		"agent": map[string]any{opencodedefault.ManagedAgent: map[string]any{"prompt": seeded}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, settingsPath, payload)
+
+	step := agentRoutingGuidanceStep{
+		id:      "agent-guidance:" + string(model.AgentKilocode),
+		agent:   model.AgentKilocode,
+		homeDir: home,
+		scope:   ScopeGlobal,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	var settings struct {
+		Agent map[string]struct {
+			Prompt string `json:"prompt"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(readTextFile(t, settingsPath)), &settings); err != nil {
+		t.Fatalf("decode Kilo settings error = %v", err)
+	}
+	prompt := settings.Agent[opencodedefault.ManagedAgent].Prompt
+	if strings.Contains(prompt, "Retired WorkRun ceremony") {
+		t.Fatalf("legacy trigger-rules content survived in the Kilo settings:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "# My own notes") {
+		t.Fatalf("stripping the legacy section destroyed unmanaged user content:\n%s", prompt)
+	}
+}
+
 // TestRoutingLegacyTriggerCleanupTargetsSelectedOpenCodeSettings covers issue
 // #5025 item 2: the retired trigger-rules cleanup must act on the settings file
 // OpenCode loads, never on a non-loaded global decoy, for install and sync.
@@ -1586,7 +1643,7 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 		t.Fatalf("backupTargets() error = %v", err)
 	}
 
-	routing, err := agentguidance.RoutingPaths(home, agent)
+	routing, err := agentguidance.RoutingPathsWithOptions(home, agent, agentguidance.RoutingOptions{})
 	if err != nil {
 		t.Fatalf("RoutingPaths(%q) error = %v", agent, err)
 	}
@@ -1663,6 +1720,7 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 			if tc.wantRoot == "workspace" {
 				root = workspace
 			}
+			// Retained routing hooks and Context7 cleanup share selected-scope settings.
 			wantSettings := adapters[0].SettingsPath(root)
 			if !containsPath(targets, wantSettings) {
 				t.Fatalf("backupTargets missing cleanup path %q; targets=%v", wantSettings, targets)
@@ -1677,8 +1735,9 @@ func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement
 			if root == workspace {
 				otherRoot = home
 			}
-			if !tc.sameWorkspace && containsPath(targets, adapters[0].SettingsPath(otherRoot)) {
-				t.Fatalf("backupTargets selected the wrong scope's cleanup path; targets=%v", targets)
+			otherSettings := adapters[0].SettingsPath(otherRoot)
+			if !tc.sameWorkspace && containsPath(targets, otherSettings) {
+				t.Fatalf("backupTargets selected settings outside install scope; targets=%v", targets)
 			}
 		})
 	}
@@ -1940,9 +1999,9 @@ func TestInstallPrepareValidationFollowsExistingContract(t *testing.T) {
 		if result.Err != nil {
 			t.Fatalf("install rejected valid OpenCode settings: %v", result.Err)
 		}
-		// The ownership writers normalize a JSONC document (pre-existing
-		// behavior, #5028); the data contract is that user members survive and
-		// the result stays parseable.
+		// User members survive and the result stays parseable; comment and
+		// trailing-comma preservation is pinned by
+		// TestOpenCodeRoutingWritersPreserveJSONCThroughInstallAndSync.
 		after, err := filemerge.UnmarshalJSONObject([]byte(readTextFile(t, settingsPath)))
 		if err != nil {
 			t.Fatalf("settings unreadable after install: %v", err)
@@ -2014,5 +2073,46 @@ func TestInstallPrepareValidationScopesRefusalsToSelectedWriters(t *testing.T) {
 				t.Fatal("validation mutated the settings document")
 			}
 		})
+	}
+}
+
+// backupTargets is the monolithic install snapshot plan these tests assert:
+// installBackupTargets without the Claude module opt-in.
+func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
+	return installBackupTargets(homeDir, workspaceDir, scope, selection, resolved, false)
+}
+
+// TestComponentPathsAntigravityUsesSharedConfigRoot pins agy 1.4's shared
+// ~/.gemini/config root for backup and verification paths, and proves the
+// Gemini CLI and Claude Code paths that share these helpers are unchanged.
+func TestComponentPathsAntigravityUsesSharedConfigRoot(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentAntigravity, model.AgentGeminiCLI, model.AgentClaudeCode})
+	selection := model.Selection{Skills: []model.SkillID{model.SkillGoTesting}}
+
+	context7 := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, adapters, model.ComponentContext7)
+	skills := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, adapters, model.ComponentSkills)
+
+	for _, tc := range []struct {
+		paths []string
+		want  string
+	}{
+		{context7, filepath.Join(home, ".gemini", "config", "mcp_config.json")},
+		{context7, filepath.Join(home, ".gemini", "settings.json")},
+		{skills, filepath.Join(home, ".gemini", "config", "skills", "go-testing", "SKILL.md")},
+		{skills, filepath.Join(home, ".gemini", "skills", "go-testing", "SKILL.md")},
+		{skills, filepath.Join(home, ".claude", "skills", "go-testing", "SKILL.md")},
+	} {
+		if !containsPath(tc.paths, tc.want) {
+			t.Errorf("component paths missing %q\npaths=%v", tc.want, tc.paths)
+		}
+	}
+	for _, unwanted := range []string{
+		filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json"),
+		filepath.Join(home, ".gemini", "antigravity-cli", "skills", "go-testing", "SKILL.md"),
+	} {
+		if containsPath(context7, unwanted) || containsPath(skills, unwanted) {
+			t.Errorf("component paths must not target the variant directory %q", unwanted)
+		}
 	}
 }

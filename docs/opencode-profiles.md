@@ -20,6 +20,8 @@ Use `auto`, `on`, or `off`. You can also set `GENTLE_AI_OPENCODE_BACKGROUND_SUBA
 
 When activation is enabled, Gentle AI manages launchers under `~/.gentle-ai/bin/` (`opencode` on POSIX; `opencode.cmd` and `opencode.ps1` on Windows). The launcher sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` only if the variable is unset: an explicit `false` keeps execution in the foreground. On POSIX systems Gentle AI also persists `~/.gentle-ai/bin/` in your login profile; see [Platforms](platforms.md) for which profile is used and when you must add the line yourself. Restart OpenCode after activation, and start a new login shell so PATH includes the launcher directory.
 
+Managed launchers preserve the executable's stable package-manager symlink (for example, `/opt/homebrew/bin/opencode`) instead of pinning a versioned Cellar target, so upgrades do not invalidate the launcher. If an older, unedited Gentle AI launcher fails, runtime detection can use an OpenCode executable elsewhere on `PATH`, outside the managed directory, so `gentle-ai sync` can regenerate the launcher. Edited or user-owned launchers are not bypassed; the alternate runtime must still report a supported version.
+
 Sessions launched through `opencode serve`, `opencode attach`, or OpenCode Desktop may not inherit the managed launcher environment; they fall back to foreground execution. Gentle AI does not rewrite their configuration.
 
 Background jobs are process-local and non-durable: restarting OpenCode loses them. They provide no filesystem isolation, so use them only for independent read-only work, not dependent tasks or parallel writers in one worktree.

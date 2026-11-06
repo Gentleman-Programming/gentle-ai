@@ -30,6 +30,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
@@ -41,6 +42,9 @@ import (
 // tuiNowFn returns the current time for the update-check cooldown gate.
 // Package-level var so tests can inject a deterministic clock.
 var tuiNowFn = time.Now
+
+// updateCheckFn is the remote-check boundary, replaceable by deterministic tests.
+var updateCheckFn = update.CheckAll
 
 // tuiOpenBrowserFn opens a URL in the default system browser.
 // Package-level var so tests can inject a stub without spawning a process.
@@ -105,6 +109,13 @@ var osRemoveFn = os.Remove
 var execCommandFn = exec.Command
 var communityToolInstallFn = communitytool.Install
 var communityToolStatusFn = communitytool.DetectStatus
+
+// agentBuilderEngineAvailableFn reports whether an agent-builder engine binary
+// is on PATH. Tests may override it to count or fake PATH probes.
+var agentBuilderEngineAvailableFn = func(id model.AgentID) bool {
+	engine := agentbuilder.NewEngine(id)
+	return engine != nil && engine.Available()
+}
 
 // readCurrentAssignmentsFn reads OpenCode agent assignments for Configure models.
 // Tests may override it without touching user settings.
@@ -393,6 +404,9 @@ type BackupRestoreMsg struct {
 // UpdateCheckResultMsg is sent when the background update check completes.
 type UpdateCheckResultMsg struct {
 	Results []update.UpdateResult
+	State   update.CheckState
+	// Forced marks a zero-TTL refresh result so its failure cannot auto-retry.
+	Forced bool
 }
 
 // AdvisoryMsg is sent when the background advisory manifest fetch completes.
@@ -527,9 +541,9 @@ type SyncDetailedFunc func(overrides *model.SyncOverrides) ([]string, []string, 
 // UninstallFunc is the signature of the function injected to perform managed uninstall.
 type UninstallFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error)
 
-// UninstallWithProfilesFunc is an uninstall function variant that accepts an
-// explicit profile selection for OpenCode SDD profile cleanup.
-type UninstallWithProfilesFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error)
+// UninstallWithEngramScopeFunc is an uninstall function variant that accepts an
+// explicit Engram cleanup scope.
+type UninstallWithEngramScopeFunc func(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (componentuninstall.Result, error)
 
 // ExecuteFunc builds and runs the installation pipeline. It receives the
 // effective and publishable OpenCode and Pi background choices plus a
@@ -604,9 +618,11 @@ const (
 	ScreenUninstallMode
 	ScreenUninstall
 	ScreenUninstallComponents
-	ScreenUninstallProfiles
+	ScreenUninstallEngramScope
 	ScreenUninstallConfirm
 	ScreenUninstallResult
+	ScreenCustomAgents
+	ScreenCustomAgentDelete
 	ScreenAgentBuilderEngine
 	ScreenAgentBuilderPrompt
 	ScreenAgentBuilderGenerating
@@ -626,9 +642,34 @@ const (
 	ScreenReviewStoreResetResult
 	// ScreenReviewMode displays and changes the global review-mode switch.
 	ScreenReviewMode
+	ScreenShellInstall
+	ScreenAntigravityModelPicker
 )
 
 type Model struct {
+	// agentBuilderEngines is detected once in NewModel so View and optionCount
+	// never probe PATH per frame (#268).
+	agentBuilderEngines   []model.AgentID
+	shellExperience       *shellExperienceConfig
+	shellDetected         []shellinstaller.UserShellInstall
+	shellDetectedProfiles []shellinstaller.UserExperience
+	shellDetectedCursor   int
+	shellManage           *shellManageState
+	shellUpdate           *shellUpdateState
+	shellReconfigure      string
+	shellPlan             []string
+	shellPlanConfig       *shellExperienceConfig
+	shellPlanRequest      shellinstaller.UserInstallRequest
+	shellRootRisk         *shellRootRiskPrompt
+	shellInstallRun       *shellInstallRun
+	shellInstallEvents    <-chan shellInstallEvent
+	shellInstallRunner    func(context.Context, shellinstaller.UserInstallRequest, func(shellinstaller.UserInstallProgress)) error
+	shellReadyOffset      int
+	shellReadyCursor      int
+	shellInstallEnabled   bool
+	shellInstallModel     tea.Model
+	shellInstallSelection cli.ShellInstallSelection
+
 	openCodePresentationMajor opencode.RuntimeMajor
 	Screen                    Screen
 	PreviousScreen            Screen
@@ -649,6 +690,7 @@ type Model struct {
 	runtimeCatalogDiscoveryRequest uint64
 	ClaudeModelPicker              screens.ClaudeModelPickerState
 	KiroModelPicker                screens.KiroModelPickerState
+	AntigravityModelPicker         screens.AntigravityModelPickerState
 	CodexModelPicker               screens.CodexModelPickerState
 	SkillPicker                    []model.SkillID
 	Err                            error
@@ -718,7 +760,8 @@ type Model struct {
 	UpdateResults []update.UpdateResult
 
 	// UpdateCheckDone is true once the background update check has completed.
-	UpdateCheckDone bool
+	UpdateCheckDone  bool
+	UpdateCheckState update.CheckState
 
 	// AdvisoryMessage holds the informational text from the advisory manifest
 	// fetch, when a non-empty message was returned. Empty string means no
@@ -787,11 +830,9 @@ type Model struct {
 	UninstallMode model.UninstallMode
 
 	// UninstallAgents holds the current TUI selection for the uninstall flow.
-	UninstallAgents            []model.AgentID
-	UninstallComponents        []model.ComponentID
-	UninstallProfilesAvailable []string
-	UninstallProfilesToRemove  []string
-	UninstallProfileSelection  bool
+	UninstallAgents              []model.AgentID
+	UninstallComponents          []model.ComponentID
+	UninstallEngramScopeSelected bool
 	// UninstallEngramProjectScopeAvailable indicates whether .engram project data
 	// was detected for the current workspace, enabling project-only cleanup.
 	UninstallEngramProjectScopeAvailable bool
@@ -813,12 +854,17 @@ type Model struct {
 	// UninstallFn performs the managed uninstall operation.
 	UninstallFn UninstallFunc
 
-	// UninstallWithProfilesFn performs managed uninstall with explicit profile
-	// cleanup selection when the current flow requires it.
-	UninstallWithProfilesFn UninstallWithProfilesFunc
+	// UninstallWithEngramScopeFn performs managed uninstall with an explicit
+	// Engram cleanup scope when the current flow requires it.
+	UninstallWithEngramScopeFn UninstallWithEngramScopeFunc
 
 	// AgentBuilder holds the transient state for the agent-builder TUI flow.
 	AgentBuilder AgentBuilderState
+
+	// CustomAgents holds the list and deletion selection for custom agents.
+	CustomAgentsList          []agentbuilder.RegistryEntry
+	CustomAgentsErr           error
+	CustomAgentDeleteSelected map[string]bool
 
 	InstallFlowActive bool
 
@@ -878,20 +924,22 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 	}
 
 	selection := model.Selection{
-		Agents:                 agents,
-		Persona:                model.PersonaGentleman,
-		Preset:                 model.PresetFullGentleman,
-		Components:             components,
-		ClaudeModelAssignments: installStateClaudeAssignments(s.ClaudeModelAssignments),
-		ClaudePhaseAssignments: installStateClaudePhaseAssignments(s.ClaudePhaseAssignments),
-		KiroModelAssignments:   installStateKiroAssignments(s.KiroModelAssignments),
-		ModelAssignments:       installStateModelAssignments(s.ModelAssignments),
+		Agents:                      agents,
+		Persona:                     model.PersonaGentleman,
+		Preset:                      model.PresetFullGentleman,
+		Components:                  components,
+		ClaudeModelAssignments:      installStateClaudeAssignments(s.ClaudeModelAssignments),
+		ClaudePhaseAssignments:      installStateClaudePhaseAssignments(s.ClaudePhaseAssignments),
+		KiroModelAssignments:        installStateKiroAssignments(s.KiroModelAssignments),
+		AntigravityModelAssignments: model.AntigravityModelTiersFromStrings(s.AntigravityModelAssignments),
+		ModelAssignments:            installStateModelAssignments(s.ModelAssignments),
 		// The persisted tier is both the pre-selection and what Gentle manages.
 		CodexServiceTier:        validCodexServiceTier(s.CodexServiceTier),
 		CodexManagedServiceTier: validCodexServiceTier(s.CodexServiceTier),
 	}
 
 	return Model{
+		agentBuilderEngines:   detectAgentBuilderEngines(),
 		Screen:                ScreenWelcome,
 		Version:               version,
 		Selection:             selection,
@@ -983,20 +1031,24 @@ func installStateModelAssignments(assignments map[string]state.ModelAssignmentSt
 	return out
 }
 
-func (m Model) Init() tea.Cmd {
+func (m Model) updateCheckCommand(ttl time.Duration) tea.Cmd {
 	version := m.Version
 	profile := m.Detection.System.Profile
 	home := homeDir()
 
-	updateCmd := func() tea.Msg {
+	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		results := update.CheckAllWithCooldown(ctx, version, profile, home, update.UpdateCheckTTL,
+		report := update.CheckAllWithCooldownReport(ctx, version, profile, home, ttl,
 			tuiNowFn,
-			update.CheckAll,
+			updateCheckFn,
 		)
-		return UpdateCheckResultMsg{Results: results}
+		return UpdateCheckResultMsg{Results: report.Results, State: report.State, Forced: ttl == 0}
 	}
+}
+
+func (m Model) Init() tea.Cmd {
+	updateCmd := m.updateCheckCommand(update.UpdateCheckTTL)
 
 	// Fetch the advisory manifest concurrently with the update check.
 	// advisoryFetchFn is a package-level var so tests can override it.
@@ -1014,6 +1066,17 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.Screen == ScreenShellInstall {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			return m.updateShellInstall(msg)
+		case tea.WindowSizeMsg:
+			m.Width, m.Height = msg.Width, msg.Height
+			return m.updateShellInstall(msg)
+		case shellInstallEvent, shellInstallTick, shellUpdateResult, shellUninstallResult:
+			return m.updateShellInstall(msg)
+		}
+	}
 	switch msg := msg.(type) {
 	case openCodePresentationMsg:
 		m.openCodePresentationMajor = msg.major
@@ -1186,6 +1249,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case UpdateCheckResultMsg:
 		m.UpdateResults = msg.Results
 		m.UpdateCheckDone = true
+		m.UpdateCheckState = msg.State
+		for _, result := range msg.Results {
+			if result.Status == update.CheckFailed {
+				m.UpdateCheckState = update.CheckUnsuccessful
+			}
+		}
+		// An upgrade screen opened during startup gets one fresh check after
+		// omission or failure. Never automatically retry that forced check.
+		if !msg.Forced && (m.UpdateCheckState == update.CheckSkipped || m.UpdateCheckState == update.CheckUnsuccessful) &&
+			(m.Screen == ScreenUpgrade || m.Screen == ScreenUpgradeSync) {
+			m.UpdateCheckDone = false
+			return m, tea.Batch(tickCmd(), m.updateCheckCommand(0))
+		}
 		// Show the pre-Welcome update prompt only when the user is still on the
 		// initial Welcome screen. The update check is async (~10 s) so if the user
 		// has already navigated into a flow we must not interrupt them mid-action.
@@ -1437,12 +1513,17 @@ func (m Model) View() string {
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
-		return screens.RenderWelcomeWithAdvisory(
-			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone,
-			m.hasDetectedOpenCode(), 0, m.hasAgentBuilderEngines(),
+		render := screens.RenderWelcomeWithAdvisory
+		if m.shellInstallEnabled {
+			render = screens.RenderShellWelcomeWithAdvisory
+		}
+		return render(
+			m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone && m.UpdateCheckState == update.CheckCompleted, m.hasAgentBuilderEngines(),
 			m.Width, m.Height,
 			screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll},
 		)
+	case ScreenShellInstall:
+		return m.shellInstallView()
 	case ScreenUpgrade:
 		return screens.RenderUpgradeWithWidth(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame, m.Width)
 	case ScreenSync:
@@ -1461,12 +1542,12 @@ func (m Model) View() string {
 		return screens.RenderUninstall(m.UninstallAgents, m.Cursor)
 	case ScreenUninstallComponents:
 		return screens.RenderUninstallComponents(m.UninstallComponents, m.Cursor)
-	case ScreenUninstallProfiles:
-		return screens.RenderUninstallProfiles(m.UninstallProfilesAvailable, m.UninstallProfilesToRemove, m.UninstallEngramProjectScopeAvailable, m.UninstallEngramScope, m.Cursor)
+	case ScreenUninstallEngramScope:
+		return screens.RenderUninstallEngramScope(m.UninstallEngramProjectScopeAvailable, m.UninstallEngramScope, m.Cursor)
 	case ScreenUninstallConfirm:
-		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.Cursor, m.OperationRunning, m.SpinnerFrame)
+		return screens.RenderUninstallConfirm(m.UninstallMode, m.UninstallAgents, m.UninstallComponents, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.Cursor, m.OperationRunning, m.SpinnerFrame)
 	case ScreenUninstallResult:
-		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.UninstallProfilesToRemove, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.SyncCleanInstallFiles, m.SyncCleanInstallErr)
+		return screens.RenderUninstallResult(m.UninstallResult, m.UninstallErr, m.UninstallMode, m.UninstallEngramScope, m.UninstallEngramProjectScopeAvailable, m.SyncCleanInstallFiles, m.SyncCleanInstallErr)
 	case ScreenDetection:
 		return screens.RenderDetection(m.Detection, m.Cursor)
 	case ScreenAgents:
@@ -1479,6 +1560,8 @@ func (m Model) View() string {
 		return screens.RenderClaudeModelPicker(m.ClaudeModelPicker, m.Cursor, m.Height)
 	case ScreenKiroModelPicker:
 		return screens.RenderKiroModelPicker(m.KiroModelPicker, m.Cursor)
+	case ScreenAntigravityModelPicker:
+		return screens.RenderAntigravityModelPicker(m.AntigravityModelPicker, m.Cursor)
 	case ScreenCodexModelPicker:
 		return screens.RenderCodexModelPicker(m.CodexModelPicker, m.Cursor, m.Height)
 	case ScreenCommunityTools:
@@ -1520,8 +1603,8 @@ func (m Model) View() string {
 	case ScreenComplete:
 		return screens.RenderComplete(screens.CompletePayload{
 			ConfiguredAgents:    len(m.Selection.Agents),
-			InstalledComponents: len(m.Selection.Components),
-			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA),
+			InstalledComponents: installedComponentCount(m.Selection.Components, m.Execution.DeferredComponents),
+			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA) && !slices.Contains(m.Execution.DeferredComponents, model.ComponentGGA),
 			FailedSteps:         extractFailedSteps(m.Execution),
 			RollbackPerformed:   len(m.Execution.Rollback.Steps) > 0,
 			RollbackComplete:    m.Execution.Rollback.Success,
@@ -1560,6 +1643,10 @@ func (m Model) View() string {
 		return screens.RenderDeleteResult(m.SelectedBackup, m.DeleteErr)
 	case ScreenRenameBackup:
 		return screens.RenderRenameBackup(m.SelectedBackup, m.BackupRenameText, m.BackupRenamePos)
+	case ScreenCustomAgents:
+		return screens.RenderCustomAgents(m.CustomAgentsList, m.Cursor, m.CustomAgentsErr, m.hasAgentBuilderEngines())
+	case ScreenCustomAgentDelete:
+		return screens.RenderCustomAgentDelete(m.CustomAgentsList, m.CustomAgentDeleteSelected, m.Cursor)
 	case ScreenAgentBuilderEngine:
 		return screens.RenderABEngine(m.AgentBuilder.AvailableEngines, m.Cursor)
 	case ScreenAgentBuilderPrompt:
@@ -1645,6 +1732,40 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else if next, ok := m.pickerNextScreen(); ok {
 					return m, m.advanceToNextPickerScreen(next)
 				}
+			}
+			return m, nil
+		}
+	}
+
+	if m.Screen == ScreenAntigravityModelPicker {
+		wasInCustomMode := m.AntigravityModelPicker.InCustomMode
+		handled, updated := screens.HandleAntigravityModelPickerNav(keyStr, &m.AntigravityModelPicker, m.Cursor)
+		if handled {
+			if wasInCustomMode != m.AntigravityModelPicker.InCustomMode {
+				m.Cursor = 0
+			}
+			if updated != nil {
+				m.Selection.AntigravityModelAssignments = updated
+				if m.ModelConfigMode {
+					m.ModelConfigMode = false
+					m.PendingSyncOverrides = &model.SyncOverrides{
+						TargetAgents:                []model.AgentID{model.AgentAntigravity},
+						AntigravityModelAssignments: updated,
+					}
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
+					return m, nil
+				}
+				if next, ok := m.pickerNextScreen(); ok {
+					return m, m.advanceToNextPickerScreen(next)
+				}
+				// Custom preset: the Antigravity picker is the last installer step
+				// before optional community tools, skills, and review.
+				if m.shouldShowCommunityToolsScreen() {
+					m.setScreen(ScreenCommunityTools)
+					return m, nil
+				}
+				return m.continueAfterCommunityTools()
 			}
 			return m, nil
 		}
@@ -1879,12 +2000,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggleCurrentUninstallAgent()
 		case ScreenUninstallComponents:
 			m.toggleCurrentUninstallComponent()
-		case ScreenUninstallProfiles:
-			if m.Cursor < len(m.UninstallProfilesAvailable) {
-				m.toggleCurrentUninstallProfile()
-			} else {
-				m.toggleCurrentUninstallEngramScope()
-			}
+		case ScreenUninstallEngramScope:
+			m.toggleCurrentUninstallEngramScope()
 		case ScreenDependencyTree:
 			if m.Selection.Preset == model.PresetCustom {
 				m.toggleCurrentComponent()
@@ -1893,6 +2010,14 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggleCurrentSkill()
 		case ScreenCommunityTools:
 			m.toggleCurrentCommunityTool()
+		case ScreenCustomAgentDelete:
+			if m.Cursor < len(m.CustomAgentsList) {
+				name := m.CustomAgentsList[m.Cursor].Name
+				if m.CustomAgentDeleteSelected == nil {
+					m.CustomAgentDeleteSelected = make(map[string]bool)
+				}
+				m.CustomAgentDeleteSelected[name] = !m.CustomAgentDeleteSelected[name]
+			}
 		}
 		return m, nil
 	case "r":
@@ -1905,6 +2030,15 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "d":
+		if m.Screen == ScreenCustomAgents && len(m.CustomAgentsList) > 0 {
+			m.CustomAgentsErr = nil
+			m.CustomAgentDeleteSelected = make(map[string]bool)
+			if m.Cursor < len(m.CustomAgentsList) {
+				m.CustomAgentDeleteSelected[m.CustomAgentsList[m.Cursor].Name] = true
+			}
+			m.setScreen(ScreenCustomAgentDelete)
+			return m, nil
+		}
 		// Delete: only when on ScreenBackups and cursor is on a backup item (not "Back").
 		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
 			m.SelectedBackup = m.Backups[m.Cursor]
@@ -1966,13 +2100,36 @@ func (m Model) isModelPickerSeparatorCursor() bool {
 func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	switch m.Screen {
 	case ScreenWelcome:
-		switch m.Cursor {
+		options := screens.WelcomeOptionsWithShellInstaller(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.shellInstallEnabled)
+		if m.Cursor >= 0 && m.Cursor < len(options) {
+			switch options[m.Cursor] {
+			case screens.ShellInstallWelcomeOption:
+				m.shellInstallSelection = cli.ShellInstallSelection{}
+				m.beginShellExperience()
+				if m.shellInstallModel != nil {
+					m.shellInstallModel, _ = m.shellInstallModel.Update(tea.WindowSizeMsg{Width: m.Width, Height: m.Height})
+				}
+				m.setScreen(ScreenShellInstall)
+				return m, nil
+			case "Quit":
+				return m, tea.Quit
+			}
+		}
+		welcomeCursor := m.Cursor
+		if m.shellInstallEnabled {
+			welcomeCursor--
+		}
+		switch welcomeCursor {
 		case 0:
 			m.InstallFlowActive = true
 			m.setScreen(ScreenDetection)
 		case 1:
 			m = m.withResetOperationState()
 			m.setScreen(ScreenUpgrade)
+			if m.UpdateCheckDone && m.UpdateCheckState != update.CheckCompleted {
+				m.UpdateCheckDone = false
+				return m, tea.Batch(tickCmd(), m.updateCheckCommand(0))
+			}
 			// Start spinner for update check waiting state.
 			if !m.UpdateCheckDone {
 				return m, tickCmd()
@@ -1983,6 +2140,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 3:
 			m = m.withResetOperationState()
 			m.setScreen(ScreenUpgradeSync)
+			if m.UpdateCheckDone && m.UpdateCheckState != update.CheckCompleted {
+				m.UpdateCheckDone = false
+				return m, tea.Batch(tickCmd(), m.updateCheckCommand(0))
+			}
 			// Start spinner for update check waiting state.
 			if !m.UpdateCheckDone {
 				return m, tickCmd()
@@ -1990,45 +2151,35 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 4:
 			m.setScreen(ScreenModelConfig)
 		case 5:
-			// "Create your own Agent" — blocked when no engines are available.
-			if !m.hasAgentBuilderEngines() {
-				return m, nil
-			}
-			m.AgentBuilder = AgentBuilderState{}
-			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
-			ta := textarea.New()
-			ta.Placeholder = "Describe what you want your agent to do..."
-			ta.Focus()
-			ta.SetWidth(60)
-			ta.SetHeight(5)
-			m.AgentBuilder.Textarea = ta
-			m.setScreen(ScreenAgentBuilderEngine)
+			m.CustomAgentsErr = nil
+			m.setScreen(ScreenCustomAgents)
+			return m, nil
 		default:
 			next := 6
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				m.setScreen(ScreenBackups)
 				return m, nil
 			}
 			next++
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				return m.startReviewStoreResetSurvey()
 			}
 			next++
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				return m.startReviewModeLoad()
 			}
 			next++
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				m.setScreen(ScreenUninstallMode)
 				return m, nil
 			}
 			next++
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				m.CommunityToolsStandalone = true
 				m.CommunityToolResults = nil
 				m.CommunityToolErr = nil
@@ -2041,12 +2192,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			next++
 
-			if m.Cursor == next {
+			if welcomeCursor == next {
 				return m, tea.Quit
 			}
 		}
 	case ScreenUninstallMode:
-		m.refreshUninstallProfiles()
+		m.refreshUninstallEngramScope()
 		options := screens.UninstallModeOptions()
 		switch {
 		case m.Cursor < len(options):
@@ -2066,8 +2217,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				for _, component := range allComponents {
 					m.UninstallComponents = append(m.UninstallComponents, component.ID)
 				}
-				m.UninstallProfileSelection = false
-				m.UninstallProfilesToRemove = nil
+				m.UninstallEngramScopeSelected = false
 				m.setScreen(ScreenUninstallConfirm)
 			}
 		case m.Cursor == len(options):
@@ -2091,11 +2241,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case m.Cursor < componentCount:
 			m.toggleCurrentUninstallComponent()
 		case m.Cursor == componentCount && len(m.UninstallComponents) > 0:
-			m.refreshUninstallProfiles()
-			m.UninstallProfileSelection = false
-			m.UninstallProfilesToRemove = nil
+			m.refreshUninstallEngramScope()
 			if m.shouldShowUninstallEngramScopeSelection() {
-				m.setScreen(ScreenUninstallProfiles)
+				m.setScreen(ScreenUninstallEngramScope)
 			} else {
 				m.setScreen(ScreenUninstallConfirm)
 			}
@@ -2103,20 +2251,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenUninstall)
 		}
 		return m, nil
-	case ScreenUninstallProfiles:
-		profileCount := len(m.UninstallProfilesAvailable)
-		engramScopeOptionCount := 0
+	case ScreenUninstallEngramScope:
+		continueIdx := 0
 		if m.shouldShowUninstallEngramScopeSelection() {
-			engramScopeOptionCount = 2
+			continueIdx = 2
 		}
-		continueIdx := profileCount + engramScopeOptionCount
 		switch {
-		case m.Cursor < profileCount:
-			m.toggleCurrentUninstallProfile()
 		case m.Cursor < continueIdx:
 			m.toggleCurrentUninstallEngramScope()
 		case m.Cursor == continueIdx:
-			m.UninstallProfileSelection = true
+			m.UninstallEngramScopeSelected = true
 			m.setScreen(ScreenUninstallConfirm)
 		case m.Cursor == continueIdx+1:
 			if m.UninstallMode == model.UninstallModePartial {
@@ -2138,8 +2282,8 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Route cancel/back based on uninstall mode:
 		// - partial: go back to components selection
 		// - full/full-remove: go back to uninstall mode selection
-		if m.UninstallProfileSelection {
-			m.setScreen(ScreenUninstallProfiles)
+		if m.UninstallEngramScopeSelected {
+			m.setScreen(ScreenUninstallEngramScope)
 		} else {
 			switch m.UninstallMode {
 			case model.UninstallModePartial:
@@ -2254,8 +2398,68 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			discoveryCmd := m.enterCodexModelPicker()
 			m.setScreen(ScreenCodexModelPicker)
 			return m, discoveryCmd
-		case 4: // Back
+		case 4: // Configure Antigravity models
+			m.ModelConfigMode = true
+			m.AntigravityModelPicker = screens.NewAntigravityModelPickerStateFromAssignments(m.Selection.AntigravityModelAssignments)
+			m.setScreen(ScreenAntigravityModelPicker)
+		case 5: // Back
 			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenCustomAgents:
+		agentCount := len(m.CustomAgentsList)
+		switch {
+		case m.Cursor < agentCount:
+			m.CustomAgentsErr = nil
+			m.CustomAgentDeleteSelected = map[string]bool{
+				m.CustomAgentsList[m.Cursor].Name: true,
+			}
+			m.setScreen(ScreenCustomAgentDelete)
+		case m.Cursor == agentCount:
+			m.agentBuilderEngines = detectAgentBuilderEngines()
+			if !m.hasAgentBuilderEngines() {
+				return m, nil
+			}
+			m.AgentBuilder = AgentBuilderState{}
+			m.AgentBuilder.AvailableEngines = m.agentBuilderEngines
+			ta := textarea.New()
+			ta.Placeholder = "Describe what you want your agent to do..."
+			ta.Focus()
+			ta.SetWidth(60)
+			ta.SetHeight(5)
+			m.AgentBuilder.Textarea = ta
+			m.setScreen(ScreenAgentBuilderEngine)
+		case m.Cursor == agentCount+1:
+			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenCustomAgentDelete:
+		agentCount := len(m.CustomAgentsList)
+		if agentCount == 0 {
+			m.setScreen(ScreenCustomAgents)
+			return m, nil
+		}
+		deleteIdx := agentCount
+		cancelIdx := agentCount + 1
+		switch m.Cursor {
+		case deleteIdx:
+			registryPath := customAgentsRegistryPath()
+			var toDelete []string
+			for name, selected := range m.CustomAgentDeleteSelected {
+				if selected {
+					toDelete = append(toDelete, name)
+				}
+			}
+			adapters := m.buildAgentBuilderAdapters()
+			err := agentbuilder.Uninstall(registryPath, toDelete, adapters)
+			m.CustomAgentDeleteSelected = nil
+			m.setScreen(ScreenCustomAgents)
+			if err != nil {
+				m.CustomAgentsErr = err
+			}
+		case cancelIdx:
+			m.setScreen(ScreenCustomAgents)
+			m.CustomAgentDeleteSelected = nil
 		}
 		return m, nil
 	case ScreenDetection:
@@ -2332,6 +2536,18 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 	case ScreenKiroModelPicker:
 		if !m.KiroModelPicker.InCustomMode && m.Cursor == screens.KiroModelPickerOptionCount(m.KiroModelPicker)-1 {
+			if m.ModelConfigMode {
+				m.ModelConfigMode = false
+				m.setScreen(ScreenModelConfig)
+				return m, nil
+			}
+			if prev, ok := m.pickerPreviousScreen(); ok {
+				m.applyPickerEntry(prev)
+			}
+			return m, nil
+		}
+	case ScreenAntigravityModelPicker:
+		if !m.AntigravityModelPicker.InCustomMode && m.Cursor == screens.AntigravityModelPickerOptionCount(m.AntigravityModelPicker)-1 {
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
 				m.setScreen(ScreenModelConfig)
@@ -2480,7 +2696,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		default:
 			// "Back" — in custom preset, return to the screen that preceded SkillPicker.
 			if m.Selection.Preset == model.PresetCustom {
-				if m.shouldShowClaudeModelPickerScreen() {
+				if m.shouldShowAntigravityModelPickerScreen() {
+					m.setScreen(ScreenAntigravityModelPicker)
+				} else if m.shouldShowClaudeModelPickerScreen() {
 					m.setScreen(ScreenClaudeModelPicker)
 				} else {
 					m.setScreen(ScreenDependencyTree)
@@ -2702,7 +2920,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenAgentBuilderComplete)
 		}
 	case ScreenAgentBuilderComplete:
-		m.setScreen(ScreenWelcome)
+		m.setScreen(ScreenCustomAgents)
 	case ScreenUpdatePrompt:
 		// Cursor maps to: 0=Update now, 1=View changes, 2=Keep current version.
 		// Enter always confirms the currently highlighted option.
@@ -2876,9 +3094,7 @@ func (m Model) withResetUninstallState() Model {
 	m.UninstallMode = model.UninstallModePartial
 	m.UninstallAgents = detectedAgentIDs(m.Detection)
 	m.UninstallComponents = defaultUninstallComponents()
-	m.UninstallProfilesAvailable = nil
-	m.UninstallProfilesToRemove = nil
-	m.UninstallProfileSelection = false
+	m.UninstallEngramScopeSelected = false
 	m.UninstallEngramProjectScopeAvailable = false
 	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
 	m.UninstallResult = componentuninstall.Result{}
@@ -3242,16 +3458,15 @@ func executeExternalCommand(commandFn func(string, ...string) *exec.Cmd, name st
 
 func (m Model) startUninstall() tea.Cmd {
 	uninstallFn := m.UninstallFn
-	uninstallWithProfilesFn := m.UninstallWithProfilesFn
+	uninstallWithEngramScopeFn := m.UninstallWithEngramScopeFn
 	syncFn := m.SyncFn
 	agentIDs := append([]model.AgentID(nil), m.UninstallAgents...)
 	componentIDs := append([]model.ComponentID(nil), m.UninstallComponents...)
-	profileNamesToRemove := append([]string(nil), m.UninstallProfilesToRemove...)
 	engramScope := m.UninstallEngramScope
-	profileSelectionUsed := m.UninstallProfileSelection || len(profileNamesToRemove) > 0
+	engramScopeSelected := m.UninstallEngramScopeSelected
 	mode := m.UninstallMode
 	return func() tea.Msg {
-		if uninstallFn == nil && uninstallWithProfilesFn == nil {
+		if uninstallFn == nil && uninstallWithEngramScopeFn == nil {
 			return UninstallDoneMsg{Err: fmt.Errorf("uninstall function not configured")}
 		}
 
@@ -3259,8 +3474,8 @@ func (m Model) startUninstall() tea.Cmd {
 			result componentuninstall.Result
 			err    error
 		)
-		if uninstallWithProfilesFn != nil && profileSelectionUsed {
-			result, err = uninstallWithProfilesFn(agentIDs, componentIDs, profileNamesToRemove, engramScope)
+		if uninstallWithEngramScopeFn != nil && engramScopeSelected {
+			result, err = uninstallWithEngramScopeFn(agentIDs, componentIDs, engramScope)
 		} else {
 			result, err = uninstallFn(agentIDs, componentIDs)
 		}
@@ -3297,21 +3512,10 @@ func (m Model) startUninstall() tea.Cmd {
 	}
 }
 
-func (m *Model) refreshUninstallProfiles() {
+func (m *Model) refreshUninstallEngramScope() {
 	m.UninstallEngramProjectScopeAvailable = m.detectProjectEngramData()
 	m.UninstallEngramScope = model.EngramUninstallScopeGlobal
-
-	if !m.hasDetectedOpenCode() {
-		m.UninstallProfilesAvailable = nil
-		m.UninstallProfilesToRemove = nil
-		m.UninstallProfileSelection = false
-		return
-	}
-
-	// Named profile cleanup is retired. Existing user profiles remain untouched.
-	m.UninstallProfilesAvailable = nil
-	m.UninstallProfilesToRemove = nil
-	m.UninstallProfileSelection = false
+	m.UninstallEngramScopeSelected = false
 }
 
 func (m Model) detectProjectEngramData() bool {
@@ -3536,7 +3740,10 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	// Agent builder back navigation.
 	switch m.Screen {
 	case ScreenAgentBuilderComplete:
-		m.setScreen(ScreenWelcome)
+		m.setScreen(ScreenCustomAgents)
+		return m
+	case ScreenAgentBuilderEngine:
+		m.setScreen(ScreenCustomAgents)
 		return m
 	case ScreenAgentBuilderInstalling:
 		// Can't go back while installing — guard above handles this.
@@ -3560,12 +3767,12 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	}
 
 	// ScreenUninstallConfirm: dynamic back navigation based on uninstall mode.
-	// - with profile selection: go back to profile selection screen
+	// - with Engram scope selection: go back to the Engram scope screen
 	// - partial: go back to component selection (ScreenUninstallComponents)
 	// - full/full-remove: go back to mode selection (ScreenUninstallMode)
 	if m.Screen == ScreenUninstallConfirm {
-		if m.UninstallProfileSelection {
-			m.setScreen(ScreenUninstallProfiles)
+		if m.UninstallEngramScopeSelected {
+			m.setScreen(ScreenUninstallEngramScope)
 		} else {
 			switch m.UninstallMode {
 			case model.UninstallModePartial:
@@ -3577,7 +3784,7 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		return m
 	}
 
-	if m.Screen == ScreenUninstallProfiles {
+	if m.Screen == ScreenUninstallEngramScope {
 		if m.UninstallMode == model.UninstallModePartial {
 			m.setScreen(ScreenUninstallComponents)
 		} else {
@@ -3587,7 +3794,7 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	}
 
 	// ModelConfigMode: pickers reached via Model Config shortcut return to ScreenModelConfig.
-	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenCodexModelPicker || m.Screen == ScreenModelPicker) {
+	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenCodexModelPicker || m.Screen == ScreenAntigravityModelPicker || m.Screen == ScreenModelPicker) {
 		m.ModelConfigMode = false
 		m.setScreen(ScreenModelConfig)
 		return m
@@ -3597,7 +3804,9 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	// In custom preset, agent pickers precede SkillPicker.
 	if m.Screen == ScreenSkillPicker {
 		if m.Selection.Preset == model.PresetCustom {
-			if m.shouldShowKiroModelPickerScreen() {
+			if m.shouldShowAntigravityModelPickerScreen() {
+				m.setScreen(ScreenAntigravityModelPicker)
+			} else if m.shouldShowKiroModelPickerScreen() {
 				m.setScreen(ScreenKiroModelPicker)
 			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
@@ -3649,7 +3858,7 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		}
 	}
 
-	if m.Screen == ScreenCodexModelPicker {
+	if m.Screen == ScreenCodexModelPicker || m.Screen == ScreenAntigravityModelPicker {
 		if prev, ok := m.pickerPreviousScreen(); ok {
 			m.applyPickerEntry(prev)
 			return m
@@ -3713,10 +3922,10 @@ func (m *Model) setScreen(next Screen) {
 		m.PinErr = nil
 	}
 	if next == ScreenUninstallMode {
-		m.refreshUninstallProfiles()
-		m.UninstallProfilesToRemove = nil
-		m.UninstallProfileSelection = false
-		m.UninstallEngramScope = model.EngramUninstallScopeGlobal
+		m.refreshUninstallEngramScope()
+	}
+	if next == ScreenCustomAgents {
+		m.loadCustomAgents()
 	}
 }
 
@@ -3773,7 +3982,7 @@ func (m Model) optionCount() int {
 	}
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), 0, m.hasAgentBuilderEngines()))
+		return len(screens.WelcomeOptionsWithShellInstaller(m.UpdateResults, m.UpdateCheckDone, m.hasAgentBuilderEngines(), m.shellInstallEnabled))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 0
@@ -3800,8 +4009,8 @@ func (m Model) optionCount() int {
 		return len(screens.UninstallAgentOptions()) + 2
 	case ScreenUninstallComponents:
 		return len(screens.UninstallComponentOptions()) + 2
-	case ScreenUninstallProfiles:
-		count := len(m.UninstallProfilesAvailable) + 2
+	case ScreenUninstallEngramScope:
+		count := 2
 		if m.shouldShowUninstallEngramScopeSelection() {
 			count += 2
 		}
@@ -3822,6 +4031,8 @@ func (m Model) optionCount() int {
 		return screens.ClaudeModelPickerOptionCount(m.ClaudeModelPicker)
 	case ScreenKiroModelPicker:
 		return screens.KiroModelPickerOptionCount(m.KiroModelPicker)
+	case ScreenAntigravityModelPicker:
+		return screens.AntigravityModelPickerOptionCount(m.AntigravityModelPicker)
 	case ScreenCodexModelPicker:
 		return screens.CodexModelPickerOptionCount(m.CodexModelPicker)
 	case ScreenCommunityTools:
@@ -3874,6 +4085,10 @@ func (m Model) optionCount() int {
 		return 0
 	case ScreenRenameBackup:
 		return 0 // text input mode — no cursor navigation
+	case ScreenCustomAgents:
+		return screens.CustomAgentsOptionCount(m.CustomAgentsList)
+	case ScreenCustomAgentDelete:
+		return screens.CustomAgentDeleteOptionCount(m.CustomAgentsList)
 	case ScreenAgentBuilderEngine:
 		return len(m.AgentBuilder.AvailableEngines) + 1 // engines + Back
 	case ScreenAgentBuilderPrompt:
@@ -3996,28 +4211,11 @@ func (m *Model) toggleCurrentUninstallComponent() {
 	m.UninstallComponents = append(m.UninstallComponents, componentID)
 }
 
-func (m *Model) toggleCurrentUninstallProfile() {
-	if m.Cursor >= len(m.UninstallProfilesAvailable) {
-		return
-	}
-
-	profileName := m.UninstallProfilesAvailable[m.Cursor]
-	for idx, selected := range m.UninstallProfilesToRemove {
-		if selected == profileName {
-			m.UninstallProfilesToRemove = append(m.UninstallProfilesToRemove[:idx], m.UninstallProfilesToRemove[idx+1:]...)
-			return
-		}
-	}
-
-	m.UninstallProfilesToRemove = append(m.UninstallProfilesToRemove, profileName)
-}
-
 func (m *Model) toggleCurrentUninstallEngramScope() {
-	profileCount := len(m.UninstallProfilesAvailable)
-	if m.Cursor < profileCount || !m.shouldShowUninstallEngramScopeSelection() {
+	if !m.shouldShowUninstallEngramScopeSelection() {
 		return
 	}
-	idx := m.Cursor - profileCount
+	idx := m.Cursor
 	if idx == 0 {
 		m.UninstallEngramScope = model.EngramUninstallScopeProject
 		return
@@ -4111,6 +4309,10 @@ func (m Model) goBackFromCommunityTools() Model {
 		m.CommunityToolResults = nil
 		m.CommunityToolErr = nil
 		m.setScreen(ScreenWelcome)
+		return m
+	}
+	if m.shouldShowAntigravityModelPickerScreen() {
+		m.setScreen(ScreenAntigravityModelPicker)
 		return m
 	}
 	if m.shouldShowCodexModelPickerScreen() {
@@ -4220,6 +4422,8 @@ func detectedAgentIDs(detection system.DetectionResult) []model.AgentID {
 			selected = append(selected, model.AgentCursor)
 		case string(model.AgentVSCodeCopilot):
 			selected = append(selected, model.AgentVSCodeCopilot)
+		case string(model.AgentGitHubCopilotCLI):
+			selected = append(selected, model.AgentGitHubCopilotCLI)
 		case string(model.AgentCodex):
 			selected = append(selected, model.AgentCodex)
 		case string(model.AgentAntigravity):
@@ -4310,16 +4514,6 @@ func extractAvailableUpdates(results []update.UpdateResult) []screens.UpdateInfo
 	return updates
 }
 
-// hasDetectedOpenCode returns true if OpenCode config directory was detected.
-func (m Model) hasDetectedOpenCode() bool {
-	for _, cfg := range m.Detection.Configs {
-		if cfg.Agent == string(model.AgentOpenCode) && cfg.Exists {
-			return true
-		}
-	}
-	return false
-}
-
 func (m Model) shouldShowOpenCodeBackgroundScreen() bool {
 	return m.Selection.HasAgent(model.AgentOpenCode)
 }
@@ -4341,6 +4535,13 @@ func (m Model) shouldShowKiroModelPickerScreen() bool {
 
 func (m Model) shouldShowCodexModelPickerScreen() bool {
 	return m.ModelConfigMode
+}
+
+// shouldShowAntigravityModelPickerScreen is the only phase picker kept in the
+// installer route: agy agent tiers are chosen when Antigravity is installed.
+// Configure models opens it directly instead of through this chain.
+func (m Model) shouldShowAntigravityModelPickerScreen() bool {
+	return m.Selection.HasAgent(model.AgentAntigravity)
 }
 
 // pickerFlowSlice returns the ordered conditional picker chain for the current
@@ -4366,6 +4567,9 @@ func (m Model) pickerFlowSlice() []Screen {
 	}
 	if m.shouldShowCodexModelPickerScreen() {
 		s = append(s, ScreenCodexModelPicker)
+	}
+	if m.shouldShowAntigravityModelPickerScreen() {
+		s = append(s, ScreenAntigravityModelPicker)
 	}
 	if !custom {
 		// Non-custom: DependencyTree is the last anchor.
@@ -4425,6 +4629,8 @@ func (m *Model) applyPickerEntry(next Screen) tea.Cmd {
 		)
 	case ScreenKiroModelPicker:
 		m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
+	case ScreenAntigravityModelPicker:
+		m.AntigravityModelPicker = screens.NewAntigravityModelPickerStateFromAssignments(m.Selection.AntigravityModelAssignments)
 	case ScreenCodexModelPicker:
 		discoveryCmd = m.enterCodexModelPicker()
 	case ScreenModelPicker:
@@ -4477,6 +4683,18 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 	return false
 }
 
+// installedComponentCount counts the selected components whose install was not
+// deferred for a missing prerequisite.
+func installedComponentCount(selected, deferred []model.ComponentID) int {
+	count := 0
+	for _, c := range selected {
+		if !slices.Contains(deferred, c) {
+			count++
+		}
+	}
+	return count
+}
+
 func (m Model) shouldShowUninstallEngramScopeSelection() bool {
 	if !hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
 		return false
@@ -4493,7 +4711,7 @@ func (m Model) isScrollableScreen() bool {
 
 // detectAgentBuilderEngines scans for supported AI agent binaries on PATH and
 // returns the list of available AgentIDs.
-func (m Model) detectAgentBuilderEngines() []model.AgentID {
+func detectAgentBuilderEngines() []model.AgentID {
 	candidateIDs := []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
@@ -4502,17 +4720,17 @@ func (m Model) detectAgentBuilderEngines() []model.AgentID {
 	}
 	var available []model.AgentID
 	for _, id := range candidateIDs {
-		engine := agentbuilder.NewEngine(id)
-		if engine != nil && engine.Available() {
+		if agentBuilderEngineAvailableFn(id) {
 			available = append(available, id)
 		}
 	}
 	return available
 }
 
-// hasAgentBuilderEngines reports whether any supported AI agent binary is installed.
+// hasAgentBuilderEngines reports whether any supported AI agent binary was
+// detected; it reads the stored result and never probes PATH.
 func (m Model) hasAgentBuilderEngines() bool {
-	return len(m.detectAgentBuilderEngines()) > 0
+	return len(m.agentBuilderEngines) > 0
 }
 
 // agentBuilderInstallTargets returns the list of install target paths for the preview screen.
@@ -4572,6 +4790,24 @@ func homeDir() string {
 		return h
 	}
 	return ""
+}
+
+// customAgentsRegistryPath resolves the user custom-agent registry file.
+func customAgentsRegistryPath() string {
+	return filepath.Join(homeDir(), ".config", "gentle-ai", "custom-agents.json")
+}
+
+// loadCustomAgents populates CustomAgentsList from the custom-agents.json registry.
+func (m *Model) loadCustomAgents() {
+	registryPath := customAgentsRegistryPath()
+	reg, err := agentbuilder.LoadRegistry(registryPath)
+	if err != nil {
+		m.CustomAgentsList = nil
+		m.CustomAgentsErr = err
+		return
+	}
+	m.CustomAgentsList = reg.Agents
+	m.CustomAgentsErr = nil
 }
 
 // buildInstalledAgentIDs returns the list of AgentIDs from the adapter list.
@@ -4686,6 +4922,15 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		_ = ctx // timeout enforced; Install itself is synchronous
+
+		// Validate before any adapter writes, including earlier non-Codex targets.
+		for _, adapter := range adapters {
+			if adapter.AgentID == model.AgentCodex {
+				if err := system.ValidateCodexHome(homeDir()); err != nil {
+					return AgentBuilderInstallDoneMsg{Err: err}
+				}
+			}
+		}
 
 		// Resolve agent name, applying conflict suffix if needed.
 		installAgent := agent

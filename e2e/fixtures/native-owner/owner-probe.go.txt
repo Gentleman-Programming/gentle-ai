@@ -1,0 +1,125 @@
+//go:build linux && amd64
+
+package shellinstaller
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"golang.org/x/sys/unix"
+	"io"
+	"os"
+	"os/signal"
+	"runtime"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+func independentTUIOwnerProbe(ctx context.Context, self string, args []string, req UserInstallRequest, in io.Reader, out, errout io.Writer) error {
+	if os.Getenv("INDEPENDENT_TUI_PROBE") != "yes" {
+		return errors.New("inert owner probe only")
+	}
+	var want struct {
+		PID       int
+		Flags     []uint32
+		Cc        []int
+		Dev       uint64
+		Ino       uint64
+		ConfirmNS int64
+	}
+	data, e := os.ReadFile("/fixture/probe-expect.json")
+	if e != nil {
+		return e
+	}
+	if e = json.Unmarshal(data, &want); e != nil {
+		return e
+	}
+	if os.Getpid() != want.PID || in != os.Stdin || out != os.Stdout || errout != os.Stderr {
+		return errors.New("PID or standard streams changed")
+	}
+	if e = UserKernelCheck(); e != nil {
+		return e
+	}
+	state, e := unix.IoctlGetTermios(0, unix.TCGETS)
+	if e != nil {
+		return e
+	}
+	flags := []uint32{state.Iflag, state.Oflag, state.Cflag, state.Lflag}
+	diagnostic := map[string]any{"expectedFlags": want.Flags, "actualFlags": flags, "expectedCc": want.Cc, "actualCc": state.Cc}
+	b, _ := json.Marshal(diagnostic)
+	_ = os.WriteFile("/fixture/terminal-raw.json", b, 0600)
+
+	for i, v := range flags {
+		if v != want.Flags[i] {
+			return errors.New("terminal flags not restored before exec")
+		}
+	}
+	for i, v := range want.Cc {
+		if int(state.Cc[i]) != v {
+			return errors.New("terminal controls not restored before exec")
+		}
+	}
+	for _, fd := range []int{0, 1, 2} {
+		var st unix.Stat_t
+		if e = unix.Fstat(fd, &st); e != nil {
+			return e
+		}
+		if uint64(st.Dev) != want.Dev || st.Ino != want.Ino {
+			return errors.New("standard descriptor replaced")
+		}
+	}
+	pools := []string{}
+	for _, v := range os.Environ() {
+		if strings.HasPrefix(v, "GOMAXPROCS=") {
+			pools = append(pools, v)
+		}
+	}
+	if len(pools) != 1 || pools[0] != "GOMAXPROCS=1" || runtime.GOMAXPROCS(0) != 1 {
+		return errors.New("pool environment changed")
+	}
+	if req.Experience == nil || req.Experience.Persona != "neutral" || req.Experience.BackgroundSubagents != "off" {
+		return errors.New("profile changed")
+	}
+	token, e := InspectUserInstall(req)
+	if e != nil || token != req.Confirmation {
+		return errors.New("physical token changed")
+	}
+	absolute, e := strconv.ParseInt(args[0], 10, 64)
+	if e != nil {
+		return e
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || deadline.UnixNano() != absolute || absolute < want.ConfirmNS+int64(139*time.Second) || absolute > want.ConfirmNS+int64(141*time.Second) {
+		return errors.New("absolute deadline changed")
+	}
+	proof := map[string]any{"PID": os.Getpid(), "self": self, "profile": "neutral/off", "tokenValid": true, "pool": pools, "runtimeGOMAXPROCS": runtime.GOMAXPROCS(0), "absoluteDeadline": absolute, "remainingSeconds": time.Until(deadline).Seconds(), "terminalRestoredBeforeExec": true, "standardDescriptorsInherited": true, "signalReceived": false, "input": "", "inertNoInstaller": true}
+	save := func() { b, _ := json.Marshal(proof); _ = os.WriteFile("/fixture/owner-proof.json", b, 0600) }
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	save()
+	fmt.Fprintln(out, "INERT_OWNER_READY")
+	fmt.Fprintln(errout, "INHERITED_STDERR")
+	input, e := bufio.NewReader(in).ReadString('\n')
+	proof["observedInputBytes"] = []byte(input)
+	proof["observedInputHex"] = fmt.Sprintf("%x", []byte(input))
+	save()
+	if e != nil || input != "inherited-input\n" {
+		return errors.New("stdin changed")
+	}
+	proof["input"] = input
+	save()
+	fmt.Fprintln(out, "INERT_OWNER_INPUT_OK")
+	select {
+	case <-signals:
+		proof["signalReceived"] = true
+		save()
+		return errors.New("INERT_OWNER_SIGNAL_RECEIVED")
+	case <-time.After(5 * time.Second):
+		return errors.New("signal missing")
+	}
+}

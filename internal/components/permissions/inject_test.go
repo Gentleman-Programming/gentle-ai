@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
@@ -533,6 +534,135 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeCodePreservesExistingDeny(t *testing.T) {
+	for _, deny := range []string{
+		`["Read(private.txt)","Read(.env.local)","Edit(custom/**)"]`,
+		`[]`,
+	} {
+		t.Run(deny, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := filepath.Join(home, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			seed := `{"permissions":{"deny":` + deny + `,"allow":["Read(public.txt)"],"ask":["Bash(git push *)"]},"unrelated":"keep"}`
+			if err := os.WriteFile(settingsPath, []byte(seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result, err := Inject(home, claudeAdapter())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.Changed || len(result.Files) != 1 || result.Files[0] != settingsPath {
+				t.Fatalf("first injection result = %#v", result)
+			}
+			content, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(content, &got); err != nil {
+				t.Fatal(err)
+			}
+			var wantDeny any
+			if err := json.Unmarshal([]byte(deny), &wantDeny); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{
+				"permissions": map[string]any{
+					"deny": wantDeny, "allow": []any{"Read(public.txt)"},
+					"ask": []any{"Bash(git push *)"}, "defaultMode": "bypassPermissions",
+				},
+				"unrelated": "keep",
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("settings = %#v; want %#v", got, want)
+			}
+			second, err := InjectAtPath(settingsPath, claudeAdapter())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if second.Changed || len(second.Files) != 1 || second.Files[0] != settingsPath {
+				t.Errorf("second injection result = %#v; want unchanged", second)
+			}
+			after, err := os.ReadFile(settingsPath)
+			if err != nil || string(after) != string(content) {
+				t.Errorf("reinjection changed settings: %s; error %v", after, err)
+			}
+		})
+	}
+}
+
+// TestInjectClaudeCodeAnchorsStaleHomeDenyRules upgrades the cwd-relative home
+// rules earlier releases wrote, which only matched inside the project (#5280).
+func TestInjectClaudeCodeAnchorsStaleHomeDenyRules(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"permissions":{"deny":["Read(.env)","Read(.ssh/*)","Edit(.ssh/*)","Read(.credentials/*)","Edit(.credentials/*)",` +
+		`"Read(Library/Keychains/*)","Edit(Library/Keychains/*)","Read(.aws/credentials)","Edit(.aws/credentials)",` +
+		`"Read(.config/gh/hosts.yml)","Edit(~/.config/gh/hosts.yml)","Edit(.config/gh/hosts.yml)","Read(custom/**)"]}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Permissions struct {
+			Deny []string `json:"deny"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Read(.env)", "Read(~/.ssh/**)", "Edit(~/.ssh/**)", "Read(~/.credentials/**)", "Edit(~/.credentials/**)",
+		"Read(~/Library/Keychains/**)", "Edit(~/Library/Keychains/**)", "Read(~/.aws/credentials)", "Edit(~/.aws/credentials)",
+		"Read(~/.config/gh/hosts.yml)", "Edit(~/.config/gh/hosts.yml)", "Read(custom/**)"}
+	if !reflect.DeepEqual(got.Permissions.Deny, want) {
+		t.Fatalf("deny = %q; want %q", got.Permissions.Deny, want)
+	}
+	second, err := Inject(home, claudeAdapter())
+	if err != nil || second.Changed {
+		t.Errorf("reinjection = %#v, %v; want unchanged", second, err)
+	}
+}
+
+func TestInjectClaudeCodeSeedsMissingDeny(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"permissions":{"allow":["Read(public.txt)"]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, claudeAdapter()); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got, defaults map[string]any
+	if err := json.Unmarshal(content, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(claudeCodeOverlayJSON, &defaults); err != nil {
+		t.Fatal(err)
+	}
+	defaults["permissions"].(map[string]any)["allow"] = []any{"Read(public.txt)"}
+	if !reflect.DeepEqual(got, defaults) {
+		t.Fatalf("settings = %#v; want unchanged defaults plus existing allow %#v", got, defaults)
+	}
+}
+
 func TestInjectAddsEnvToDenyList(t *testing.T) {
 	home := t.TempDir()
 
@@ -838,16 +968,16 @@ func TestTargetPathCodexHasNoInjectionTarget(t *testing.T) {
 // deny list is present in the Claude Code permissions block.
 func TestInjectClaudeCodeSensitivePathsDenied(t *testing.T) {
 	sensitivePatterns := []string{
-		"Read(.ssh/*)",
-		"Edit(.ssh/*)",
-		"Read(.credentials/*)",
-		"Edit(.credentials/*)",
-		"Read(Library/Keychains/*)",
-		"Edit(Library/Keychains/*)",
-		"Read(.aws/credentials)",
-		"Edit(.aws/credentials)",
-		"Read(.config/gh/hosts.yml)",
-		"Edit(.config/gh/hosts.yml)",
+		"Read(~/.ssh/**)",
+		"Edit(~/.ssh/**)",
+		"Read(~/.credentials/**)",
+		"Edit(~/.credentials/**)",
+		"Read(~/Library/Keychains/**)",
+		"Edit(~/Library/Keychains/**)",
+		"Read(~/.aws/credentials)",
+		"Edit(~/.aws/credentials)",
+		"Read(~/.config/gh/hosts.yml)",
+		"Edit(~/.config/gh/hosts.yml)",
 		"Read(**/*.pem)",
 		"Edit(**/*.pem)",
 		"Read(**/*.key)",
@@ -1014,7 +1144,7 @@ func TestInjectClaudeCodeDefaultDenyRulesApplied(t *testing.T) {
 	}
 
 	// Sensitive-path rules must be present after overlay application.
-	for _, rule := range []string{"Read(.ssh/*)", "Read(**/*.pem)", "Read(**/*.key)"} {
+	for _, rule := range []string{"Read(~/.ssh/**)", "Read(**/*.pem)", "Read(**/*.key)"} {
 		if !denySet[rule] {
 			t.Errorf("default deny rule %q was not present; got: %v", rule, denyList)
 		}
@@ -1106,5 +1236,144 @@ func TestKilocodePermissionsKeepBaseDuplicateKeyBehavior(t *testing.T) {
 	}
 	if _, ok := root["permission"].(map[string]any); !ok {
 		t.Fatalf("permission missing after merge: %s", raw)
+	}
+}
+
+// A user running deny-by-default keeps it: no overlay rule looser than the
+// root "*" lands inside a tool map the user scoped, where it would follow the
+// root rule and win as the last match.
+func TestInjectKeepsUserDenyByDefault(t *testing.T) {
+	for _, id := range []model.AgentID{model.AgentOpenCode, model.AgentKilocode} {
+		t.Run(string(id), func(t *testing.T) {
+			home := t.TempDir()
+			adapter, _ := agents.NewAdapter(id)
+			path := adapter.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			seed := `{"permission":{"*":"deny","bash":{"git status":"allow"}}}`
+			if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Inject(home, adapter); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root struct {
+				Permission map[string]json.RawMessage `json:"permission"`
+			}
+			if err := json.Unmarshal(raw, &root); err != nil {
+				t.Fatal(err)
+			}
+			if string(root.Permission["*"]) != `"deny"` {
+				t.Errorf("root deny changed: %s", root.Permission["*"])
+			}
+			// An unlisted command must fall through to the root deny: no tool
+			// map may carry its own "*" rule the user did not write.
+			for tool, value := range root.Permission {
+				var patterns map[string]string
+				if json.Unmarshal(value, &patterns) == nil {
+					if action, ok := patterns["*"]; ok {
+						t.Errorf("%s gained \"*\": %q over the user's deny-by-default", tool, action)
+					}
+				}
+			}
+			if result, err := Inject(home, adapter); err != nil || result.Changed {
+				t.Fatalf("repeat injection = %+v, %v", result, err)
+			}
+			if got := remoteAction(t, raw, "rm -rf /"); got != "deny" {
+				t.Errorf("overlay deny lost: got %s", got)
+			}
+			// Overlay rules follow the root deny, so any ask or allow the
+			// overlay added would loosen it; only the user's allow may remain.
+			for tool, value := range root.Permission {
+				var patterns map[string]string
+				if json.Unmarshal(value, &patterns) != nil {
+					continue
+				}
+				for pattern, action := range patterns {
+					if action != "deny" && !(tool == "bash" && pattern == "git status") {
+						t.Errorf("%s %q: %s loosens the user's deny-by-default", tool, pattern, action)
+					}
+				}
+			}
+			if got := remoteAction(t, raw, "git status"); got != "allow" {
+				t.Errorf("user's own allow: got %s, want allow", got)
+			}
+		})
+	}
+}
+
+// Under a root "*" of ask, the overlay keeps its asks and denies but adds no
+// allow that would follow the root rule.
+func TestInjectKeepsUserAskByDefault(t *testing.T) {
+	home := t.TempDir()
+	adapter, _ := agents.NewAdapter(model.AgentOpenCode)
+	path := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"permission":{"*":"ask","bash":{"ls":"allow"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root struct {
+		Permission map[string]map[string]string `json:"permission"`
+	}
+	_ = json.Unmarshal(raw, &root)
+	for pattern, action := range root.Permission["bash"] {
+		if action == "allow" && pattern != "ls" {
+			t.Errorf("bash %q: allow loosens the user's ask-by-default", pattern)
+		}
+	}
+	if got := remoteAction(t, raw, "git push"); got != "ask" {
+		t.Errorf("overlay ask lost: got %s", got)
+	}
+}
+
+// A root "*" pattern map of deny is deny-by-default too: the overlay adds no
+// looser rule, and the filter must not panic on the map form.
+func TestInjectToleratesPatternMapRootDefault(t *testing.T) {
+	home := t.TempDir()
+	adapter, _ := agents.NewAdapter(model.AgentKilocode)
+	path := adapter.SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"permission":{"*":{"*":"deny"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root struct {
+		Permission map[string]json.RawMessage `json:"permission"`
+	}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatal(err)
+	}
+	for tool, value := range root.Permission {
+		var patterns map[string]string
+		if tool == "*" || json.Unmarshal(value, &patterns) != nil {
+			continue
+		}
+		for pattern, action := range patterns {
+			if action != "deny" {
+				t.Errorf("%s %q: %s loosens the user's deny-by-default", tool, pattern, action)
+			}
+		}
 	}
 }

@@ -42,7 +42,7 @@ This prevents a historical authority, a sibling worktree, or a stale lifecycle r
 
 A session rooted in repository A can review an explicitly user-authorized nested target in unrelated repository B. Go resolves the requested path to B's canonical worktree root; adapters remain opaque and never parse authorization or roots. Once B is selected, the host retains B through STATUS, consent, collection, correction, validation, acknowledgement, and burn. Provider-issued tokens remain exact; an invocation without `--cwd` runs with process cwd B.
 
-Opaque `repository_context` can materialize or capture from process cwd A, but remains bound to B. Identical lineage text in A and B names independent authority: approval burns B only and leaves A unchanged. Ordinary repository policy owns delivery, and any explicitly authorized delivery action runs in B only.
+Opaque `repository_context` can materialize or capture from process cwd A, but remains bound to B. OpenCode hosts receive a sealed `rctx3` handle that names B's canonical root, so their relay opens B directly instead of discovering it from the session directory; every other runtime keeps the `rctx2` digest. Identical lineage text in A and B names independent authority: approval burns B only and leaves A unchanged. Ordinary repository policy owns delivery, and any explicitly authorized delivery action runs in B only.
 
 Only Claude Code, Codex, OpenCode, and Pi receive this lifecycle. Unsupported runtimes fail before repository or authority mutation.
 
@@ -71,7 +71,7 @@ Review completion is evidence about the completed transaction, not delivery auth
 
 ## Runtime boundary
 
-The atomic lifecycle is rendered only for Claude Code, OpenCode, Codex, and Pi. Generic and non-RDD runtime guidance keeps ODD routing and makes no review-transport promise. Pi receives the review execution contract through `orchestration/pi.md` in the provider contract bundle, which gentle-pi mirrors and injects at session start; gentle-ai writes nothing into the Pi system prompt.
+The atomic lifecycle is rendered only for Claude Code, OpenCode, Codex, and Pi. Generic and non-RDD runtime guidance keeps ODD routing and makes no review-transport promise. Pi receives the review execution contract through `orchestration/pi.md` in the provider contract bundle, which gentle-pi mirrors and injects at session start; gentle-ai writes nothing into the Pi system prompt. The same bundle carries Pi's rendered ODD routing block as `routing/pi.md` (contract 1.4.0), so gentle-pi can consume the routing canon from gentle-ai instead of a hand copy once it mirrors a 1.4.0 bundle (a follow-up change in gentle-pi).
 
 ## Historical compatibility
 

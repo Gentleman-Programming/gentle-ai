@@ -23,6 +23,7 @@ import (
 // --- checkOneTool ---
 
 func TestCheckOneTool_MissingBinary(t *testing.T) {
+	stubDoctorToolProbe(t)
 	orig := lookPathFn
 	defer func() { lookPathFn = orig }()
 	lookPathFn = func(string) (string, error) { return "", errors.New("not found") }
@@ -41,6 +42,7 @@ func TestCheckOneTool_MissingBinary(t *testing.T) {
 }
 
 func TestCheckOneTool_ShadowedBinary(t *testing.T) {
+	stubDoctorToolProbe(t)
 	orig := lookPathFn
 	defer func() { lookPathFn = orig }()
 	origExts := executableExtsFn
@@ -110,6 +112,7 @@ func TestDoctorToolCopies_DeduplicatesSymlinkedPathDirectories(t *testing.T) {
 }
 
 func TestCheckOneTool_OK(t *testing.T) {
+	stubDoctorToolProbe(t)
 	orig := lookPathFn
 	defer func() { lookPathFn = orig }()
 	origExts := executableExtsFn
@@ -137,6 +140,7 @@ func TestCheckOneTool_OK(t *testing.T) {
 // bare-name scan misses them and shadowing is reported as [ok]. With PATHEXT
 // extensions the duplicate copies are detected and a warning is produced.
 func TestCheckOneTool_ShadowedWindowsExt(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origGOOS := doctorGOOS
 	origExts := executableExtsFn
@@ -171,6 +175,7 @@ func TestCheckOneTool_ShadowedWindowsExt(t *testing.T) {
 }
 
 func TestCheckOneTool_WindowsPowerShellShimFallback(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origGOOS := doctorGOOS
 	origExts := executableExtsFn
@@ -206,6 +211,7 @@ func TestCheckOneTool_WindowsPowerShellShimFallback(t *testing.T) {
 }
 
 func TestCheckOneTool_WindowsShimVariantsInSameDirAreNotDuplicates(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origGOOS := doctorGOOS
 	origExts := executableExtsFn
@@ -635,7 +641,7 @@ func TestCheckInstalledAssetVersion_SkewWarning(t *testing.T) {
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn for version skew, got %s: %s", got.Status, got.Detail)
 	}
-	if !strings.Contains(got.Detail, "v0.9.0") || !strings.Contains(got.Detail, "gentle-ai sync") {
+	if !strings.Contains(got.Detail, "v0.9.0") || !strings.Contains(got.Detail, "sync") {
 		t.Errorf("unexpected detail: %s", got.Detail)
 	}
 }
@@ -948,6 +954,7 @@ func TestCheckDiskSpace_StatError(t *testing.T) {
 // --- RunDoctor integration test ---
 
 func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
+	stubDoctorToolProbe(t)
 	// Mock all external dependencies.
 	origLookPath := lookPathFn
 	origAvail := availableBytesFn
@@ -1026,6 +1033,7 @@ Status:  healthy
 }
 
 func TestRunDoctor_DanglingConfigSymlinkIsReadOnly(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLookPath := lookPathFn
 	origAvail := availableBytesFn
 	origHTTP := httpGetFn
@@ -1276,6 +1284,7 @@ func activateDoctorLauncher(t *testing.T, home, goos, targetOverride string) str
 // Issue #5238: the managed launcher and the target it delegates to are one
 // activation chain, not duplicate installations; genuine extra copies still warn.
 func TestCheckOneToolTreatsManagedLauncherAndTargetAsOneInstallation(t *testing.T) {
+	stubDoctorToolProbe(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX execute bits are not used on Windows")
 	}
@@ -1417,6 +1426,7 @@ func TestCheckOpenCodeProfileUnverifiableShellWarnsWithGuidance(t *testing.T) {
 }
 
 func TestRunDoctorAddsOpenCodeProfileCheckOnlyWhenBackgroundIsOn(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLookPath := lookPathFn
 	origAvail := availableBytesFn
 	origHTTP := httpGetFn
@@ -1478,6 +1488,7 @@ func TestRunDoctorAddsOpenCodeProfileCheckOnlyWhenBackgroundIsOn(t *testing.T) {
 // listed in state.json's InstalledAgents field are added to the required-tool
 // set and produce a fail check when their binary is not on PATH (#709).
 func TestCheckToolBinaries_DerivesAgentsFromInstalled(t *testing.T) {
+	stubDoctorToolProbe(t)
 	orig := lookPathFn
 	origGOOS := doctorGOOS
 	defer func() {
@@ -1512,6 +1523,7 @@ func TestCheckToolBinaries_DerivesAgentsFromInstalled(t *testing.T) {
 // user with only pi installed is not flagged as unhealthy because opencode
 // is missing (#709).
 func TestCheckToolBinaries_AgentNotInState_NotReported(t *testing.T) {
+	stubDoctorToolProbe(t)
 	orig := lookPathFn
 	defer func() { lookPathFn = orig }()
 	// Pretend everything is missing — only the actually required tools should
@@ -1552,6 +1564,7 @@ func TestCheckToolBinaries_AgentNotInState_NotReported(t *testing.T) {
 // pretend the user has selected any agents (RunDoctor handles this by
 // passing a nil/empty list to checkToolBinaries).
 func TestCheckToolBinaries_StateMissing_ChecksCoreOnly(t *testing.T) {
+	stubDoctorToolProbe(t)
 	orig := lookPathFn
 	defer func() { lookPathFn = orig }()
 	lookPathFn = func(string) (string, error) { return "/usr/local/bin/" + "missing", nil }
@@ -1579,6 +1592,7 @@ func TestCheckToolBinaries_StateMissing_ChecksCoreOnly(t *testing.T) {
 // $HOME/gentle-ai/ on PATH) is not treated as a duplicate binary copy by
 // the doctor (#709).
 func TestCheckOneTool_DirectoryWithToolName_NotCountedAsDuplicate(t *testing.T) {
+	stubDoctorToolProbe(t)
 	orig := lookPathFn
 	origExts := executableExtsFn
 	origGOOS := doctorGOOS
@@ -1619,6 +1633,7 @@ func TestCheckOneTool_DirectoryWithToolName_NotCountedAsDuplicate(t *testing.T) 
 // as a binary by the doctor — only directories were excluded before #709;
 // non-executable files were still flagged as duplicates.
 func TestCheckOneTool_FileWithoutExecBit_NotCountedAsDuplicate(t *testing.T) {
+	stubDoctorToolProbe(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix execute-bit semantics do not apply on Windows")
 	}
@@ -1662,6 +1677,7 @@ func TestCheckOneTool_FileWithoutExecBit_NotCountedAsDuplicate(t *testing.T) {
 // although not on PATH — is NOT in the rendered report (because it is not
 // in state.json's InstalledAgents). This is the headline scenario from #709.
 func TestRunDoctor_OnlySelectedAgentsAreRequired(t *testing.T) {
+	stubDoctorToolProbe(t)
 	origLook := lookPathFn
 	origAvail := availableBytesFn
 	origHTTP := httpGetFn

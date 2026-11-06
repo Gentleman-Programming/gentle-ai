@@ -156,7 +156,7 @@ func TestClaudeODDOnlyOrchestrator(t *testing.T) {
 		"{{GENTLE_AI_ODD_SECTION:Language Domain Contract}}",
 		"{{GENTLE_AI_ODD_SECTION:Delegated Verification Gate (MANDATORY)}}",
 		"Lossless Blocking Prompts", "Gentle AI Provider Defect Handoff",
-		"Native Checking Contract", "Review Execution Contract", "Mandatory Delegation Triggers",
+		"Native Checking Contract", "Review Execution Contract", "#### Delegation Triggers", // S9 C4 renamed the heading
 	} {
 		if !strings.Contains(content, required) {
 			t.Errorf("Claude orchestrator missing %q", required)
@@ -191,7 +191,7 @@ func TestPrimaryODDOnlyOrchestrator(t *testing.T) {
 				"{{GENTLE_AI_ODD_SECTION:Organic Driven Development Is The Default Workflow (MANDATORY)}}",
 				"{{GENTLE_AI_ODD_SECTION:Delegated Verification Gate (MANDATORY)}}",
 				"Lossless Blocking Prompts", "Gentle AI Provider Defect Handoff",
-				"Mandatory Delegation Triggers", "Native Checking Contract", "Review Execution Contract",
+				"#### Delegation Triggers", "Native Checking Contract", "Review Execution Contract", // S9 C4 renamed the heading
 			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("missing %q", required)
@@ -236,7 +236,7 @@ func TestRemainingODDOnlyOrchestrators(t *testing.T) {
 				"{{GENTLE_AI_ODD_SECTION:Language Domain Contract}}",
 				"{{GENTLE_AI_ODD_SECTION:Delegated Verification Gate (MANDATORY)}}",
 				"Lossless Blocking Prompts", "Gentle AI Provider Defect Handoff",
-				"Mandatory Delegation Triggers", "Native Checking Contract", "Review Execution Contract",
+				"#### Delegation Triggers", "Native Checking Contract", "Review Execution Contract", // S9 C4 renamed the heading
 			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("missing %q", required)
@@ -377,19 +377,59 @@ func TestODDOrchestratorsCarryNoRetiredWorkRunCeremony(t *testing.T) {
 	}
 }
 
+// pain-point-iteration S9 C4: delegation triggers hold only when their
+// condition truly holds (none by default, inline when in doubt), and a writer
+// unit is one independent behavior with its code, tests, and docs and several
+// minutes of work, never a test/doc/code split or a dependent delivery.
+func TestOrchestratorsDelegateOnlyWhenATriggerTrulyHolds(t *testing.T) {
+	for _, path := range allODDOrchestratorAssetPaths(t) {
+		content := MustRead(path)
+		for _, required := range []string{
+			"#### Delegation Triggers",
+			"Each trigger holds only when its condition truly holds, and only then is it mandatory; no trigger holds by default, and when in doubt work inline.",
+			"parallel units launched together (two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work: several files or roughly 100+ changed lines, because a subagent spends one to two minutes reading before it writes) or the context backstop",
+			"A unit is one independent piece of behavior with its code, tests, and docs together: never split one behavior into test, docs, and code writers, and a delivery that depends on another is not independent; several small independent changes run inline, one after another.",
+		} {
+			if !strings.Contains(content, required) {
+				t.Errorf("%s missing delegation-trigger clause %q", path, required)
+			}
+		}
+		for _, retired := range []string{"Mandatory Delegation Trigger", "each clearly heavier than starting a subagent"} {
+			if strings.Contains(content, retired) {
+				t.Errorf("%s keeps retired %q", path, retired)
+			}
+		}
+	}
+	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
+	for _, required := range []string{
+		"only when a Delegation Trigger's condition truly holds and names a reason",
+		"A Delegation Trigger holds only when its condition truly holds; none holds by default, and when in doubt work inline. Once one holds, delegation is not optional",
+		"A writer reason is parallel units launched together (independent units of behavior, each with its code, tests, and docs and several minutes of work) or the context backstop",
+	} {
+		if !strings.Contains(shared, required) {
+			t.Errorf("shared orchestrator sections missing %q", required)
+		}
+	}
+	if strings.Contains(shared, "Mandatory Delegation Trigger") {
+		t.Error("shared orchestrator sections keep the retired Mandatory Delegation Trigger framing")
+	}
+}
+
 func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 	paths := allODDOrchestratorAssetPaths(t)
 
 	for _, path := range paths {
 		content := MustRead(path)
 		for _, required := range []string{
-			"Mandatory Delegation Triggers",
+			// pain-point-iteration S9 C4 renamed the heading: triggers hold only
+			// when their condition truly holds, so they are no longer "Mandatory".
+			"#### Delegation Triggers",
 			"Evidence budget rule", "one parallel batch",
 			"Mapping rule", "one read-only explorer",
 			"Write rule", "delegate a writer only for a named reason",
 			"parallel writers follow the **Parallel writers** rule under `## Implementation Routing`",
 			"Context rule", "reading that prepares a write", "broad research",
-			"Mandatory Delegation Triggers", "delegated direct",
+			"delegated direct",
 		} {
 			if !strings.Contains(strings.ToLower(content), strings.ToLower(required)) {
 				t.Fatalf("%s missing organic routing/native authority contract %q", path, required)
@@ -420,7 +460,7 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 			delegationHeading = "## General Delegation Rules (Always Active)"
 		}
 		start := strings.Index(content, delegationHeading)
-		end := strings.Index(content, "#### Mandatory Delegation Triggers")
+		end := strings.Index(content, "#### Delegation Triggers")
 		if start < 0 || end <= start {
 			t.Fatalf("%s missing bounded general delegation section", path)
 		}
@@ -1581,6 +1621,12 @@ func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
 			"add one test proving its previous behavior still holds; add no other cases",
 			"counts as touched when it shares the code you changed",
 			"they need no RED run",
+			// pain-point-iteration S9 C8: PRESERVE ends with a differential
+			// run of the commands sharing the changed code, old vs new.
+			"Before finishing, run a differential check: for each existing command that shares the code you changed, run it with the new or changed input (for example a new option passed to a sibling subcommand) against the previous code (a copy of the base commit in a `mktemp -d` scratch directory, never committed as a test; committed tests never read git history or a fixed commit) and against your change, and compare stdout, stderr, and exit code; any difference nobody asked for is a regression to fix and pin with a test.",
+			// pain-point-iteration S9 C3: shared state goes through the
+			// existing function, keeping its invariants.
+			"Before you create or change shared state (a record, list entry, file, or setting that other commands also create or read), find the existing function that already does it and reuse it, keeping every invariant it enforces (ordering, uniqueness, validation, normalization). Never re-implement that step inline with a different shape.",
 			"PRESERVE/REFACTOR",
 			// S8: bounded self-correction.
 			"one correction attempt per failing check, and a second only if the same check still fails",
@@ -1635,6 +1681,50 @@ func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
 			if strings.Contains(string(body), phrase) {
 				t.Errorf("%s still contains %q", path, phrase)
 			}
+		}
+	}
+}
+
+// C7: the worker keeps test scratch and tool caches out of the delivered diff
+// and checks `git status --short` before it returns.
+func TestOpenCodeWorkerKeepsScratchOutOfTheDiff(t *testing.T) {
+	t.Parallel()
+
+	body, err := FS.ReadFile("opencode/agents/gentle-ai-worker.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, clause := range []string{
+		"Keep test scratch state (temporary directories, `HOME`, `TMPDIR`, tool caches) outside the worktree in a `mktemp -d` directory.",
+		"When it must live inside the worktree, use a path git excludes and remove it through the test's own cleanup before finishing.",
+		"Before returning, run `git status --short` and confirm it lists no tool cache or scratch path",
+	} {
+		if !strings.Contains(string(body), clause) {
+			t.Errorf("gentle-ai-worker.md is missing %q", clause)
+		}
+	}
+}
+
+// C7: scratch outside the worktree is cleaned up too. Child safety blocks
+// deletion in subagents, so the verifier and the worker never delete: tests
+// clean up in teardown and both report exact scratch paths the parent removes.
+func TestOpenCodeGenericAgentsRemoveTheirScratchAfterUse(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]string{
+		"opencode/agents/gentle-ai-verify.md": "Before returning, list every scratch directory you created by exact path in your result so the parent removes it; never delete it yourself.",
+		"opencode/agents/gentle-ai-worker.md": "Tests delete the temp directories they create in teardown; name any scratch directory you created outside the worktree in `risks` so the parent removes it.",
+	}
+	for path, clause := range want {
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		if !strings.Contains(string(body), clause) {
+			t.Errorf("%s is missing %q", path, clause)
+		}
+		if strings.Contains(string(body), "rm -rf") {
+			t.Errorf("%s instructs a deletion that child safety blocks", path)
 		}
 	}
 }
