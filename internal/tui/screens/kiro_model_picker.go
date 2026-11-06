@@ -20,10 +20,10 @@ const (
 )
 
 var kiroPresetDescriptions = map[KiroModelPreset]string{
-	KiroPresetBalanced:    "Claude Sonnet 5.5 and GPT-5.6 Luna mix with cross-family Judgment Day judges",
+	KiroPresetBalanced:    "Claude Sonnet 5.5 and Haiku 5.5 mix for near-Auto cost",
 	KiroPresetPerformance: "Claude Opus 5.5 and Sonnet 5.5 for delegation and review roles",
-	KiroPresetEconomy:     "GPT-5.6 Luna for most roles and MiniMax for budget-conscious runs",
-	KiroPresetOpenWeight:  "Kiro open-weight families: MiniMax, GLM, DeepSeek, and Qwen",
+	KiroPresetEconomy:     "Claude Haiku 5.5 for every role in budget-conscious runs",
+	KiroPresetOpenWeight:  "Kiro open-weight families for Kiro Free: MiniMax, GLM, DeepSeek, and Qwen",
 	KiroPresetCustom:      "Pick the Kiro model for ODD, JD, RDD, and general delegation roles individually",
 }
 
@@ -47,9 +47,6 @@ var kiroAliasOrder = []model.KiroModelAlias{
 	model.KiroModelOpus,
 	model.KiroModelSonnet,
 	model.KiroModelHaiku,
-	model.KiroModelLuna,
-	model.KiroModelTerra,
-	model.KiroModelSol,
 	model.KiroModelMiniMax,
 	model.KiroModelGLM,
 	model.KiroModelDeepSeek,
@@ -259,16 +256,15 @@ func kiroAliasCycle() string {
 }
 
 // kiroAliasTag shows the Kiro model ID the alias resolves to, highlighting
-// the highest-credit models and aliases that fall back to auto until their
-// model ID is verified.
+// the highest-credit model. A saved alias the picker does not know resolves
+// to auto at install time and is labeled as unrecognized.
 func kiroAliasTag(alias model.KiroModelAlias) string {
-	id := model.KiroModelID(alias)
-	if id == string(model.KiroModelAuto) && alias != model.KiroModelAuto {
-		return styles.SubtextStyle.Render("[auto: ID pending]")
+	if !alias.Valid() {
+		return styles.WarningStyle.Render("[unrecognized: auto]")
 	}
-	tag := "[" + id + "]"
+	tag := "[" + model.KiroModelID(alias) + "]"
 	switch alias {
-	case model.KiroModelOpus, model.KiroModelTerra, model.KiroModelSol:
+	case model.KiroModelOpus:
 		return styles.WarningStyle.Render(tag)
 	case model.KiroModelHaiku, model.KiroModelQwen:
 		return styles.SubtextStyle.Render(tag)

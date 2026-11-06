@@ -8,34 +8,44 @@ const (
 	KiroModelOpus     KiroModelAlias = "opus"
 	KiroModelSonnet   KiroModelAlias = "sonnet"
 	KiroModelHaiku    KiroModelAlias = "haiku"
-	KiroModelLuna     KiroModelAlias = "luna"
-	KiroModelTerra    KiroModelAlias = "terra"
-	KiroModelSol      KiroModelAlias = "sol"
 	KiroModelMiniMax  KiroModelAlias = "minimax"
 	KiroModelGLM      KiroModelAlias = "glm"
 	KiroModelDeepSeek KiroModelAlias = "deepseek"
 	KiroModelQwen     KiroModelAlias = "qwen"
 )
 
+// Valid reports whether the alias is one of the known Kiro model options.
+func (a KiroModelAlias) Valid() bool {
+	switch a {
+	case KiroModelAuto, KiroModelOpus, KiroModelSonnet, KiroModelHaiku,
+		KiroModelMiniMax, KiroModelGLM, KiroModelDeepSeek, KiroModelQwen:
+		return true
+	default:
+		return false
+	}
+}
+
 // KiroModelID maps a KiroModelAlias to the model identifier Kiro expects
 // in the `model:` field of a custom agent frontmatter.
 //
 // Kiro model IDs do not include a provider prefix — they are passed directly
 // as the `model` key in ~/.kiro/agents/*.md frontmatter. Every non-auto ID
-// below appears in `kiro-cli chat --list-models` (kiro-cli 2.34.2).
+// below appears in `kiro-cli chat --list-models`; the Claude 5.5 IDs are
+// listed only for paid plans, so Kiro Free users should pick the open-weight
+// preset or open-weight custom assignments.
 //
 // Kiro rejects an agent whose pinned model is unknown or unavailable instead
-// of falling back, so an alias without a verified ID resolves to auto. That
-// covers opus, sonnet, luna, terra, and sol (Claude Opus 5.5, Claude Sonnet
-// 5.5, and GPT-5.6 Luna, Terra, and Sol): Kiro publishes only their display
-// names, and --list-models shows them only to paid plans. Unknown aliases
-// resolve to auto as well.
+// of falling back, so unknown aliases resolve to auto.
 //
 // References: https://kiro.dev/docs/models/
 func KiroModelID(alias KiroModelAlias) string {
 	switch alias {
+	case KiroModelOpus:
+		return "claude-opus-5.5"
+	case KiroModelSonnet:
+		return "claude-sonnet-5.5"
 	case KiroModelHaiku:
-		return "claude-haiku-4.5"
+		return "claude-haiku-5.5"
 	case KiroModelMiniMax:
 		return "minimax-m2.5"
 	case KiroModelGLM:
@@ -49,26 +59,23 @@ func KiroModelID(alias KiroModelAlias) string {
 	}
 }
 
-// Presets name the models they are designed for, even while KiroModelID
-// still resolves some of them to auto.
-//
-// Presets never assign GPT-5.6 Sol or Terra: Sol is among Kiro's most
-// expensive models and Terra costs more than Opus 5.5 while trailing it.
-// Both stay selectable in the custom picker.
+// Paid presets use only Claude 5.5. GPT-5.6 Sol (4.40x credits) and Terra
+// (2.20x) cost more than Opus 5.5 (2.00x), and Haiku 5.5 (0.06x) is both
+// cheaper and stronger than GPT-5.6 Luna (0.60x) and the open-weight models.
 
-// KiroModelPresetBalanced mixes Claude Sonnet 5.5 and GPT-5.6 Luna so the two
-// Judgment Day judges come from different model families at near-Auto cost.
+// KiroModelPresetBalanced uses Claude Sonnet 5.5 for reasoning-heavy roles and
+// Claude Haiku 5.5 for exploration, implementation, and the second judge.
 func KiroModelPresetBalanced() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelAuto,
-		"odd-explorer": KiroModelLuna,
-		"odd-worker":   KiroModelLuna,
+		"odd-explorer": KiroModelHaiku,
+		"odd-worker":   KiroModelHaiku,
 		"odd-verify":   KiroModelSonnet,
 		"jd-judge-a":   KiroModelSonnet,
-		"jd-judge-b":   KiroModelLuna,
+		"jd-judge-b":   KiroModelHaiku,
 		"jd-fix-agent": KiroModelSonnet,
 		"risk":         KiroModelSonnet,
-		"readability":  KiroModelLuna,
+		"readability":  KiroModelHaiku,
 		"reliability":  KiroModelSonnet,
 		"resilience":   KiroModelSonnet,
 		"refuter":      KiroModelSonnet,
@@ -97,24 +104,24 @@ func KiroModelPresetPerformance() map[string]KiroModelAlias {
 	}
 }
 
-// KiroModelPresetEconomy uses GPT-5.6 Luna, Kiro's strongest low-credit
-// model, for most roles and MiniMax for the reliability and resilience lenses.
+// KiroModelPresetEconomy uses Claude Haiku 5.5, Kiro's cheapest strong model,
+// for every role except the auto-routed orchestrator.
 func KiroModelPresetEconomy() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelAuto,
-		"odd-explorer": KiroModelLuna,
-		"odd-worker":   KiroModelLuna,
-		"odd-verify":   KiroModelLuna,
-		"jd-judge-a":   KiroModelLuna,
-		"jd-judge-b":   KiroModelLuna,
-		"jd-fix-agent": KiroModelLuna,
-		"risk":         KiroModelLuna,
-		"readability":  KiroModelLuna,
-		"reliability":  KiroModelMiniMax,
-		"resilience":   KiroModelMiniMax,
-		"refuter":      KiroModelLuna,
-		"validator":    KiroModelLuna,
-		"default":      KiroModelLuna,
+		"odd-explorer": KiroModelHaiku,
+		"odd-worker":   KiroModelHaiku,
+		"odd-verify":   KiroModelHaiku,
+		"jd-judge-a":   KiroModelHaiku,
+		"jd-judge-b":   KiroModelHaiku,
+		"jd-fix-agent": KiroModelHaiku,
+		"risk":         KiroModelHaiku,
+		"readability":  KiroModelHaiku,
+		"reliability":  KiroModelHaiku,
+		"resilience":   KiroModelHaiku,
+		"refuter":      KiroModelHaiku,
+		"validator":    KiroModelHaiku,
+		"default":      KiroModelHaiku,
 	}
 }
 

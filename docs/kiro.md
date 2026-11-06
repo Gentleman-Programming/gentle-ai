@@ -83,29 +83,26 @@ The `model` value is injected during sync from Kiro model assignments, keyed by 
 | Alias | Kiro model ID |
 |-------|---------------|
 | `auto` | `auto` |
-| `haiku` | `claude-haiku-4.5` |
+| `opus` | `claude-opus-5.5` |
+| `sonnet` | `claude-sonnet-5.5` |
+| `haiku` | `claude-haiku-5.5` |
 | `minimax` | `minimax-m2.5` |
 | `glm` | `glm-5` |
 | `deepseek` | `deepseek-3.2` |
 | `qwen` | `qwen3-coder-next` |
-| `opus` | `auto` (Claude Opus 5.5; ID pending) |
-| `sonnet` | `auto` (Claude Sonnet 5.5; ID pending) |
-| `luna` | `auto` (GPT-5.6 Luna; ID pending) |
-| `terra` | `auto` (GPT-5.6 Terra; ID pending) |
-| `sol` | `auto` (GPT-5.6 Sol; ID pending) |
 
-Every model ID in this table comes from `kiro-cli chat --list-models`. Kiro publishes only display names for Claude Opus 5.5, Claude Sonnet 5.5, and the GPT-5.6 tiers, and lists them only for paid plans. Kiro does not fall back when an agent pins a model that is unknown or unavailable: the agent's prompt fails. So those aliases write `model: auto` until their IDs are confirmed from a paid-plan listing. The picker marks them `[auto: ID pending]`. Unknown aliases also resolve to `auto`.
+Every model ID in this table comes from `kiro-cli chat --list-models`. Kiro does not fall back when an agent pins a model that is unknown or unavailable: the agent's prompt fails. Unknown aliases therefore resolve to `auto`, and the picker marks a saved alias it does not know as `[unrecognized: auto]`.
 
-The model presets never assign GPT-5.6 Sol or Terra; both stay available in the custom picker.
+The aliases cover only the strongest model per credit tier. GPT-5.6 Sol (4.40x credits) and Terra (2.20x) cost more than Claude Opus 5.5 (2.00x), and Claude Haiku 5.5 (0.06x) is cheaper and stronger than GPT-5.6 Luna (0.60x) and the open-weight models. Older Claude 4.x and 5 models are not offered.
 
 | Preset | Judgment Day judges A / B | Fix agent | Default |
 |--------|---------------------------|-----------|---------|
-| `balanced` | Sonnet 5.5 / Luna | Sonnet 5.5 | Auto |
+| `balanced` | Sonnet 5.5 / Haiku 5.5 | Sonnet 5.5 | Auto |
 | `performance` | Opus 5.5 / Opus 5.5 | Sonnet 5.5 | Sonnet 5.5 |
-| `economy` | Luna / Luna | Luna | Luna |
+| `economy` | Haiku 5.5 / Haiku 5.5 | Haiku 5.5 | Haiku 5.5 |
 | `open-weight` | GLM-5 / Qwen3 Coder Next | Qwen3 Coder Next | Qwen3 Coder Next |
 
-The preset table names the models each preset is designed for. `balanced`, `performance`, and `economy` are built around models that require a paid Kiro plan (Claude Opus 5.5, Claude Sonnet 5.5, and GPT-5.6 Luna), so those roles currently resolve to `auto`. For pinned models on Kiro Free, use `open-weight`, or use `custom` with Free-plan models (`auto`, `haiku`, `minimax`, `glm`, `deepseek`, `qwen`). See [Kiro models](https://kiro.dev/docs/models/) for current plan availability.
+`balanced`, `performance`, and `economy` pin Claude 5.5 models, which Kiro lists only for paid plans. On Kiro Free, use `open-weight`, or use `custom` with Free-plan models (`auto`, `minimax`, `glm`, `deepseek`, `qwen`). See [Kiro models](https://kiro.dev/docs/models/) for current plan availability.
 
 ---
 
