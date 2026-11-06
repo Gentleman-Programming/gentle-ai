@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestSyncKeepsRetiredPromptReferencedByCustomizedAgent(t *testing.T) {
@@ -63,6 +65,74 @@ func TestSyncKeepsRetiredPromptReferencedByCustomizedAgent(t *testing.T) {
 				t.Fatalf("repeat sync was not a no-op: %+v", again.ChangedFiles)
 			}
 		})
+	}
+}
+
+func TestSyncRejectsUnsafeOpenCodeFileReferencesAndRollsBack(t *testing.T) {
+	// RED for these inputs is exercised at the injected stat boundaries in
+	// the reference and retirement packages, not through the unguarded CLI.
+	for _, target := range []string{"//attacker.example/share/leak", `\\.\pipe\example`} {
+		t.Run(target, func(t *testing.T) {
+			home := t.TempDir()
+			setSyncTestHome(t, home)
+			setOpenCodeTestHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			t.Setenv("OPENCODE_CONFIG_DIR", "")
+			stubOpenCodeRuntimeVersion(t, home, openCodeRuntimeVersions[0])
+			originalPrompt := releasedSDDRender(t, "opencode-prompt-sdd-apply.md")
+			t.Chdir(t.TempDir())
+			config := opencodeagent.ConfigPath(home)
+			settings := filepath.Join(config, "opencode.json")
+			prompt := filepath.Join(config, "prompts", "sdd", "sdd-apply.md")
+			original, err := json.Marshal(map[string]any{"agent": map[string]any{
+				"sdd-apply": map[string]any{"__managed_by": "gentle-ai/sdd"},
+				"my-helper": map[string]any{"prompt": "{file:" + target + "}"},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustWriteFile(t, settings, original)
+			mustWriteFile(t, prompt, originalPrompt)
+			_, err = RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}})
+			if err == nil || !strings.Contains(err.Error(), target) || !strings.Contains(err.Error(), "remote or device paths are not supported") {
+				t.Fatalf("sync error = %v, want refusal naming %q", err, target)
+			}
+			if got := readTextFile(t, settings); got != string(original) {
+				t.Fatalf("failed sync changed original settings: %s", got)
+			}
+			if got := readTextFile(t, prompt); got != string(originalPrompt) {
+				t.Fatal("failed sync changed the retired prompt")
+			}
+		})
+	}
+}
+
+func TestInstallRejectsUnsafeOpenCodeFileReferenceAndRollsBack(t *testing.T) {
+	home := installTestHome(t)
+	restoreBackupHome := backup.UserHomeDirFn
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { backup.UserHomeDirFn = restoreBackupHome })
+	setOpenCodeTestHome(t, home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	stubOpenCodeRuntimeVersion(t, home, openCodeRuntimeVersions[0])
+	originalPrompt := releasedSDDRender(t, "opencode-prompt-sdd-apply.md")
+	t.Chdir(t.TempDir())
+	config := opencodeagent.ConfigPath(home)
+	settings := filepath.Join(config, "opencode.json")
+	prompt := filepath.Join(config, "prompts", "sdd", "sdd-apply.md")
+	original := []byte(`{"agent":{"sdd-apply":{"__managed_by":"gentle-ai/sdd"},"my-helper":{"prompt":"{file://attacker.example/share/leak}"}}}`)
+	mustWriteFile(t, settings, original)
+	mustWriteFile(t, prompt, originalPrompt)
+	_, err := RunInstall([]string{"--agent", "opencode", "--component", "skills"}, system.DetectionResult{})
+	if err == nil || !strings.Contains(err.Error(), "//attacker.example/share/leak") || !strings.Contains(err.Error(), "remote or device paths are not supported") {
+		t.Fatalf("install error = %v, want unsafe reference refusal", err)
+	}
+	if got := readTextFile(t, settings); got != string(original) {
+		t.Fatalf("failed install changed original settings: %s", got)
+	}
+	if got := readTextFile(t, prompt); got != string(originalPrompt) {
+		t.Fatal("failed install changed the retired prompt")
 	}
 }
 

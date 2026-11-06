@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 // The OpenCode family (OpenCode, Kilocode) received the retired SDD agents as
@@ -33,6 +34,8 @@ var (
 	profileName      = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	promptFileRef    = regexp.MustCompile(`^\{file:(.+)\}$`)
 	permissionEffect = map[string]bool{"allow": true, "ask": true, "deny": true}
+	// Tests replace this boundary rather than probing hostile references.
+	statPromptReference = os.Stat
 )
 
 // NormalizeOpenCodeSDDPrompt maps a released prompt and every render of it to
@@ -477,6 +480,13 @@ type PromptRetireResult struct {
 // in or through it is touched, as with a symlinked plugins directory.
 func RetireOpenCodeSDDPrompts(dir string, referencedPaths ...string) (PromptRetireResult, error) {
 	result := PromptRetireResult{Dir: dir}
+	// Check the complete set first: a later unsafe reference must not cause a
+	// probe or leave a partially retired prompt directory.
+	for _, ref := range referencedPaths {
+		if err := opencode.ValidateLocalFileReference(ref); err != nil {
+			return result, fmt.Errorf("invalid file reference %s: %w", ref, err)
+		}
+	}
 	info, err := os.Lstat(dir)
 	if os.IsNotExist(err) {
 		return result, nil
@@ -498,7 +508,7 @@ func RetireOpenCodeSDDPrompts(dir string, referencedPaths ...string) (PromptReti
 			return result, fmt.Errorf("inspect retired SDD prompt %s: %w", file, err)
 		}
 		referenced := slices.ContainsFunc(referencedPaths, func(ref string) bool {
-			other, err := os.Stat(ref)
+			other, err := statPromptReference(ref)
 			return err == nil && os.SameFile(info, other)
 		})
 		if referenced {
