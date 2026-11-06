@@ -467,6 +467,7 @@ type syncRuntime struct {
 	changedFiles         []string // accumulates candidate paths reported by component injectors
 	skippedActions       []string // workspace-scope skips of global-only operations, surfaced as manual actions
 	skippedParts         []SyncSkippedAgent
+	piCodeGraphActions   []string // pending reasons the Pi CodeGraph step reports, surfaced as manual actions
 	backgroundPolicy     bool
 	backgroundActivation *opencodeactivation.ActivationPlan
 	runtimeReady         bool
@@ -686,7 +687,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			changedFiles:       &r.changedFiles,
 			guidanceBeforeSync: communitytool.HasAnyCodeGraphGuidance(r.homeDir),
 		})
-		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
+		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles, manualActions: &r.piCodeGraphActions})
 	}
 
 	// After every prompt writer, including CodeGraph guidance.
@@ -1279,6 +1280,7 @@ type codeGraphGuidanceSyncStep struct {
 type piCodeGraphSyncStep struct {
 	id, homeDir, workspaceDir string
 	changedFiles              *[]string
+	manualActions             *[]string
 }
 
 // openCodePluginSyncStep converges managed OpenCode-compatible plugins
@@ -1340,6 +1342,12 @@ func (s piCodeGraphSyncStep) Run() error {
 	}
 	if configured && result.Changed && s.changedFiles != nil {
 		*s.changedFiles = append(*s.changedFiles, result.Files...)
+	}
+	// A pending probe leaves the configuration preserved and non-fatal, so this
+	// action is the only thing that tells the user why nothing was verified and
+	// what to retry. Dropping it turns a non-fatal outcome into a silent one.
+	if configured && s.manualActions != nil {
+		*s.manualActions = append(*s.manualActions, result.ManualActions...)
 	}
 	return nil
 }
@@ -2125,6 +2133,7 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 	result.ManualActions = append(result.ManualActions, rt.state.retiredSDDActions...)
 	result.ManualActions = append(result.ManualActions, rt.skippedActions...)
 	result.SkippedAgents = append(result.SkippedAgents, rt.skippedParts...)
+	result.ManualActions = append(result.ManualActions, rt.piCodeGraphActions...)
 	if scope == ScopeGlobal && containsAgent(agentIDs, model.AgentPi) {
 		warning, inspectErr := inspectPiMCP(homeDir)
 		if inspectErr != nil {
