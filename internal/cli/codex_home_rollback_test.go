@@ -64,10 +64,10 @@ func TestRollbackRestoresEngramFilesUnderExternalCodexHome(t *testing.T) {
 	}
 }
 
-// TestBackupTargetsKeepDefaultEngramFilesUnderCodexHome pins that a CODEX_HOME
-// override still snapshots the Engram instruction files under ~/.codex, where
-// the Engram writer puts them, so a failed install or sync restores them.
-func TestBackupTargetsKeepDefaultEngramFilesUnderCodexHome(t *testing.T) {
+// TestBackupTargetsSnapshotEngramFilesOnlyUnderCodexHome pins that a CODEX_HOME
+// override snapshots the Engram instruction files under the override, where the
+// Engram writer puts them, and no longer under the untouched default ~/.codex.
+func TestBackupTargetsSnapshotEngramFilesOnlyUnderCodexHome(t *testing.T) {
 	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -88,8 +88,11 @@ func TestBackupTargetsKeepDefaultEngramFilesUnderCodexHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"engram-instructions.md", "engram-compact-prompt.md"} {
-		if want := filepath.Join(home, ".codex", name); !slices.Contains(targets, want) {
+		if want := filepath.Join(override, name); !slices.Contains(targets, want) {
 			t.Errorf("snapshot targets = %v; want %q", targets, want)
+		}
+		if stale := filepath.Join(home, ".codex", name); slices.Contains(targets, stale) {
+			t.Errorf("snapshot targets = %v; must not include %q", targets, stale)
 		}
 	}
 }
