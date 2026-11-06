@@ -47,6 +47,12 @@ internal/components/communitytool/pi_codegraph.go	ValidatePiCodeGraphRoot
 internal/components/communitytool/pi_codegraph.go	verifyPiMCP
 internal/components/communitytool/tool.go	CodeGraphCommands
 internal/components/communitytool/tool.go	CodeGraphCommandsForDetector
+internal/components/engram/capabilities.go	CheckInstanceIdentityCapability
+internal/components/engram/capabilities.go	ExternalServerURL
+internal/components/engram/capabilities.go	IsMissingBinary
+internal/components/engram/capabilities.go	setInstanceIDProbeForTest
+internal/components/engram/capabilities.go	setInstanceIDProbeRunnerForTest
+internal/components/engram/capabilities.go	setVerifyLookPathForTest
 internal/components/engram/download.go	downloadAndExtractTarGz
 internal/components/engram/download.go	downloadAndExtractZip
 internal/components/engram/inject.go	Inject

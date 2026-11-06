@@ -2,10 +2,14 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
 )
 
@@ -266,5 +270,38 @@ func TestRenderUpgradeReport_PerToolSemantics_Deterministic(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEngramUpgradeRecoveryCommandDispatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	originalCheck, originalExecute, originalTTY := updateCheckFiltered, upgradeExecuteWithOptions, isattyFn
+	t.Cleanup(func() {
+		updateCheckFiltered = originalCheck
+		upgradeExecuteWithOptions = originalExecute
+		isattyFn = originalTTY
+	})
+	isattyFn = func(uintptr) bool { return false }
+	checks, executions := 0, 0
+	var seenFilters []string
+	updateCheckFiltered = func(_ context.Context, _ string, _ system.PlatformProfile, filters []string) []update.UpdateResult {
+		checks++
+		seenFilters = append([]string(nil), filters...)
+		return []update.UpdateResult{{Tool: update.ToolInfo{Name: "engram"}, Status: update.UpToDate}}
+	}
+	upgradeExecuteWithOptions = func(_ context.Context, _ []update.UpdateResult, _ system.PlatformProfile, _ string, _ bool, _ upgrade.ExecuteOptions) upgrade.UpgradeReport {
+		executions++
+		return upgrade.UpgradeReport{}
+	}
+	tokens := strings.Fields(engram.EngramUpgradeRecoveryCommand)
+	if len(tokens) != 3 || tokens[0] != "gentle-ai" {
+		t.Fatalf("unexpected recovery command: %q", engram.EngramUpgradeRecoveryCommand)
+	}
+	var out bytes.Buffer
+	if err := RunArgs(tokens[1:], &out); err != nil {
+		t.Fatalf("recovery command is not dispatchable: %v", err)
+	}
+	if checks != 1 || len(seenFilters) != 1 || seenFilters[0] != "engram" || executions != 1 {
+		t.Fatalf("wrong command dispatch: checks=%d filters=%v executions=%d", checks, seenFilters, executions)
 	}
 }
