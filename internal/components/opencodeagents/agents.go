@@ -221,36 +221,66 @@ func NativeEntryByName(agent model.AgentID, name string) (map[string]any, error)
 	return nil, fmt.Errorf("unknown managed subagent %q for %q", name, agent)
 }
 
-// MergeRuleLists appends incoming rules to existing rules, skipping rules that
-// already exist verbatim (action, resource, effect). Existing rules keep their
-// order so user-authored precedence decisions are preserved.
-func MergeRuleLists(existing, incoming []map[string]any) []map[string]any {
-	key := func(r map[string]any) string {
+// MergeRulesByPrecedence inserts incoming rules into existing rules so the
+// effective decision of every existing rule is preserved under the
+// last-matching-rule semantics: each incoming rule is placed before the first
+// existing rule of the same action whose resource sorts equal or after it,
+// reproducing the byte-order precedence the legacy permission object
+// evaluator used. Existing rules are never reordered, merged, or dropped —
+// collapsing a duplicate triple can flip the effective decision (an
+// allow → deny → allow sequence for one resource would lose its final
+// allow). An incoming rule whose exact triple already exists is skipped,
+// making repeated merges idempotent.
+func MergeRulesByPrecedence(existing, incoming []map[string]any) []map[string]any {
+	merged := make([]map[string]any, 0, len(existing)+len(incoming))
+	for _, rule := range existing {
+		if rule != nil {
+			merged = append(merged, rule)
+		}
+	}
+	triple := func(r map[string]any) string {
 		action, _ := r["action"].(string)
 		resource, _ := r["resource"].(string)
 		effect, _ := r["effect"].(string)
 		return action + "\x00" + resource + "\x00" + effect
 	}
-	seen := make(map[string]bool, len(existing)+len(incoming))
-	merged := make([]map[string]any, 0, len(existing)+len(incoming))
-	for _, rule := range existing {
-		if rule == nil {
-			continue
-		}
-		k := key(rule)
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		merged = append(merged, rule)
+	// Seed with the existing triples: an incoming rule whose exact triple is
+	// already in the list is skipped, so repeated merges are idempotent.
+	seen := make(map[string]bool, len(merged)+len(incoming))
+	for _, rule := range merged {
+		seen[triple(rule)] = true
 	}
-	for _, rule := range incoming {
-		k := key(rule)
-		if seen[k] {
+	actionResource := func(r map[string]any) (string, string) {
+		action, _ := r["action"].(string)
+		resource, _ := r["resource"].(string)
+		return action, resource
+	}
+	for _, in := range incoming {
+		if in == nil {
 			continue
 		}
-		seen[k] = true
-		merged = append(merged, rule)
+		key := triple(in)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		action, resource := actionResource(in)
+		idx := len(merged)
+		for i, rule := range merged {
+			ra, rr := actionResource(rule)
+			if ra != action {
+				if ra > action {
+					idx = i
+					break
+				}
+				continue
+			}
+			if rr >= resource {
+				idx = i
+				break
+			}
+		}
+		merged = append(merged[:idx], append([]map[string]any{in}, merged[idx:]...)...)
 	}
 	return merged
 }

@@ -222,7 +222,7 @@ func openCodeNativeOverlay(raw []byte) ([]byte, bool, error) {
 		}
 		current = append(current, rule)
 	}
-	overlay, err := json.Marshal(map[string]any{"permissions": opencodeagents.MergeRuleLists(current, rules)})
+	overlay, err := json.Marshal(map[string]any{"permissions": opencodeagents.MergeRulesByPrecedence(current, rules)})
 	if err != nil {
 		return nil, false, err
 	}
