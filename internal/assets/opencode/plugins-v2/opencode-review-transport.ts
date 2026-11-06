@@ -42,7 +42,6 @@ const REFUSAL_CAUSES: ReadonlySet<string> = new Set([
   "role_capture_failed",
   "inspection_coverage",
   "invalid_finding_location",
-  "evidence_path_out_of_scope",
   "proof_path_out_of_scope",
   "candidate_causality_unclaimed_id",
   "candidate_causality_evidence_degraded",
