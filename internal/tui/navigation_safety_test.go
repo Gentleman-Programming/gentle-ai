@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,8 +12,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
+func screenName(s Screen) string { return fmt.Sprintf("Screen#%d", int(s)) }
+
 func TestRunningScreensRejectInputAndExposeNoOptions(t *testing.T) {
-	for _, screen := range []Screen{ScreenRestoreConfirm, ScreenSync, ScreenUpgradeSync, ScreenOpenCodePlugins, ScreenUninstallConfirm, ScreenReviewStoreResetConfirm} {
+	for _, screen := range []Screen{ScreenRestoreConfirm, ScreenSync, ScreenUpgradeSync, ScreenUninstallConfirm, ScreenReviewStoreResetConfirm} {
 		t.Run(screenName(screen), func(t *testing.T) {
 			m := NewModel(system.DetectionResult{}, "dev")
 			m.Screen = screen
@@ -34,7 +37,7 @@ func TestRunningScreensRejectInputAndExposeNoOptions(t *testing.T) {
 }
 
 func TestResultScreensDoNotExposePhantomCursorRows(t *testing.T) {
-	for _, screen := range []Screen{ScreenRestoreResult, ScreenDeleteResult, ScreenUninstallResult, ScreenOpenCodePluginResult, ScreenCommunityToolResult, ScreenComplete, ScreenReviewStoreResetResult} {
+	for _, screen := range []Screen{ScreenRestoreResult, ScreenDeleteResult, ScreenUninstallResult, ScreenCommunityToolResult, ScreenComplete, ScreenReviewStoreResetResult} {
 		m := NewModel(system.DetectionResult{}, "dev")
 		m.Screen = screen
 		if got := m.optionCount(); got != 0 {
@@ -114,9 +117,5 @@ func TestAsyncCompletionCannotReenterAbandonedFlow(t *testing.T) {
 	got := updated.(Model)
 	if got.Screen != ScreenWelcome || got.RestoreErr != nil {
 		t.Fatalf("late restore changed abandoned flow: screen=%v err=%v", got.Screen, got.RestoreErr)
-	}
-	updated, _ = m.Update(OpenCodePluginRegistrationDoneMsg{})
-	if got := updated.(Model); got.Screen != ScreenWelcome {
-		t.Fatalf("late plugin completion changed screen to %v", got.Screen)
 	}
 }

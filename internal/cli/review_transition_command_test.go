@@ -554,6 +554,7 @@ func TestReviewRecoverTransitionEmitsACommandThatRuns(t *testing.T) {
 		}
 		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &bytes.Buffer{})
 	}
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 
 	// Change the candidate so the live target really differs from the frozen
 	// one; recovery onto an unchanged target is refused by design.

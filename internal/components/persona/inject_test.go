@@ -2,6 +2,7 @@ package persona
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -604,6 +605,40 @@ func TestInjectClaudeNeutralWritesNeutralOutputStyleAndSettings(t *testing.T) {
 	}
 }
 
+// TestInjectClaudeNeutralReturnsRetiredStyleRemovalFailure pins the contract
+// the install/sync rollback boundary depends on: a failed removal of the
+// retired output style is returned to the caller instead of being swallowed.
+func TestInjectClaudeNeutralReturnsRetiredStyleRemovalFailure(t *testing.T) {
+	home := t.TempDir()
+	stylesDir := filepath.Join(home, ".claude", "output-styles")
+	if err := os.MkdirAll(stylesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	gentlemanPath := filepath.Join(stylesDir, "gentleman.md")
+	if err := os.WriteFile(gentlemanPath, []byte("gentleman style"), 0o644); err != nil {
+		t.Fatalf("WriteFile(gentleman) error = %v", err)
+	}
+
+	injected := errors.New("injected remove failure")
+	SetRemoveForTest(t, func(path string) error {
+		if path == gentlemanPath {
+			return injected
+		}
+		return os.Remove(path)
+	})
+
+	_, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
+	if !errors.Is(err, injected) {
+		t.Fatalf("Inject() error = %v, want wrapped injected remove failure", err)
+	}
+	if !strings.Contains(err.Error(), "remove retired output style") {
+		t.Fatalf("Inject() error = %q, want retired output style context", err)
+	}
+	if _, statErr := os.Stat(gentlemanPath); statErr != nil {
+		t.Fatalf("retired gentleman output style should remain after failed removal, stat err=%v", statErr)
+	}
+}
+
 func TestInjectCustomClaudeDoesNothing(t *testing.T) {
 	home := t.TempDir()
 
@@ -650,7 +685,7 @@ func TestInjectPiPersonaWritesSelectedModeAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	path := PiPersonaConfigPath(root)
 
-	result, err := InjectPiPersona(root, model.PersonaNeutral)
+	result, err := InjectPiPersonaAt(PiPersonaConfigPath(root), model.PersonaNeutral)
 	if err != nil {
 		t.Fatalf("InjectPiPersona() error = %v", err)
 	}
@@ -669,7 +704,7 @@ func TestInjectPiPersonaWritesSelectedModeAndIsIdempotent(t *testing.T) {
 		t.Fatalf("Pi persona config = %q, want %q", got, want)
 	}
 
-	second, err := InjectPiPersona(root, model.PersonaNeutral)
+	second, err := InjectPiPersonaAt(PiPersonaConfigPath(root), model.PersonaNeutral)
 	if err != nil {
 		t.Fatalf("second InjectPiPersona() error = %v", err)
 	}
@@ -689,7 +724,7 @@ func TestInjectPiPersonaCustomPreservesExistingConfig(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	result, err := InjectPiPersona(root, model.PersonaCustom)
+	result, err := InjectPiPersonaAt(PiPersonaConfigPath(root), model.PersonaCustom)
 	if err != nil {
 		t.Fatalf("InjectPiPersona(custom) error = %v", err)
 	}
@@ -734,7 +769,9 @@ func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 
 func TestInjectAntigravityGentlemanWritesMarkedPersonaSection(t *testing.T) {
 	home := t.TempDir()
-	promptPath := filepath.Join(home, ".gemini", "GEMINI.md")
+	// Antigravity stages guidance outside GEMINI.md; antigravityrules
+	// publishes the marker sections as agy rules (#5676, #5608).
+	promptPath := antigravityAdapter().SystemPromptFile(home)
 	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
@@ -762,7 +799,7 @@ func TestInjectAntigravityGentlemanWritesMarkedPersonaSection(t *testing.T) {
 		"<!-- /gentle-ai:persona -->",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("GEMINI.md missing %q; got:\n%s", want, text)
+			t.Fatalf("staged prompt missing %q; got:\n%s", want, text)
 		}
 	}
 
@@ -780,6 +817,9 @@ func TestInjectAntigravityGentlemanWritesMarkedPersonaSection(t *testing.T) {
 	}
 	if got := strings.Count(string(content), "<!-- gentle-ai:persona -->"); got != 1 {
 		t.Fatalf("persona marker count = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gemini", "GEMINI.md")); !os.IsNotExist(err) {
+		t.Fatalf("Antigravity persona must not write GEMINI.md; stat err = %v", err)
 	}
 }
 
@@ -1611,7 +1651,7 @@ func TestInjectGeminiGentlemanWritesSystemPromptWithRealContent(t *testing.T) {
 		t.Fatal("Inject(gemini, gentleman) changed = false")
 	}
 
-	path := filepath.Join(home, ".gemini", "GEMINI.md")
+	path := geminiAdapter.SystemPromptFile(home)
 	content, readErr := os.ReadFile(path)
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q) error = %v", path, readErr)
@@ -1665,6 +1705,51 @@ func TestInjectVSCodeGentlemanWritesInstructionsFile(t *testing.T) {
 	}
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("VS Code persona missing 'Senior Architect'")
+	}
+}
+
+// TestInjectVSCodeReplacesRetiredSDDFrontmatter covers upgrades from releases
+// whose instructions frontmatter advertised SDD orchestration: sync rewrites
+// the Gentle-owned frontmatter for both personas and keeps managed sections.
+func TestInjectVSCodeReplacesRetiredSDDFrontmatter(t *testing.T) {
+	const legacyFrontmatter = "---\nname: Gentle AI Persona\ndescription: Teaching-oriented persona with SDD orchestration and Engram protocol\napplyTo: \"**\"\n---\n\n"
+	const managed = "<!-- gentle-ai:engram-protocol -->\nMemory protocol.\n<!-- /gentle-ai:engram-protocol -->\n"
+	for _, persona := range []model.PersonaID{model.PersonaGentleman, model.PersonaNeutral} {
+		t.Run(string(persona), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			vscodeAdapter, err := agents.NewAdapter("vscode-copilot")
+			if err != nil {
+				t.Fatalf("NewAdapter(vscode-copilot) error = %v", err)
+			}
+			path := vscodeAdapter.SystemPromptFile(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			legacy := legacyFrontmatter + "## Personality\n\nSenior Architect mentor persona.\n\n" + managed
+			if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Inject(home, vscodeAdapter, persona); err != nil {
+				t.Fatalf("Inject(%s) error = %v", persona, err)
+			}
+
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(content)
+			if strings.Contains(strings.ToLower(text), "sdd") {
+				t.Fatalf("upgraded instructions file still mentions SDD:\n%s", text)
+			}
+			if !strings.HasPrefix(text, "---\nname: Gentle AI Persona\ndescription: Teaching-oriented persona with ODD orchestration and Engram protocol\n") {
+				t.Fatalf("upgraded instructions file lacks current frontmatter:\n%s", text)
+			}
+			if persona == model.PersonaNeutral && !strings.Contains(text, managed) {
+				t.Fatalf("neutral upgrade lost managed section:\n%s", text)
+			}
+		})
 	}
 }
 
@@ -2685,6 +2770,7 @@ func TestPersonaContentResidualDispatchAllAgents(t *testing.T) {
 		model.AgentPi,
 		model.AgentTrae,
 		model.AgentHermes,
+		model.AgentGitHubCopilotCLI,
 	}
 
 	isResidualCapable := func(agent model.AgentID) bool {
@@ -2764,6 +2850,7 @@ func TestResidualChannelAllAgents(t *testing.T) {
 		model.AgentPi,
 		model.AgentTrae,
 		model.AgentHermes,
+		model.AgentGitHubCopilotCLI,
 	}
 
 	for _, agentID := range allAgentIDs {
@@ -2895,6 +2982,13 @@ var legacyKimiOutputStyleNeutralLines = []string{
 	"- AGAINST IMMEDIACY: do not trade correctness or learning for speed theater.",
 }
 
+// retiredKimiOutputStyleNeutralLines maps a frozen legacy line to the wording
+// that intentionally replaced it after the snapshot. SDD was retired in v4.0.0,
+// so the artifact list no longer names SDD artifacts.
+var retiredKimiOutputStyleNeutralLines = map[string]string{
+	"Generated technical artifacts default to English and neutral professional wording unless the user explicitly requests another artifact language or the existing project convention requires it. This includes code, identifiers, comments, UI copy, docs, tests, commit messages, PR descriptions, and SDD artifacts.": "Generated technical artifacts default to English and neutral professional wording unless the user explicitly requests another artifact language or the existing project convention requires it. This includes code, identifiers, comments, UI copy, docs, tests, commit messages, and PR descriptions.",
+}
+
 // TestKimiOutputStyleSupersetOfLegacyKimiCopy verifies Decision 4's "strict
 // subset" claim: every line Kimi's output-style asset had before reconciliation
 // still exists in the reconciled text, and the reconciled Kimi asset is
@@ -2926,6 +3020,9 @@ func TestKimiOutputStyleSupersetOfLegacyKimiCopy(t *testing.T) {
 	t.Run("neutral", func(t *testing.T) {
 		reconciled := assets.MustRead("kimi/output-style-neutral.md")
 		for _, line := range legacyKimiOutputStyleNeutralLines {
+			if replacement, retired := retiredKimiOutputStyleNeutralLines[line]; retired {
+				line = replacement
+			}
 			if !strings.Contains(reconciled, line) {
 				t.Fatalf("reconciled kimi/output-style-neutral.md lost legacy line %q", line)
 			}

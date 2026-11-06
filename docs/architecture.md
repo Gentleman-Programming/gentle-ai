@@ -11,6 +11,7 @@
 
 ```
 cmd/gentle-ai/             CLI entrypoint
+cmd/gentle-telemetry/      Self-hosted telemetry collector (see telemetry-collector.md)
 internal/
   app/                     Command dispatch + runtime wiring
   model/                   Domain types (agents, components, skills, presets, personas)
@@ -23,14 +24,25 @@ internal/
   backup/                  Config snapshot + restore
   assets/                  Embedded skill files + persona templates
   components/              Per-component install/inject logic
-    engram/  sdd/  skills/  mcp/  persona/  theme/  permissions/  gga/
+    engram/  skills/  mcp/  persona/  theme/  permissions/  gga/
+    agentguidance/         Always-installed routing guidance projected into every agent
+    agenthooks/            Runtime hook installation independent of optional components
+    antigravityrules/      Antigravity guidance published as size-capped agy rule files
+    geminimodules/         Gemini CLI guidance published as modules GEMINI.md imports
+    telemetryruntime/      Native runtime telemetry event adapters and managed hooks
+    reviewassets/          Runtime review contract rendering for each agent
     communitytool/         Community tool install/guidance/config orchestration
+    opencodeagents/        OpenCode-compatible agents owned by gentle-ai
+    opencodedefault/       OpenCode default_agent ownership and custom agent discovery
     opencodeplugin/        OpenCode TUI plugin registration/local plugin helpers
+    opencoderuntimeplugins/  Names and eligibility of managed OpenCode runtime plugins
     uninstall/             Managed uninstall cleanup service
+    legacyassets/          Retired managed paths for snapshots and rollback
+    mutationjournal/       Before-images of mutated files for atomic rollback
     filemerge/             Marker-based file merging (inject without clobbering)
   skillregistry/           .atl skill registry refresh/list support
   agents/                  Agent adapters (config strategy per agent)
-    claude/  opencode/  gemini/  cursor/  vscode/  codex/  windsurf/  antigravity/
+    <agent>/               One adapter per supported agent; see agents.md
   opencode/                OpenCode model/config parsing utilities
   state/                   Installation state tracking
   update/                  Self-update + upgrade logic
@@ -76,7 +88,7 @@ Test coverage is broad and changes frequently. Keep this section qualitative unl
 | | Gentleman.Dots | AI Gentle Stack |
 |--|---------------|-----------------|
 | **Purpose** | Dev environment (editors, shells, terminals) | AI development layer (agents, memory, skills) |
-| **Installs** | Neovim, Fish/Zsh, Tmux/Zellij, Ghostty | Configures Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot, Codex, Windsurf, Antigravity |
+| **Installs** | Neovim, Fish/Zsh, Tmux/Zellij, Ghostty | Configures the [supported AI agents](agents.md) |
 | **Overlap** | None — complementary | None — different layer |
 
 Install Gentleman.Dots first for your dev environment, then AI Gentle Stack for the AI layer on top.

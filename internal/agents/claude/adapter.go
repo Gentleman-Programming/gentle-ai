@@ -92,6 +92,16 @@ func UserConfigPath(homeDir string) string {
 // aborts instead of being reset to {}, the file always ends at 0600, and a
 // base that moves underneath the merge is re-read and retried (issue #1868).
 func MergeUserConfig(homeDir string, overlayJSON []byte) (filemerge.WriteResult, string, error) {
+	return mergeUserConfig(homeDir, overlayJSON, "", nil)
+}
+
+// MergeUserMCPServer preserves a server unless absent or recognized by isManaged.
+// The decision is rechecked after each concurrent-change retry, retaining 0600.
+func MergeUserMCPServer(homeDir, serverID string, overlayJSON []byte, isManaged func(any) bool) (filemerge.WriteResult, string, error) {
+	return mergeUserConfig(homeDir, overlayJSON, serverID, isManaged)
+}
+
+func mergeUserConfig(homeDir string, overlayJSON []byte, preserveServer string, isManaged func(any) bool) (filemerge.WriteResult, string, error) {
 	configPath := UserConfigPath(homeDir)
 	const maxAttempts = 4
 	for attempt := 1; ; attempt++ {
@@ -99,12 +109,17 @@ func MergeUserConfig(homeDir string, overlayJSON []byte) (filemerge.WriteResult,
 		if err != nil {
 			return filemerge.WriteResult{}, configPath, err
 		}
-		if _, parseErr := filemerge.UnmarshalJSONObject(raw); parseErr != nil {
+		root, parseErr := filemerge.UnmarshalJSONObject(raw)
+		if parseErr != nil {
 			return filemerge.WriteResult{}, configPath, fmt.Errorf("refusing to modify %q: it holds the Claude Code session and could not be parsed as JSON: %w", configPath, parseErr)
 		}
-		merged, err := filemerge.MergeJSONObjects(raw, overlayJSON)
-		if err != nil {
-			return filemerge.WriteResult{}, configPath, err
+		servers, _ := root["mcpServers"].(map[string]any)
+		merged := raw
+		if entry, exists := servers[preserveServer]; preserveServer == "" || !exists || (isManaged != nil && isManaged(entry)) {
+			merged, err = filemerge.MergeJSONObjects(raw, overlayJSON)
+			if err != nil {
+				return filemerge.WriteResult{}, configPath, err
+			}
 		}
 		current, err := readUserConfigBase(configPath)
 		if err != nil {

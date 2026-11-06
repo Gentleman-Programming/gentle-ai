@@ -31,7 +31,7 @@ RUN_FULL_E2E=1 RUN_BACKUP_TESTS=1 ./e2e/docker-test.sh
 | Tier | Env var | What it tests |
 |------|---------|---------------|
 | 1 (default) | — | Binary exists, runs, dry-run output format, flag validation |
-| 2 | `RUN_FULL_E2E=1` | Full install: opencode+permissions, claude-code+persona, context7, sdd |
+| 2 | `RUN_FULL_E2E=1` | Full install: opencode+permissions, claude-code+persona, context7, skills |
 | 3 | `RUN_BACKUP_TESTS=1` | Backup snapshot creation, backup file contents |
 
 ## Supported platforms

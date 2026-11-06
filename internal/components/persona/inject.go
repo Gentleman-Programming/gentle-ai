@@ -9,9 +9,12 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type InjectionResult struct {
@@ -26,11 +29,20 @@ func PiPersonaConfigPath(rootDir string) string {
 	return filepath.Join(rootDir, ".pi", "gentle-ai", "persona.json")
 }
 
-// InjectPiPersona writes the small runtime config consumed by gentle-pi.
-// Custom personas remain user-owned and therefore intentionally do nothing.
-func InjectPiPersona(rootDir string, persona model.PersonaID) (InjectionResult, error) {
-	if strings.TrimSpace(rootDir) == "" {
-		return InjectionResult{}, fmt.Errorf("Pi persona root must not be empty")
+// PiGlobalPersonaConfigPath returns the persona state path of a global
+// install: persona.json in gentle-pi's config folder, which
+// GENTLE_AI_PI_CONFIG_DIR relocates (default <homeDir>/.pi/gentle-ai).
+func PiGlobalPersonaConfigPath(homeDir string) string {
+	return filepath.Join(piagent.GentlePiConfigDir(homeDir), "persona.json")
+}
+
+// InjectPiPersonaAt writes the small runtime config consumed by gentle-pi to
+// an exact persona.json path (PiPersonaConfigPath for a workspace,
+// PiGlobalPersonaConfigPath for a global install). Custom personas remain
+// user-owned and therefore intentionally do nothing.
+func InjectPiPersonaAt(path string, persona model.PersonaID) (InjectionResult, error) {
+	if strings.TrimSpace(path) == "" {
+		return InjectionResult{}, fmt.Errorf("Pi persona path must not be empty")
 	}
 	if persona == model.PersonaCustom {
 		return InjectionResult{}, nil
@@ -48,7 +60,6 @@ func InjectPiPersona(rootDir string, persona model.PersonaID) (InjectionResult, 
 	}
 	content = append(content, '\n')
 
-	path := PiPersonaConfigPath(rootDir)
 	writeResult, err := filemerge.WriteFileAtomic(path, content, 0o644)
 	if err != nil {
 		return InjectionResult{}, err
@@ -124,6 +135,11 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	if persona == model.PersonaCustom {
 		return InjectionResult{}, nil
 	}
+	if adapter.Agent() == model.AgentCodex {
+		if err := system.ValidateCodexHome(homeDir); err != nil {
+			return InjectionResult{}, err
+		}
+	}
 	if adapter.Agent() == model.AgentOpenCode {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if selectedSettingsPath != "" {
@@ -191,6 +207,25 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 
 	case model.StrategyFileReplace:
 		promptPath := adapter.SystemPromptFile(homeDir)
+
+		if adapter.Agent() == model.AgentCursor {
+			existing, err := readFileOrEmpty(promptPath)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			// Cursor owns the leading persona body, but other components append
+			// marker-bound sections that install and sync must retain.
+			if idx := strings.Index(existing, "<!-- gentle-ai:"); idx >= 0 {
+				content = strings.TrimRight(content, "\n") + "\n\n" + existing[idx:]
+			}
+			writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(cursor.WrapRule(content)), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || writeResult.Changed
+			files = append(files, promptPath)
+			break
+		}
 
 		if adapter.Agent() == model.AgentOpenCode {
 			existing, err := readFileOrEmpty(promptPath)
@@ -889,7 +924,16 @@ func preserveManagedSections(existing, newPersona string, persona model.PersonaI
 		return "", false
 	}
 
+	// The new persona is written as the leading body, so a marked persona
+	// section in the preserved tail is a second copy. Releases that appended
+	// Antigravity sections to the shared ~/.gemini/GEMINI.md left one (#5608).
 	managedSuffix := existing[idx:]
+	if strings.Contains(managedSuffix, "<!-- /gentle-ai:persona -->") {
+		managedSuffix = strings.TrimLeft(filemerge.InjectMarkdownSection(managedSuffix, "persona", ""), "\n")
+		if managedSuffix == "" {
+			return newPersona, true
+		}
+	}
 	updated := newPersona
 	if !strings.HasSuffix(updated, "\n") {
 		updated += "\n"
@@ -917,7 +961,7 @@ func readFileOrEmpty(path string) (string, error) {
 func wrapInstructionsFile(content string) string {
 	frontmatter := "---\n" +
 		"name: Gentle AI Persona\n" +
-		"description: Teaching-oriented persona with SDD orchestration and Engram protocol\n" +
+		"description: Teaching-oriented persona with ODD orchestration and Engram protocol\n" +
 		"applyTo: \"**\"\n" +
 		"---\n\n"
 
@@ -968,11 +1012,27 @@ func legacyVSCodePersonaPaths(homeDir string) []string {
 	}
 }
 
+var osRemove = os.Remove
+
+// SetRemoveForTest replaces the file removal used by persona injection for the
+// duration of a test and restores the original after the test completes.
+// Exported so that external test packages (e.g. internal/cli) can fail a real
+// removal inside the install and sync pipelines.
+func SetRemoveForTest(t interface {
+	Helper()
+	Cleanup(func())
+}, remove func(string) error) {
+	t.Helper()
+	orig := osRemove
+	osRemove = remove
+	t.Cleanup(func() { osRemove = orig })
+}
+
 // removeFileAtomic removes path if it exists. Returns true when the file was
 // present and successfully deleted, false when it did not exist. Any other
 // OS-level error is returned as-is.
 func removeFileAtomic(path string) (bool, error) {
-	err := os.Remove(path)
+	err := osRemove(path)
 	if err == nil {
 		return true, nil
 	}

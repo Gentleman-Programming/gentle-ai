@@ -32,16 +32,38 @@ const REFUSAL_REASON = {
 type RefusalReason = (typeof REFUSAL_REASON)[keyof typeof REFUSAL_REASON]
 const REFUSAL_REASONS: ReadonlySet<string> = new Set(Object.values(REFUSAL_REASON))
 
+// Bounded refusal causes. Go may name one beside the reason; the plugin only
+// forwards an exact member, so admission prose, paths, or child bytes never
+// reach the parent. An absent or unknown cause keeps the reason-only refusal.
+const REFUSAL_CAUSES: ReadonlySet<string> = new Set([
+  "reviewer_result_not_admissible",
+  "validator_result_not_admissible",
+  "targeted_validation_inconclusive",
+  "role_capture_failed",
+  "inspection_coverage",
+  "invalid_finding_location",
+  "evidence_path_out_of_scope",
+  "proof_path_out_of_scope",
+  "candidate_causality_unclaimed_id",
+  "candidate_causality_evidence_degraded",
+])
+
 class RelayRefusal extends Error {
   readonly reason: RefusalReason
-  constructor(reason: RefusalReason) {
+  readonly refusalCause: string | undefined
+  constructor(reason: RefusalReason, refusalCause?: string) {
     super("Go review relay refused the Task")
     this.reason = reason
+    this.refusalCause = refusalCause
   }
 }
 
 function refusalReason(cause: unknown): RefusalReason {
   return cause instanceof RelayRefusal ? cause.reason : REFUSAL_REASON.RelayUnavailable
+}
+
+function refusalCause(cause: unknown): string | undefined {
+  return cause instanceof RelayRefusal ? cause.refusalCause : undefined
 }
 
 interface TransportFrame {
@@ -52,6 +74,7 @@ interface TransportFrame {
   agent?: string
   output?: string
   error?: string
+  cause?: string
 }
 
 interface Relay {
@@ -114,7 +137,8 @@ function startRelay(cwd: string, prompt: string, agent: string): Relay {
         }
         if (frame.operation === TRANSPORT.Refused) {
           const reason = typeof frame.error === "string" && REFUSAL_REASONS.has(frame.error) ? frame.error as RefusalReason : REFUSAL_REASON.RelayUnavailable
-          fail(new RelayRefusal(reason))
+          const detail = typeof frame.cause === "string" && REFUSAL_CAUSES.has(frame.cause) ? frame.cause : undefined
+          fail(new RelayRefusal(reason, detail))
           continue
         }
         throw new Error("invalid Go relay frame")
@@ -156,8 +180,8 @@ function registry(): Map<string, RelayRegistration> {
   return runtime[REGISTRY] ??= new Map()
 }
 const REFUSED = "opencode_review_transport_relay_refused"
-const refusalText = (reason: RefusalReason) => `${REFUSED} (reason: ${reason})`
-const refusal = (reason: RefusalReason) => Object.assign(new Error(refusalText(reason)), { code: REFUSED, reason })
+const refusalText = (reason: RefusalReason, cause?: string) => `${REFUSED} (reason: ${reason}${cause === undefined ? "" : `, cause: ${cause}`})`
+const refusal = (reason: RefusalReason, cause?: string) => Object.assign(new Error(refusalText(reason, cause)), { code: REFUSED, reason }, cause === undefined ? {} : { cause })
 
 export default Plugin.define({
   id: "gentle-ai.opencode-review-transport",
@@ -219,9 +243,9 @@ export default Plugin.define({
         const input = reviewInput(call)
         if (!input) return
         const key = keyFor(call, input.agent as string)
-        const refuse = (reason: RefusalReason) => {
-          if (call.status === "completed") call.result = { output: { status: "unavailable", code: REFUSED, reason }, content: refusalText(reason) }
-          throw refusal(reason)
+        const refuse = (reason: RefusalReason, cause?: string) => {
+          if (call.status === "completed") call.result = { output: { status: "unavailable", code: REFUSED, reason, ...(cause === undefined ? {} : { cause }) }, content: refusalText(reason, cause) }
+          throw refusal(reason, cause)
         }
         const earlier = refused.get(key)
         if (earlier !== undefined) {
@@ -244,7 +268,7 @@ export default Plugin.define({
           const raw = child?.status === "completed" && typeof child.sessionID === "string" && child.sessionID !== "" && typeof child.output === "string" ? child.output : undefined
           const result = await registration.relay.complete(raw)
           if (call.status === "completed") call.result = { ...call.result, output: { ...child, output: result }, content: result }
-        } catch (cause) { return refuse(refusalReason(cause)) }
+        } catch (cause) { return refuse(refusalReason(cause), refusalCause(cause)) }
         finally { clearOwned(key) }
       }))
       registrations.push(await ctx.shell.hook("create.before", invocation => {

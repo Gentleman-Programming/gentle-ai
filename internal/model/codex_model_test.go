@@ -21,7 +21,9 @@ func TestCodexEffortValid(t *testing.T) {
 		{"empty", model.CodexEffort(""), false},
 		{"junk", model.CodexEffort("junk"), false},
 		{"uppercase", model.CodexEffort("HIGH"), false},
-		{"max deferred", model.CodexEffort("max"), false},
+		{"max (runtime-gated by the picker)", model.CodexEffortMax, true},
+		{"ultra (runtime-gated by the picker)", model.CodexEffortUltra, true},
+		{"none is not routable", model.CodexEffort("none"), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

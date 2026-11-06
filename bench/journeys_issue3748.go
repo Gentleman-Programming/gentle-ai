@@ -65,6 +65,16 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
+if grep -q 'gentle-ai.review-provider-refuter-request/v1' "$prompt"; then
+  hash=$(grep -o '"request_hash":"[^"]*"' "$prompt" | head -n 1 | sed 's/.*:"\(.*\)"/\1/')
+  test -n "$hash" && test -n "$output"
+  results=
+  for id in $(grep -o '"finding_id":"[^"]*"' "$prompt" | sed 's/.*:"\(.*\)"/\1/' | sort -u); do
+    results="$results${results:+,}{\"finding_id\":\"$id\",\"outcome\":\"corroborated\",\"proof_refs\":[\"candidate.go:4 returns the wrong value in the frozen candidate\"]}"
+  done
+  printf '{"refuter_request_hash":"%s","results":[%s]}\n' "$hash" "$results" > "$output"
+  exit 0
+fi
 subject=$(sed -n 's/.*"subject_hash"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$prompt" | head -n 1)
 test -n "$subject" && test -n "$output"
 printf '{"subject_hash":"%s","inspection":{"status":"completed","paths":["candidate.go"]},"lens":"review-reliability","findings":[{"location":"candidate.go:4","severity":"CRITICAL","claim":"the committed candidate returns the wrong value","proof_refs":["candidate.go:4 is introduced by the committed candidate"],"evidence_class":"deterministic","causal_disposition":"introduced"}],"evidence":["the frozen committed candidate returns 1 instead of the required value"]}\n' "$subject" > "$output"

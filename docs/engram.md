@@ -156,7 +156,7 @@ These are the tools the AI agent uses behind the scenes. You never call them dir
 | `mem_get_observation` | Retrieves full untruncated content of a specific observation by ID |
 | `mem_save_prompt` | Saves the user's prompt and feeds session activity so a later `mem_save` can capture/dedupe it |
 
-`mem_save` accepts optional `capture_prompt`. Leave it unset for normal human/proactive saves. Use `capture_prompt: false` only for automated artifacts such as SDD proposal/spec/design/tasks/apply/verify/archive/init reports, testing-capabilities caches, onboarding/state artifacts, or skill-registry output. If the MCP server has no prompt context, `mem_save` still succeeds and does not invent prompt text.
+`mem_save` accepts optional `capture_prompt`. Leave it unset for normal human/proactive saves. Use `capture_prompt: false` only for automated artifacts such as testing-capabilities caches, onboarding/state artifacts, or skill-registry output. If the MCP server has no prompt context, `mem_save` still succeeds and does not invent prompt text.
 
 Agents or plugin hooks that can observe the user's prompt should call `mem_save_prompt` before any derived `mem_save` calls so Engram can attach and dedupe the real prompt context.
 
@@ -185,6 +185,16 @@ Agents or plugin hooks that can observe the user's prompt should call `mem_save_
 Since v1.11.0, engram reads the git remote URL at startup, normalizes it to lowercase, and uses that as the project name. If it finds similar existing project names, it warns you. This prevents the most common issue -- the same project accumulating memories under slightly different names.
 
 If you're working outside a git repo, engram falls back to the directory name.
+
+### Startup project resolution
+
+The injected protocol makes the agent call `mem_current_project` and wait for it before its first `mem_context`, `mem_search`, or `mem_review`:
+
+- **Unique**: a non-empty `project` with no `available_projects` (including the `dir_basename` fallback) is passed as the exact `project` value.
+- **Ambiguous**: when `available_projects` is non-empty or `project_source` is `ambiguous`, the agent asks you to choose one. The choice is a workspace alternative, not a project key; the agent re-resolves it only when the tool accepts a `cwd`, and otherwise skips initial reads.
+- **Unverified or no project**: checked first, when the workspace is unknown, the returned `cwd` does not match it, or the call fails, the agent stops and skips initial project-scoped reads; an empty `project` with no alternatives also skips them. It never guesses or searches all projects.
+
+Explicit requests to recall memory across projects, or from a named other project, are still honored; asking to work on another project is not one. In Engram 2.2.1 `mem_current_project` takes no arguments and resolves from the MCP server's working directory, so start the agent from the repository you want memory for.
 
 ---
 

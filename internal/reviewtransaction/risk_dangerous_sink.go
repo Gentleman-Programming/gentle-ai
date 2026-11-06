@@ -78,14 +78,8 @@ var dangerousSinkCatalog = []dangerousSinkPattern{
 }
 
 func dangerousSinkLine(logicalPath, line string) bool {
-	if isTestRiskPath(logicalPath) {
+	if isTestRiskPath(logicalPath) || isCommentOnlySourceLine(logicalPath, line) {
 		return false
-	}
-	trimmed := strings.TrimSpace(line)
-	for _, prefix := range []string{"//", "#", "--", "/*", "*", "<!--", "'''", `"""`} {
-		if strings.HasPrefix(trimmed, prefix) {
-			return false
-		}
 	}
 	extension := strings.ToLower(path.Ext(logicalPath))
 	for _, entry := range dangerousSinkCatalog {
@@ -129,4 +123,66 @@ func hasUnsafeYAMLLoad(line string) bool {
 		}
 	}
 	return false
+}
+
+// isCommentOnlySourceLine reports an added line that is only a comment in the
+// language its file is written in. A marker counts only where that language
+// uses it -- `#` opens a C directive, a Rust attribute, and a TypeScript
+// private field -- and code after a closed block comment is still code. An
+// unrecognized language is never skipped, so the scan fails toward high.
+func isCommentOnlySourceLine(logicalPath, line string) bool {
+	trimmed := strings.TrimSpace(line)
+	switch commentSyntaxFor(logicalPath) {
+	case hashComments:
+		return strings.HasPrefix(trimmed, "#")
+	case dashComments:
+		return strings.HasPrefix(trimmed, "--")
+	case slashComments:
+		if strings.HasPrefix(trimmed, "//") {
+			return true
+		}
+		if strings.HasPrefix(trimmed, "/*") {
+			closing := strings.Index(trimmed[2:], "*/")
+			return closing < 0 || strings.TrimSpace(trimmed[2+closing+2:]) == ""
+		}
+		if strings.HasPrefix(trimmed, "*/") {
+			return strings.TrimSpace(trimmed[2:]) == ""
+		}
+		// A block comment continuation is a lone `*` followed by whitespace
+		// or nothing; `*cmd` is a dereference, not a comment.
+		return trimmed == "*" || strings.HasPrefix(trimmed, "* ") || strings.HasPrefix(trimmed, "*\t")
+	default:
+		return false
+	}
+}
+
+type commentSyntax int
+
+const (
+	unknownComments commentSyntax = iota
+	hashComments
+	dashComments
+	slashComments
+)
+
+func commentSyntaxFor(logicalPath string) commentSyntax {
+	base := asciiLower(path.Base(logicalPath))
+	switch {
+	case base == "dockerfile" || base == "makefile" || base == "cmakelists.txt" ||
+		base == ".env" || strings.HasPrefix(base, ".env.") ||
+		strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt"):
+		return hashComments
+	}
+	switch asciiLower(path.Ext(logicalPath)) {
+	case ".sh", ".bash", ".zsh", ".py", ".rb", ".pl", ".pm", ".r", ".ps1", ".psm1",
+		".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".cmake", ".mk", ".tf", ".nix":
+		return hashComments
+	case ".sql", ".lua", ".hs", ".adb", ".ads":
+		return dashComments
+	case ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".go", ".java", ".js", ".jsx",
+		".kt", ".kts", ".php", ".rs", ".swift", ".ts", ".tsx", ".scala", ".dart":
+		return slashComments
+	default:
+		return unknownComments
+	}
 }

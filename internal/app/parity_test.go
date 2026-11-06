@@ -43,7 +43,7 @@ func TestInstallPlannerParityWithTUISelection(t *testing.T) {
 	detection := system.DetectionResult{}
 	model := tui.NewModel(detection, "dev")
 
-	result, err := cli.RunInstall([]string{"--dry-run"}, detection)
+	result, err := runInstallForParity([]string{"--dry-run"}, detection)
 	if err != nil {
 		t.Fatalf("RunInstall() error = %v", err)
 	}
@@ -146,7 +146,7 @@ func TestGuardFlowLinuxDryRunPropagatesDecision(t *testing.T) {
 		},
 	}
 
-	result, err := cli.RunInstall([]string{"--dry-run"}, detection)
+	result, err := runInstallForParity([]string{"--dry-run"}, detection)
 	if err != nil {
 		t.Fatalf("RunInstall() dry-run error = %v", err)
 	}
@@ -266,7 +266,7 @@ func TestRunArgsSyncNoAgentsIsNoOp(t *testing.T) {
 func TestMacOSDefaultProfileFallbackWhenDetectionEmpty(t *testing.T) {
 	// When DetectionResult is zero-value (no profile), CLI defaults to macOS/brew.
 	detection := system.DetectionResult{}
-	result, err := cli.RunInstall([]string{"--dry-run"}, detection)
+	result, err := runInstallForParity([]string{"--dry-run"}, detection)
 	if err != nil {
 		t.Fatalf("RunInstall() error = %v", err)
 	}
@@ -284,7 +284,7 @@ func TestMacOSDefaultProfileFallbackWhenDetectionEmpty(t *testing.T) {
 
 func TestLinuxDryRunPreservesSameResolverOutputAsMacOS(t *testing.T) {
 	// Platform decision differs but the resolver output (agents, components, order) should be identical.
-	macOSResult, err := cli.RunInstall([]string{"--dry-run"}, system.DetectionResult{})
+	macOSResult, err := runInstallForParity([]string{"--dry-run"}, system.DetectionResult{})
 	if err != nil {
 		t.Fatalf("macOS RunInstall() error = %v", err)
 	}
@@ -303,7 +303,7 @@ func TestLinuxDryRunPreservesSameResolverOutputAsMacOS(t *testing.T) {
 			},
 		},
 	}
-	linuxResult, err := cli.RunInstall([]string{"--dry-run"}, linuxDetection)
+	linuxResult, err := runInstallForParity([]string{"--dry-run"}, linuxDetection)
 	if err != nil {
 		t.Fatalf("Linux RunInstall() error = %v", err)
 	}
@@ -366,7 +366,7 @@ func TestInstallPlannerParityLinuxPreservesComponentOrder(t *testing.T) {
 		},
 	}
 
-	result, err := cli.RunInstall([]string{"--dry-run", "--agent", "opencode", "--component", "persona,engram,skills"}, linuxDetection)
+	result, err := runInstallForParity([]string{"--dry-run", "--agent", "opencode", "--component", "persona,engram,skills"}, linuxDetection)
 	if err != nil {
 		t.Fatalf("RunInstall() error = %v", err)
 	}
@@ -387,4 +387,13 @@ func TestInstallPlannerParityLinuxPreservesComponentOrder(t *testing.T) {
 	if wantReview := planner.BuildReviewPayload(result.Selection, result.Resolved); !reflect.DeepEqual(result.Review, wantReview) {
 		t.Fatalf("review mismatch\ncli=%#v\nplanner=%#v", result.Review, wantReview)
 	}
+}
+
+// runInstallForParity exercises the same prepared-plan path as production dispatch.
+func runInstallForParity(args []string, detection system.DetectionResult) (cli.InstallResult, error) {
+	prepared, err := cli.PrepareInstall(args, detection)
+	if err != nil {
+		return cli.InstallResult{}, err
+	}
+	return cli.RunPreparedInstall(prepared, detection)
 }

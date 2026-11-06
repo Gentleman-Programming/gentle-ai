@@ -1,6 +1,6 @@
 name: Bug Report
 description: File a bug report for Gentle AI
-labels: ["bug", "status:needs-review"]
+labels: ["type:bug", "status:needs-review"]
 
 body:
   - type: markdown
@@ -9,7 +9,7 @@ body:
         ## 📋 How this works
 
         1. **Submit** this bug report → it gets the `status:needs-review` label automatically
-        2. A **maintainer reviews** it and adds `status:approved` (or closes it as invalid/duplicate)
+        2. **Review** precedes approval: adding `status:approved` follows the canonical issue-creation workflow contract, requiring a current direct human instruction for the exact target/action and verified actor `MAINTAIN`/`ADMIN` capability (or a separately authorized closure)
         3. **Only then** should you (or anyone) open a PR to fix it
 
         PRs that fix issues without `status:approved` will be automatically rejected.

@@ -10,7 +10,9 @@ import (
 // source assets (see testdata/*.md). Fixtures are byte-exact snapshots so
 // tests can assert canonical-renderer output without depending on the old
 // per-adapter asset files, which are deleted once every renderer is green
-// (task 2.8).
+// (task 2.8). Intentional protocol contract changes update the canonical asset
+// and these fixtures in the same change (runtime session identity, #1903
+// startup project resolution), so byte equality still catches accidental drift.
 func readTestdata(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile("testdata/" + name)

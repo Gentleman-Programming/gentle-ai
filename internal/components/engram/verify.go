@@ -13,6 +13,9 @@ var (
 )
 
 func VerifyInstalled() error {
+	if _, ok := CallerBinary(); ok {
+		return ValidateCallerBinary()
+	}
 	if _, err := lookPath("engram"); err != nil {
 		return fmt.Errorf("engram binary not found in PATH: %w", err)
 	}
@@ -38,6 +41,9 @@ var runVersionCommand = func(ctx context.Context, command string) ([]byte, error
 // VerifyVersion runs "engram version" and returns the trimmed output.
 // Returns an error if the command fails or produces no output.
 func VerifyVersion() (string, error) {
+	if bin, ok := CallerBinary(); ok {
+		return VerifyVersionCommand(bin)
+	}
 	return VerifyVersionCommand("engram")
 }
 

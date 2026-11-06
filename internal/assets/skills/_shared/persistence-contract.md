@@ -8,7 +8,7 @@ Read back both writes. If Engram is unavailable, preserve the local document and
 
 ## Delegated work
 
-The parent selects relevant context and gives the worker its authorized edit surfaces, task document locator, TDD mode and source, exact test runner and verification commands. The worker reads the task document before editing, stays inside those surfaces, and reports actual checks. Significant verified project discoveries can be saved with `mem_save` under the resolved project. The parent reconciles the task document and full mirror after each observed transition. A task checkbox is not review authority.
+The parent selects relevant context and gives the worker its authorized edit surfaces, task document locator, the applicable test-first policy and runner from `## Implementation Routing`, and exact verification commands. The worker reads the task document before editing, stays inside those surfaces, and reports actual checks. Significant verified project discoveries can be saved with `mem_save` under the resolved project. The parent reconciles the task document and full mirror after each observed transition. A task checkbox is not review authority.
 
 Skill paths are supplied in `## Skills to load before work`; workers read those exact `SKILL.md` files before task-specific work. See `skill-resolver.md` for matching and reporting.
 

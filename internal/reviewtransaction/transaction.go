@@ -112,9 +112,13 @@ type Start struct {
 	PolicyHash string
 	// PolicyContent preserves the exact bytes START already read and hashed when
 	// creating compact authority. Nil is retained only for historical authority.
-	PolicyContent        *string
-	RiskLevel            RiskLevel
-	SelectedLenses       []string
+	PolicyContent  *string
+	RiskLevel      RiskLevel
+	SelectedLenses []string
+	// LensSelectionReason, when set, marks SelectedLenses as the agent's own
+	// START --lenses choice (any non-empty canonical subset on a reviewed
+	// tier) and records why it chose them.
+	LensSelectionReason  string
 	OriginalChangedLines *int
 	// RuntimeAgent is the validated runtime identity START was bound to, or
 	// empty on the manual/non-agent route. It is frozen with the lineage.
@@ -1233,6 +1237,40 @@ func validateCounters(mode Mode, counters Counters) error {
 		}
 	}
 	return nil
+}
+
+// validateAgentSelectedLenses admits the agent's own lens choice
+// (verify-always-rdd-high S8): one to four supported lenses on a medium or
+// high tier, without repeats, in canonical 4R order.
+// ValidateAgentSelectedLenses is validateAgentSelectedLenses for callers
+// outside the transaction that check a published lens set.
+func ValidateAgentSelectedLenses(riskLevel RiskLevel, lenses []string) error {
+	_, err := validateAgentSelectedLenses(riskLevel, lenses)
+	return err
+}
+
+func validateAgentSelectedLenses(riskLevel RiskLevel, lenses []string) ([]string, error) {
+	if riskLevel != RiskMedium && riskLevel != RiskHigh {
+		return nil, fmt.Errorf("an agent lens selection needs a medium or high risk review, not %q", riskLevel) // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+	}
+	if len(lenses) == 0 || len(lenses) > len(supportedLenses) {
+		return nil, errors.New("an agent lens selection names one to four lenses") // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+	}
+	next := 0
+	for _, lens := range lenses {
+		position := -1
+		for index := next; index < len(supportedLenses); index++ {
+			if supportedLenses[index] == lens {
+				position = index
+				break
+			}
+		}
+		if position < 0 {
+			return nil, fmt.Errorf("agent-selected lens %q is unknown, repeated, or out of canonical 4R order", lens) // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+		}
+		next = position + 1
+	}
+	return append([]string{}, lenses...), nil
 }
 
 func validateSelectedLenses(mode Mode, riskLevel RiskLevel, lenses []string) ([]string, error) {

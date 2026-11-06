@@ -1,7 +1,6 @@
 package uninstall
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,17 +13,21 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/theme"
@@ -32,6 +35,7 @@ import (
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type Manager interface {
@@ -80,6 +84,9 @@ const (
 	opRewriteFile opType = iota
 	opRemoveFile
 	opRemoveTree
+	// opRetireSDD runs after every file and tree removal, so the empty
+	// directories it leaves are still pruned by opRemoveIfEmpty.
+	opRetireSDD
 	opRemoveIfEmpty
 )
 
@@ -117,6 +124,12 @@ type operation struct {
 	// cleanup it was.
 	agents []model.AgentID
 	apply  func(path string) (changed bool, removed bool, err error)
+	// report, when set, adds to the result what an operation changed
+	// beyond its own path. It runs after apply, even when apply failed.
+	report func(result *Result)
+	// notes, when set, names what a successful apply kept for the user to
+	// decide on.
+	notes func() []string
 }
 
 // operationFailure records one operation that did not complete, so the run can
@@ -169,7 +182,7 @@ func PartialUninstall(homeDir, workspaceDir, appVersion string, agentIDs []strin
 	return svc.PartialUninstall(agentsTyped, componentsTyped)
 }
 
-func PartialUninstallWithProfileSelection(homeDir, workspaceDir, appVersion string, agentIDs []string, componentIDs []string, profileNames []string, engramScope model.EngramUninstallScope) (Result, error) {
+func PartialUninstallWithEngramScopeSelection(homeDir, workspaceDir, appVersion string, agentIDs []string, componentIDs []string, engramScope model.EngramUninstallScope) (Result, error) {
 	svc, err := NewService(homeDir, workspaceDir, appVersion)
 	if err != nil {
 		return Result{}, err
@@ -185,7 +198,7 @@ func PartialUninstallWithProfileSelection(homeDir, workspaceDir, appVersion stri
 		componentsTyped = append(componentsTyped, model.ComponentID(componentID))
 	}
 
-	return svc.PartialUninstallWithProfiles(agentsTyped, componentsTyped, profileNames, engramScope)
+	return svc.PartialUninstallWithEngramScope(agentsTyped, componentsTyped, engramScope)
 }
 
 func CompleteUninstall(homeDir, workspaceDir, appVersion string) (Result, error) {
@@ -202,10 +215,7 @@ func (s *Service) PartialUninstall(agentIDs []model.AgentID, componentIDs []mode
 	return s.partialUninstall(agentIDs, componentIDs)
 }
 
-func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (Result, error) {
-	// Profiles only applied to the retired SDD component; component validation
-	// rejects that request before planning and preserves existing profiles.
-	_ = profileNames
+func (s *Service) PartialUninstallWithEngramScope(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (Result, error) {
 	s.SetEngramUninstallScope(engramScope)
 	defer func() {
 		s.engramUninstallScope = model.EngramUninstallScopeGlobal
@@ -215,7 +225,7 @@ func (s *Service) PartialUninstallWithProfiles(agentIDs []model.AgentID, compone
 }
 
 // partialUninstall is the shared body of PartialUninstall and
-// PartialUninstallWithProfiles. It resolves the requested components,
+// PartialUninstallWithEngramScope. It resolves the requested components,
 // downgrades any that are still shared with an agent this run is not
 // removing (see reconcileSharedComponents), and executes the resulting plan.
 func (s *Service) partialUninstall(agentIDs []model.AgentID, componentIDs []model.ComponentID) (Result, error) {
@@ -398,6 +408,15 @@ func (s *Service) CompleteUninstall() (Result, error) {
 type plan struct {
 	backupTargets []string
 	operations    []operation
+	// antigravityRules republishes the Antigravity rules from the staging
+	// file after its sections were removed; retireLegacyAntigravityPrompt
+	// also strips the sections older releases appended to GEMINI.md.
+	antigravityRules              bool
+	retireLegacyAntigravityPrompt bool
+	// geminiModules moves what older releases wrote into GEMINI.md to the
+	// Gemini CLI staging file the operations target, then republishes the
+	// modules from what is left.
+	geminiModules bool
 }
 
 func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.ComponentID) (plan, error) {
@@ -492,6 +511,21 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	}
 	if removesAllAgentComponents(componentIDs) {
 		for _, agentID := range agentIDs {
+			adapter, _ := s.registry.Get(agentID)
+			op, targets, ok := s.retiredSDDOperation(adapter)
+			if !ok {
+				continue
+			}
+			for _, target := range targets {
+				backupTargets[target] = struct{}{}
+			}
+			// One retirement per runtime: runtimes sharing a config root
+			// still retire their own inventories.
+			operationsByKey["retire-sdd:"+string(agentID)] = op
+		}
+	}
+	if removesAllAgentComponents(componentIDs) {
+		for _, agentID := range agentIDs {
 			if agentID != model.AgentOpenCode && agentID != model.AgentKilocode {
 				continue
 			}
@@ -506,6 +540,38 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 				}
 				operationsByKey[key] = op
 			}
+			for _, op := range retainedOpenCodePluginOperations(adapter, s.homeDir) {
+				backupTargets[op.path] = struct{}{}
+				operationsByKey[operationKey(op)] = op
+			}
+		}
+	}
+	publishAntigravity := slices.Contains(agentIDs, model.AgentAntigravity)
+	retireLegacyAntigravity := publishAntigravity && removesAllAgentComponents(componentIDs)
+	if publishAntigravity {
+		for _, path := range antigravityrules.ManagedPaths(s.homeDir) {
+			backupTargets[path] = struct{}{}
+		}
+	}
+	if retireLegacyAntigravity {
+		backupTargets[antigravityrules.LegacyPromptPath(s.homeDir)] = struct{}{}
+	}
+	geminiModules := slices.Contains(agentIDs, model.AgentGeminiCLI)
+	if geminiModules || retireLegacyAntigravity {
+		for _, path := range geminimodules.ManagedPaths(s.homeDir) {
+			backupTargets[path] = struct{}{}
+		}
+	}
+	if slices.Contains(agentIDs, model.AgentClaudeCode) && removesAllAgentComponents(componentIDs) {
+		// Only a complete Claude removal retires the module pilot (see
+		// retireClaudeGlobalModules); snapshot every file it may change. An
+		// unreadable ledger path fails the plan before any write.
+		paths, err := agentguidance.ClaudeGlobalModulePaths(s.homeDir)
+		if err != nil {
+			return plan{}, err
+		}
+		for _, path := range paths {
+			backupTargets[path] = struct{}{}
 		}
 	}
 	if slices.Contains(agentIDs, model.AgentOpenCode) && removesAllAgentComponents(componentIDs) {
@@ -540,13 +606,18 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			backupTargets[op.path] = struct{}{}
 			operationsByKey[operationKey(op)] = op
 		}
-		for _, op := range retainedOpenCodePluginOperations(adapter, s.homeDir) {
-			backupTargets[op.path] = struct{}{}
-			operationsByKey[operationKey(op)] = op
-		}
 		for _, path := range opencodeactivation.LauncherPaths(s.homeDir, runtime.GOOS) {
 			backupTargets[path] = struct{}{}
 			operationsByKey[operationKey(removeOwnedOpenCodeLauncher(path))] = removeOwnedOpenCodeLauncher(path)
+		}
+		// Only profiles that carry the canonical managed block are snapshotted
+		// and rewritten; every other profile byte belongs to the user.
+		for _, path := range opencodeactivation.ManagedProfilePaths(s.homeDir) {
+			if runtime.GOOS == "windows" || !opencodeactivation.HasManagedProfileBlock(path) {
+				continue
+			}
+			backupTargets[path] = struct{}{}
+			operationsByKey[operationKey(removeOwnedOpenCodeProfileBlock(path))] = removeOwnedOpenCodeProfileBlock(path)
 		}
 	}
 
@@ -562,7 +633,7 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	}
 	slices.SortFunc(operations, compareOperations)
 
-	return plan{backupTargets: orderedTargets, operations: operations}, nil
+	return plan{backupTargets: orderedTargets, operations: operations, antigravityRules: publishAntigravity, retireLegacyAntigravityPrompt: retireLegacyAntigravity, geminiModules: geminiModules}, nil
 }
 
 func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, error) {
@@ -629,11 +700,29 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		}
 	}
 
+	var geminiFiles []string
+	if p.geminiModules {
+		migrated, err := geminimodules.MigrateLegacyRoot(s.homeDir)
+		if err != nil {
+			failures = append(failures, operationFailure{path: geminimodules.RootPath(s.homeDir), agents: []model.AgentID{model.AgentGeminiCLI}, err: err})
+		}
+		// Without the migration the operations miss the guidance, so the
+		// modules are not republished from an incomplete staging file.
+		p.geminiModules = err == nil
+		geminiFiles = migrated.Files
+	}
+
 	for _, op := range p.operations {
 		changed, removed, err := op.apply(op.path)
+		if op.report != nil {
+			op.report(&result)
+		}
 		if err != nil {
 			failures = append(failures, operationFailure{path: op.path, agents: op.agents, err: err})
 			continue
+		}
+		if op.notes != nil {
+			result.ManualActions = append(result.ManualActions, op.notes()...)
 		}
 		if op.typeID == opRemoveIfEmpty && !removed {
 			if note, ok := manualActionForNonEmptyDirectory(op.path); ok {
@@ -654,6 +743,34 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 			if removed {
 				result.RemovedDirectories = append(result.RemovedDirectories, op.path)
 			}
+		}
+	}
+
+	if p.geminiModules {
+		published, err := geminimodules.Publish(s.homeDir)
+		reportPublishedFiles(&result, append(geminiFiles, published.Files...))
+		if err != nil {
+			failures = append(failures, operationFailure{path: geminimodules.ModulesDir(s.homeDir), agents: []model.AgentID{model.AgentGeminiCLI}, err: err})
+		}
+	}
+
+	if p.antigravityRules {
+		if err := s.publishAntigravityRules(&result, p.retireLegacyAntigravityPrompt); err != nil {
+			failures = append(failures, operationFailure{
+				path:   antigravityrules.RulesDir(s.homeDir),
+				agents: []model.AgentID{model.AgentAntigravity},
+				err:    err,
+			})
+		}
+	}
+
+	if slices.Contains(agentsToRemove, model.AgentClaudeCode) {
+		if err := s.retireClaudeGlobalModules(&result); err != nil {
+			failures = append(failures, operationFailure{
+				path:   claude.NewAdapter().GlobalConfigDir(s.homeDir),
+				agents: []model.AgentID{model.AgentClaudeCode},
+				err:    fmt.Errorf("retire Claude orchestrator modules: %w", err),
+			})
 		}
 	}
 
@@ -687,6 +804,99 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		return result, errors.Join(errs...)
 	}
 	return result, nil
+}
+
+// publishAntigravityRules runs after the staging file lost its removed
+// sections, so the published rules match what is left: an emptied staging
+// file retires every owned rule. A complete removal also strips the sections
+// older releases appended to GEMINI.md.
+func (s *Service) publishAntigravityRules(result *Result, retireLegacy bool) error {
+	published, err := antigravityrules.Publish(s.homeDir)
+	if err != nil {
+		return err
+	}
+	files := published.Files
+	if retireLegacy {
+		migrated, err := antigravityrules.MigrateLegacyPrompt(s.homeDir, antigravityrules.GeminiCLIManaged(s.homeDir, nil))
+		if err != nil {
+			return err
+		}
+		files = append(files, migrated.Files...)
+		// The staging directory is Gentle AI's own; it stays only while it
+		// holds guidance uninstall retains (routing), which is no leftover.
+		stagingDir := filepath.Dir(antigravityrules.StagingPath(s.homeDir))
+		if err := os.Remove(stagingDir); err == nil {
+			result.RemovedDirectories = append(result.RemovedDirectories, stagingDir)
+		}
+		if !antigravityrules.GeminiCLIManaged(s.homeDir, nil) {
+			// Nothing imports the modules an earlier Gemini CLI install left.
+			retired, err := geminimodules.Retire(s.homeDir)
+			files = append(files, retired.Files...)
+			if err != nil {
+				reportPublishedFiles(result, files)
+				return err
+			}
+		}
+	}
+	reportPublishedFiles(result, files)
+	return nil
+}
+
+// reportPublishedFiles records each path a publisher touched as it is on disk
+// afterwards: removed or changed.
+func reportPublishedFiles(result *Result, files []string) {
+	for _, path := range slices.Compact(slices.Sorted(slices.Values(files))) {
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			result.RemovedFiles = append(result.RemovedFiles, path)
+		} else {
+			result.ChangedFiles = append(result.ChangedFiles, path)
+		}
+	}
+}
+
+// retireClaudeGlobalModules returns a complete Claude removal from the module
+// pilot to the monolithic orchestrator, and does nothing without a module
+// ledger. Each known path is reported as it is on disk afterwards: removed or
+// changed when retirement touched it, and kept for manual review otherwise.
+// Nothing else in the module directory is enumerated.
+func (s *Service) retireClaudeGlobalModules(result *Result) error {
+	paths, err := agentguidance.ClaudeGlobalModulePaths(s.homeDir)
+	if err != nil || paths == nil {
+		return err
+	}
+	retired, err := agentguidance.RetireClaudeGlobalModules(s.homeDir, reviewassets.ReviewExecutionContractFor)
+	return reportClaudeModuleRetirement(result, paths, retired, err)
+}
+
+// reportClaudeModuleRetirement records in result what retiring the module
+// pilot did to paths, the files ClaudeGlobalModulePaths planned. A failed
+// retirement that still reports Changed did not finish its rollback, so which
+// files it left changed is unknown: none is reported as removed or changed,
+// and the user is asked to inspect the core and the module directory.
+func reportClaudeModuleRetirement(result *Result, paths []string, retired agentguidance.Result, err error) error {
+	if err != nil {
+		if retired.Changed {
+			result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+				"Inspect %s and %s before rerunning the uninstall: the failed Claude orchestrator module retirement did not finish its rollback, so they may be partially changed",
+				paths[0], filepath.Dir(paths[len(paths)-1])))
+		}
+		return err
+	}
+	for _, path := range paths {
+		_, statErr := os.Lstat(path)
+		switch {
+		case slices.Contains(retired.Files, path) && os.IsNotExist(statErr):
+			result.RemovedFiles = append(result.RemovedFiles, path)
+		case slices.Contains(retired.Files, path):
+			if !slices.Contains(result.ChangedFiles, path) {
+				result.ChangedFiles = append(result.ChangedFiles, path)
+			}
+		case statErr == nil:
+			result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+				"Remove manually if no longer needed: %s (orchestrator module modified or not owned by Gentle AI, kept)", path))
+		}
+	}
+	return nil
 }
 
 // failedAgents reports which agents cannot claim a completed uninstall. A
@@ -828,8 +1038,11 @@ func dedupeSortedStrings(items []string) []string {
 	return slices.Compact(cloned)
 }
 
+// settingsTargets returns the JSON settings files generic cleaners may rewrite.
+// Only the native path is classified: OpenCode's effective path is caller
+// selected and kept as-is.
 func settingsTargets(homeDir string, adapter agents.Adapter) []string {
-	path := adapter.SettingsPath(homeDir)
+	path := agents.JSONSettingsPath(homeDir, adapter)
 	if path == "" {
 		return nil
 	}
@@ -847,6 +1060,14 @@ func settingsTargets(homeDir string, adapter agents.Adapter) []string {
 }
 
 func (s *Service) componentOperations(adapter agents.Adapter, componentID model.ComponentID) ([]operation, []string, error) {
+	if adapter.Agent() == model.AgentCodex {
+		globalEngram := componentID == model.ComponentEngram && s.engramUninstallScope != model.EngramUninstallScopeProject
+		if globalEngram || componentID == model.ComponentPersona || componentID == model.ComponentContext7 || componentID == model.ComponentSkills {
+			if err := system.ValidateCodexHome(s.homeDir); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
 	ops := make([]operation, 0)
 	targets := make([]string, 0)
 	homeDir := s.homeDir
@@ -882,6 +1103,12 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 	case model.ComponentContext7:
 		targets = append(targets, context7Targets(adapter, homeDir)...)
 		ops = append(ops, context7Operations(adapter, homeDir)...)
+		legacyOps, legacyTargets, err := antigravityLegacyMCPOperations(adapter, homeDir, "context7")
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = append(ops, legacyOps...)
+		targets = append(targets, legacyTargets...)
 	case model.ComponentEngram:
 		if s.engramUninstallScope == model.EngramUninstallScopeProject {
 			projectDataPath := filepath.Join(s.workspaceDir, ".engram")
@@ -894,6 +1121,12 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 
 		targets = append(targets, engramTargets(adapter, homeDir)...)
 		ops = append(ops, engramOperations(adapter, homeDir)...)
+		legacyOps, legacyTargets, err := antigravityLegacyMCPOperations(adapter, homeDir, "engram")
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = append(ops, legacyOps...)
+		targets = append(targets, legacyTargets...)
 		if adapter.SupportsSystemPrompt() {
 			path := adapter.SystemPromptFile(homeDir)
 			targets = append(targets, path)
@@ -943,34 +1176,24 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		if skillDir == "" {
 			break
 		}
-		entries, err := fs.ReadDir(assets.FS, "skills")
-		if err != nil {
-			return nil, nil, fmt.Errorf("read embedded skills: %w", err)
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), "sdd-") || entry.Name() == "_shared" {
-				continue
-			}
-			dirPath := filepath.Join(skillDir, entry.Name())
-			targets = append(targets, dirPath)
-			ops = append(ops, removeTree(dirPath), removeDirIfEmpty(skillDir))
-		}
-		// _shared may hold user-authored notes, so only the embedded references
-		// the skills component writes are removed, never the whole directory.
-		shared, err := skills.SharedReferencePaths(skillDir)
+		skillOps, skillTargets, err := skillDirOperations(skillDir)
 		if err != nil {
 			return nil, nil, err
 		}
-		for _, path := range shared {
-			targets = append(targets, path)
-			ops = append(ops, removeFile(path))
+		ops = append(ops, skillOps...)
+		targets = append(targets, skillTargets...)
+		for _, root := range antigravityLegacyRoots(adapter, homeDir) {
+			legacyOps, legacyTargets, err := skillDirOperations(filepath.Join(root, "skills"))
+			if err != nil {
+				return nil, nil, err
+			}
+			legacyOps, legacyTargets, err = guardAntigravityLegacyOperations(root, legacyOps, legacyTargets)
+			if err != nil {
+				return nil, nil, err
+			}
+			ops = append(ops, legacyOps...)
+			targets = append(targets, legacyTargets...)
 		}
-		// Upgraded installs may still hold the obsolete generated marker; install
-		// only ever removes it as a regular file, so uninstall does the same.
-		marker := skills.LegacySharedMarkerPath(skillDir)
-		targets = append(targets, marker)
-		ops = append(ops, removeRegularFile(marker))
-		ops = append(ops, removeDirIfEmpty(filepath.Join(skillDir, "_shared")))
 		commands, err := skills.AllSkillCommandPaths(homeDir, adapter)
 		if err != nil {
 			return nil, nil, err
@@ -990,6 +1213,124 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 	}
 
 	return ops, targets, nil
+}
+
+// skillDirOperations removes the embedded skills and shared references the
+// skills component writes into skillDir, leaving user-authored skills alone.
+func skillDirOperations(skillDir string) ([]operation, []string, error) {
+	var ops []operation
+	var targets []string
+	entries, err := fs.ReadDir(assets.FS, "skills")
+	if err != nil {
+		return nil, nil, fmt.Errorf("read embedded skills: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), "sdd-") || entry.Name() == "_shared" {
+			continue
+		}
+		dirPath := filepath.Join(skillDir, entry.Name())
+		targets = append(targets, dirPath)
+		ops = append(ops, removeTree(dirPath), removeDirIfEmpty(skillDir))
+	}
+	// _shared may hold user-authored notes, so only the embedded references
+	// the skills component writes are removed, never the whole directory.
+	shared, err := skills.SharedReferencePaths(skillDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, path := range shared {
+		targets = append(targets, path)
+		ops = append(ops, removeFile(path))
+	}
+	// Upgraded installs may still hold the obsolete generated marker; install
+	// only ever removes it as a regular file, so uninstall does the same.
+	marker := skills.LegacySharedMarkerPath(skillDir)
+	targets = append(targets, marker)
+	ops = append(ops, removeRegularFile(marker))
+	ops = append(ops, removeDirIfEmpty(filepath.Join(skillDir, "_shared")))
+	return ops, targets, nil
+}
+
+// antigravityLegacyRoots returns the Antigravity variant directories that
+// installs made before the shared ~/.gemini/config root wrote skills and MCP
+// entries into. Install never writes there anymore; only uninstall cleans them.
+func antigravityLegacyRoots(adapter agents.Adapter, homeDir string) []string {
+	if adapter.Agent() != model.AgentAntigravity {
+		return nil
+	}
+	return antigravity.LegacyVariantDirs(homeDir)
+}
+
+// antigravityLegacyMCPOperations removes one managed server from a legacy
+// variant mcp_config.json. On migrated layouts that file is a symlink into the
+// shared root, which the adapter path already cleans, so it is skipped.
+func antigravityLegacyMCPOperations(adapter agents.Adapter, homeDir, server string) ([]operation, []string, error) {
+	var ops []operation
+	var targets []string
+	for _, root := range antigravityLegacyRoots(adapter, homeDir) {
+		path := filepath.Join(root, "mcp_config.json")
+		guardedOps, guardedTargets, err := guardAntigravityLegacyOperations(root, []operation{rewriteJSONFile(path, jsonPath{"mcpServers", server})}, []string{path})
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = append(ops, guardedOps...)
+		targets = append(targets, guardedTargets...)
+	}
+	return ops, targets, nil
+}
+
+// guardAntigravityLegacyOperations keeps legacy cleanup inside real files and
+// directories under root. Backup targets are filtered at plan time, and every
+// operation re-checks at apply time, so a symlink into ~/.gemini/config is
+// never followed, rewritten, or replaced.
+func guardAntigravityLegacyOperations(root string, ops []operation, targets []string) ([]operation, []string, error) {
+	kept := make([]string, 0, len(targets))
+	for _, target := range targets {
+		real, err := isRealPathBelow(root, target)
+		if err != nil {
+			return nil, nil, err
+		}
+		if real {
+			kept = append(kept, target)
+		}
+	}
+	guarded := make([]operation, 0, len(ops))
+	for _, op := range ops {
+		apply := op.apply
+		op.apply = func(path string) (bool, bool, error) {
+			real, err := isRealPathBelow(root, path)
+			if !real || err != nil {
+				return false, false, err
+			}
+			return apply(path)
+		}
+		guarded = append(guarded, op)
+	}
+	return guarded, kept, nil
+}
+
+// isRealPathBelow reports whether path exists below root and neither root nor
+// any entry between root and path is a symlink.
+func isRealPathBelow(root, path string) (bool, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, err
+	}
+	current := root
+	for _, part := range append([]string{"."}, strings.Split(rel, string(filepath.Separator))...) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func context7Targets(adapter agents.Adapter, homeDir string) []string {
@@ -1055,6 +1396,10 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 		targets = append(targets, settingsTargets(homeDir, adapter)...)
 	case model.StrategyMCPConfigFile:
 		targets = append(targets, adapter.MCPConfigPath(homeDir, "engram"))
+		if adapter.Agent() == model.AgentAntigravity {
+			targets = append(targets, engram.AntigravityPluginAssetPaths(homeDir)...)
+			targets = append(targets, engram.AntigravityLegacyPluginAssetPaths(homeDir)...)
+		}
 	case model.StrategyTOMLFile:
 		targets = append(targets,
 			adapter.MCPConfigPath(homeDir, "engram"),
@@ -1088,7 +1433,24 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 		if adapter.Agent() == model.AgentVSCodeCopilot {
 			return []operation{rewriteJSONFile(path, jsonPath{"servers", "engram"})}
 		}
-		return []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "engram"})}
+		ops := []operation{rewriteJSONFile(path, jsonPath{"mcpServers", "engram"})}
+		if adapter.Agent() == model.AgentAntigravity {
+			// #779: since #5065 Antigravity Engram registration is
+			// plugin-owned; the rewrite above only clears a legacy duplicate
+			// entry. Remove the plugin assets install wrote, leaving any
+			// edited asset (and so its directory) in place. #5930: the plugin
+			// moved to the shared config root; a legacy copy that was never
+			// migrated is retired the same way.
+			for _, asset := range engram.AntigravityPluginAssetPaths(homeDir) {
+				ops = append(ops, removeManagedAntigravityPluginAsset(asset))
+			}
+			ops = append(ops, removeDirIfEmpty(engram.AntigravityPluginDir(homeDir)))
+			for _, asset := range engram.AntigravityLegacyPluginAssetPaths(homeDir) {
+				ops = append(ops, removeManagedAntigravityPluginAsset(asset))
+			}
+			ops = append(ops, removeDirIfEmpty(engram.AntigravityLegacyPluginDir(homeDir)))
+		}
+		return ops
 	case model.StrategyTOMLFile:
 		configPath := adapter.MCPConfigPath(homeDir, "engram")
 		instructionsPath := filepath.Join(homeDir, ".codex", "engram-instructions.md")
@@ -1159,9 +1521,8 @@ func rewriteJSONFile(path string, jsonPaths ...jsonPath) operation {
 				}
 				return true, true, nil
 			}
-			// Preserve the file's existing mode: ~/.claude.json is injected
-			// with 0600 because it holds the OAuth session, and an uninstall
-			// rewrite must not widen it.
+			// Preserve the file's existing mode: an uninstall rewrite must
+			// not widen permissions on a file the user or agent restricted.
 			perm := os.FileMode(0o644)
 			if info, statErr := os.Lstat(path); statErr == nil {
 				perm = info.Mode().Perm()
@@ -1230,7 +1591,8 @@ func rewriteSkillRegistryHook(path string) operation {
 			if !changed {
 				return false, false, nil
 			}
-			if jsonIsEmptyObject(updated) {
+			// An emptied object that still holds JSONC comments is user text.
+			if jsonIsEmptyObject(updated) && json.Valid(updated) {
 				if err := removeFileIfExists(path); err != nil {
 					return false, false, err
 				}
@@ -1254,14 +1616,30 @@ func managedRetainedHookCommand(cmd string) bool {
 		cmd == "gentle-ai telemetry runtime codex --json"
 }
 
+// removeSkillRegistryHook removes the managed hook commands. Strict JSON is
+// re-encoded; JSONC keeps every byte outside the hooks value and refuses,
+// rather than normalizes, hooks spelled with escapes or holding comments.
 func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
+	strict := json.Valid(raw)
 	root := map[string]any{}
-	if err := json.Unmarshal(raw, &root); err != nil {
-		return nil, false, err
+	if strict {
+		if err := json.Unmarshal(raw, &root); err != nil {
+			return nil, false, err
+		}
+	} else {
+		decoded, err := filemerge.UnmarshalJSONObject(raw)
+		if err != nil {
+			return nil, false, err
+		}
+		root = decoded
 	}
 	hooksMap, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return raw, false, nil
+	}
+	events := make([]string, 0, len(hooksMap))
+	for event := range hooksMap {
+		events = append(events, event)
 	}
 	changed := false
 	for _, hookKey := range []string{"UserPromptSubmit", "SessionStart", "Stop", "SubagentStop", "PreToolUse", "PostToolUse", "SessionEnd"} {
@@ -1307,6 +1685,27 @@ func removeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 	if !changed {
 		return raw, false, nil
 	}
+	if !strict && len(hooksMap) == 0 {
+		updated, kept, err := filemerge.RemoveJSONCMembers(raw, []string{"hooks"}, events, true)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(kept) > 0 {
+			return nil, false, fmt.Errorf("refuse to remove hooks %v spelled with escapes or holding comments; remove the Gentle AI hooks yourself", kept)
+		}
+		return updated, true, nil
+	}
+	if !strict {
+		overlay, err := json.Marshal(map[string]any{"hooks": map[string]any{"__replace__": hooksMap}})
+		if err != nil {
+			return nil, false, err
+		}
+		updated, err := filemerge.MergeOpenCodeJSONCObjects(raw, overlay)
+		if err != nil {
+			return nil, false, err
+		}
+		return updated, true, nil
+	}
 	if len(hooksMap) == 0 {
 		delete(root, "hooks")
 	}
@@ -1348,28 +1747,56 @@ func rewriteTOMLFile(path string, mutate func(content string) (string, bool)) op
 }
 
 // retainedOpenCodePluginOperations is an agent-removal boundary, independent of
-// legacy SDD and skills. Unknown or modified plugin bytes are never removed.
+// legacy SDD and skills. Plugin bytes no Gentle AI release shipped are never
+// removed, and neither is a plugins path that is not a real directory: Install
+// refuses a symlinked plugins directory as user-owned, so uninstall neither
+// removes the link nor deletes through it.
 func retainedOpenCodePluginOperations(adapter agents.Adapter, homeDir string) []operation {
-	pluginDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
 	ops := make([]operation, 0)
-	for _, name := range append([]string{"background-agents.ts"}, opencoderuntimeplugins.OpenCodePluginLifecycleNames(adapter.Agent())...) {
-		path := filepath.Join(pluginDir, name)
-		ops = append(ops, removeEmbeddedOpenCodePlugin(path, name))
+	for _, path := range opencoderuntimeplugins.PluginPaths(homeDir, adapter) {
+		ops = append(ops, removeReleasedOpenCodePlugin(path))
 	}
-	ops = append(ops, removeDirIfEmpty(pluginDir))
-	for _, path := range modelVariantsCachePaths(filepath.Join(homeDir, ".gentle-ai", "cache")) {
-		op := removeFile(path)
-		op.agents = []model.AgentID{model.AgentOpenCode}
-		ops = append(ops, op)
+	dirOp := removeDirIfEmpty(filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins"))
+	removeEmpty := dirOp.apply
+	dirOp.apply = func(path string) (bool, bool, error) {
+		if real, err := isRealDirectory(path); !real || err != nil {
+			return false, false, err
+		}
+		return removeEmpty(path)
 	}
+	ops = append(ops, dirOp)
+	// The model-variants cache is shared by the OpenCode family; only an
+	// OpenCode removal clears it, as before Kilocode plugins were removed.
+	if adapter.Agent() == model.AgentOpenCode {
+		for _, path := range modelVariantsCachePaths(filepath.Join(homeDir, ".gentle-ai", "cache")) {
+			ops = append(ops, removeFile(path))
+		}
+	}
+	// Attribute every operation to the agent being removed, so a failure keeps
+	// that agent's uninstall incomplete and names it in the rerun hint.
 	for i := range ops {
-		ops[i].agents = []model.AgentID{model.AgentOpenCode}
+		ops[i].agents = []model.AgentID{adapter.Agent()}
 	}
 	return ops
 }
 
-func removeEmbeddedOpenCodePlugin(path, name string) operation {
+// isRealDirectory reports whether path is a directory and not a symlink to one.
+func isRealDirectory(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return info.IsDir(), nil
+}
+
+func removeReleasedOpenCodePlugin(path string) operation {
 	return operation{typeID: opRemoveFile, path: path, agents: []model.AgentID{model.AgentOpenCode}, apply: func(path string) (bool, bool, error) {
+		if real, err := isRealDirectory(filepath.Dir(path)); !real || err != nil {
+			return false, false, err
+		}
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) {
 			return false, false, nil
@@ -1384,16 +1811,13 @@ func removeEmbeddedOpenCodePlugin(path, name string) operation {
 		if err != nil {
 			return false, false, err
 		}
-		for _, dir := range []string{"opencode/plugins/", "opencode/plugins-v2/"} {
-			managed, err := assets.Read(dir + name)
-			if err == nil && bytes.Equal(installed, []byte(managed)) {
-				if err := os.Remove(path); err != nil {
-					return false, false, err
-				}
-				return true, true, nil
-			}
+		if !opencoderuntimeplugins.ReleasedPlugin(filepath.Base(path), installed) {
+			return false, false, nil
 		}
-		return false, false, nil
+		if err := os.Remove(path); err != nil {
+			return false, false, err
+		}
+		return true, true, nil
 	}}
 }
 
@@ -1456,6 +1880,17 @@ func removeManagedContext7File(path string) operation {
 				return false, false, err
 			}
 			return true, true, nil
+		},
+	}
+}
+
+func removeManagedAntigravityPluginAsset(path string) operation {
+	return operation{
+		typeID: opRemoveFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			removed, err := engram.RemoveManagedAntigravityPluginAsset(path)
+			return removed, removed, err
 		},
 	}
 }
@@ -1677,6 +2112,15 @@ func mergeRewriteOps(a, b operation) operation {
 			changed2, removed2, err2 := b.apply(path)
 			return changed1 || changed2, removed2, err2
 		},
+		notes: func() []string {
+			var notes []string
+			for _, op := range []operation{a, b} {
+				if op.notes != nil {
+					notes = append(notes, op.notes()...)
+				}
+			}
+			return notes
+		},
 	}
 }
 
@@ -1741,20 +2185,23 @@ func removeOwnedOpenCodeLauncher(path string) operation {
 		path:   path,
 		agents: []model.AgentID{model.AgentOpenCode},
 		apply: func(path string) (bool, bool, error) {
-			data, err := os.ReadFile(path)
-			if os.IsNotExist(err) {
-				return false, false, nil
-			}
-			if err != nil {
-				return false, false, err
-			}
-			if !bytes.Contains(data, []byte(opencodeactivation.OwnershipMarker)) {
-				return false, false, nil
-			}
-			if err := os.Remove(path); err != nil {
+			result, err := opencodeactivation.RemoveManagedLauncher(path)
+			if err != nil || !result.Removed() {
 				return false, false, err
 			}
 			return true, true, nil
+		},
+	}
+}
+
+func removeOwnedOpenCodeProfileBlock(path string) operation {
+	return operation{
+		typeID: opRewriteFile,
+		path:   path,
+		agents: []model.AgentID{model.AgentOpenCode},
+		apply: func(path string) (bool, bool, error) {
+			changed, err := opencodeactivation.RemoveManagedProfileBlock(path)
+			return changed, false, err
 		},
 	}
 }

@@ -32,10 +32,13 @@ j3043-opencode-managed-background-activation
 j31-nonsense-mode-value
 j34-abandon-then-start-again
 j3500-preserved-external-opencode-sync
+j3565-skill-registry-dot-cwd
 j36-contract-right-name-wrong-version
 j4395-telemetry-trigger-resolves-rdd-repository
 j4433-restored-escalated-derived-target-stops
 j4435-selected-untracked-correction-continuation-is-selectorless
+j4772-committed-correction-dirty-commit
+j4773-committed-correction-dirty-amend
 j51-negotiated-status-correction-continuation
 j59-current-status-and-start-ignore-sibling-worktree-transaction
 j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow

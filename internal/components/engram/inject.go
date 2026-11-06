@@ -18,11 +18,17 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type InjectionResult struct {
 	Changed bool
 	Files   []string
+	// CodexServiceTier is non-nil only when this injection wrote a new Codex
+	// service_tier or retired the managed one; it is the tier Gentle AI owns
+	// afterwards ("" = none). Callers record it as the managed tier; nil keeps
+	// the previously recorded value.
+	CodexServiceTier *string
 }
 
 // bootstrapper is an optional adapter capability: if an adapter implements
@@ -68,6 +74,9 @@ func SetLookPathForTest(t interface {
 // an absolute path survives across environments where PATH is not fully
 // inherited (e.g. Windsurf, IDEs that launch without a login shell).
 func resolveEngramCommand() (string, bool) {
+	if bin, ok := CallerBinary(); ok {
+		return bin, true
+	}
 	p, err := EngramLookPath("engram")
 	if err != nil || p == "" {
 		return "engram", false
@@ -173,6 +182,14 @@ type InjectOptions struct {
 	// nil preserves the user's existing main-session configuration.
 	CodexOrchestratorAssignment *model.CodexOrchestratorAssignment
 
+	// CodexServiceTier writes the top-level service_tier when it is a new,
+	// non-empty selection (different from CodexManagedServiceTier).
+	CodexServiceTier string
+	// CodexManagedServiceTier is the service_tier Gentle AI previously wrote.
+	// With no CodexServiceTier selected it is removed only while config.toml
+	// still holds exactly that value; any other user value is left untouched.
+	CodexManagedServiceTier string
+
 	// CodexCarrilModelAssignments retains saved model choices for ODD workers.
 	// Existing legacy carril keys remain readable, but no SDD profiles are written.
 	CodexCarrilModelAssignments map[string]string
@@ -222,21 +239,47 @@ const antigravityEngramPluginJSON = `{
 }
 `
 
-const antigravityEngramToolsMessage = "CRITICAL FIRST ACTION — Ensure these Engram MCP tools are available before responding: mem_save, mem_search, mem_context, mem_session_summary, mem_session_start, mem_session_end, mem_get_observation, mem_suggest_topic_key, mem_capture_passive, mem_save_prompt, mem_update, mem_current_project, mem_judge. When available, also load/select optional mem_review for memory lifecycle review; if mem_review is unavailable, continue with the required tools above. If Antigravity defers MCP tools, load/select these tools from the engram MCP server first. Then call mem_context when the user asks about prior work or the session needs project memory."
+const antigravityEngramToolsMessage = "CRITICAL FIRST ACTION — Ensure these Engram MCP tools are available before responding: mem_save, mem_search, mem_context, mem_session_summary, mem_session_start, mem_session_end, mem_get_observation, mem_suggest_topic_key, mem_capture_passive, mem_save_prompt, mem_update, mem_current_project, mem_judge. When available, also load/select optional mem_review for memory lifecycle review; if mem_review is unavailable, continue with the required tools above. If Antigravity defers MCP tools, load/select these tools from the engram MCP server first. Loading tools never resolves the project: before any initial mem_context, follow the Engram startup protocol (call mem_current_project and apply its workspace, ambiguous, and no-project checks), then pass only the resolved project to mem_context when the user asks about prior work or the session needs project memory."
 
+// antigravityEngramHookTimeout is the explicit handler timeout in agy's hook
+// shape {type, command, timeout}; the hook only prints a static message.
+const antigravityEngramHookTimeout = 10
+
+// antigravityEngramHooksJSON registers the Engram guidance as a SessionStart
+// hook, so agy injects it once per session instead of before every model call
+// (#5895).
 func antigravityEngramHooksJSON() []byte {
+	return antigravityEngramHooksJSONFor("SessionStart", antigravityEngramHookTimeout)
+}
+
+// legacyAntigravityEngramHooksJSON lists hooks.json bytes earlier gentle-ai
+// builds wrote: the per-invocation hook and the SessionStart hook without an
+// explicit timeout. They stay recognized as managed so migration and
+// uninstall can remove them.
+func legacyAntigravityEngramHooksJSON() [][]byte {
+	return [][]byte{
+		antigravityEngramHooksJSONFor("PreInvocation", 0),
+		antigravityEngramHooksJSONFor("SessionStart", 0),
+	}
+}
+
+// antigravityEngramHooksJSONFor renders the hook for event; a zero timeout
+// omits the field, reproducing the legacy handler shape.
+func antigravityEngramHooksJSONFor(event string, timeout int) []byte {
+	handler := map[string]any{
+		"type": "command",
+		"command": "printf '%s\\n' '" + mustJSONString(map[string]any{
+			"injectSteps": []any{
+				map[string]any{"ephemeralMessage": antigravityEngramToolsMessage},
+			},
+		}) + "'",
+	}
+	if timeout > 0 {
+		handler["timeout"] = timeout
+	}
 	cfg := map[string]any{
 		"gentle-ai-engram-tools": map[string]any{
-			"PreInvocation": []any{
-				map[string]any{
-					"type": "command",
-					"command": "printf '%s\\n' '" + mustJSONString(map[string]any{
-						"injectSteps": []any{
-							map[string]any{"ephemeralMessage": antigravityEngramToolsMessage},
-						},
-					}) + "'",
-				},
-			},
+			event: []any{handler},
 		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
@@ -475,7 +518,7 @@ func validateAntigravityGlobalMCPConfig(path string) error {
 }
 
 func installAntigravityEngramPlugin(homeDir, engramCommand string) (bool, []string, antigravityPluginTransfer, error) {
-	pluginDir := filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram")
+	pluginDir := AntigravityPluginDir(homeDir)
 	type pluginAsset struct {
 		path    string
 		content []byte
@@ -664,7 +707,21 @@ func injectAntigravityMutationsUnderLock(configHomeDir, settingsPath, mcpPath st
 	if removalErr != nil {
 		return changed, files, classifyAntigravityOwnershipTransferFailure(mcpPath, transfer, removalErr)
 	}
-	return changed, files, nil
+	// #5930: the legacy plugin under antigravity-cli/plugins is retired only
+	// once the new registration is read back from disk exactly as installed.
+	for _, asset := range transfer.expected {
+		current, err := readAntigravityPluginAsset(asset.path)
+		if err != nil {
+			return changed, files, fmt.Errorf("verify Antigravity plugin asset %q before retiring the legacy plugin: %w", asset.path, err)
+		}
+		if !current.existed || !bytes.Equal(current.content, asset.content) {
+			return changed, files, fmt.Errorf("Antigravity plugin asset %q on disk does not match the state it was installed with; the legacy plugin was not retired", asset.path)
+		}
+	}
+	legacyRemoved, legacyErr := removeLegacyAntigravityPlugin(configHomeDir)
+	changed = changed || len(legacyRemoved) > 0
+	files = append(files, legacyRemoved...)
+	return changed, files, legacyErr
 }
 
 // injectAntigravityOwnership runs every managed Antigravity mutation under
@@ -690,6 +747,11 @@ func injectAntigravityOwnership(configHomeDir, settingsPath, mcpPath string) (bo
 }
 
 func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions, userScope bool) (InjectionResult, error) {
+	if adapter.Agent() == model.AgentCodex {
+		if err := system.ValidateCodexHome(configHomeDir); err != nil {
+			return InjectionResult{}, err
+		}
+	}
 	if provisioner, ok := adapter.(piEngramProvisioner); ok {
 		changed, files, err := provisioner.ProvisionEngramMCP(configHomeDir)
 		if err != nil {
@@ -707,6 +769,7 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 
 	files := make([]string, 0, 2)
 	changed := false
+	var codexServiceTier *string
 
 	// 1. Write MCP server config using the adapter's strategy.
 	switch adapter.MCPStrategy() {
@@ -766,8 +829,8 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		engramCommand := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
 		if adapter.Agent() == model.AgentAntigravity {
 			// #797: Engram registration for Antigravity is plugin-owned only.
-			// The global ~/.gemini/antigravity-cli/mcp_config.json is shared
-			// with other MCP servers (e.g. Context7), so gentle-ai never
+			// The global ~/.gemini/config/mcp_config.json is shared with
+			// other MCP servers (e.g. Context7), so gentle-ai never
 			// writes it for Engram and removes only its own exact managed
 			// duplicate entry left behind by older versions.
 			//
@@ -878,6 +941,19 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "model", opts.CodexOrchestratorAssignment.Model)
 			withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "model_reasoning_effort", string(opts.CodexOrchestratorAssignment.Effort))
 		}
+		// Invalid tiers are dropped, and an unchanged selection leaves
+		// service_tier exactly as the user keeps it.
+		desiredTier, managedTier := validServiceTier(opts.CodexServiceTier), validServiceTier(opts.CodexManagedServiceTier)
+		var changedTier *string
+		if desiredTier != managedTier {
+			if desiredTier != "" {
+				withCompact = filemerge.UpsertTopLevelTOMLString(withCompact, "service_tier", desiredTier)
+			} else if line, ok := rootCodexServiceTierLine(withCompact, managedTier); ok {
+				lines := strings.Split(withCompact, "\n")
+				withCompact = strings.Join(append(lines[:line], lines[line+1:]...), "\n")
+			}
+			changedTier = &desiredTier
+		}
 
 		// Step 3 — [mcp_servers.engram] block (always last; strip+re-append at EOF).
 		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())
@@ -889,6 +965,7 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		}
 		changed = changed || tomlWrite.Changed
 		files = append(files, configPath)
+		codexServiceTier = changedTier
 
 		// Retired SDD-only profile files, including user-customized copies, are
 		// deliberately neither created nor modified by Engram injection.
@@ -955,7 +1032,7 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		}
 	}
 
-	return InjectionResult{Changed: changed, Files: files}, nil
+	return InjectionResult{Changed: changed, Files: files, CodexServiceTier: codexServiceTier}, nil
 }
 
 // upsertCodexTableKeyBeforeMCPServers behaves like filemerge.UpsertTOMLTableKey,
@@ -1148,21 +1225,42 @@ func stableEngramCommandForExisting(cmd string, _ model.AgentID) string {
 func stableAntigravityEngramCommand(homeDir, globalPath string) string {
 	paths := []string{
 		globalPath,
-		filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json"),
+		filepath.Join(AntigravityPluginDir(homeDir), "mcp_config.json"),
+		filepath.Join(AntigravityLegacyPluginDir(homeDir), "mcp_config.json"),
 	}
 	for _, path := range paths {
 		raw, err := osReadFile(path)
 		if err != nil {
 			continue
 		}
-		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) {
+		// #5930: a preserved command that no longer resolves leaves agy with a
+		// disconnected Engram, so it falls through to the fresh-install command.
+		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) && engramCommandResolves(cmd) {
 			return stableEngramCommandForExisting(cmd, model.AgentAntigravity)
 		}
 	}
 	return preferredStableEngramCommand()
 }
 
+// engramCommandResolves reports whether cmd can still be launched: a bare name
+// must be on PATH, and a path must name an existing executable file. It is a
+// variable so ownership-transfer tests can keep their fixed fixture commands.
+var engramCommandResolves = func(cmd string) bool {
+	if filepath.Base(cmd) == cmd {
+		p, err := EngramLookPath(cmd)
+		return err == nil && p != ""
+	}
+	info, err := os.Stat(cmd)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0
+}
+
 func preferredStableEngramCommand() string {
+	if bin, ok := CallerBinary(); ok {
+		return bin
+	}
 	p, err := EngramLookPath("engram")
 	if err == nil && isStableHomebrewEngramPath(p) {
 		return p
@@ -1586,4 +1684,35 @@ func nativeOpenCodeEngramOverlay(path string, overlay []byte) ([]byte, error) {
 	}
 	patch["mcp"] = map[string]any{"servers": map[string]any{"engram": server}}
 	return json.Marshal(patch)
+}
+
+func validServiceTier(tier string) string {
+	if !model.ValidCodexServiceTier(tier) {
+		return ""
+	}
+	return tier
+}
+
+// rootCodexServiceTierLine finds the root-scope line that is byte-for-byte the
+// service_tier assignment Gentle AI writes for tier. Lines inside multiline
+// strings are content, not assignments, and never match.
+func rootCodexServiceTierLine(content, tier string) (int, bool) {
+	if tier == "" {
+		return 0, false
+	}
+	want := fmt.Sprintf("service_tier = %q", tier)
+	var multilineQuote byte
+	for i, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if multilineQuote == 0 {
+			if strings.HasPrefix(trimmed, "[") {
+				return 0, false
+			}
+			if trimmed == want {
+				return i, true
+			}
+		}
+		multilineQuote = filemerge.ScanTOMLMultilineString(line, multilineQuote)
+	}
+	return 0, false
 }

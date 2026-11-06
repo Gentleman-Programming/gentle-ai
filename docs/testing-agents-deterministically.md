@@ -32,7 +32,7 @@ A test with those properties gets disabled within a month. The solution is to ke
 
 | Suite | Location | Platforms | What it proves |
 |---|---|---|---|
-| Installer E2E | `e2e/docker-test.sh` | Ubuntu, Arch, Fedora (Docker) | Installation, layout, idempotency, optional SDD |
+| Installer E2E | `e2e/docker-test.sh` | Ubuntu, Arch, Fedora (Docker) | Installation, layout, idempotency |
 | Organic Runtime E2E | `e2e/organicruntime/` | Ubuntu, Windows (native runners) | A real agent driving the real CLI through the full work lifecycle |
 
 The installer suite is documented separately in [Docker E2E Testing](./docker-e2e-testing.md). This document covers the Organic Runtime suite.
@@ -55,20 +55,20 @@ Everything except the model's reasoning:
 |---|---|---|
 | OpenCode binary | Yes | Pinned to `versions.OpenCode`; `requireExecutableVersion` fails the test on a mismatch |
 | OpenCode plugin | Yes | `@opencode-ai/plugin` installed with `npm install` at the pinned version |
-| Orchestrator prompt | Yes | Read from `internal/assets/opencode/sdd-orchestrator.md` — the same asset shipped to users |
+| Orchestrator prompt | No | The `organic` agent is defined without a `prompt`; the scripted model turns drive its decisions |
 | `gentle-ai` binary | Yes | Compiled from the working tree, exposed as `GENTLE_AI_TEST_BINARY` |
 | Git repository | Yes | A real repository plus a bare remote; delivery ends in an `update-ref` CAS with exact tree and blob proof |
 | Filesystem effects | Yes | Real files, real commits, isolated `$HOME` with `--pure` and per-test `XDG_*` directories |
 | Model reasoning | **No** | A local HTTP server returning a scripted sequence |
 
-Because the prompt is loaded from the shipped asset, changing that asset changes what the E2E exercises. There is no test-only copy to drift out of sync.
+Because the agent has no prompt, this suite does not cover the shipped orchestrator prompt. Changing that asset does not change what the E2E exercises.
 
 ### The journeys
 
 | Journey | Invariant under test |
 |---|---|
-| `direct inline implementation` | The `direct_inline` route stays inline and creates no SDD artifacts |
-| `delegated direct implementation` | The `delegated_direct` route delegates without entering an SDD lifecycle |
+| `direct inline implementation` | The `direct_inline` route stays inline and creates no retired-workflow, trace, or evaluation state |
+| `delegated direct implementation` | The `delegated_direct` route delegates without creating retired-workflow, trace, or evaluation state |
 
 Both are routing invariants from the architecture plan.
 
@@ -110,7 +110,7 @@ fixture.Server = httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
 
 `httptest` binds a free port and returns a URL. That URL becomes the `baseURL` above, which is why the configuration is generated at runtime rather than committed.
 
-### Step 3 — the agent is defined with the shipped prompt
+### Step 3 — the agent is defined
 
 ```json
 {
@@ -118,7 +118,6 @@ fixture.Server = httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
     "organic": {
       "mode": "primary",
       "model": "fixture/fixture",
-      "prompt": "<contents of internal/assets/opencode/sdd-orchestrator.md>",
       "permission": { "bash": "allow", "task": "allow", "edit": "deny" }
     }
   }
@@ -183,7 +182,7 @@ Go test
  ├─ start httptest server                → http://127.0.0.1:<port>
  ├─ compile gentle-ai                    → GENTLE_AI_TEST_BINARY
  ├─ create a real Git repo + bare remote + isolated $HOME
- ├─ write the OpenCode config pointing at that URL, with the shipped prompt
+ ├─ write the OpenCode config pointing at that URL (the organic agent has no prompt)
  └─ exec: opencode run --agent organic ...
        │
        │  POST /v1/chat/completions { messages, tools }
@@ -249,7 +248,7 @@ In CI the `organic-runtime-e2e` job runs this across a matrix of `ubuntu-latest`
 
 ## What it proves, and what it does not
 
-**Proved.** Given a known agent behaviour, the CLI classifies the implementation route correctly, creates no SDD artifacts when it must not, freezes the candidate, runs applicable verification, records any selected review as content-bound evidence only, performs a real compare-and-swap against the remote under ordinary repository policy, and stops when the kill switch is set (`TestOrganicKillSwitchStopsAtTheDeliveryBoundary`, which the same CI job runs) — on Linux and Windows. Review evidence never authorizes delivery or archive.
+**Proved.** Given a known agent behaviour, the CLI classifies the implementation route correctly, creates no retired-workflow, trace, or evaluation state when it must not, freezes the candidate, runs applicable verification, records any selected review as content-bound evidence only, performs a real compare-and-swap against the remote under ordinary repository policy, and stops when the kill switch is set (`TestOrganicKillSwitchStopsAtTheDeliveryBoundary`, which the same CI job runs) — on Linux and Windows. Review evidence never authorizes delivery or archive.
 
 **Not proved.** That a live model, given the shipped prompt, produces the same tool calls the fixture scripts. That leap is non-deterministic by nature and does not belong in a merge gate; it is covered by real usage and by the cross-adapter asset parity fixtures.
 
@@ -261,7 +260,7 @@ The complement is the platform unit tests. The Windows job runs a curated set of
 
 The approach generalizes to any agent-driven system:
 
-1. **Keep the runtime real.** Same binary, same version pin, same shipped prompt, same permissions.
+1. **Keep the runtime real.** Same binary, same version pin, same permissions.
 2. **Replace only the reasoning.** Serve the model protocol from a local server with a scripted sequence.
 3. **Make the fixture adversarial.** Assert on the incoming request, not just the outgoing response. Fail when evidence arrives out of order.
 4. **Fake nothing else.** Real filesystem, real Git, real TLS. Anything that can be deterministic should stay real.

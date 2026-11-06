@@ -574,7 +574,7 @@ func RunReviewBundleImport(args []string, stdout io.Writer) error {
 		return errors.New("review-bundle-import requires --cwd and --bundle")
 	}
 	if err := authorizeManagedReviewerAssets(); err != nil {
-		return err
+		return withPlainReviewContinuation(err)
 	}
 	bundlePayload, err := os.ReadFile(*bundlePath)
 	if err != nil {

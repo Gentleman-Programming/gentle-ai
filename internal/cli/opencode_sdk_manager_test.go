@@ -14,7 +14,7 @@ import (
 	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
-const v2SDKManualInstall = "npm install --save --no-audit --no-fund @opencode/plugin@2.0.4"
+const v2SDKManualInstall = "npm install --save-exact --no-audit --no-fund @opencode/plugin@2.0.4"
 
 // freshV2SDKConfig prepares an isolated home with a fresh OpenCode config and
 // a V2 runtime, returning the home and config directories.

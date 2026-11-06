@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -366,6 +367,78 @@ func TestProvisionEngramMCPLeavesFilesWithoutAdapterUntouched(t *testing.T) {
 	}
 }
 
+// TestProvisionEngramMCPPreservesExactNumberTokens keeps unrelated number
+// tokens verbatim in every Pi file it rewrites (#1672).
+func TestProvisionEngramMCPPreservesExactNumberTokens(t *testing.T) {
+	a := NewAdapter()
+	home := t.TempDir()
+	setRealHome(t, home)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	agentDir := filepath.Join(home, ".pi", "agent")
+	numbers := `"big":9007199254740993,"neg":-9007199254740995,"max":9223372036854775807,` +
+		`"nested":{"list":[1.10,6.02214076e23,1E+2,{"min":-9223372036854775808}]},"huge":1e999`
+	files := map[string]string{
+		"settings.json":        `{"packages":["npm:pi-mcp-adapter"],` + numbers + `}`,
+		"npm/package.json":     `{"dependencies":{"pi-mcp-adapter":"^2.6.0"},` + numbers + `}`,
+		"mcp.json":             `{"mcpServers":{},` + numbers + `}`,
+		piMCPAdapterConfigFile: `{"mcpServers":{"context7":{"command":"npx",` + numbers + `}}}`,
+	}
+	for name, body := range files {
+		writeTestFile(t, filepath.Join(agentDir, name), body)
+	}
+
+	if _, _, err := a.ProvisionEngramMCP(home); err != nil {
+		t.Fatalf("ProvisionEngramMCP() error = %v", err)
+	}
+	for _, name := range []string{"settings.json", "npm/package.json", "mcp.json"} {
+		body, err := os.ReadFile(filepath.Join(agentDir, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", name, err)
+		}
+		if string(body) == files[name] {
+			t.Fatalf("%s was not rewritten; the test must exercise a re-encode", name)
+		}
+		var root map[string]any
+		decoder := json.NewDecoder(strings.NewReader(string(body)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&root); err != nil {
+			t.Fatalf("decode %s error = %v", name, err)
+		}
+		assertExactPiNumbers(t, name, root)
+		if name == "mcp.json" {
+			servers, _ := root["mcpServers"].(map[string]any)
+			migrated, _ := servers["context7"].(map[string]any)
+			assertExactPiNumbers(t, "mcp.json mcpServers.context7", migrated)
+		}
+	}
+
+	// Strict single-document JSON stays required: no trailing documents.
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+	writeTestFile(t, mcpPath, `{"mcpServers":{}}{"x":1}`)
+	if _, _, err := a.ProvisionEngramMCP(home); err == nil || !strings.Contains(err.Error(), "unmarshal pi json file") {
+		t.Fatalf("ProvisionEngramMCP() error = %v, want trailing document rejected", err)
+	}
+}
+
+// assertExactPiNumbers checks each number of the #1672 fixture at its path.
+func assertExactPiNumbers(t *testing.T, name string, object map[string]any) {
+	t.Helper()
+	nested, _ := object["nested"].(map[string]any)
+	list, _ := nested["list"].([]any)
+	if len(list) != 4 {
+		t.Fatalf("%s nested.list = %#v, want 4 entries", name, nested["list"])
+	}
+	last, _ := list[3].(map[string]any)
+	got := []any{object["big"], object["neg"], object["max"], list[0], list[1], list[2], last["min"], object["huge"]}
+	want := []string{"9007199254740993", "-9007199254740995", "9223372036854775807",
+		"1.10", "6.02214076e23", "1E+2", "-9223372036854775808", "1e999"}
+	for i := range want {
+		if number, ok := got[i].(json.Number); !ok || number.String() != want[i] {
+			t.Fatalf("%s number %d = %#v, want exact %s", name, i, got[i], want[i])
+		}
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -629,7 +702,6 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 	want := [][]string{
 		{"pi", "install", "npm:gentle-pi"},
 		{"pi", "install", "npm:gentle-engram"},
-		{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"},
 		{"pi", "install", "npm:pi-web-access"},
 		{"pi", "install", "npm:pi-btw"},
 	}
@@ -638,7 +710,7 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 	}
 }
 
-func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t *testing.T) {
+func TestAdapterInstallCommandSequenceUsesPiWhenPnpmIsAvailable(t *testing.T) {
 	a := &Adapter{
 		lookPath: func(file string) (string, error) {
 			if file == "pnpm" {
@@ -653,9 +725,14 @@ func TestAdapterInstallCommandSequenceUsesNpmForEngramInitWhenPnpmIsAvailable(t 
 		t.Fatalf("InstallCommand() error = %v", err)
 	}
 
-	want := []string{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"}
-	if !reflect.DeepEqual(commands[2], want) {
-		t.Fatalf("InstallCommand()[2] = %#v, want %#v", commands[2], want)
+	want := [][]string{
+		{"pi", "install", "npm:gentle-pi"},
+		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-web-access"},
+		{"pi", "install", "npm:pi-btw"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("InstallCommand() = %#v, want %#v", commands, want)
 	}
 }
 
@@ -754,5 +831,70 @@ func TestPrunePiSettingsFileRemovesLegacySubagentPackages(t *testing.T) {
 	}
 	if !reflect.DeepEqual(settings.Packages, []string{"npm:pi-web-access", "npm:other@1.0.0"}) {
 		t.Fatalf("packages = %#v", settings.Packages)
+	}
+}
+
+func TestAdapterPrepareInstallSkipsExcludedPackageSources(t *testing.T) {
+	commands, err := NewAdapter().PrepareInstall(system.PlatformProfile{}, t.TempDir(), "npm:gentle-pi", "npm:pi-btw")
+	if err != nil {
+		t.Fatalf("PrepareInstall() error = %v", err)
+	}
+	want := [][]string{
+		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-web-access"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("PrepareInstall() = %#v, want %#v", commands, want)
+	}
+}
+
+func TestAdapterPrepareInstallWithoutExclusionKeepsFullSequence(t *testing.T) {
+	commands, err := NewAdapter().PrepareInstall(system.PlatformProfile{}, t.TempDir())
+	if err != nil {
+		t.Fatalf("PrepareInstall() error = %v", err)
+	}
+	want := [][]string{
+		{"pi", "install", "npm:gentle-pi"},
+		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-web-access"},
+		{"pi", "install", "npm:pi-btw"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("PrepareInstall() = %#v, want %#v", commands, want)
+	}
+}
+
+func TestValidateExcludedPackageSources(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		values  []string
+		errText string
+	}{
+		{name: "none"},
+		{name: "managed sources", values: []string{"npm:gentle-pi", "npm:pi-web-access", "npm:pi-btw"}},
+		{name: "unknown source names allowed values", values: []string{"npm:gentle-pi@2.5.0"}, errText: `unknown Pi package "npm:gentle-pi@2.5.0"; allowed values: npm:gentle-pi, npm:pi-web-access, npm:pi-btw`},
+		{name: "engram source is required", values: []string{"npm:gentle-engram"}, errText: `package "npm:gentle-engram" cannot be excluded`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateExcludedPackageSources(tt.values)
+			if tt.errText == "" {
+				if err != nil {
+					t.Fatalf("ValidateExcludedPackageSources(%v) error = %v", tt.values, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.errText) {
+				t.Fatalf("ValidateExcludedPackageSources(%v) error = %v, want %q", tt.values, err, tt.errText)
+			}
+		})
+	}
+}
+
+func TestUninstallPackageSourcesIgnoresInstallExclusion(t *testing.T) {
+	if _, err := NewAdapter().PrepareInstall(system.PlatformProfile{}, t.TempDir(), "npm:gentle-pi"); err != nil {
+		t.Fatalf("PrepareInstall() error = %v", err)
+	}
+	if got := UninstallPackageSources(); !slices.Contains(got, "npm:gentle-pi") || len(got) != len(managedPackageSources)+1 {
+		t.Fatalf("UninstallPackageSources() = %v, want the full managed list plus the retired adapter", got)
 	}
 }

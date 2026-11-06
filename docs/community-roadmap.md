@@ -78,7 +78,7 @@ into applying a decision rather than making one.
 
 ## Where the design lives
 
-Before changing review, delivery or SDD behaviour, read:
+Before changing review, delivery or routing behaviour, read:
 
 - [Organic RDD architecture](architecture/organic-rdd.md) — how a candidate is
   reviewed as evidence while ordinary repository policy controls delivery

@@ -610,6 +610,12 @@ archives:
         info:
           mode: 0644
           mtime: "1970-01-01T00:00:00Z"
+      - src: .goreleaser-provider-contract/routing/*.md
+        dst: routing
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
       - src: .goreleaser-provider-contract/schemas/*.schema.json
         dst: schemas
         strip_parent: true
