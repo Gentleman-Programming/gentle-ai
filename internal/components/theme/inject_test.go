@@ -162,42 +162,67 @@ func TestInjectLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
 // a theme by name, so it only belongs on adapters that register "gentleman"
 // (Claude Code and OpenCode). Pi ships its own themes (Gentle, Gentleman-Cute,
 // Gentleman-Sexy) through the gentle-pi npm package, so persisting "gentleman"
-// in its settings makes every Pi startup fail to load the theme; Kimi reads
-// TOML settings that must stay byte-for-byte untouched.
+// in its settings makes every Pi startup fail to load the theme. Sync still owns
+// one contract for every adapter: the settings file exists afterwards, so a
+// missing file is created without a theme key while an existing one is left
+// byte-for-byte untouched. Kimi reads TOML settings, which stay untouched too.
 func TestInjectSkipsAdapterWithoutGentlemanTheme(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "")
+	piSeed := "{\n  \"tuiMode\": \"fullscreen\",\n  \"packages\": [\"npm:gentle-pi\"]\n}\n"
 	tests := []struct {
-		name    string
-		adapter agents.Adapter
-		seed    string
+		name        string
+		adapter     agents.Adapter
+		seed        string
+		wantCreated bool
 	}{
-		{name: "pi json", adapter: piAdapter(), seed: "{\n  \"tuiMode\": \"fullscreen\",\n  \"packages\": [\"npm:gentle-pi\"]\n}\n"},
-		{name: "pi json missing", adapter: piAdapter()},
+		{name: "pi json keeps user settings", adapter: piAdapter(), seed: piSeed},
+		{name: "pi json created when missing", adapter: piAdapter(), wantCreated: true},
 		{name: "kimi toml", adapter: kimi.NewAdapter(), seed: "[settings]\ntheme = \"user-theme\"\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
-			settingsPath := tt.adapter.SettingsPath(home)
+			jsonPath := agents.JSONSettingsPath(home, tt.adapter)
 			if tt.seed != "" {
-				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				seedPath := tt.adapter.SettingsPath(home)
+				if err := os.MkdirAll(filepath.Dir(seedPath), 0o755); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(settingsPath, []byte(tt.seed), 0o600); err != nil {
+				if err := os.WriteFile(seedPath, []byte(tt.seed), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
 
 			first, err := Inject(home, tt.adapter)
-			if err != nil || first.Changed || len(first.Files) != 0 {
-				t.Fatalf("Inject() = %#v, %v; want a no-op without reported files", first, err)
+			if err != nil {
+				t.Fatalf("Inject() error = %v", err)
 			}
-			if tt.seed == "" {
-				if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
-					t.Fatalf("Inject() created %s; stat error = %v", settingsPath, err)
+			if tt.wantCreated {
+				// Sync verification requires the adapter's settings file to exist
+				// after a sync even when the adapter has no theme assets.
+				if !first.Changed || len(first.Files) != 1 || first.Files[0] != jsonPath {
+					t.Fatalf("Inject() = %#v, want the created settings file %q reported", first, jsonPath)
 				}
-			} else if got, err := os.ReadFile(settingsPath); err != nil || string(got) != tt.seed {
-				t.Fatalf("settings = %q, %v; want bytes preserved as %q", got, err, tt.seed)
+				got, err := os.ReadFile(jsonPath)
+				if err != nil {
+					t.Fatalf("ReadFile(%s) error = %v", jsonPath, err)
+				}
+				if strings.Contains(string(got), "theme") {
+					t.Fatalf("created settings contain a theme key: %q", got)
+				}
+				if strings.TrimSpace(string(got)) != "{}" {
+					t.Fatalf("created settings = %q, want an empty JSON object", got)
+				}
+			} else {
+				if first.Changed || len(first.Files) != 0 {
+					t.Fatalf("Inject() = %#v, want a no-op without reported files", first)
+				}
+			}
+			if tt.seed != "" {
+				seedPath := tt.adapter.SettingsPath(home)
+				if got, err := os.ReadFile(seedPath); err != nil || string(got) != tt.seed {
+					t.Fatalf("settings = %q, %v; want bytes preserved as %q", got, err, tt.seed)
+				}
 			}
 
 			second, err := Inject(home, tt.adapter)
