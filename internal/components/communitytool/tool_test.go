@@ -1815,3 +1815,86 @@ func TestInstallFirstInstallPathUnchangedByVersionReconcile(t *testing.T) {
 		t.Fatalf("commands = %#v, want the first-install package command unchanged by R1", commands)
 	}
 }
+
+// TestInstallForceReinstallsLatestWhenCodeGraphIsCurrent covers the
+// --force-community-tools contract (#984): an explicit forced run must
+// reinstall the package at @latest and then re-run the reconcile step even
+// when the installed CLI already meets codeGraphUpstreamVersion and every
+// detected agent is wired. A current, reconciled CLI is exactly the case the
+// unforced gate short-circuits, so the package install command is what proves
+// the flag took effect.
+func TestInstallForceReinstallsLatestWhenCodeGraphIsCurrent(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".claude", "settings.json"), `{}`)
+	mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+	stubCodeGraphVersion(t, codeGraphUpstreamVersion, true)
+
+	var commands []string
+	result, err := InstallWithOptions(model.CommunityToolCodeGraph, "/work/project", InstallOptions{HomeDir: home, ForceCommunityTools: true}, RunnerFunc(func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil {
+		t.Fatalf("InstallWithOptions() error = %v", err)
+	}
+	want := []string{
+		"npm install -g @colbymchenry/codegraph@latest",
+		"codegraph install --target claude --location global --yes",
+	}
+	if !reflect.DeepEqual(result.CommandsRun, want) {
+		t.Fatalf("CommandsRun = %#v, want %#v", result.CommandsRun, want)
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("runner calls = %#v, want %#v", commands, want)
+	}
+}
+
+// TestInstallForceRunsLatestInstallWithoutDetectedTargets pins the other half
+// of the forced contract: with no detected native target there is nothing to
+// reconcile, but the forced run still reinstalls the package at @latest
+// instead of skipping the install step.
+func TestInstallForceRunsLatestInstallWithoutDetectedTargets(t *testing.T) {
+	home := t.TempDir()
+	stubCodeGraphVersion(t, codeGraphUpstreamVersion, true)
+
+	var commands []string
+	result, err := InstallWithOptions(model.CommunityToolCodeGraph, "/work/project", InstallOptions{HomeDir: home, ForceCommunityTools: true}, RunnerFunc(func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil {
+		t.Fatalf("InstallWithOptions() error = %v", err)
+	}
+	want := []string{"npm install -g @colbymchenry/codegraph@latest"}
+	if !reflect.DeepEqual(result.CommandsRun, want) {
+		t.Fatalf("CommandsRun = %#v, want %#v", result.CommandsRun, want)
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("runner calls = %#v, want %#v", commands, want)
+	}
+}
+
+// TestInstallOptionsWithoutForceKeepsTheReconcileShortCircuit is the preserve
+// guard for the shared gate: the options entry point with the force opt-in
+// unset must behave exactly like the legacy InstallWithHome wrapper and skip
+// every command for a current, reconciled CLI.
+func TestInstallOptionsWithoutForceKeepsTheReconcileShortCircuit(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+	stubCodeGraphVersion(t, codeGraphUpstreamVersion, true)
+
+	calls := 0
+	result, err := InstallWithOptions(model.CommunityToolCodeGraph, "/work/project", InstallOptions{HomeDir: home}, RunnerFunc(func(string, ...string) error {
+		calls++
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil {
+		t.Fatalf("InstallWithOptions() error = %v", err)
+	}
+	if calls != 0 || len(result.CommandsRun) != 0 {
+		t.Fatalf("runner calls = %d, CommandsRun = %#v, want the unforced short-circuit unchanged", calls, result.CommandsRun)
+	}
+	if result.StatusAfter == nil || !result.StatusAfter.CodeGraphReconcileSatisfied() {
+		t.Fatalf("StatusAfter = %#v, want reconciled", result.StatusAfter)
+	}
+}
