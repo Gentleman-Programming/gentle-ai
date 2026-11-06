@@ -140,10 +140,13 @@ class LinuxCIContract(unittest.TestCase):
         # ANSI-stripped visible stream (recent releases open with a
         # codemode consent dialog first and position the header glyphs with
         # cursor moves); both alternatives are fixed bytes, never a dynamic
-        # or vacuous pass.
+        # or vacuous pass. The same witness starts the exit choreography,
+        # because the historical line never arrives to trigger it.
         self.assertIn("branded = re.compile(rb'\\xe2\\x9c\\xbf\\s+Gentle\\s+Shell')", text)
-        self.assertIn("require(expected in raw or (not opening_only and branded.search(visible)),", text)
+        self.assertIn("witnessed = expected in raw or (not opening_only and branded.search(visible))", text)
+        self.assertIn("require(witnessed, 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')", text)
         self.assertIn("visible = re.sub(rb'\\x1b\\[[0-9;?]*[a-zA-Z]", text)
+        self.assertIn("if installer is None and witnessed and (input_ready or not opening_only) and not stopped:", text)
         # The window covers the first boot's expansive setup on the single-CPU
         # worker (#5904); no success check was lowered, only given time.
         self.assertIn("min(150, remaining())", text)
