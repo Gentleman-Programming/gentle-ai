@@ -139,6 +139,7 @@ func (builder SnapshotBuilder) BuildStagedWorkspaceOverlayRecovery(ctx context.C
 }
 
 func (builder SnapshotBuilder) BuildStoredSnapshot(ctx context.Context, target Target) (Snapshot, error) {
+	defer StartStatusPhase(ctx, StatusPhaseSnapshotConstruction)()
 	if target.Kind == TargetBaseWorkspaceOverlay && target.Projection == ProjectionStaged {
 		return builder.BuildStagedWorkspaceOverlayRecovery(ctx, target)
 	}
@@ -812,6 +813,7 @@ func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) (
 
 // IntendedUntrackedInventory returns the canonical digest-bound eligible workspace inventory.
 func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) ([]string, string, error) {
+	defer StartStatusPhase(ctx, StatusPhaseSnapshotConstruction)()
 	paths, err := builder.DiscoverUnignoredUntracked(ctx)
 	if err != nil {
 		return nil, "", err

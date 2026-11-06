@@ -39,18 +39,11 @@ func TestWelcomeOptions_OptionCount(t *testing.T) {
 	}
 }
 
-// TestWelcomeOptions_NoEngines_ShowsDisabledLabel verifies that when hasEngines=false,
-// the agent option is labelled "(no agents)" to signal unavailability.
-func TestWelcomeOptions_NoEngines_ShowsDisabledLabel(t *testing.T) {
+// TestWelcomeOptions_ManageCustomAgents verifies the entry is present at index 5.
+func TestWelcomeOptions_ManageCustomAgents(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, false)
-	found := false
-	for _, opt := range opts {
-		if strings.Contains(opt, "no agents") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected 'no agents' label when hasEngines=false; got: %v", opts)
+	if opts[5] != "Manage Custom Agents" {
+		t.Errorf("opts[5] = %q, want 'Manage Custom Agents'", opts[5])
 	}
 }
 
@@ -58,7 +51,7 @@ func TestWelcomeOptions_NoEngines_ShowsDisabledLabel(t *testing.T) {
 func TestWelcomeOptions_AgentBuilderBeforeManageBackups(t *testing.T) {
 	opts := screens.WelcomeOptions(nil, true, true)
 
-	if opts[5] != "Create your own Agent" || opts[6] != "Manage backups" {
+	if opts[5] != "Manage Custom Agents" || opts[6] != "Manage backups" {
 		t.Fatalf("retained actions are not adjacent: %v", opts)
 	}
 }

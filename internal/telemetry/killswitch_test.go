@@ -28,6 +28,7 @@ func TestDecidePrecedence(t *testing.T) {
 		{"DO_NOT_TRACK false stays default", map[string]string{"DO_NOT_TRACK": "false"}, enabledState, SourceDefault},
 		{"DO_NOT_TRACK empty stays default", map[string]string{"DO_NOT_TRACK": ""}, enabledState, SourceDefault},
 		{"GENTLE_AI_TELEMETRY requires exactly 0", map[string]string{"GENTLE_AI_TELEMETRY": "false"}, enabledState, SourceDefault},
+		{"GENTLE_AI_TELEMETRY 0 with surrounding whitespace opts out", map[string]string{"GENTLE_AI_TELEMETRY": " 0\n"}, enabledState, SourceEnvOptOut},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

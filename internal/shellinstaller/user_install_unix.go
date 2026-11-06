@@ -79,17 +79,17 @@ func userTreeStamp(root string) (string, error) {
 			}
 			target, err := filepath.EvalSymlinks(path)
 			if err != nil || !strings.HasPrefix(target, root+"/") {
-				return errors.New("selection symlink escapes physical tree")
+				return fmt.Errorf("selection symlink escapes physical tree: path=%q", path)
 			}
 			content = link
 		case info.IsDir():
 			if info.Mode().Perm()&0022 != 0 {
-				return errors.New("selection directory is writable by others")
+				return fmt.Errorf("selection directory is writable by others: path=%q", path)
 			}
 		case info.Mode().IsRegular():
 			total += info.Size()
 			if info.Mode().Perm()&0022 != 0 || info.Size() > 32<<20 || total > 1024<<20 {
-				return errors.New("selection file permissions or byte bound")
+				return fmt.Errorf("selection file permissions or byte bound: path=%q", path)
 			}
 			fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 			if err != nil {
@@ -107,7 +107,7 @@ func userTreeStamp(root string) (string, error) {
 			}
 			content = fmt.Sprintf("%x", bytesHash.Sum(nil))
 		default:
-			return errors.New("selection contains nonregular object")
+			return fmt.Errorf("selection contains nonregular object: path=%q", path)
 		}
 		after, err := os.Lstat(path)
 		if err != nil {
@@ -233,8 +233,22 @@ func userSourceFile(ctx context.Context, path string, size int64, pin string) (s
 // this mutable checksum. It witnesses cooperative preimages, not loaded bytes.
 func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 	info, err := privateForeignPhysical(source)
-	if err != nil || ctx.Err() != nil || info.Size() > 268435456 || info.Mode().Perm()&0022 != 0 || info.Mode().Perm()&0111 == 0 {
+	if err != nil || ctx.Err() != nil {
 		return "", privateError("source", errors.Join(err, ctx.Err()))
+	}
+	if info.Size() > 268435456 {
+		return "", privateError("source", fmt.Errorf("supervisor file refused: reason=oversize path=%q size=%d limit=268435456", source, info.Size()))
+	}
+	// Debian/Ubuntu ship the User Private Group scheme: a group-writable
+	// supervisor file whose group is the user's own private group (gid == uid)
+	// has no other members, so the default `go install` output (0775 under
+	// umask 0002) must not be refused (#5705). World-writable files and
+	// foreign groups keep the refusal.
+	if info.Mode().Perm()&0002 != 0 || (info.Mode().Perm()&0020 != 0 && !(os.Getuid() != 0 && info.Sys().(*syscall.Stat_t).Gid == uint32(os.Getuid()))) {
+		return "", privateError("source", fmt.Errorf("supervisor file refused: reason=group-or-world-writable path=%q mode=%#o", source, info.Mode().Perm()))
+	}
+	if info.Mode().Perm()&0111 == 0 {
+		return "", privateError("source", fmt.Errorf("supervisor file refused: reason=not-executable path=%q mode=%#o", source, info.Mode().Perm()))
 	}
 	for current := source; ; current = filepath.Dir(current) {
 		st, err := os.Lstat(current)
@@ -242,8 +256,16 @@ func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 			return "", err
 		}
 		owner := st.Sys().(*syscall.Stat_t).Uid
+		group := st.Sys().(*syscall.Stat_t).Gid
 		trustedTmp := current == userTrustedTmp && owner == 0 && st.Mode()&os.ModeSticky != 0
-		if (owner != 0 && owner != uint32(os.Getuid())) || (st.Mode().Perm()&0022 != 0 && !trustedTmp) {
+		// Debian/Ubuntu ship the User Private Group scheme: a group-writable
+		// ancestor whose group is the user's own private group (gid == uid) has
+		// no other members and is as trusted as 0755, so the standard GOPATH
+		// layout (0775 ~/go/bin) must not be refused (#5696). World-writable
+		// ancestors, foreign groups, and root's shared gid keep the refusal.
+		privateGroup := os.Getuid() != 0 && group == uint32(os.Getuid())
+		writable := st.Mode().Perm()&0002 != 0 || (st.Mode().Perm()&0020 != 0 && !privateGroup)
+		if (owner != 0 && owner != uint32(os.Getuid())) || (writable && !trustedTmp) {
 			return "", privateError("source", fmt.Errorf("supervisor ancestor refused: path=%q owner=%d mode=%#o", current, owner, st.Mode().Perm()))
 		}
 		if current == "/" {
@@ -252,8 +274,11 @@ func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 	}
 	data, err := os.ReadFile(source)
 	fresh, freshErr := privateForeignPhysical(source)
-	if err != nil || freshErr != nil || privateStamp(info) != privateStamp(fresh) || ctx.Err() != nil {
+	if err != nil || freshErr != nil || ctx.Err() != nil {
 		return "", privateError("preimage", errors.Join(err, freshErr, ctx.Err()))
+	}
+	if privateStamp(info) != privateStamp(fresh) {
+		return "", privateError("preimage", fmt.Errorf("supervisor file mutated during readback: path=%q", source))
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
 }

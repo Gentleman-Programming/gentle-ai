@@ -48,6 +48,7 @@ func prepareCompactTerminalConsumption(base, root string, record CompactRecord) 
 // target. It never loads, restores, or grants authority. Callers must prefer
 // any live authority before suppressing a fresh offer on this evidence.
 func CompactTargetConsumed(ctx context.Context, repo, target string) (bool, error) {
+	defer StartStatusPhase(ctx, StatusPhasePredecessorConsumptionAncestry)()
 	if !validSHA256(target) {
 		return false, errors.New("terminal consumption requires a canonical target identity") // refusal:by-design world-action: the caller must supply the canonical snapshot identity; malformed identities cannot identify consumed targets
 	}

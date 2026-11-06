@@ -29,13 +29,98 @@ if (selection.Channel === 'main') {
       snapshot.Prefix !== `gentle-shell-${commit}` || snapshot.URL !== `https://codeload.github.com/Gentleman-Programming/gentle-shell/zip/${commit}` ||
       !/^[0-9a-f]{64}$/.test(snapshot.SHA) || snapshot.Archive !== 'main.zip' || snapshot.Bound !== 33554432 || snapshot.Size !== 0) reject('Main descriptor authority');
 }
-const pins = {
-  'gentle-pi': ['4.0.0', 'sha512-ZG/diWBSKPfjU4MjiHVUXxHWQvDSRS2dvpPCma4ZINuV+8UGdZAPHca6vcK27FLAAG7crlJpwdWOcwVNW4rh/Q=='],
-  '@earendil-works/pi-coding-agent': ['1.0.0', 'sha512-/FtbxoSQU/mEv1QnichJjRjqteqaIaMWxmhB4G367+MwZfX7/DI5B9YAg5lqbN7nztFskBEtUSZ+FlmMBECtMw=='],
-  '@earendil-works/pi-tui': ['1.0.0', 'sha512-JsT7kXnpZA2YOtQu6RyriyxEO0eJIzPyfiH09bH+OLN5+s18HYkwaUD/tBkjhnSfMu6/50CQPRYJagzSP6HdPw=='],
-  '@heyhuynhgiabuu/pi-pretty': ['0.6.27', 'sha512-4Jj+n6ZBFdn979fWAA3nMcJ45Q5qtcLeq1Pe6+Oo2LDIpDhqv7heoTKkBpq9G74/pNYc0EaXR28pssQ5Wbc5bg=='],
-  'typebox': ['1.3.27', 'sha512-zu+jc1pcy4UiNThxikUr36f0Rybk9PEeCg/NE6adeWr/SKsdNO4EzZHYRDlv2YCVAfj3Odq3dESSo/jNyoBXzA=='],
-};
+// Stable resolves npm's `latest` dist-tag for the five stock root packages at
+// install time and installs exactly that resolution; the generated
+// package-lock.json pins the exact resolved versions and SRI. The channel is
+// the contract: stable always installs what `latest` resolves today, and Main
+// stays bound to the frozen Main ZIP. The reviewed supplier list
+// (gentle-pi-suppliers.json) is advisory only: it may warn that the resolved
+// gentle-pi is outside the reviewed table or drifted from its reviewed entry,
+// and it never refuses an install. The lock's registry SRI stays the only hard
+// integrity anchor.
+const pins = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
+// The Engram companion is an optional sixth root, declared at the exact pin
+// of the resolved gentle-pi (never `latest`) and only when that pins one.
+const companionName = 'gentle-engram';
+// gentle-pi pins its companion as bundled Shell declares it
+// (runtime/gentle-shell-bundled.mjs ENGRAM_COMPANION_SOURCE).
+function companionPin(text) {
+  const match = /^export const ENGRAM_COMPANION_SOURCE = "npm:gentle-engram@((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))";$/m.exec(text ?? '');
+  return match ? match[1] : null;
+}
+// The companion is declared exactly as bundled Shell declares it, and only
+// when the gentle-pi pin, the lock root and the installed package agree. Any
+// disagreement keeps the install and leaves Shell usable without memory.
+function companionDeclaration(pin, locked, installed) {
+  if (pin && locked === pin && installed === pin) return `npm:${companionName}@${pin}`;
+  if (pin || locked || installed) console.error(`Engram companion not declared: gentle-pi pins ${pin ?? 'none'}, lock ${locked ?? 'none'}, installed ${installed ?? 'none'}; Shell stays usable without memory`);
+  return null;
+}
+// The verified Engram core at the contract path <agent>\bin\engram.exe. Its
+// pin, download, digest and archive reading belong to the provisioned
+// gentle-pi; one without them, or any failure, skips memory instead of the install.
+async function publishEngramCore(gentle, bin, name, platform, arch, adapters = {}) {
+  let downloads, bundled;
+  try {
+    downloads = await import(pathToFileURL(path.join(gentle, 'scripts/installer-downloads.mjs')).href);
+    bundled = await import(pathToFileURL(path.join(gentle, 'scripts/bundled-install.mjs')).href);
+  } catch { /* An older gentle-pi ships neither module. */ }
+  if (typeof downloads?.artifactFor !== 'function' || typeof downloads.verifiedDownload !== 'function' || typeof bundled?.engramExecutable !== 'function') {
+    console.error('Engram core skipped: the installed gentle-pi pins no Engram core; Shell stays usable without memory');
+    return false;
+  }
+  try {
+    const descriptor = (adapters.artifact ?? downloads.artifactFor)('engram', platform, arch);
+    const executable = bundled.engramExecutable(await downloads.verifiedDownload('engram', adapters, platform, arch), descriptor);
+    if (!fs.existsSync(bin)) fs.mkdirSync(bin, { mode: 0o700 });
+    const target = path.join(bin, name), stage = path.join(bin, `.${name}-${crypto.randomUUID()}`);
+    absent(target);
+    exclusive(stage, executable);
+    fs.renameSync(stage, target);
+    return true;
+  } catch (error) {
+    console.error(`Engram core skipped: ${error.message}; Shell stays usable without memory`);
+    return false;
+  }
+}
+// Reviewed gentle-pi releases for the Windows stock lane, loaded from the
+// stage list the Go worker writes (gentle-pi-suppliers.json, schema
+// gentle-shell-reviewed-suppliers/v1): the live repository copy when its
+// fetch and strict validation succeeded, otherwise the embedded copy. The
+// list is advisory data, so an unreadable, oversized or malformed staged list
+// degrades to no supplier advisories instead of refusing the channel install.
+// Each entry binds the exact version to its npm tarball SRI (the lock's
+// `integrity`) and to the SHA-256 of the two native supplier files inside the
+// package. Reviewing a new release is a one-line change to that JSON; the
+// root specs stay `latest`.
+function reviewedSuppliers() {
+  const unavailable = reason => {
+    console.error(`Windows provision advisory: the reviewed supplier list is unusable (${reason}); supplier advisories are unavailable`);
+    return {};
+  };
+  let raw;
+  try { raw = read(path.join(root, 'gentle-pi-suppliers.json')); }
+  catch (error) { return unavailable(error.message); }
+  if (raw.length > 262144) return unavailable('the staged list exceeds the 256 KiB bound');
+  let list;
+  try { list = JSON.parse(raw); }
+  catch (error) { return unavailable(error.message); }
+  const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+  const sri = value => typeof value === 'string' && /^sha512-[A-Za-z0-9+/]{86}==$/.test(value) &&
+    Buffer.from(value.slice(7), 'base64').toString('base64') === value.slice(7);
+  if (list === null || typeof list !== 'object' || Array.isArray(list) || list.schema !== 'gentle-shell-reviewed-suppliers/v1' ||
+      list.releases === null || typeof list.releases !== 'object' || Array.isArray(list.releases) ||
+      Object.keys(list).sort().join(',') !== 'releases,schema') return unavailable('the staged list shape is malformed');
+  const table = {};
+  for (const [version, entry] of Object.entries(list.releases)) {
+    if (!semver.test(version) || entry === null || typeof entry !== 'object' || Array.isArray(entry) ||
+        Object.keys(entry).sort().join(',') !== 'binary,installer,integrity' || !sri(entry.integrity) ||
+        !/^[0-9a-f]{64}$/.test(entry.installer) || !/^[0-9a-f]{64}$/.test(entry.binary)) return unavailable(`entry ${version} is malformed`);
+    table[version] = entry;
+  }
+  if (Object.keys(table).length === 0) return unavailable('the staged list lists no releases');
+  return table;
+}
 // NTFS owner/DACL/reparse checks are enforced by the Go worker before entry and
 // on the complete produced tree afterward. This is not a substitute for them.
 function read(file) {
@@ -50,31 +135,193 @@ function exclusive(file, value) {
   fs.writeFileSync(file, value, { flag: 'wx' });
   if (!read(file).equals(Buffer.from(value))) reject('exclusive readback');
 }
-function npmCommand(args) {
-  const child = spawnSync(node, [npm, ...args], { cwd: source, env: process.env, shell: false, timeout: 180000, maxBuffer: 8388608 });
+function absent(absolute) {
+  try { fs.lstatSync(absolute); reject('occupied path'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+// Root authority: the generated lock must pin the complete, closed root set with
+// an exact resolved version and a well-formed sha512 SRI for every stock package.
+// A missing or extra root package, a range/prerelease version, or a malformed
+// integrity value fails closed; dist-tag resolution happens upstream in npm.
+function rootAuthorities(lock, names) {
+  if (lock === null || typeof lock !== 'object' || Array.isArray(lock) || lock.lockfileVersion !== 3 ||
+      !lock.packages || typeof lock.packages !== 'object' || Array.isArray(lock.packages) ||
+      !lock.packages[''] || Object.keys(lock.packages).length > 4096 ||
+      JSON.stringify(Object.keys(lock.packages[''].dependencies ?? {}).sort()) !== JSON.stringify([...names].sort())) reject('root package set');
+  const exact = value => typeof value === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value);
+  const sri = value => typeof value === 'string' && /^sha512-[A-Za-z0-9+/]{86}==$/.test(value) &&
+    Buffer.from(value.slice(7), 'base64').toString('base64') === value.slice(7);
+  const resolved = {};
+  for (const name of names) {
+    const record = lock.packages[`node_modules/${name}`];
+    if (!record || !exact(record.version) || !sri(record.integrity) || typeof record.resolved !== 'string') reject('root SRI/version');
+    resolved[name] = record.version;
+  }
+  return resolved;
+}
+// Advisory lock report: the reviewed supplier table never gates the channel.
+// A gentle-pi outside the table, or a listed version whose lock SRI differs
+// from its entry, installs anyway and says so. Main overlay/verify stay
+// silent: their gentle-pi is bound by the frozen Main ZIP, not this lock.
+function reviewedSupplierAdvisory(action, mainOverlay, version, integrity, table) {
+  if (action !== 'install' && mainOverlay) return;
+  const entry = table[version];
+  if (!entry) console.error(`Windows provision advisory: gentle-pi@${version} is outside the reviewed supplier table; installing the channel resolution`);
+  else if (entry.integrity !== integrity) console.error(`Windows provision advisory: gentle-pi@${version} lock SRI differs from its reviewed entry; installing the channel resolution`);
+}
+// Locate the single supported native bundle directory under .gentle-ai: exactly
+// one entry, named v<resolved gentle-pi version>, a physical directory. A
+// missing, duplicate, foreign or non-directory version layout fails closed.
+function stockNativeDirectory(nativeRoot) {
+  let entries;
+  try { entries = fs.readdirSync(nativeRoot); }
+  catch { return reject('stock native source layout'); }
+  const match = entries.length === 1 ? /^v((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/.exec(entries[0]) : null;
+  if (!match) reject('stock native source layout');
+  const directory = path.join(nativeRoot, entries[0]);
+  if (!fs.lstatSync(directory).isDirectory() || !fs.existsSync(path.join(directory, 'integrity.json'))) reject('stock native source layout');
+  return { directory, version: match[1] };
+}
+// The stock installer's Windows source-build manifest: the dynamic native bundle
+// version (which can differ from the gentle-pi version), the supported go-sumdb
+// source-build method, a well-formed Go module checksum, and the digest of the
+// produced executable.
+function stockNativeIntegrity(manifest, native, version) {
+  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest) ||
+      manifest.version !== version || manifest.method !== 'go-sumdb-source-build' ||
+      !/^h1:[A-Za-z0-9+/]{43}=$/.test(manifest.moduleChecksum) ||
+      manifest.binarySha256 !== digest(read(path.join(native, 'gentle-ai.exe')))) reject('stock native source manifest');
+}
+// Advisory supplier digests: the installed tree's authenticity is anchored by
+// the lock's registry SRI and the whole-tree compare, so the reviewed entry's
+// installer/binary digests only inform. An unlisted version, or one whose
+// supplier files drift from its reviewed entry, installs anyway and says so.
+function reviewedSupplierAdvisorySources(gentle, version, table) {
+  const entry = table[version];
+  if (!entry) return console.error(`Windows provision advisory: gentle-pi@${version} is outside the reviewed supplier table; supplier file digests unchecked`);
+  for (const [name, expected] of [
+    ['scripts/gentle-ai-installer.mjs', entry.installer],
+    ['runtime/gentle-ai-binary.mjs', entry.binary],
+  ]) if (digest(read(path.join(gentle, name))) !== expected) return console.error(`Windows provision advisory: gentle-pi@${version} supplier file ${name} differs from its reviewed entry`);
+}
+// Whole-tree materialization digest adapted from the private-global provisioner's
+// inventory: bounded entry/byte counts, physical regular files only, every entry
+// content-addressed. Symlinks and special files fail closed before any copy.
+function treeDigest(directory) {
+  const records = [];
+  let bytes = 0;
+  function visit(absolute) {
+    if (records.length >= 250000) reject('inventory entry bound');
+    const relative = path.relative(directory, absolute);
+    const info = fs.lstatSync(absolute);
+    if (info.isSymbolicLink()) reject('inventory alias');
+    if (info.isDirectory()) {
+      records.push([relative, 'dir']);
+      for (const name of fs.readdirSync(absolute).sort()) visit(path.join(absolute, name));
+    } else {
+      if (!info.isFile()) reject('inventory special file');
+      const raw = read(absolute);
+      bytes += raw.length;
+      if (bytes > 1073741824) reject('inventory aggregate bound');
+      records.push([relative, 'file', info.size, digest(raw)]);
+    }
+  }
+  visit(directory);
+  return digest(JSON.stringify(records));
+}
+// Single materialization: npm ci already writes the authenticated tree at
+// source/node_modules; promote it by rename into the final prefix instead of
+// copying and re-hashing every file. The lock/authority and metadata checks
+// still run before the promotion.
+let materialized = false;
+function materializeGlobal() {
+  fs.mkdirSync(prefix, { recursive: true });
+  const previous = path.join(prefix, `.previous-${crypto.randomUUID()}`);
+  absent(previous);
+  const acquired = path.join(source, 'node_modules');
+  if (!fs.existsSync(acquired)) reject('acquired source absent');
+  const hidden = path.join(acquired, '.package-lock.json');
+  if (fs.existsSync(hidden)) fs.unlinkSync(hidden);
+  if (fs.existsSync(modules)) {
+    fs.renameSync(modules, previous);
+  }
+  fs.renameSync(acquired, modules);
+  materialized = true;
+}
+const NPM_NETWORK_TIMEOUT = 1200000; // Network-bound npm runs must not depend on connection speed.
+function npmCommand(args, timeout = NPM_NETWORK_TIMEOUT) {
+  const started = Date.now();
+  let child = spawnSync(node, [npm, ...args], { cwd: source, env: process.env, shell: false, timeout, maxBuffer: 8388608 });
+  if (child.error) {
+    // Transport-class failure (spawn error or the spawn timeout): one bounded
+    // retry with a fresh window separates a slow connection from a dead one.
+    child = spawnSync(node, [npm, ...args], { cwd: source, env: process.env, shell: false, timeout, maxBuffer: 8388608 });
+  }
   if (child.error || child.status !== 0 || child.signal) {
     const bytes = Buffer.concat([child.stdout ?? Buffer.alloc(0), child.stderr ?? Buffer.alloc(0)]);
     const text = bytes.toString('utf8');
     const detail = bytes.length <= 8192 && Buffer.from(text, 'utf8').equals(bytes) && !text.includes('\0')
       ? JSON.stringify(text).replace(/[\u007f-\u009f]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
       : 'whole npm diagnostic withheld (size/encoding guard)';
-    reject(`npm ${args[0]} failed; status=${child.status}; error=${child.error?.code ?? 'none'}; bytes=${bytes.length}; sha256=${digest(bytes)}; diagnostic=${detail}`);
+    reject(`npm ${args[0]} failed; status=${child.status}; error=${child.error?.code ?? 'none'}; elapsedMs=${Date.now() - started}; bytes=${bytes.length}; sha256=${digest(bytes)}; diagnostic=${detail}`);
   }
 }
 const lockPath = path.join(source, 'package-lock.json');
+let companion = null;
+const lockInstall = ['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/'];
+// Root declaration: every stock root at `latest`, except a reviewed gentle-pi
+// fallback, which is pinned to its exact version.
+function rootDeclaration(names, gentlePi = 'latest', companion = null) {
+  const dependencies = Object.fromEntries(names.map(name => [name, name === 'gentle-pi' ? gentlePi : 'latest']));
+  if (companion) dependencies[companionName] = companion;
+  return JSON.stringify({ name: 'gentle-shell-windows-private', private: true, version: '1.0.0', dependencies });
+}
+// Fallback rewrite before the single re-resolution: exclusive() writes with wx,
+// so the declaration is removed first, and the generated lock is discarded.
+function rewriteSupplierDeclaration(directory, names, fallback, companion = null) {
+  fs.unlinkSync(path.join(directory, 'package.json'));
+  fs.unlinkSync(path.join(directory, 'package-lock.json'));
+  exclusive(path.join(directory, 'package.json'), rootDeclaration(names, fallback, companion));
+}
+// The companion pin is read once, from the resolved gentle-pi tarball stock
+// npm fetches into the private cache (npm ci reuses it), only after its bytes
+// match the locked SRI — the channel resolution anchors the pack bytes.
+function packedCompanionPin(version, integrity) {
+  const packed = path.join(root, 'tmp', `gentle-pi-${crypto.randomUUID()}`);
+  fs.mkdirSync(packed);
+  npmCommand(['pack', `gentle-pi@${version}`, `--pack-destination=${packed}`, '--ignore-scripts', '--registry=https://registry.npmjs.org/']);
+  const tarball = path.join(packed, `gentle-pi-${version}.tgz`), bytes = read(tarball);
+  if (`sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}` !== integrity) reject('stock native supplier source pin');
+  const member = spawnSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-xOzf', '-', 'package/runtime/gentle-shell-bundled.mjs'],
+    { input: bytes, env: process.env, shell: false, timeout: 60000, maxBuffer: 8388608, encoding: 'utf8', windowsHide: true });
+  fs.unlinkSync(tarball);
+  fs.rmdirSync(packed);
+  return member.status === 0 ? companionPin(member.stdout) : null;
+}
 if (action === 'install') {
+  console.error('Windows install phase: provision-lock');
   fs.mkdirSync(source);
-  exclusive(path.join(source, 'package.json'), JSON.stringify({ name: 'gentle-shell-windows-private', private: true, version: '1.0.0', dependencies: Object.fromEntries(Object.entries(pins).map(([name, [version]]) => [name, version])) }));
-  npmCommand(['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
+  exclusive(path.join(source, 'package.json'), rootDeclaration(pins));
+  npmCommand(lockInstall);
   const { completeFile } = await import(pathToFileURL(path.join(root, 'complete-generated-lock-sri.mjs')).href);
   await completeFile(lockPath);
+  // The channel resolution is final: no re-resolution ever rewrites it.
+  // Companion: the locked gentle-pi that pins one is re-resolved once at its
+  // exact version with the companion at that exact pin. The pack's SRI is
+  // checked against the lock, so the channel resolution anchors the bytes.
+  const locked = JSON.parse(read(lockPath)).packages['node_modules/gentle-pi'];
+  companion = packedCompanionPin(locked.version, locked.integrity);
+  if (companion) {
+    console.error(`Windows install phase: provision-companion ${companionName}@${companion}`);
+    rewriteSupplierDeclaration(source, pins, locked.version, companion);
+    npmCommand(lockInstall);
+    await completeFile(lockPath);
+  }
 }
 const lockBytes = read(lockPath), lock = JSON.parse(lockBytes);
-if (lock.lockfileVersion !== 3 || !lock.packages || Object.keys(lock.packages).length > 4096 || Object.keys(lock.packages[''].dependencies).length !== 5) reject('source lock');
-for (const [name, [version, integrity]] of Object.entries(pins)) {
-  const record = lock.packages[`node_modules/${name}`];
-  if (record?.version !== version || record.integrity !== integrity || lock.packages[''].dependencies[name] !== version) reject('root SRI/version');
-}
+const roots = Object.hasOwn(lock?.packages?.['']?.dependencies ?? {}, companionName) ? [...pins, companionName] : pins;
+const resolved = rootAuthorities(lock, roots);
+reviewedSupplierAdvisory(action, mainOverlay, resolved['gentle-pi'], lock.packages['node_modules/gentle-pi'].integrity, reviewedSuppliers());
 for (const [relative, record] of Object.entries(lock.packages)) {
   if (!relative) continue;
   if (!/^node_modules\/(?:@?[a-z0-9][a-z0-9._-]*\/)*[a-z0-9][a-z0-9._-]*$/.test(relative)) reject('lock placement');
@@ -82,13 +329,26 @@ for (const [relative, record] of Object.entries(lock.packages)) {
   if (record.resolved !== `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-${record.version}.tgz` || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(record.integrity)) reject('locked supplier');
 }
 if (action === 'install') {
+  console.error('Windows install phase: provision-ci');
   npmCommand(['ci', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
-  npmCommand(['install', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', ...Object.entries(pins).map(([name, [version]]) => `${name}@${version}`)]);
+  console.error('Windows install phase: provision-copy');
+  materializeGlobal();
+  console.error('Windows install phase: provision-rebuild');
+  npmCommand(['rebuild', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--bin-links=true', '--engine-strict', '--no-audit', '--no-fund'], 180000);
 }
 const authority = new Map();
+// An install promotes source/node_modules into prefix/node_modules. A later
+// verify/overlay run therefore has no source tree left; use the promoted tree
+// as authority whenever it exists. A source tree that was not promoted (for
+// example a staged overlay) remains authoritative.
+const promotedAuthority = materialized || !fs.existsSync(path.join(source, 'node_modules'));
 for (const [relative, record] of Object.entries(lock.packages)) {
   if (!relative) continue;
-  const metadata = path.join(source, relative, 'package.json');
+  const acquiredRoot = promotedAuthority ? modules : source;
+  // The promoted root is already prefix/node_modules, so lock-relative
+  // node_modules/... paths must lose that one prefix.
+  const acquiredRelative = promotedAuthority ? relative.slice('node_modules/'.length) : relative;
+  const metadata = path.join(acquiredRoot, acquiredRelative, 'package.json');
   if (!fs.existsSync(metadata)) {
     if (record.optional !== true) reject('required acquired source absent');
     continue;
@@ -99,6 +359,67 @@ for (const [relative, record] of Object.entries(lock.packages)) {
   const key = `${name}@${record.version}`, previous = authority.get(key);
   if (previous && (!previous.bytes.equals(bytes) || previous.integrity !== record.integrity)) reject('ambiguous acquired source');
   authority.set(key, { directory: path.dirname(metadata), bytes, integrity: record.integrity });
+}
+// Main overlay composition: every expectation is read from the frozen
+// publisher snapshot's own metadata, never embedded in this installer. A
+// snapshot released after this build therefore installs unchanged, and any
+// refusal names the exact expected and staged values.
+// Minimal, fail-closed range satisfaction: `*` and `>=x.y.z` only. Any other
+// range shape is reported as unsupported instead of guessed.
+function satisfiesVersionRange(version, range) {
+  if (range === '*') return true;
+  const required = /^>=\s*(\d+)\.(\d+)\.(\d+)$/.exec(String(range));
+  if (!required) return undefined;
+  const actual = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(version));
+  if (!actual) return undefined;
+  for (let index = 0; index < 3; ++index) {
+    const left = Number(actual[index + 1]), right = Number(required[index + 1]);
+    if (left !== right) return left > right;
+  }
+  return true;
+}
+// Staged-graph peer lookup: top-level hoisted packages only, a scoped peer at
+// its two-component directory. Absent resolves to null; a malformed name
+// resolves to undefined so the caller refuses explicitly.
+function stagedPeerVersion(fs, path, read, modules, name) {
+  const segments = String(name).split('/');
+  if (segments.length > 2 || segments.some(segment => segment === '' || segment === '.' || segment === '..') ||
+      (segments.length === 2) !== name.startsWith('@')) return undefined;
+  const metadata = path.join(modules, ...segments, 'package.json');
+  if (!fs.existsSync(metadata)) return null;
+  return JSON.parse(read(metadata)).version;
+}
+// The staged overlay must carry the frozen snapshot's own metadata and every
+// peer the snapshot declares must be present and satisfied in the staged graph
+// (optional peers per peerDependenciesMeta may be absent). Version identity
+// with the locked reviewed gentle-pi keeps the overlay bound to the reviewed
+// stock resolution.
+function mainOverlayComposition(record, frozen, lockVersion, peers, reject) {
+  if (record?.name !== 'gentle-pi' || record.version !== frozen.version || record.engines?.node !== frozen.engines?.node ||
+      JSON.stringify(record.dependencies) !== JSON.stringify(frozen.dependencies))
+    return reject(`Main overlay metadata differs from the frozen snapshot (staged ${record?.version}, frozen ${frozen.version}, lock ${lockVersion})`);
+  if (record.version !== lockVersion) return reject(`Main overlay version ${record.version} is not the locked reviewed gentle-pi ${lockVersion}`);
+  const optional = frozen.peerDependenciesMeta ?? {};
+  for (const [name, range] of Object.entries(frozen.peerDependencies ?? {})) {
+    const installed = peers(name);
+    if (installed === null && optional[name]?.optional === true) continue;
+    if (installed === null) return reject(`Main overlay peer ${name}@${range} is absent from the staged graph`);
+    const satisfied = satisfiesVersionRange(installed, range);
+    if (satisfied === undefined) return reject(`Main overlay peer ${name}@${JSON.stringify(range)} declares an unsupported range (staged ${name}@${installed})`);
+    if (!satisfied) return reject(`Main overlay peer ${name}@${range} is unsatisfied by the staged ${name}@${installed}`);
+  }
+}
+// Fail fast: the frozen snapshot must run on the node runtime this installer
+// ships, before any further overlay work. Unknown engines shapes refuse
+// explicitly instead of guessing.
+if (mainOverlay) {
+  const staged = authority.get(`gentle-pi@${resolved['gentle-pi']}`);
+  if (staged) {
+    const required = JSON.parse(staged.bytes).engines?.node;
+    const satisfied = required === undefined ? true : satisfiesVersionRange(process.versions.node, required);
+    if (satisfied === undefined) reject(`Main snapshot engine ${JSON.stringify(required)} is unsupported by this installer (node ${process.versions.node})`);
+    if (!satisfied) reject(`Main snapshot requires node ${required}; this installer ships node ${process.versions.node}`);
+  }
 }
 let count = 0, compared = 0, bytes = 0;
 function compare(actual, original, gentle = false) {
@@ -131,17 +452,20 @@ function packages(directory) {
     if (mainOverlay && absolute === path.join(modules, 'gentle-pi')) {
       // Go has compared every Main source member/set against the retained ZIP.
       // Its authority is the frozen publisher snapshot, not this npm SRI record.
-      const peers = { '@earendil-works/pi-coding-agent': '>=0.99.1', '@earendil-works/pi-ai': '*', '@earendil-works/pi-tui': '*', typebox: '*' };
-      if (!acquired || record.name !== 'gentle-pi' || record.version !== '4.0.0' || record.engines?.node !== '>=22.19.0' ||
-          JSON.stringify(record.dependencies) !== JSON.stringify(JSON.parse(acquired.bytes).dependencies) ||
-          Object.keys(record.peerDependencies ?? {}).length !== 4 || Object.entries(peers).some(([name, range]) => record.peerDependencies?.[name] !== range)) reject('unsupported Main dependency/native composition');
+      if (!acquired) reject(`Main overlay identity (staged ${record.name}@${record.version} is not the locked reviewed gentle-pi ${resolved['gentle-pi']})`);
+      mainOverlayComposition(record, JSON.parse(acquired.bytes), resolved['gentle-pi'],
+        name => stagedPeerVersion(fs, path, read, modules, name), reject);
     } else {
       if (!acquired || !metadata.equals(acquired.bytes)) reject('global unauthenticated metadata');
-      compare(absolute, acquired.directory, record.name === 'gentle-pi');
+      // A successful materializeGlobal already proved the copied tree equals
+      // the authenticated source by whole-tree digest. Re-reading every file
+      // here is redundant and dominates the Windows install.
+      if (!promotedAuthority) compare(absolute, acquired.directory, record.name === 'gentle-pi');
     }
     if (fs.existsSync(path.join(absolute, 'node_modules'))) packages(path.join(absolute, 'node_modules'));
   }
 }
+console.error('Windows install phase: provision-compare');
 packages(modules);
 const gentle = path.join(modules, 'gentle-pi');
 const piMetadata = JSON.parse(read(path.join(modules, '@earendil-works/pi-coding-agent/package.json')));
@@ -149,33 +473,41 @@ const gentleMetadata = JSON.parse(read(path.join(gentle, 'package.json')));
 if (piMetadata.bin?.pi !== 'dist/bundle/cli.js' || gentleMetadata.bin?.['gentle-shell'] !== 'bin/gentle-shell.mjs') reject('stock role bin metadata');
 read(path.join(modules, '@earendil-works/pi-coding-agent/dist/bundle/cli.js'));
 read(path.join(gentle, 'bin/gentle-shell.mjs'));
-// Stock supplier pins authorize installation; Main source is bound by the frozen ZIP.
-if (action === 'install' || !mainOverlay) for (const [name, expected] of [
-  ['scripts/gentle-ai-installer.mjs', 'bc2da0585026fa538f0c6ae0cf50463767c175b71d0dfdb582a88cbe894c84ca'],
-  ['runtime/gentle-ai-binary.mjs', 'cbdf5deac8b7a85ab1253dbd049953aeb192a7d1f7987f9206916ab449c10a92'],
-]) if (digest(read(path.join(gentle, name))) !== expected) reject('stock native supplier source pin');
+// Engram companion (S1): the owned settings may carry exactly the locked
+// companion. Install declares it only through the agreement gate; verify
+// admits the owned declaration with or without it.
+const lockedCompanion = resolved[companionName] ? `npm:${companionName}@${resolved[companionName]}` : null;
+const declaredCompanion = action === 'install'
+  ? companionDeclaration(companion, resolved[companionName], lockedCompanion ? JSON.parse(read(path.join(modules, companionName, 'package.json'))).version : undefined)
+  : null;
+// Supplier digests are advisory; Main source stays bound by the frozen ZIP.
+if (action === 'install' || !mainOverlay) reviewedSupplierAdvisorySources(gentle, resolved['gentle-pi'], reviewedSuppliers());
 if (action === 'install') {
   const { installGentleAi } = await import(pathToFileURL(path.join(gentle, 'scripts/gentle-ai-installer.mjs')).href);
-  await installGentleAi({ packageRoot: gentle }); // Explicit, authenticated stock API, no postinstall/fullscreen hook.
+  console.error('Windows install phase: provision-native'); // Explicit, authenticated stock API, no postinstall/fullscreen hook.
+  await installGentleAi({ packageRoot: gentle });
 }
-const native = path.join(gentle, '.gentle-ai/v4.0.0');
-const manifest = JSON.parse(read(path.join(native, 'integrity.json')));
-if (manifest.version !== '4.0.0' || manifest.method !== 'go-sumdb-source-build' || manifest.moduleChecksum !== 'h1:pZ/XZ2Pk3U9lgXigOTY62zlxxFOHnc9CjQhLgaV/Hfc=' || manifest.binarySha256 !== digest(read(path.join(native, 'gentle-ai.exe')))) reject('stock native source manifest');
+const nativeBundle = stockNativeDirectory(path.join(gentle, '.gentle-ai'));
+const nativeVersion = nativeBundle.version;
+const native = nativeBundle.directory;
+stockNativeIntegrity(JSON.parse(read(path.join(native, 'integrity.json'))), native, nativeVersion);
 const configPath = path.join(root, 'config/gentle-shell.json');
 const homeKey = path.join(finalRoot, 'agent');
-if (action === 'install') exclusive(configPath, `${JSON.stringify({ home: 'isolated', provisioned: { [homeKey]: { gentleAi: '4.0.0', gentlePi: gentleMetadata.version, at: new Date().toISOString() } } })}\n`);
+if (action === 'install') exclusive(configPath, `${JSON.stringify({ home: 'isolated', provisioned: { [homeKey]: { gentleAi: nativeVersion, gentlePi: gentleMetadata.version, at: new Date().toISOString() } } })}\n`);
 const config = JSON.parse(read(configPath));
 const provisioned = config?.provisioned, entry = provisioned?.[homeKey];
 if (config?.home !== 'isolated' || Object.keys(config).sort().join(',') !== 'home,provisioned' ||
     provisioned === null || typeof provisioned !== 'object' || Array.isArray(provisioned) || Object.keys(provisioned).length !== 1 ||
     entry === null || typeof entry !== 'object' || Array.isArray(entry) || Object.keys(entry).sort().join(',') !== 'at,gentleAi,gentlePi' ||
-    entry.gentleAi !== '4.0.0' || entry.gentlePi !== gentleMetadata.version || typeof entry.at !== 'string' ||
+    entry.gentleAi !== nativeVersion || entry.gentlePi !== gentleMetadata.version || typeof entry.at !== 'string' ||
     !Number.isFinite(Date.parse(entry.at))) reject('owned Shell provisioning binding changed');
 const settingsPath = path.join(agent, 'settings.json');
 const settings = { packages: [path.join(finalRoot, 'prefix/node_modules/gentle-pi')], npmCommand: [path.join(finalRoot, 'runtime/node/node.exe'), path.join(finalRoot, 'runtime/node/node_modules/npm/bin/npm-cli.js'), '--prefix', path.join(finalRoot, 'prefix')] };
+if (declaredCompanion) settings.packages.push(declaredCompanion);
 if (action === 'install') exclusive(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 const observedSettings = JSON.parse(read(settingsPath));
-// Pinned Pi 1.0.0 SettingsManager writes these typed scalars from changelog, model,
+if (lockedCompanion && JSON.stringify(observedSettings?.packages) === JSON.stringify([...settings.packages, lockedCompanion])) settings.packages.push(lockedCompanion);
+// The stable Pi SettingsManager writes these typed scalars from changelog, model,
 // thinking-level and theme selection. A theme is a name lookup, never a path.
 // Packages, commands, resources, trust, redirection and telemetry stay refused.
 const uiScalar = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
@@ -196,4 +528,6 @@ if (observedSettings === null || typeof observedSettings !== 'object' || Array.i
   reject('owned package/settings bindings changed');
 }
 if (!read(lockPath).equals(lockBytes)) reject('source lock changed');
+// Memory is the companion and the core together: no core for no client.
+if (action === 'install' && declaredCompanion) await publishEngramCore(gentle, path.join(agent, 'bin'), 'engram.exe', 'win32', 'x64');
 console.log(`Windows stock composition verified; packages=${count}; registration and full Ready remain unqualified`);

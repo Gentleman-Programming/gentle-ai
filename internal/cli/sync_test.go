@@ -4607,6 +4607,7 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 			"review-risk": "glm",
 			"default":     "auto",
 		},
+		AntigravityModelAssignments: map[string]string{"jd-fix-agent": "flash_lite", "jd-judge-a": "ultra"},
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"review-risk": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
@@ -4635,6 +4636,9 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	}
 	if got := result.Selection.KiroModelAssignments["default"]; got != model.KiroModelAuto {
 		t.Errorf("KiroModelAssignments[default] = %q, want %q", got, model.KiroModelAuto)
+	}
+	if got, want := result.Selection.AntigravityModelAssignments, (map[string]model.AntigravityModelTier{"jd-fix-agent": model.AntigravityModelFlashLite}); !reflect.DeepEqual(got, want) {
+		t.Errorf("AntigravityModelAssignments = %v, want %v (unknown tiers dropped)", got, want)
 	}
 
 	// OpenCode assignments must be loaded.
