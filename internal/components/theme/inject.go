@@ -87,6 +87,17 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	// The overlay selects the "gentleman" theme by name, so it is only
+	// meaningful for adapters whose visual theme assets register that name
+	// (today: Claude Code and OpenCode). Writing it elsewhere, e.g. into Pi's
+	// settings.json, persists an identifier the agent cannot resolve and breaks
+	// its startup after every install or sync (issue #4775). Known limitations,
+	// left as-is on purpose: the theme name stays hardcoded, and a
+	// "gentleman" key already persisted by an earlier run is not cleaned up.
+	if len(VisualThemePaths(homeDir, adapter)) == 0 {
+		return InjectionResult{}, nil
+	}
+
 	return injectSettings(agents.JSONSettingsPath(homeDir, adapter))
 }
 

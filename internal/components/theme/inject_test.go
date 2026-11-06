@@ -14,11 +14,13 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+func piAdapter() agents.Adapter       { return pi.NewAdapter() }
 
 func TestInjectMergesThemeOverlayIntoAdapterSettings(t *testing.T) {
 	home := t.TempDir()
@@ -151,6 +153,56 @@ func TestInjectLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
 			}
 			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != wantMode {
 				t.Fatalf("native settings mode = %v, %v; want %v", info, err, wantMode)
+			}
+		})
+	}
+}
+
+// TestInjectSkipsAdapterWithoutGentlemanTheme covers #4775: the overlay selects
+// a theme by name, so it only belongs on adapters that register "gentleman"
+// (Claude Code and OpenCode). Pi ships its own themes (Gentle, Gentleman-Cute,
+// Gentleman-Sexy) through the gentle-pi npm package, so persisting "gentleman"
+// in its settings makes every Pi startup fail to load the theme; Kimi reads
+// TOML settings that must stay byte-for-byte untouched.
+func TestInjectSkipsAdapterWithoutGentlemanTheme(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	tests := []struct {
+		name    string
+		adapter agents.Adapter
+		seed    string
+	}{
+		{name: "pi json", adapter: piAdapter(), seed: "{\n  \"tuiMode\": \"fullscreen\",\n  \"packages\": [\"npm:gentle-pi\"]\n}\n"},
+		{name: "pi json missing", adapter: piAdapter()},
+		{name: "kimi toml", adapter: kimi.NewAdapter(), seed: "[settings]\ntheme = \"user-theme\"\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := tt.adapter.SettingsPath(home)
+			if tt.seed != "" {
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(settingsPath, []byte(tt.seed), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			first, err := Inject(home, tt.adapter)
+			if err != nil || first.Changed || len(first.Files) != 0 {
+				t.Fatalf("Inject() = %#v, %v; want a no-op without reported files", first, err)
+			}
+			if tt.seed == "" {
+				if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+					t.Fatalf("Inject() created %s; stat error = %v", settingsPath, err)
+				}
+			} else if got, err := os.ReadFile(settingsPath); err != nil || string(got) != tt.seed {
+				t.Fatalf("settings = %q, %v; want bytes preserved as %q", got, err, tt.seed)
+			}
+
+			second, err := Inject(home, tt.adapter)
+			if err != nil || second.Changed || len(second.Files) != 0 {
+				t.Fatalf("Inject() second = %#v, %v; want a no-op on re-run", second, err)
 			}
 		})
 	}
