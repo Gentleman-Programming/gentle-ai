@@ -20,9 +20,18 @@ const (
 
 var antigravityPresetDescriptions = map[AntigravityModelPreset]string{
 	AntigravityPresetInherit:     "Subagents use the session model (agy default)",
-	AntigravityPresetPerformance: "pro tier for Judgment Day judges and the fix agent",
-	AntigravityPresetEconomy:     "flash judges and a flash_lite fix agent",
-	AntigravityPresetCustom:      "Pick the agy tier for each Judgment Day role individually",
+	AntigravityPresetPerformance: "pro tier for workers, verifiers, and judges; flash for explorer",
+	AntigravityPresetEconomy:     "flash workers, verifiers, and judges; flash_lite for explorer and fixes",
+	AntigravityPresetCustom:      "Pick the agy tier for each ODD and Judgment Day role individually",
+}
+
+var antigravityRoleLabels = map[string]string{
+	"gentle-ai-explore": "ODD Explorer",
+	"gentle-ai-worker":  "ODD Worker",
+	"gentle-ai-verify":  "ODD Verify",
+	"jd-judge-a":        "JD Judge A",
+	"jd-judge-b":        "JD Judge B",
+	"jd-fix-agent":      "JD Fix Agent",
 }
 
 var antigravityPresetOrder = []AntigravityModelPreset{
@@ -148,7 +157,14 @@ func RenderAntigravityModelPicker(state AntigravityModelPickerState, cursor int)
 	b.WriteString(styles.SubtextStyle.Render("Press enter on a role to cycle: inherit → flash_lite → flash → pro"))
 	b.WriteString("\n\n")
 	for idx, role := range model.AntigravityModelRoles {
-		label := fmt.Sprintf("%-20s [%s]", claudePhaseLabels[role], model.AntigravityModelID(state.CustomAssignments[role]))
+		roleLabel := antigravityRoleLabels[role]
+		if roleLabel == "" {
+			roleLabel = claudePhaseLabels[role]
+		}
+		if roleLabel == "" {
+			roleLabel = role
+		}
+		label := fmt.Sprintf("%-20s [%s]", roleLabel, model.AntigravityModelID(state.CustomAssignments[role]))
 		if idx == cursor {
 			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
 		} else {
