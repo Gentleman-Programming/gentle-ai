@@ -365,6 +365,64 @@ func committedRangeReviewRepo(t *testing.T) string {
 	return repo
 }
 
+// TestNegotiatedStatusExplicitBaseRefPreservesCommitForStart pins the
+// explicit-selector START echo (issue #4924): an explicitly supplied 40-hex
+// commit id is carried verbatim, while an explicitly supplied symbolic ref
+// (origin/main, a branch, HEAD~1) falls back to the frozen base tree so a
+// moving branch cannot change the scope this STATUS already froze. It is the
+// first-START twin of the REVIEWING re-entry echo
+// (reviewStartStatusContinuation), which deliberately keeps the frozen tree in
+// both cases -- see review_committed_correction_test.go.
+func TestNegotiatedStatusExplicitBaseRefPreservesCommitForStart(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := committedRangeReviewRepo(t)
+	baseCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "refs/remotes/origin/main"))
+	baseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", baseCommit+"^{tree}"))
+	if baseCommit == baseTree {
+		t.Fatal("fixture commit and tree must differ")
+	}
+
+	cases := []struct {
+		name    string
+		baseRef string
+		want    string
+	}{
+		{
+			name:    "explicit commit id is echoed verbatim",
+			baseRef: baseCommit,
+			want:    baseCommit,
+		},
+		{
+			name:    "explicit symbolic ref keeps the frozen base tree",
+			baseRef: "origin/main",
+			want:    baseTree,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition", "--base-ref", testCase.baseRef, "--committed-only"}, &output); err != nil {
+				t.Fatalf("explicit committed STATUS for %q: %v\n%s", testCase.baseRef, err, output.String())
+			}
+			var status ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, output.Bytes(), &status)
+			if status.Projection.BaseTree != baseTree {
+				t.Fatalf("projection base_tree = %q, want tree %q", status.Projection.BaseTree, baseTree)
+			}
+			if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+				t.Fatalf("next_transition = %#v, want executable START", status.NextTransition)
+			}
+			arguments, err := reviewTransitionArgumentMap(status.NextTransition.Execute.Arguments, status.NextTransition.Execute.Operation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if arguments["base-ref"] != testCase.want || arguments["committed-only"] != "true" {
+				t.Fatalf("START selectors = %#v, want base-ref %q and committed-only=true", arguments, testCase.want)
+			}
+		})
+	}
+}
+
 // TestNegotiatedStatusDerivedCommittedRangePayloadValidatesAgainstPublishedSchema
 // is the execution-based proof that the real selectorless STATUS payload for a
 // committed-range candidate still validates against the published status-v7
