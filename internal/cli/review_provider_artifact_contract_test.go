@@ -217,7 +217,12 @@ func TestReviewProviderArtifactV24IntendedUntrackedContractsArePinned(t *testing
 		"schemas/capabilities-v2.4.schema.json": "fc4d55dbad6b19cc4c289e8ed94bd1839800ca2892e449640459b668e0c7b0b5",
 		// Issue #4821: an absolute document ID restores sibling $ref resolution;
 		// the wire envelope identity remains unchanged. Deliberate, not drift.
-		"schemas/intended-untracked-selection.schema.json": "2379d4b748ffd9719058aa5b10ed6640f0dec9a525198cf8e14cd827408a348e",
+		//
+		// Issue #4311: intended_untracked publishes the string representation the
+		// sole implementation authority decodes (`[]string`, one repo-relative
+		// path per entry), not the changed-path objects the schema used to
+		// advertise. Deliberate, not drift.
+		"schemas/intended-untracked-selection.schema.json": "ba58b45bd641ee9ae662832cc054273b38b32cb253c2940a596bd26a3b2dc2ed",
 		"schemas/status-v6.schema.json":                    "0aa731e4d3961d678b4e51a6be0af93f2de82a4a326c3366e2fbe6a3e687236c",
 	}
 	for name, expected := range want {
