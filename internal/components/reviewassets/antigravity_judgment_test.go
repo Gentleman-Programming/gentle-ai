@@ -21,7 +21,7 @@ func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 	}
 	home := t.TempDir()
 	dir := filepath.Join(home, ".gemini", "config", "agents")
-	names := []string{"jd-judge-a.md", "jd-judge-b.md", "jd-fix-agent.md"}
+	allNames := reviewassets.NativeAgentManifest[model.AgentAntigravity]
 	for _, flow := range []string{"fresh", "refresh", "idempotent"} {
 		t.Run(flow, func(t *testing.T) {
 			opts := reviewassets.InstallOptions{}
@@ -35,7 +35,7 @@ func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 			if result.Changed != (flow != "idempotent") {
 				t.Fatalf("%s: unexpected result %+v", flow, result)
 			}
-			for _, name := range names {
+			for _, name := range allNames {
 				data, err := os.ReadFile(filepath.Join(dir, name))
 				if err != nil {
 					t.Fatal(err)
@@ -65,14 +65,14 @@ func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 							t.Errorf("%s missing judge contract %q", name, want)
 						}
 					}
-				} else {
+				} else if name == "jd-fix-agent.md" {
 					for _, want := range []string{"Fix ONLY the confirmed issues", "Only the parent may launch"} {
 						if !strings.Contains(text, want) {
 							t.Errorf("%s missing fix contract %q", name, want)
 						}
 					}
 				}
-				if flow != "fresh" && !strings.Contains(text, opts.CodeGraphGuidanceMarkdown) {
+				if flow != "fresh" && strings.HasPrefix(name, "jd-") && !strings.Contains(text, opts.CodeGraphGuidanceMarkdown) {
 					t.Errorf("%s was not refreshed", name)
 				}
 			}
@@ -80,8 +80,8 @@ func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(entries) != len(names)+1 {
-				t.Fatalf("got %d entries, want three JD agents plus ownership ledger", len(entries))
+			if len(entries) != len(allNames)+1 {
+				t.Fatalf("got %d entries, want %d agents plus ownership ledger", len(entries), len(allNames))
 			}
 			for _, entry := range entries {
 				if strings.HasPrefix(entry.Name(), "review-") {
