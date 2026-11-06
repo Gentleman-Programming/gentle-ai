@@ -108,7 +108,9 @@ Community Tools are opt-in and are not included by presets or automatic detectio
 
 ### OpenCode CodeGraph wiring
 
-Existing native `mcp.servers.codegraph` wiring is preserved byte-for-byte, including JSONC comments. A local string-array command may use `codegraph serve --mcp`, an absolute `codegraph` executable path (including Windows `.exe`/`.cmd`), and the supported `--no-watch`, `--path <directory>` / `--path=<directory>`, or `-p <directory>` options.
+Existing native `mcp.servers.codegraph` wiring is preserved byte-for-byte, including JSONC comments. A local string-array command may use `codegraph serve --mcp`, an absolute `codegraph` executable path (including Windows `.exe`/`.cmd`), and the supported `--no-watch` option.
+
+An entry, native or legacy `mcp.codegraph`, whose local `codegraph serve --mcp` command pins a project with a non-empty `--path <directory>`, `--path=<directory>`, or `-p <directory>` serves that fixed project regardless of the client's workspace, so it is not managed wiring. Install, status, and sync treat it as configured by the user: they never run the installer, fail, or rewrite that entry, whatever its enable flags. A pin that is not a valid CodeGraph serve command (another program, a non-local type, or a missing or empty path value) still gets the native diagnostic or the legacy installer path.
 
 When both `opencode.jsonc` and `opencode.json` exist, the CodeGraph entry in JSONC takes priority; JSON is consulted only if JSONC has no CodeGraph entry. An invalid or disabled higher-priority entry never falls back to the lower-priority file.
 

@@ -2291,6 +2291,36 @@ func TestCodeGraphGuidanceSyncStepNativePreservation(t *testing.T) {
 	}
 }
 
+func TestCodeGraphGuidanceSyncStepSkipsPinnedNativePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	settingsBefore := "{\n// pinned project stays user-owned\n\"mcp\":{\"servers\":{\"codegraph\":{\"type\":\"local\",\"command\":[\"codegraph\",\"serve\",\"--mcp\",\"--path\",\"/other\"]}}}}\n"
+	mustWriteFile(t, settingsPath, []byte(settingsBefore))
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+	cmdLookPath = func(string) (string, error) { return "/bin/codegraph", nil }
+	calls := 0
+	step := codeGraphGuidanceSyncStep{
+		id:      "sync:community-tool:codegraph-guidance",
+		homeDir: home,
+		runner: communitytool.RunnerFunc(func(string, ...string) error {
+			calls++
+			return nil
+		}),
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() with pinned native path: %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("pinned native path called installer %d times, want zero", calls)
+	}
+	body, err := os.ReadFile(settingsPath)
+	if err != nil || string(body) != settingsBefore {
+		t.Fatalf("Run() changed pinned native config bytes: %q, error=%v", body, err)
+	}
+}
+
 func TestCodeGraphGuidanceSyncStepRefreshesOldMarkerWhenConfigured(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")

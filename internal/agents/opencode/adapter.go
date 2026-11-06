@@ -135,6 +135,42 @@ func (a *Adapter) MCPConfigPath(homeDir string, serverName string) string {
 // EffectiveCodeGraphWiring validates OpenCode's effective MCP entry while
 // keeping OpenCode's JSON/JSONC schema behind the adapter boundary.
 func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
+	path, entry, native := a.codeGraphEntry(homeDir)
+	if entry == nil {
+		return "", false
+	}
+	if native {
+		if disabled, exists := entry["disabled"]; exists && disabled != false {
+			return "", false
+		}
+		// V2 does not interpret legacy enabled inside a native server.
+		entry = map[string]any{"type": entry["type"], "command": entry["command"]}
+	}
+	if isEffectiveCodeGraphEntry(entry) {
+		return path, true
+	}
+	return "", false
+}
+
+// PinnedCodeGraphPath reports the authoritative CodeGraph entry, native or
+// legacy, that pins a project with a non-empty --path or -p value. A pinned
+// server ignores the client's rootUri, so it is not effective managed wiring;
+// it is user configuration that install and sync leave untouched. Enable
+// flags do not change ownership, so they are not consulted here.
+func (a *Adapter) PinnedCodeGraphPath(homeDir string) (string, bool) {
+	path, entry, _ := a.codeGraphEntry(homeDir)
+	if entry == nil || entry["type"] != "local" {
+		return "", false
+	}
+	if valid, pinned := parseCodeGraphCommand(entry["command"]); valid && pinned {
+		return path, true
+	}
+	return "", false
+}
+
+// codeGraphEntry returns the authoritative CodeGraph entry: the first settings
+// file with one wins, and lower-priority files are never consulted after it.
+func (a *Adapter) codeGraphEntry(homeDir string) (string, map[string]any, bool) {
 	for _, path := range a.codeGraphSettingsPaths(homeDir) {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -144,23 +180,11 @@ func (a *Adapter) EffectiveCodeGraphWiring(homeDir string) (string, bool) {
 		if err != nil {
 			continue
 		}
-		entry, native := config.MCPEntry(root, "codegraph")
-		if entry == nil {
-			continue
+		if entry, native := config.MCPEntry(root, "codegraph"); entry != nil {
+			return path, entry, native
 		}
-		if native {
-			if disabled, exists := entry["disabled"]; exists && disabled != false {
-				return "", false
-			}
-			// V2 does not interpret legacy enabled inside a native server.
-			entry = map[string]any{"type": entry["type"], "command": entry["command"]}
-		}
-		if isEffectiveCodeGraphEntry(entry) {
-			return path, true
-		}
-		return "", false
 	}
-	return "", false
+	return "", nil, false
 }
 
 func (a *Adapter) codeGraphSettingsPaths(homeDir string) []string {
@@ -177,36 +201,22 @@ func (a *Adapter) codeGraphSettingsPaths(homeDir string) []string {
 // NativeCodeGraphWiringError explains native conditions a legacy installer cannot
 // repair. Call after effective-wiring detection; absent native entries need the installer.
 func (a *Adapter) NativeCodeGraphWiringError(homeDir string) error {
-	for _, path := range a.codeGraphSettingsPaths(homeDir) {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		root, err := filemerge.UnmarshalJSONObject(data)
-		if err != nil {
-			continue
-		}
-		entry, native := config.MCPEntry(root, "codegraph")
-		if entry == nil {
-			continue
-		}
-		if !native {
-			return nil
-		}
-		reason := ""
-		disabled, exists := entry["disabled"]
-		switch {
-		case exists && disabled != false:
-			reason = "disabled must be false (or absent); enable or remove this entry to complete sync"
-		case entry["type"] != "local":
-			reason = "type must be local"
-		case !isCodeGraphCommand(entry["command"]):
-			reason = "command must be a string array with only supported arguments"
-		}
-		if reason != "" {
-			return fmt.Errorf("edit %s at mcp.servers.codegraph: %s; expected type local and command [codegraph serve --mcp], optionally --no-watch and --path <directory> (-p <directory>), with a bare codegraph or absolute executable path; the legacy CodeGraph installer cannot repair this native entry", path, reason)
-		}
+	path, entry, native := a.codeGraphEntry(homeDir)
+	if entry == nil || !native {
 		return nil
+	}
+	reason := ""
+	disabled, exists := entry["disabled"]
+	switch {
+	case exists && disabled != false:
+		reason = "disabled must be false (or absent); enable or remove this entry to complete sync"
+	case entry["type"] != "local":
+		reason = "type must be local"
+	case !isCodeGraphCommand(entry["command"]):
+		reason = "command must be a string array with only supported arguments"
+	}
+	if reason != "" {
+		return fmt.Errorf("edit %s at mcp.servers.codegraph: %s; expected type local and command [codegraph serve --mcp], optionally --no-watch, with a bare codegraph or absolute executable path; the legacy CodeGraph installer cannot repair this native entry", path, reason)
 	}
 	return nil
 }
@@ -223,15 +233,22 @@ func isEffectiveCodeGraphEntry(value any) bool {
 }
 
 func isCodeGraphCommand(value any) bool {
+	valid, pinned := parseCodeGraphCommand(value)
+	return valid && !pinned
+}
+
+// parseCodeGraphCommand validates a CodeGraph MCP serve command and reports
+// whether it pins a project with a non-empty --path, --path= or -p value.
+func parseCodeGraphCommand(value any) (valid, pinned bool) {
 	values, ok := value.([]any)
 	if !ok || len(values) < 3 {
-		return false
+		return false, false
 	}
 	command := make([]string, len(values))
 	for i, value := range values {
 		command[i], ok = value.(string)
 		if !ok {
-			return false
+			return false, false
 		}
 	}
 	executable := command[0]
@@ -241,11 +258,11 @@ func isCodeGraphCommand(value any) bool {
 		driveAbsolute := len(normalized) > 3 && ((normalized[0] >= 'A' && normalized[0] <= 'Z') || (normalized[0] >= 'a' && normalized[0] <= 'z')) && normalized[1:3] == ":/"
 		basename := strings.ToLower(normalized[strings.LastIndex(normalized, "/")+1:])
 		if !(path.IsAbs(executable) || filepath.IsAbs(executable) || driveAbsolute || strings.HasPrefix(normalized, "//")) || (basename != "codegraph" && basename != "codegraph.exe" && basename != "codegraph.cmd") {
-			return false
+			return false, false
 		}
 	}
 	if command[1] != "serve" {
-		return false
+		return false, false
 	}
 	mcp := false
 	for i := 2; i < len(command); i++ {
@@ -256,15 +273,17 @@ func isCodeGraphCommand(value any) bool {
 		case "--path", "-p":
 			i++
 			if i >= len(command) || command[i] == "" || strings.HasPrefix(command[i], "-") {
-				return false
+				return false, false
 			}
+			pinned = true
 		default:
 			if !strings.HasPrefix(command[i], "--path=") || strings.TrimPrefix(command[i], "--path=") == "" {
-				return false
+				return false, false
 			}
+			pinned = true
 		}
 	}
-	return mcp
+	return mcp, pinned
 }
 
 // --- Optional capabilities ---

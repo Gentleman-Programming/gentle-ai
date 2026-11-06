@@ -83,8 +83,8 @@ func TestReconcileOpenCodeCodeGraphNativeValidPreservesBytes(t *testing.T) {
 		for _, tt := range []struct{ name, command string }{
 			{"canonical", `["codegraph","serve","--mcp"]`},
 			{"no watch", `["codegraph","serve","--mcp","--no-watch"]`},
-			{"absolute POSIX and path", `["/opt/bin/codegraph","serve","--mcp","--path","/work/my project"]`},
-			{"absolute Windows and short path", `["C:\\Tools\\codegraph.exe","serve","-p","C:\\Work\\project","--mcp","--no-watch"]`},
+			{"absolute POSIX", `["/opt/bin/codegraph","serve","--mcp"]`},
+			{"absolute Windows and no watch", `["C:\\Tools\\codegraph.exe","serve","--mcp","--no-watch"]`},
 		} {
 			t.Run(extension+"/"+tt.name, func(t *testing.T) {
 				home := t.TempDir()
@@ -198,6 +198,53 @@ func TestReconcileOpenCodeCodeGraphNativeUnmetCondition(t *testing.T) {
 				}
 				if calls != 0 {
 					t.Errorf("installer called %d times for authoritative invalid/disabled native entry, want zero", calls)
+				}
+			})
+		}
+	}
+}
+
+func TestReconcileOpenCodeCodeGraphNativePinnedPathIsUserConfig(t *testing.T) {
+	for _, extension := range []string{".json", ".jsonc"} {
+		for _, tt := range []struct{ name, entry string }{
+			{"long path", `{"type":"local","command":["codegraph","serve","--mcp","--path","/other"]}`},
+			{"equals path", `{"type":"local","command":["codegraph","serve","--mcp","--path=/work/my project"]}`},
+			{"short path", `{"type":"local","command":["C:\\Tools\\codegraph.exe","serve","-p","C:\\Work\\project","--mcp","--no-watch"]}`},
+			{"disabled pinned path", `{"type":"local","command":["codegraph","serve","--mcp","--path","/other"],"disabled":true}`},
+		} {
+			t.Run(extension+"/"+tt.name, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("XDG_CONFIG_HOME", "")
+				path := filepath.Join(home, ".config", "opencode", "opencode"+extension)
+				comment := ""
+				if extension == ".jsonc" {
+					comment = "// pinned project stays user-owned\n"
+				}
+				before := fmt.Sprintf("{\n%s\"mcp\":{\"servers\":{\"codegraph\":%s}}}\n", comment, tt.entry)
+				mustWrite(t, path, before)
+				calls := 0
+				runner := RunnerFunc(func(string, ...string) error {
+					calls++
+					return nil
+				})
+				for attempt := 0; attempt < 2; attempt++ {
+					if gotPath, configured := opencode.NewAdapter().EffectiveCodeGraphWiring(home); gotPath != "" || configured {
+						t.Errorf("attempt %d: pinned path reported effective at %q", attempt, gotPath)
+					}
+					if NeedsOpenCodeCodeGraphReconcile(home) {
+						t.Errorf("attempt %d: pinned native path needs reconciliation", attempt)
+					}
+					result, err := ReconcileOpenCodeCodeGraph(home, runner)
+					if err != nil || result.Changed || len(result.Files) != 0 {
+						t.Errorf("attempt %d: reconcile = (%#v, %v), want skipped success", attempt, result, err)
+					}
+					after, err := os.ReadFile(path)
+					if err != nil || string(after) != before {
+						t.Fatalf("attempt %d: pinned config bytes changed: %q, error=%v", attempt, after, err)
+					}
+				}
+				if calls != 0 {
+					t.Errorf("installer called %d times for pinned native path, want zero", calls)
 				}
 			})
 		}

@@ -14,10 +14,11 @@ func TestNativeCodeGraphCommandVariants(t *testing.T) {
 	}{
 		{"canonical", `["codegraph","serve","--mcp"]`, true},
 		{"no watch", `["codegraph","serve","--mcp","--no-watch"]`, true},
-		{"long path", `["codegraph","serve","--mcp","--path","/work/my project"]`, true},
-		{"equals path", `["codegraph","serve","--mcp","--path=/work/my project"]`, true},
+		// A pinned path serves a fixed project regardless of the client's rootUri.
+		{"pinned long path", `["codegraph","serve","--mcp","--path","/other"]`, false},
+		{"pinned equals path", `["codegraph","serve","--mcp","--path=/work/my project"]`, false},
 		{"empty equals path", `["codegraph","serve","--mcp","--path="]`, false},
-		{"short path and no watch", `["codegraph","serve","-p","/work/project","--no-watch","--mcp"]`, true},
+		{"pinned short path and no watch", `["codegraph","serve","-p","/work/project","--no-watch","--mcp"]`, false},
 		{"absolute POSIX", `["/opt/tools/codegraph","serve","--mcp"]`, true},
 		{"absolute Windows", `["C:\\Tools\\codegraph.exe","serve","--mcp","--no-watch"]`, true},
 		{"absolute Windows npm shim", `["C:\\Tools\\codegraph.cmd","serve","--mcp"]`, true},
