@@ -147,11 +147,13 @@ for (const mode of ['separate', 'shared']) {
   test(`${mode} materializes the frozen tree and stock offline bins without hooks`, rebuildProof, t => {
     const f = fixture(t, mode);
     const calls = f.calls.filter(args => args[0] !== 'pack');
-    assert.deepEqual(calls.map(args => args[0]), ['install', 'ci', 'rebuild'], f.result.stderr);
+    // Separate resolves the lock from `latest`, packs the resolved gentle-pi
+    // against the lock SRI for the companion pin, and re-resolves once with
+    // the companion as an authenticated root; Shared never packs gentle-pi
+    // and keeps the five stock roots (B1).
+    assert.deepEqual(calls.map(args => args[0]), mode === 'separate' ? ['install', 'install', 'ci', 'rebuild'] : ['install', 'ci', 'rebuild'], f.result.stderr);
     assert.ok(calls[0].includes('--package-lock-only') && calls[0].includes('--min-release-age=0'));
-    assert.ok(calls[2].includes('--global') && calls[2].includes('--offline') && calls[2].includes('--ignore-scripts'));
-    // Separate acquires the companion as an authenticated root; Shared leaves
-    // the selected prefix without a new package or command (B1).
+    assert.ok(calls[calls.length - 1].includes('--global') && calls[calls.length - 1].includes('--offline') && calls[calls.length - 1].includes('--ignore-scripts'));
     if (mode === 'separate') {
       assert.equal(JSON.parse(fs.readFileSync(path.join(f.modules, 'gentle-engram/package.json'))).version, companionPin);
       assert.equal(fs.realpathSync(path.join(f.prefix, 'bin/pi-engram')), path.join(f.modules, 'gentle-engram/cli.js'));
@@ -189,7 +191,7 @@ for (const mode of ['separate', 'shared']) {
 
 test('escaping source refuses before deployment or rebuild', rebuildProof, t => {
   const f = fixture(t, 'separate', 'escaping-source');
-  assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install', 'ci'], f.result.stderr);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'pack', 'install', 'ci'], f.result.stderr);
   assert.match(f.result.stderr, /inventory escaping link/);
   assert.equal(fs.existsSync(f.modules), false);
   assert.equal(fs.readFileSync(path.join(f.root, 'agent/settings.json'), 'utf8'), f.originalSettings);
@@ -223,10 +225,12 @@ test('rebuild failure retains old, new and confirmed recovery evidence', rebuild
   assert.ok(fs.readdirSync(path.join(f.root, 'state')).some(name => name.startsWith('prefix.preimage.quarantine-')));
 });
 
-test('supplier bytes differing from the reviewed list entry refuse before the supplier runs', rebuildProof, t => {
+test('supplier bytes differing from the reviewed list entry install with an advisory', rebuildProof, t => {
   const f = fixture(t, 'separate', 'supplier-mismatch');
-  assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install', 'ci', 'rebuild'], f.result.stderr);
-  assert.match(f.result.stderr, /stock supplier pin/);
-  assert.equal(fs.readFileSync(path.join(f.root, 'agent/settings.json'), 'utf8'), f.originalSettings);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'pack', 'install', 'ci', 'rebuild'], f.result.stderr);
+  assert.match(f.result.stderr, /global provision advisory: gentle-pi@\S+ supplier file scripts\/gentle-ai-installer\.mjs differs from its reviewed entry/);
+  assert.match(f.result.stderr, /global provision advisory: gentle-pi@\S+ supplier file runtime\/gentle-ai-binary\.mjs differs from its reviewed entry/);
+  assert.doesNotMatch(f.result.stderr, /stock supplier pin/);
+  assert.equal(f.result.status, 0, f.result.stderr);
   assert.equal(fs.existsSync(path.join(f.root, 'home/hook-ran')), false);
 });
