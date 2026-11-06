@@ -30,10 +30,14 @@ if (selection.Channel === 'main') {
       !/^[0-9a-f]{64}$/.test(snapshot.SHA) || snapshot.Archive !== 'main.zip' || snapshot.Bound !== 33554432 || snapshot.Size !== 0) reject('Main descriptor authority');
 }
 // Stable resolves npm's `latest` dist-tag for the five stock root packages at
-// install time; the generated package-lock.json pins the exact resolved versions
-// and SRI. gentle-pi additionally resolves only onto reviewed supplier versions
-// (see reviewedSuppliers): an unreviewed `latest` falls back once to the newest
-// reviewed release, and every listed-version deviation fails closed.
+// install time and installs exactly that resolution; the generated
+// package-lock.json pins the exact resolved versions and SRI. The channel is
+// the contract: stable always installs what `latest` resolves today, and Main
+// stays bound to the frozen Main ZIP. The reviewed supplier list
+// (gentle-pi-suppliers.json) is advisory only: it may warn that the resolved
+// gentle-pi is outside the reviewed table or drifted from its reviewed entry,
+// and it never refuses an install. The lock's registry SRI stays the only hard
+// integrity anchor.
 const pins = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
 // The Engram companion is an optional sixth root, declared at the exact pin
 // of the resolved gentle-pi (never `latest`) and only when that pins one.
@@ -83,42 +87,39 @@ async function publishEngramCore(gentle, bin, name, platform, arch, adapters = {
 // stage list the Go worker writes (gentle-pi-suppliers.json, schema
 // gentle-shell-reviewed-suppliers/v1): the live repository copy when its
 // fetch and strict validation succeeded, otherwise the embedded copy. The
-// provisioner re-validates the staged bytes strictly and never widens them.
+// list is advisory data, so an unreadable, oversized or malformed staged list
+// degrades to no supplier advisories instead of refusing the channel install.
 // Each entry binds the exact version to its npm tarball SRI (the lock's
 // `integrity`) and to the SHA-256 of the two native supplier files inside the
 // package. Reviewing a new release is a one-line change to that JSON; the
 // root specs stay `latest`.
 function reviewedSuppliers() {
-  const raw = read(path.join(root, 'gentle-pi-suppliers.json'));
-  // The staged list read is bounded at 256 KiB, matching the Go loader's bound.
-  if (raw.length > 262144) reject('reviewed supplier list');
-  const list = JSON.parse(raw);
+  const unavailable = reason => {
+    console.error(`Windows provision advisory: the reviewed supplier list is unusable (${reason}); supplier advisories are unavailable`);
+    return {};
+  };
+  let raw;
+  try { raw = read(path.join(root, 'gentle-pi-suppliers.json')); }
+  catch (error) { return unavailable(error.message); }
+  if (raw.length > 262144) return unavailable('the staged list exceeds the 256 KiB bound');
+  let list;
+  try { list = JSON.parse(raw); }
+  catch (error) { return unavailable(error.message); }
   const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
   const sri = value => typeof value === 'string' && /^sha512-[A-Za-z0-9+/]{86}==$/.test(value) &&
     Buffer.from(value.slice(7), 'base64').toString('base64') === value.slice(7);
   if (list === null || typeof list !== 'object' || Array.isArray(list) || list.schema !== 'gentle-shell-reviewed-suppliers/v1' ||
-      list.releases === null || typeof list.releases !== 'object' || Array.isArray(list.releases)) reject('reviewed supplier list');
-  // Strict top-level shape: exactly the schema and releases fields, mirroring
-  // the Go decoder's DisallowUnknownFields.
-  if (Object.keys(list).sort().join(',') !== 'releases,schema') reject('reviewed supplier list');
+      list.releases === null || typeof list.releases !== 'object' || Array.isArray(list.releases) ||
+      Object.keys(list).sort().join(',') !== 'releases,schema') return unavailable('the staged list shape is malformed');
   const table = {};
   for (const [version, entry] of Object.entries(list.releases)) {
     if (!semver.test(version) || entry === null || typeof entry !== 'object' || Array.isArray(entry) ||
         Object.keys(entry).sort().join(',') !== 'binary,installer,integrity' || !sri(entry.integrity) ||
-        !/^[0-9a-f]{64}$/.test(entry.installer) || !/^[0-9a-f]{64}$/.test(entry.binary)) reject('reviewed supplier list');
+        !/^[0-9a-f]{64}$/.test(entry.installer) || !/^[0-9a-f]{64}$/.test(entry.binary)) return unavailable(`entry ${version} is malformed`);
     table[version] = entry;
   }
-  if (Object.keys(table).length === 0) reject('reviewed supplier list');
+  if (Object.keys(table).length === 0) return unavailable('the staged list lists no releases');
   return table;
-}
-// Newest reviewed version in semantic order (4.10.0 > 4.9.0): the fallback
-// target when npm's `latest` resolution is unreviewed.
-function newestReviewedSupplier(table) {
-  const order = version => version.split('.').map(Number);
-  return Object.keys(table).sort((left, right) => {
-    const a = order(left), b = order(right);
-    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-  }).at(-1);
 }
 // NTFS owner/DACL/reparse checks are enforced by the Go worker before entry and
 // on the complete produced tree afterward. This is not a substitute for them.
@@ -158,24 +159,15 @@ function rootAuthorities(lock, names) {
   }
   return resolved;
 }
-// The locked gentle-pi version must be reviewed with the entry's exact npm
-// tarball SRI. A listed version with a differing integrity fails closed and
-// never falls back; only an unlisted one is fallback-eligible.
-function reviewedSupplierEntry(version, integrity, table) {
+// Advisory lock report: the reviewed supplier table never gates the channel.
+// A gentle-pi outside the table, or a listed version whose lock SRI differs
+// from its entry, installs anyway and says so. Main overlay/verify stay
+// silent: their gentle-pi is bound by the frozen Main ZIP, not this lock.
+function reviewedSupplierAdvisory(action, mainOverlay, version, integrity, table) {
+  if (action !== 'install' && mainOverlay) return;
   const entry = table[version];
-  return entry && entry.integrity === integrity ? entry : null;
-}
-// Lock gate: stable install/verify and every install must lock a reviewed
-// gentle-pi with its entry's exact SRI. Main overlay/verify keep the supplier
-// exemption below: their gentle-pi is bound by the frozen Main ZIP, not this lock.
-function reviewedSupplierLock(action, mainOverlay, version, integrity, table) {
-  if ((action === 'install' || !mainOverlay) && !reviewedSupplierEntry(version, integrity, table)) reject('stock native supplier source pin');
-}
-// Single fallback re-resolution target: an unreviewed `latest` resolution is
-// replaced by the newest reviewed version instead of failing. Listed versions
-// are decided by reviewedSupplierEntry alone; verify/overlay never fall back.
-function supplierFallbackVersion(version, integrity, table) {
-  return table[version] ? null : newestReviewedSupplier(table);
+  if (!entry) console.error(`Windows provision advisory: gentle-pi@${version} is outside the reviewed supplier table; installing the channel resolution`);
+  else if (entry.integrity !== integrity) console.error(`Windows provision advisory: gentle-pi@${version} lock SRI differs from its reviewed entry; installing the channel resolution`);
 }
 // Locate the single supported native bundle directory under .gentle-ai: exactly
 // one entry, named v<resolved gentle-pi version>, a physical directory. A
@@ -200,16 +192,17 @@ function stockNativeIntegrity(manifest, native, version) {
       !/^h1:[A-Za-z0-9+/]{43}=$/.test(manifest.moduleChecksum) ||
       manifest.binarySha256 !== digest(read(path.join(native, 'gentle-ai.exe')))) reject('stock native source manifest');
 }
-// Reviewed supplier sources: the materialized/installed gentle-pi tree must
-// carry the reviewed entry's exact installer and binary digests. Unlisted
-// versions fail closed before any supplier file is read.
-function reviewedSupplierSources(gentle, version, table) {
+// Advisory supplier digests: the installed tree's authenticity is anchored by
+// the lock's registry SRI and the whole-tree compare, so the reviewed entry's
+// installer/binary digests only inform. An unlisted version, or one whose
+// supplier files drift from its reviewed entry, installs anyway and says so.
+function reviewedSupplierAdvisorySources(gentle, version, table) {
   const entry = table[version];
-  if (!entry) reject('stock native supplier source pin');
+  if (!entry) return console.error(`Windows provision advisory: gentle-pi@${version} is outside the reviewed supplier table; supplier file digests unchecked`);
   for (const [name, expected] of [
     ['scripts/gentle-ai-installer.mjs', entry.installer],
     ['runtime/gentle-ai-binary.mjs', entry.binary],
-  ]) if (digest(read(path.join(gentle, name))) !== expected) reject('stock native supplier source pin');
+  ]) if (digest(read(path.join(gentle, name))) !== expected) return console.error(`Windows provision advisory: gentle-pi@${version} supplier file ${name} differs from its reviewed entry`);
 }
 // Whole-tree materialization digest adapted from the private-global provisioner's
 // inventory: bounded entry/byte counts, physical regular files only, every entry
@@ -290,9 +283,9 @@ function rewriteSupplierDeclaration(directory, names, fallback, companion = null
   fs.unlinkSync(path.join(directory, 'package-lock.json'));
   exclusive(path.join(directory, 'package.json'), rootDeclaration(names, fallback, companion));
 }
-// The companion pin is read once, from the resolved reviewed gentle-pi tarball
-// stock npm fetches into the private cache (npm ci reuses it), only after its
-// bytes match the locked SRI.
+// The companion pin is read once, from the resolved gentle-pi tarball stock
+// npm fetches into the private cache (npm ci reuses it), only after its bytes
+// match the locked SRI — the channel resolution anchors the pack bytes.
 function packedCompanionPin(version, integrity) {
   const packed = path.join(root, 'tmp', `gentle-pi-${crypto.randomUUID()}`);
   fs.mkdirSync(packed);
@@ -312,35 +305,23 @@ if (action === 'install') {
   npmCommand(lockInstall);
   const { completeFile } = await import(pathToFileURL(path.join(root, 'complete-generated-lock-sri.mjs')).href);
   await completeFile(lockPath);
-  // Reviewed-latest fallback: an unreviewed `latest` resolution installs the
-  // newest reviewed gentle-pi version instead of failing; the other four roots
-  // stay `latest`. One re-resolution only.
-  const first = JSON.parse(read(lockPath)), firstResolved = rootAuthorities(first, pins);
-  const fallback = supplierFallbackVersion(firstResolved['gentle-pi'], first.packages['node_modules/gentle-pi'].integrity, reviewedSuppliers());
-  if (fallback) {
-    console.error(`Windows install phase: provision-supplier-fallback ${firstResolved['gentle-pi']} -> ${fallback}`);
-    rewriteSupplierDeclaration(source, pins, fallback);
+  // The channel resolution is final: no re-resolution ever rewrites it.
+  // Companion: the locked gentle-pi that pins one is re-resolved once at its
+  // exact version with the companion at that exact pin. The pack's SRI is
+  // checked against the lock, so the channel resolution anchors the bytes.
+  const locked = JSON.parse(read(lockPath)).packages['node_modules/gentle-pi'];
+  companion = packedCompanionPin(locked.version, locked.integrity);
+  if (companion) {
+    console.error(`Windows install phase: provision-companion ${companionName}@${companion}`);
+    rewriteSupplierDeclaration(source, pins, locked.version, companion);
     npmCommand(lockInstall);
     await completeFile(lockPath);
-  }
-  // Companion: a reviewed gentle-pi that pins one is re-resolved once at its
-  // exact version with the companion at that exact pin.
-  const locked = JSON.parse(read(lockPath)).packages['node_modules/gentle-pi'];
-  if (reviewedSupplierEntry(locked.version, locked.integrity, reviewedSuppliers())) {
-    companion = packedCompanionPin(locked.version, locked.integrity);
-    if (companion) {
-      console.error(`Windows install phase: provision-companion ${companionName}@${companion}`);
-      rewriteSupplierDeclaration(source, pins, locked.version, companion);
-      npmCommand(lockInstall);
-      await completeFile(lockPath);
-    }
   }
 }
 const lockBytes = read(lockPath), lock = JSON.parse(lockBytes);
 const roots = Object.hasOwn(lock?.packages?.['']?.dependencies ?? {}, companionName) ? [...pins, companionName] : pins;
 const resolved = rootAuthorities(lock, roots);
-// A listed version whose integrity differs from the reviewed entry never falls back.
-reviewedSupplierLock(action, mainOverlay, resolved['gentle-pi'], lock.packages['node_modules/gentle-pi'].integrity, reviewedSuppliers());
+reviewedSupplierAdvisory(action, mainOverlay, resolved['gentle-pi'], lock.packages['node_modules/gentle-pi'].integrity, reviewedSuppliers());
 for (const [relative, record] of Object.entries(lock.packages)) {
   if (!relative) continue;
   if (!/^node_modules\/(?:@?[a-z0-9][a-z0-9._-]*\/)*[a-z0-9][a-z0-9._-]*$/.test(relative)) reject('lock placement');
@@ -499,8 +480,8 @@ const lockedCompanion = resolved[companionName] ? `npm:${companionName}@${resolv
 const declaredCompanion = action === 'install'
   ? companionDeclaration(companion, resolved[companionName], lockedCompanion ? JSON.parse(read(path.join(modules, companionName, 'package.json'))).version : undefined)
   : null;
-// Stock supplier pins authorize installation; Main source is bound by the frozen ZIP.
-if (action === 'install' || !mainOverlay) reviewedSupplierSources(gentle, resolved['gentle-pi'], reviewedSuppliers());
+// Supplier digests are advisory; Main source stays bound by the frozen ZIP.
+if (action === 'install' || !mainOverlay) reviewedSupplierAdvisorySources(gentle, resolved['gentle-pi'], reviewedSuppliers());
 if (action === 'install') {
   const { installGentleAi } = await import(pathToFileURL(path.join(gentle, 'scripts/gentle-ai-installer.mjs')).href);
   console.error('Windows install phase: provision-native'); // Explicit, authenticated stock API, no postinstall/fullscreen hook.
