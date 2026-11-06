@@ -29,9 +29,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agenthooks"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mcp"
@@ -296,10 +298,16 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
+	// Keep notices visible even if a later pipeline step failed. The shared
+	// component records them without writing to TUI stderr.
+	writeGGAProviderNotices(os.Stderr, runtime.state.ggaNotices)
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
 	result.PiCodeGraph = runtime.state.piCodeGraph
+	if runtime.state.ggaInstallDeferred {
+		result.ManualActions = append(result.ManualActions, GGAHomebrewDeferredAction)
+	}
 	result.ManualActions = append(result.ManualActions, runtime.state.nativeReviewActions...)
 	result.ManualActions = append(result.ManualActions, runtime.state.retiredSDDActions...)
 	result.Verify = runPostApplyVerification(postApplyVerificationInput{
@@ -310,7 +318,7 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		Resolved:     resolved,
 		State:        runtime.state,
 	})
-	result.Verify = withPostInstallNotes(result.Verify, resolved)
+	result.Verify = withPostInstallNotes(result.Verify, resolved, runtime.state.ggaInstallDeferred)
 	if backgroundActivation != nil {
 		// Notes describe the applied outcome, not the prepared prediction.
 		background.Activation = backgroundActivation.Report()
@@ -353,6 +361,7 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		ClaudeModelAssignments:      claudeLegacyAssignmentsForState(input.Selection.ClaudeModelAssignments, claudePhaseState),
 		ClaudePhaseAssignments:      claudePhaseState,
 		KiroModelAssignments:        kiroAliasesToStrings(input.Selection.KiroModelAssignments),
+		AntigravityModelAssignments: model.AntigravityModelTiersToStrings(input.Selection.AntigravityModelAssignments),
 		CodexModelAssignments:       codexEffortsToStrings(input.Selection.CodexModelAssignments),
 		CodexOrchestratorAssignment: codexOrchestratorToState(input.Selection.CodexOrchestratorAssignment),
 		CodexCarrilModelAssignments: input.Selection.CodexCarrilModelAssignments,
@@ -423,6 +432,7 @@ func mergeFullInstallState(existing, fresh state.InstallState) state.InstallStat
 	merged.CommunityTools, merged.CommunityToolsConfigured = fresh.CommunityTools, fresh.CommunityToolsConfigured
 	merged.ClaudeModelAssignments, merged.ClaudePhaseAssignments = fresh.ClaudeModelAssignments, fresh.ClaudePhaseAssignments
 	merged.KiroModelAssignments, merged.CodexModelAssignments = fresh.KiroModelAssignments, fresh.CodexModelAssignments
+	merged.AntigravityModelAssignments = fresh.AntigravityModelAssignments
 	merged.CodexOrchestratorAssignment = fresh.CodexOrchestratorAssignment
 	merged.CodexCarrilModelAssignments, merged.CodexPhaseModelAssignments = fresh.CodexCarrilModelAssignments, fresh.CodexPhaseModelAssignments
 	merged.ModelAssignments, merged.Persona = fresh.ModelAssignments, fresh.Persona
@@ -471,6 +481,9 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	if newState.KiroModelAssignments != nil {
 		merged.KiroModelAssignments = newState.KiroModelAssignments
 	}
+	if newState.AntigravityModelAssignments != nil {
+		merged.AntigravityModelAssignments = newState.AntigravityModelAssignments
+	}
 	if newState.CodexOrchestratorAssignment != nil {
 		merged.CodexOrchestratorAssignment = newState.CodexOrchestratorAssignment
 	}
@@ -514,10 +527,10 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	return merged, nil
 }
 
-func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
+func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan, ggaInstallDeferred bool) verify.Report {
 	report = withReadyAgentRunNote(report, resolved)
 	report = withFailedVerificationNote(report, resolved)
-	if hasComponent(resolved.OrderedComponents, model.ComponentGGA) && report.Ready {
+	if hasComponent(resolved.OrderedComponents, model.ComponentGGA) && report.Ready && !ggaInstallDeferred {
 		report.FinalNote = report.FinalNote + "\n\nGGA is now installed globally. To enable project hooks, run in each repo:\n- gga init\n- gga install"
 	}
 	report = withGoInstallPathNote(report, resolved)
@@ -787,6 +800,9 @@ type runtimeState struct {
 	nativeReviewActions      []string
 	retiredSDDActions        []string
 	compatibilityTransaction compatibilityRefreshTransaction
+	ggaConfigCreationSkipped bool
+	ggaNotices               []string
+	ggaInstallDeferred       bool
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
 	// single `engram version` invocation performed by componentApplyStep.Run
@@ -800,6 +816,45 @@ type runtimeState struct {
 	// codexServiceTier is the tier the global engram injection left in Codex's
 	// config.toml (nil = not written); state records it as the managed tier.
 	codexServiceTier *string
+}
+
+// recordGGAInjection carries the actual write decision into verification. Agent
+// selection alone cannot excuse a missing config that should have been written.
+func (s *runtimeState) recordGGAInjection(result gga.InjectionResult) {
+	if s != nil {
+		s.ggaConfigCreationSkipped = result.ConfigCreationSkipped
+		s.ggaNotices = append([]string(nil), result.Notices...)
+	}
+}
+
+func (s *runtimeState) recordGGAInstallDeferred() {
+	if s != nil {
+		s.ggaInstallDeferred = true
+	}
+}
+
+// ggaManualActions returns the completion actions owed by the GGA steps.
+func (s *runtimeState) ggaManualActions() []string {
+	if s == nil {
+		return nil
+	}
+	actions := append([]string(nil), s.ggaNotices...)
+	if s.ggaInstallDeferred {
+		actions = append(actions, GGAHomebrewDeferredAction)
+	}
+	return actions
+}
+
+// deferredComponents returns the components whose install was deferred.
+func (s *runtimeState) deferredComponents() []model.ComponentID {
+	if s == nil || !s.ggaInstallDeferred {
+		return nil
+	}
+	return []model.ComponentID{model.ComponentGGA}
+}
+
+func (s *runtimeState) skipsGGAConfigVerification(homeDir string, component model.ComponentID, path string) bool {
+	return s != nil && s.ggaConfigCreationSkipped && component == model.ComponentGGA && path == gga.ConfigPath(homeDir)
 }
 
 func (s *runtimeState) cleanupRollbackSnapshot() {
@@ -911,6 +966,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if r.piBackgroundProjection != nil {
 		apply = append(apply, piBackgroundProjectionStep{id: "pi:background-projection", plan: r.piBackgroundProjection})
 	}
+	// Before every prompt writer.
+	apply = append(apply, geminiLegacyRootSteps("agent:gemini-legacy-root", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil)...)
 
 	// Before installing components, ensure modular agents have their system prompt hub.
 	// This ensures that SDD or Engram can inject their modules even if Persona is skipped.
@@ -994,6 +1051,10 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state})
 	}
 
+	// After every prompt writer, including community-tool guidance.
+	apply = append(apply, geminiModulesSteps("agent:gemini-modules", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil)...)
+	apply = append(apply, antigravityRulesSteps("agent:antigravity-rules", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil)...)
+
 	if needsCompatibilitySkillsRefresh(r.resolved.OrderedComponents) {
 		apply = append(apply, compatibilitySkillsRefreshStep{
 			id:          "component:compatibility-skills-refresh",
@@ -1035,10 +1096,11 @@ func (s nativeReviewAgentStep) Run() error {
 	adapter := resolveAdapters([]model.AgentID{s.agent})[0]
 	target := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 	res, err := reviewassets.InstallNativeAgents(target, adapter, reviewassets.InstallOptions{
-		ClaudeModelAssignments:    s.selection.ClaudeModelAssignments,
-		ClaudePhaseAssignments:    s.selection.ClaudePhaseAssignments,
-		KiroModelAssignments:      s.selection.KiroModelAssignments,
-		CodeGraphGuidanceMarkdown: nativeReviewCodeGraphGuidanceMarkdown(s.homeDir, s.selection.CommunityTools),
+		ClaudeModelAssignments:      s.selection.ClaudeModelAssignments,
+		ClaudePhaseAssignments:      s.selection.ClaudePhaseAssignments,
+		KiroModelAssignments:        s.selection.KiroModelAssignments,
+		AntigravityModelAssignments: s.selection.AntigravityModelAssignments,
+		CodeGraphGuidanceMarkdown:   nativeReviewCodeGraphGuidanceMarkdown(s.homeDir, s.selection.CommunityTools),
 	})
 	if err != nil {
 		return fmt.Errorf("install native review agents for %q: %w", s.agent, err)
@@ -2574,6 +2636,110 @@ func managedOrchestratorPromptFromSettings(raw []byte) (string, bool) {
 	return prompt, ok
 }
 
+// publishedGuidanceStep runs a publisher whose output file names depend on
+// the guidance the prompt writers staged, which does not exist when the run's
+// backup is taken. It snapshots exactly what the publisher may touch right
+// before it runs and restores that on rollback: files this run created are
+// removed, previous ones come back byte for byte, and an emptied directory
+// this run created is removed.
+type publishedGuidanceStep struct {
+	id           string
+	dir          string
+	paths        func() []string
+	publish      func() ([]string, error)
+	changedFiles *[]string
+	before       map[string]syncFileSnapshot
+	createdDir   bool
+}
+
+func (s *publishedGuidanceStep) ID() string { return s.id }
+
+func (s *publishedGuidanceStep) Run() (runErr error) {
+	if _, err := os.Lstat(s.dir); os.IsNotExist(err) {
+		s.createdDir = true
+	}
+	before, err := snapshotSyncFiles(s.paths())
+	if err != nil {
+		return fmt.Errorf("snapshot %s: %w", s.id, err)
+	}
+	s.before = before
+	defer func() {
+		if runErr != nil {
+			runErr = errors.Join(runErr, s.Rollback())
+		}
+	}()
+
+	files, err := s.publish()
+	if err != nil {
+		return err
+	}
+	if s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, files...)
+	}
+	return nil
+}
+
+func (s *publishedGuidanceStep) Rollback() error {
+	err := restoreSyncFiles(s.before)
+	if s.createdDir {
+		// Only an emptied directory this run created is removed.
+		_ = os.Remove(s.dir)
+	}
+	return err
+}
+
+// antigravityRulesSteps schedules the publisher once when Antigravity is
+// selected; it writes beside the scoped prompt the writers staged. It
+// publishes the staged guidance as size-capped agy rule files, then retires
+// the sections older releases appended to the GEMINI.md agy also loads
+// (#5676, #1989, #5608).
+func antigravityRulesSteps(id, homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string) []pipeline.Step {
+	if !containsAgent(agentIDs, model.AgentAntigravity) {
+		return nil
+	}
+	baseDir := ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+	return []pipeline.Step{&publishedGuidanceStep{
+		id:           id,
+		dir:          antigravityrules.RulesDir(baseDir),
+		paths:        func() []string { return antigravityRulesBackupPaths(homeDir, workspaceDir, scope, agentIDs) },
+		changedFiles: changedFiles,
+		publish: func() ([]string, error) {
+			published, err := antigravityrules.Publish(baseDir)
+			if err != nil {
+				return nil, fmt.Errorf("publish Antigravity rules: %w", err)
+			}
+			geminiCLIManaged := antigravityrules.GeminiCLIManaged(homeDir, agentIDs)
+			migrated, err := antigravityrules.MigrateLegacyPrompt(baseDir, geminiCLIManaged)
+			files := append(published.Files, migrated.Files...)
+			if err != nil {
+				return files, fmt.Errorf("retire Antigravity sections from GEMINI.md: %w", err)
+			}
+			if geminiCLIManaged {
+				return files, nil
+			}
+			// Without a managed Gemini CLI nothing imports the modules an
+			// earlier install published; they are Gentle AI's own leftovers.
+			retired, err := geminimodules.Retire(baseDir)
+			if err != nil {
+				return files, fmt.Errorf("retire Gemini CLI guidance modules: %w", err)
+			}
+			return append(files, retired.Files...), nil
+		},
+	}}
+}
+
+// antigravityRulesBackupPaths lists the rule files the publisher may write or
+// remove, the legacy GEMINI.md it may rewrite, and the Gemini CLI modules it
+// may retire.
+func antigravityRulesBackupPaths(homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID) []string {
+	if !containsAgent(agentIDs, model.AgentAntigravity) {
+		return nil
+	}
+	baseDir := ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+	paths := append(antigravityrules.ManagedPaths(baseDir), antigravityrules.LegacyPromptPath(baseDir))
+	return append(paths, geminimodules.ManagedPaths(baseDir)...)
+}
+
 type piCodeGraphReconcileStep struct {
 	id, homeDir, workspaceDir string
 	selected                  bool
@@ -3356,7 +3522,15 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentGGA:
-		if !ggaAvailable(s.profile) {
+		installGGA := !ggaAvailable(s.profile)
+		if installGGA && s.profile.PackageManager == "brew" && !homebrewAvailable() {
+			// Missing Homebrew is an optional prerequisite, not a failed install
+			// (#3018): record a manual action and still apply the GGA
+			// configuration below. A present Homebrew that fails still fails.
+			s.state.recordGGAInstallDeferred()
+			installGGA = false
+		}
+		if installGGA {
 			// GGA not found on any known PATH — install it.
 			if s.profile.OS == "windows" {
 				if err := cleanupGGAInstallDir(); err != nil {
@@ -3367,7 +3541,7 @@ func (s componentApplyStep) Run() error {
 			if err != nil {
 				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 			}
-			installErr := runCommandSequence(commands)
+			installErr := runCommandSequence(withResolvedBrewCommand(commands))
 			if installErr != nil {
 				if ggaAvailable(s.profile) {
 					// The GGA install script uses `set -e` and `read -p` for
@@ -3401,9 +3575,11 @@ func (s componentApplyStep) Run() error {
 				fmt.Fprintf(os.Stderr, "WARNING: could not add %s to PATH: %v\n", ggaBinDir, err)
 			}
 		}
-		if _, err := gga.Inject(s.homeDir, s.agents); err != nil {
+		res, err := gga.Inject(s.homeDir, s.agents)
+		if err != nil {
 			return fmt.Errorf("inject gga config: %w", err)
 		}
+		s.state.recordGGAInjection(res)
 		return nil
 	case model.ComponentTheme:
 		for _, adapter := range adapters {
@@ -3435,6 +3611,14 @@ func (s componentApplyStep) Run() error {
 		return nil
 	default:
 		return fmt.Errorf("component %q is not supported in install runtime", s.component)
+	}
+}
+
+// writeGGAProviderNotices keeps installation skips visible without treating
+// missing inference or conservative preservation as an installation failure.
+func writeGGAProviderNotices(w io.Writer, notices []string) {
+	for _, notice := range notices {
+		fmt.Fprintf(w, "WARNING: %s\n", notice)
 	}
 }
 
@@ -3524,6 +3708,8 @@ func executeTUIInstall(homeDir string, selection model.Selection, resolved plann
 	runtime.piBackgroundProjection = preparePiBackgroundProjection(homeDir, &piBackgroundResolution, containsAgent(resolved.Agents, model.AgentPi))
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress), pipeline.WithTerminalCleanup(runtime.state.cleanupRollbackSnapshot))
 	result := orchestrator.Execute(tuiInstallStagePlan(runtime))
+	result.ManualActions = append(result.ManualActions, runtime.state.ggaManualActions()...)
+	result.DeferredComponents = runtime.state.deferredComponents()
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
@@ -3638,6 +3824,21 @@ func resolveEngramInstalledPath(profile system.PlatformProfile) (string, bool) {
 		return standardHomebrewExecutable("engram")
 	}
 	return "", false
+}
+
+// GGAHomebrewDeferredAction is the manual action recorded when a GGA install is
+// skipped because Homebrew is not available. Completion renderers use it to
+// avoid reporting that GGA was installed.
+const GGAHomebrewDeferredAction = "gga was not installed because Homebrew is not available. Install Homebrew (https://brew.sh), then run `gentle-ai install --component gga`."
+
+// homebrewAvailable reports whether brew is on PATH or at a standard Homebrew
+// prefix, the same locations resolveBrewCommand uses.
+func homebrewAvailable() bool {
+	if _, err := cmdLookPath("brew"); err == nil {
+		return true
+	}
+	_, found := standardHomebrewExecutable("brew")
+	return found
 }
 
 // resolveBrewCommand avoids environment-sensitive shell profile probing. The
@@ -3827,6 +4028,11 @@ func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, sele
 				}
 			}
 		}
+		if component == model.ComponentEngram {
+			for _, path := range antigravityLegacyEngramPluginPaths(homeDir, workspaceDir, scope, adapters) {
+				paths[path] = struct{}{}
+			}
+		}
 		// Persona backup captures every managed output-style file, not just the
 		// selected one, so a failed persona switch can restore the file its
 		// cleanup removed. Backup-only: verification stays on the selected file.
@@ -3861,6 +4067,12 @@ func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, sele
 		paths[path] = struct{}{}
 	}
 	for _, path := range retiredSDDAssetBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range antigravityRulesBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range geminiModulesBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
 		paths[path] = struct{}{}
 	}
 	for _, adapter := range adapters {
@@ -4089,6 +4301,10 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					if p := adapter.SettingsPath(homeDir); p != "" {
 						paths = append(paths, p)
 					}
+					// Engram registration is plugin-owned (#797); declaring
+					// the assets snapshots them, so sync reports only plugin
+					// files whose bytes really changed (#5614).
+					paths = append(paths, engram.AntigravityPluginAssetPaths(targetDir)...)
 				}
 			case model.StrategyMergeIntoYAML:
 				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
@@ -4352,6 +4568,19 @@ func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScop
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
 }
 
+// antigravityLegacyEngramPluginPaths returns the Engram plugin assets older
+// gentle-ai versions wrote under antigravity-cli/plugins. Engram injection
+// retires them (#5930), so they are backup-only targets: never verified.
+func antigravityLegacyEngramPluginPaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	var paths []string
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentAntigravity {
+			paths = append(paths, engram.AntigravityLegacyPluginAssetPaths(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))...)
+		}
+	}
+	return paths
+}
+
 // piPersonaConfigPaths returns the Pi persona state files managed by install.
 // Like every scoped component, global install writes only the global file,
 // which GENTLE_AI_PI_CONFIG_DIR may relocate; workspace install writes only
@@ -4440,11 +4669,14 @@ func openCodeSDDPluginPaths(adapter agents.Adapter, targetDir string) []string {
 	return paths
 }
 
-// verificationComponentPaths excludes retired Codex SDD profiles and Pi's
-// mcp.json from active health checks. Pi Engram is native-only (gentle-engram),
-// so Engram provisioning writes mcp.json only to migrate mcp-adapter.json
-// servers and its absence is healthy (#5103). The shared component path
-// inventory retains both for snapshots and rollback of user-owned files.
+// verificationComponentPaths excludes retired Codex SDD profiles, Pi's
+// mcp.json, and Antigravity's global mcp_config.json from active health checks.
+// Pi Engram is native-only (gentle-engram), so Engram provisioning writes
+// mcp.json only to migrate mcp-adapter.json servers and its absence is healthy
+// (#5103). Antigravity Engram registration is plugin-owned (#797): Engram only
+// removes a managed duplicate from the global config and never creates it. The
+// shared component path inventory retains them for snapshots and rollback of
+// user-owned files.
 func verificationComponentPaths(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component)
 	if component != model.ComponentEngram {
@@ -4460,7 +4692,7 @@ func verificationComponentPaths(homeDir, workspaceDir string, scope InstallScope
 					excluded[profile] = true
 				}
 			}
-		case model.AgentPi:
+		case model.AgentPi, model.AgentAntigravity:
 			if config := adapter.MCPConfigPath(targetDir, "engram"); config != "" {
 				excluded[config] = true
 			}
@@ -4499,7 +4731,7 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 			continue
 		}
 		for _, path := range verificationComponentPaths(input.HomeDir, input.WorkspaceDir, input.Scope, input.Selection, adapters, component) {
-			if path == "" {
+			if path == "" || input.State.skipsGGAConfigVerification(input.HomeDir, component, path) {
 				continue
 			}
 			if _, dup := seenPath[path]; dup {
@@ -4675,10 +4907,10 @@ func engramInstallCommand(agentIDs []model.AgentID) string {
 }
 
 // antigravityCollisionCheck returns a soft verify check that warns the user
-// when Antigravity and Gemini CLI are selected together. These agents
-// intentionally share ~/.gemini/GEMINI.md because Antigravity uses a
-// Gemini-compatible prompt surface; the last synced agent routing guidance
-// controls the shared gentle-ai:agent-routing section.
+// when Antigravity and Gemini CLI are selected together. Antigravity reads its
+// Gentle AI guidance from published agy rules, but agy also loads the
+// ~/.gemini/GEMINI.md Gemini CLI owns, which keeps only user content and the
+// import lines agy does not expand.
 func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
 	hasAntigravitySurface := false
 	hasGemini := false
@@ -4696,13 +4928,14 @@ func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
 	return []verify.Check{
 		{
 			ID:          "verify:antigravity:rules-collision",
-			Description: "Antigravity and Gemini CLI share ~/.gemini/GEMINI.md",
+			Description: "Antigravity also loads the Gemini CLI prompt ~/.gemini/GEMINI.md",
 			Soft:        true,
 			Run: func(context.Context) error {
+				// refusal:by-design human-authority: keeping Gemini CLI selected beside Antigravity is the user's choice
 				return fmt.Errorf(
-					"Antigravity and Gemini CLI write rules to ~/.gemini/GEMINI.md\n" +
-						"Antigravity intentionally uses the Gemini-compatible global prompt surface; the last synced agent routing guidance controls the shared gentle-ai:agent-routing section.\n" +
-						"Prefer Antigravity for new installs; keep Gemini CLI selected only when you intentionally want that legacy prompt to be the active one.",
+					"Antigravity loads its Gentle AI guidance from ~/.gemini/config/rules/gentle-ai-*.md and also loads ~/.gemini/GEMINI.md, which Gemini CLI owns.\n" +
+						"Gemini CLI keeps only your content and @./gentle-ai/... import lines there, which Antigravity does not expand, so its sessions do not load the Gemini CLI guidance.\n" +
+						"Keep Gemini CLI selected only if you also use it; otherwise remove it from your Gentle AI selection.",
 				)
 			},
 		},
@@ -4748,12 +4981,9 @@ func (s checkDependenciesStep) Run() error {
 		}
 	}
 
-	// Run detection but do NOT write to stdout/stderr — this step runs
-	// inside the Bubble Tea alternate screen in TUI mode, so any raw
-	// output corrupts the display (see issue #2). Missing deps are
-	// surfaced on the TUI complete screen and by the actual install steps
-	// failing with real error messages.
-	_ = system.DetectDependencies(context.Background(), s.profile)
+	// This step never prints (it runs inside the Bubble Tea alternate screen;
+	// see issue #2). Missing deps are surfaced on the TUI complete screen and
+	// by the install steps failing with real error messages.
 	for _, agent := range s.selection.Agents {
 		// Only Pi executes package commands (its already-present `pi`
 		// subcommands and npm-based Engram initialization — see

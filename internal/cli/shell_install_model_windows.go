@@ -27,6 +27,7 @@ type shellInstallModel struct {
 	busy          bool
 	selectionOnly bool
 	confirmed     bool
+	preview       string
 	err           error
 }
 

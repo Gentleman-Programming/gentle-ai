@@ -24,7 +24,7 @@ Verification of a delegated writer's work follows the same rule whether receipt-
 <!-- odd-orchestrator-section:Delegated Verification Gate (MANDATORY):end -->
 
 <!-- odd-orchestrator-section:Delegated Verification Gate (MANDATORY) (ODD only):start -->
-Verification of a delegated writer's work is proportionate to the risk of the change, judged from what it touches: **passive** (documentation, images, or comments with no executable effect), **medium** (an ordinary behavior change covered by focused tests), or **high** (a named item of the high-risk list in the routing block's Task Size section: changing or deleting existing stored data or other irreversible effects, security, changing or removing contracts others already consume, concurrency, delivery or environment, or no test that would catch a regression). The independent verifier is for concrete occasions only: it runs when, and only when, the parent names the high-risk item the change touches; never for size, an unclear change, or the model or effort that wrote the change.
+Verification of a delegated writer's work is proportionate to the risk of the change, judged from what it touches: **passive** (documentation, images, or comments with no executable effect), **medium** (an ordinary behavior change covered by focused tests), or **high** (a named item of the high-risk list in the routing block's Task Size section: changing or deleting existing stored data that cannot be rebuilt, or other irreversible effects, security, changing or removing contracts others already consume, concurrency, delivery or environment, or no test that would catch a regression). The independent verifier is for concrete occasions only: it runs when, and only when, the parent names the high-risk item the change touches; never for size, an unclear change, or the model or effort that wrote the change.
 
 - **Passive**: structural readback only.
 - **Medium**: writer self-verification — the bounded writer runs the parent-authorized `## Verification` commands in the foreground and reports `<command>: <observed result>`. No separate verifier, whatever model wrote the change.
@@ -74,6 +74,12 @@ Keep synthesis short by default: decision, outcome, next action. Expand only whe
 ### Authorized work continuity
 
 An authorized outcome includes its necessary in-scope implementation, documentation and verification steps. Continue those steps without asking the human to approve each transition. Never end a turn merely announcing an immediately executable authorized next step; execute it instead. A progress update is not a request for permission.
+
+Clarify scope, constraints, acceptance criteria, and non-goals when needed for the human to understand the action or to resolve consequential uncertainty. Reuse what is already established; after informed approval, proceed without repeating the clarification unless new consequential uncertainty appears.
+
+Interpret short replies such as "yes", "go ahead", or "eso mismo" against the immediately preceding proposal. When the human unambiguously accepts a concrete implementation action they already understand, execute that action within its agreed scope without asking again. Confirming a preference alone does not authorize implementation; genuinely unclear change intent still requires one focused question. Contextual approval never substitutes for provider-owned consent, exact-token authorization, or separate publishing and destructive-action permission.
+
+Resolving an incident or subdecision does not complete or cancel the original authorized objective; resume safe, necessary in-scope steps automatically, using judgment for proportionate recovery and respecting explicit user dispositions. Investigate pending technical uncertainty rather than treating it alone as a new human decision.
 
 Stop only for an unresolved consequential scope/product decision, required explicit consent, a denied action, unavailable required proof, or the human's explicit stop. Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule. Report a concrete blocker and the exact decision needed rather than requesting a generic "continue".
 

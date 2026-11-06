@@ -68,7 +68,12 @@ func BuildCorrectionPlanRequest(state CompactState, revision string) (Correction
 	for index, id := range fixFindingIDs {
 		finding, ok := byID[id]
 		classification, classified := view.Classifications[id]
-		if !ok || !classified || view.Outcomes[id] != OutcomeCorroborated {
+		// Compact authority admits both corroborated and inconclusive refuter
+		// outcomes into the fix set (issue #5888): an inconclusive finding the
+		// refuter could not disprove is exactly a bounded-correction target, and
+		// its original outcome must remain inconclusive, never rewritten as
+		// corroborated.
+		if !ok || !classified || (view.Outcomes[id] != OutcomeCorroborated && view.Outcomes[id] != OutcomeInconclusive) {
 			return CorrectionPlanRequest{}, errors.New("correction plan request finding is not accepted by compact authority") // refusal:by-design world-action: provider authority must be repaired before projecting findings
 		}
 		findings[index] = CorrectionPlanFinding{

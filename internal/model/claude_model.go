@@ -74,7 +74,7 @@ func ClaudeEffortsForModel(alias ClaudeModelAlias) []ClaudeEffort {
 	case ClaudeModelFable, ClaudeModelOpus:
 		return []ClaudeEffort{ClaudeEffortDefault, ClaudeEffortLow, ClaudeEffortMedium, ClaudeEffortHigh, ClaudeEffortXHigh, ClaudeEffortMax}
 	case ClaudeModelSonnet:
-		return []ClaudeEffort{ClaudeEffortDefault, ClaudeEffortLow, ClaudeEffortMedium, ClaudeEffortHigh, ClaudeEffortMax}
+		return []ClaudeEffort{ClaudeEffortDefault, ClaudeEffortLow, ClaudeEffortMedium, ClaudeEffortHigh, ClaudeEffortXHigh, ClaudeEffortMax}
 	case ClaudeModelHaiku:
 		return []ClaudeEffort{ClaudeEffortDefault}
 	default:

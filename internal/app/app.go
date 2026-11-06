@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
@@ -39,7 +40,11 @@ var (
 	selfUpdateFn              = selfUpdate
 	ensureCurrentOSSupported  = system.EnsureCurrentOSSupported
 	detectSystem              = system.Detect
-	runTUI                    = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+	runShellInstallSelection  = cli.RunShellInstallSelectionProcess
+	runInlineShellInstall     = func(ctx context.Context, request shellinstaller.UserInstallRequest, report func(shellinstaller.UserInstallProgress)) error {
+		return cli.RunShellInstallInline(ctx, cli.ShellInstallSelection{Request: request, Confirmed: true, Executed: true}, report, io.Discard)
+	}
+	runTUI = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
 		p := tea.NewProgram(m, opts...)
 		return p.Run()
 	}
@@ -274,7 +279,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 			printPostUpgradeDoctorAdvisory(stdout)
 		}
 
-		m := tui.NewModel(result, Version, installedState)
+		m := tui.NewModel(result, Version, installedState).WithShellInstaller().WithShellInstallRunner(runInlineShellInstall)
 		m.ExecuteFn = tuiExecuteWithBackground
 		m.ExecuteSDKFn = tuiExecuteWithSDK
 		m.RestoreFn = tuiRestore
@@ -304,6 +309,14 @@ func RunArgs(args []string, stdout io.Writer) error {
 		finalModel, err := runTUI(m, tea.WithAltScreen())
 		if err != nil {
 			return err
+		}
+		// Bubble Tea has restored the terminal before any installer runs.
+		if selector, ok := finalModel.(interface {
+			ShellInstallSelection() cli.ShellInstallSelection
+		}); ok {
+			if selection := selector.ShellInstallSelection(); selection.Confirmed && !selection.Executed {
+				return runShellInstallSelection(selection, stdout)
+			}
 		}
 		if latestVersion, ok := gentleAIUpgradeVersionFromTUI(finalModel); ok {
 			return restartAfterGentleAIUpgrade(latestVersion, stdout)
@@ -700,6 +713,7 @@ func tuiExecuteWithSDK(
 			installState.ClaudeModelAssignments = claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState)
 			installState.ClaudePhaseAssignments = claudePhaseState
 			installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+			installState.AntigravityModelAssignments = model.AntigravityModelTiersToStrings(selection.AntigravityModelAssignments)
 			installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
 			installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
 			if codexServiceTier != nil { // only what engram actually left in config.toml
@@ -900,6 +914,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.KiroModelAssignments != nil {
 		selection.KiroModelAssignments = overrides.KiroModelAssignments
 	}
+	if overrides.AntigravityModelAssignments != nil {
+		selection.AntigravityModelAssignments = overrides.AntigravityModelAssignments
+	}
 	if overrides.ClearCodexOrchestratorAssignment {
 		selection.CodexOrchestratorAssignment = nil
 		selection.ClearCodexOrchestratorAssignment = true
@@ -968,6 +985,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		}
 		selection.KiroModelAssignments = m
 	}
+	if len(selection.AntigravityModelAssignments) == 0 {
+		selection.AntigravityModelAssignments = model.AntigravityModelTiersFromStrings(s.AntigravityModelAssignments)
+	}
 	if len(selection.CodexModelAssignments) == 0 && len(s.CodexModelAssignments) > 0 {
 		m := make(map[string]model.CodexEffort, len(s.CodexModelAssignments))
 		for k, v := range s.CodexModelAssignments {
@@ -1012,6 +1032,7 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 	hasAssignmentSignal := selection.ClaudeModelAssignments != nil ||
 		selection.ClaudePhaseAssignments != nil ||
 		selection.KiroModelAssignments != nil ||
+		selection.AntigravityModelAssignments != nil ||
 		selection.ModelAssignments != nil ||
 		selection.CodexModelAssignments != nil ||
 		selection.CodexOrchestratorAssignment != nil ||
@@ -1055,6 +1076,9 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 			} else {
 				current.KiroModelAssignments = nil
 			}
+		}
+		if selection.AntigravityModelAssignments != nil {
+			current.AntigravityModelAssignments = model.AntigravityModelTiersToStrings(selection.AntigravityModelAssignments)
 		}
 		if selection.ClearCodexOrchestratorAssignment {
 			current.CodexOrchestratorAssignment = nil

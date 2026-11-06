@@ -92,7 +92,7 @@ func TestClaudeAdapterExecutesWithSavedModelAndEffortOnlyWhenValid(t *testing.T)
 		{"default effort", model.ClaudeModelOpus, model.ClaudeEffortDefault, "opus", ""},
 		{"invalid effort", model.ClaudeModelOpus, "invalid", "opus", ""},
 		{"unsupported effort", model.ClaudeModelHaiku, model.ClaudeEffortLow, "haiku", ""},
-		{"unsupported xhigh", model.ClaudeModelSonnet, model.ClaudeEffortXHigh, "sonnet", ""},
+		{"sonnet xhigh", model.ClaudeModelSonnet, model.ClaudeEffortXHigh, "sonnet", "xhigh"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			argumentsPath := filepath.Join(t.TempDir(), "arguments")

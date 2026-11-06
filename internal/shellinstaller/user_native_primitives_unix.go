@@ -11,7 +11,23 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
+
+// Bind the opened descriptor to the physical selection before reading bytes.
+// Nonblocking, nofollow opens also refuse a substituted FIFO without waiting.
+func privateNativeOpenFile(path string, before os.FileInfo) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) || privateStamp(before) != privateStamp(opened) {
+		return nil, privateError("source", errors.Join(err, file.Close(), errors.New("native file changed before descriptor read")))
+	}
+	return file, nil
+}
 
 func privateNativeFile(ctx context.Context, path string, mode os.FileMode, size int64, pin string) (string, error) {
 	if err := ctx.Err(); err != nil {
@@ -21,7 +37,7 @@ func privateNativeFile(ctx context.Context, path string, mode os.FileMode, size 
 	if err != nil || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) || (mode != 0 && info.Mode() != mode) || (mode == 0 && info.Mode() != 0600 && info.Mode() != 0644 && info.Mode() != 0700 && info.Mode() != 0755) || info.Size() > 268435456 || (size >= 0 && info.Size() != size) {
 		return "", privateError("source", errors.Join(err, fmt.Errorf("native file refused: %s metadata=%v", path, info)))
 	}
-	file, err := os.Open(path)
+	file, err := privateNativeOpenFile(path, info)
 	if err != nil {
 		return "", err
 	}
@@ -64,8 +80,23 @@ func privateNativeDirectory(path string) error {
 	return nil
 }
 
+// privateNativeHome accepts the operator's home when group read/traverse is
+// present. It is strictly more private than the already accepted 0755 and is
+// never used for owned install directories.
+func privateNativeHome(path string) error {
+	info, err := os.Lstat(path)
+	canonical, canonicalErr := filepath.EvalSymlinks(path)
+	if err != nil || canonicalErr != nil || canonical != path || (info.Mode() != os.ModeDir|0700 && info.Mode() != os.ModeDir|0750 && info.Mode() != os.ModeDir|0755) || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
+		return privateError("source", errors.Join(err, canonicalErr))
+	}
+	if err := privateExtendedMetadata(path, info, true); err != nil {
+		return privateError("source", err)
+	}
+	return nil
+}
+
 func privateNativeEntries(path string) ([]os.DirEntry, error) {
-	directory, err := os.Open(path)
+	directory, err := os.OpenFile(path, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}

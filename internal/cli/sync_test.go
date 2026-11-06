@@ -4685,6 +4685,7 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 			"review-risk": "glm",
 			"default":     "auto",
 		},
+		AntigravityModelAssignments: map[string]string{"jd-fix-agent": "flash_lite", "jd-judge-a": "ultra"},
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"review-risk": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
@@ -4713,6 +4714,9 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	}
 	if got := result.Selection.KiroModelAssignments["default"]; got != model.KiroModelAuto {
 		t.Errorf("KiroModelAssignments[default] = %q, want %q", got, model.KiroModelAuto)
+	}
+	if got, want := result.Selection.AntigravityModelAssignments, (map[string]model.AntigravityModelTier{"jd-fix-agent": model.AntigravityModelFlashLite}); !reflect.DeepEqual(got, want) {
+		t.Errorf("AntigravityModelAssignments = %v, want %v (unknown tiers dropped)", got, want)
 	}
 
 	// OpenCode assignments must be loaded.
@@ -6011,6 +6015,25 @@ func TestRenderSyncReportIncludesChangedFilePaths(t *testing.T) {
 	}
 }
 
+// TestRenderSyncReportNoOpManualActionWording preserves ordinary no-op output
+// and uses neutral guidance without hiding action-specific recovery details.
+func TestRenderSyncReportNoOpManualActionWording(t *testing.T) {
+	action := nativeReviewPreservedAction("/managed/jd-judge-a.md")
+	for _, manual := range []bool{false, true} {
+		result := SyncResult{NoOp: true, Agents: []model.AgentID{model.AgentOpenCode}}
+		want := "gentle-ai sync — no managed sync actions needed\nAgents: opencode\n"
+		if manual {
+			result.ManualActions = []string{action}
+			want += "No managed files changed; review the manual actions below.\nManual actions required:\n- " + action
+		} else {
+			want += "All managed assets are already up to date. No files changed."
+		}
+		if got := RenderSyncReport(result); got != want {
+			t.Fatalf("manual=%v report = %q, want %q", manual, got, want)
+		}
+	}
+}
+
 // TestRenderSyncReportNoOpOmitsChangedFilePaths verifies that RenderSyncReport
 // does not list individual file path bullets in the no-op case.
 func TestRenderSyncReportNoOpOmitsChangedFilePaths(t *testing.T) {
@@ -7300,7 +7323,7 @@ func TestPostSyncVerificationRequiresEveryRetiredPluginRemoved(t *testing.T) {
 	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "sdd-task-result-artifacts.ts")
 	mustWriteFile(t, stale, []byte("stale"))
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}}
-	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	report := runPostSyncVerificationWithState(home, t.TempDir(), ScopeGlobal, selection, nil)
 	for _, check := range report.Checks {
 		if check.ID == "verify:sync:file:"+stale {
 			if check.Status != verify.CheckStatusFailed {
@@ -7321,7 +7344,7 @@ func TestPostSyncVerificationRequiresKilocodeRetiredPluginRemoved(t *testing.T) 
 	stale := filepath.Join(adapter.GlobalConfigDir(home), "plugins", "background-agents.ts")
 	mustWriteFile(t, stale, []byte("stale"))
 	selection := model.Selection{Agents: []model.AgentID{model.AgentKilocode}}
-	report := runPostSyncVerificationScoped(home, t.TempDir(), ScopeGlobal, selection)
+	report := runPostSyncVerificationWithState(home, t.TempDir(), ScopeGlobal, selection, nil)
 	for _, check := range report.Checks {
 		if check.ID == "verify:sync:file:"+stale {
 			if check.Status != verify.CheckStatusFailed {

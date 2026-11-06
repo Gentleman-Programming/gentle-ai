@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
@@ -145,6 +146,125 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				t.Fatalf("read-only correction request consumed authority or budget: %v", err)
 			}
 		})
+	}
+}
+
+// TestNegotiatedStatusExposesMixedOutcomeCorrectionPlan pins issue #5888
+// end to end: a refuter batch admitting one corroborated and one inconclusive
+// outcome closes the lineage into correction_required, and the fresh
+// provider-issued STATUS continuation must expose a usable correction-plan
+// collection for the exact authorized fix set -- never the
+// corrupted_or_unverifiable_authority stop. The inconclusive outcome stays
+// inconclusive, and read-only STATUS spends no authority or budget.
+func TestNegotiatedStatusExposesMixedOutcomeCorrectionPlan(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "one\ntwo\nthree\n", 0o644)
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Findings = []facadeFinding{
+		{
+			ID: "R3-001", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate exposes the wrong behavior",
+			ProofRefs: []string{"tracked.txt:1 reproduced candidate failure"}, EvidenceClass: reviewtransaction.EvidenceInferential,
+			CausalDisposition: reviewtransaction.CausalBehaviorActivated,
+		},
+		{
+			ID: "R3-002", Location: "tracked.txt:2", Severity: "CRITICAL", Claim: "candidate worsens the behavior",
+			ProofRefs: []string{"tracked.txt:2 candidate-specific interpretation"}, EvidenceClass: reviewtransaction.EvidenceInferential,
+			CausalDisposition: reviewtransaction.CausalBehaviorActivated,
+		},
+	}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: updated.State.LineageID, TargetIdentity: updated.State.InitialSnapshot.Identity, Revision: updated.State.CapturePhaseRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refuterRequest, err := reviewProviderNewRefuterRequest(context.Background(), repo, store.Dir, updated.State, updated.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refuterInput := filepath.Join(t.TempDir(), "refuter.json")
+	writeReviewCLIJSON(t, refuterInput, facadeRefuterResult{
+		RequestHash: refuterRequest.RequestHash,
+		Results: []facadeRefuterOutcome{
+			{FindingID: "R3-001", Outcome: reviewtransaction.OutcomeCorroborated, ProofRefs: []string{"independent reproduction"}},
+			{FindingID: "R3-002", Outcome: reviewtransaction.OutcomeInconclusive, ProofRefs: []string{"could not disprove"}},
+		},
+	})
+	submit := append(append([]string{"capture-refuter"}, piRefuterBinding(repo, updated, handle)...), "--agent", string(model.AgentPi), "--input", refuterInput)
+	if err := RunReview(submit, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	final, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.State.State != reviewtransaction.StateCorrectionRequired || !reflect.DeepEqual(final.State.FixFindingIDs, []string{"R3-001", "R3-002"}) {
+		t.Fatalf("mixed refuter batch closed into state %q with fix set %v", final.State.State, final.State.FixFindingIDs)
+	}
+
+	args := []string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--next-transition", "--lineage", started.LineageID,
+	}
+	var first, restarted bytes.Buffer
+	if err := RunReview(args, &first); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, first.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	transition := status.NextTransition
+	if transition == nil || transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "correction_plan_required" ||
+		transition.CorrectionRequest == nil {
+		t.Fatalf("mixed-outcome STATUS offered %#v instead of a usable correction plan", transition)
+	}
+	request := transition.CorrectionRequest
+	if !reflect.DeepEqual(request.FixFindingIDs, []string{"R3-001", "R3-002"}) || len(request.Findings) != 2 ||
+		request.Findings[0].ID != "R3-001" || request.Findings[1].ID != "R3-002" ||
+		reviewtransaction.ValidateCorrectionPlanRequest(*request) != nil {
+		t.Fatalf("mixed-outcome correction request = %#v", request)
+	}
+	view, err := final.State.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Outcomes["R3-001"] != reviewtransaction.OutcomeCorroborated || view.Outcomes["R3-002"] != reviewtransaction.OutcomeInconclusive {
+		t.Fatalf("admitted outcomes were rewritten: %#v", view.Outcomes)
+	}
+	if err := RunReview(args, &restarted); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first.Bytes(), restarted.Bytes()) {
+		t.Fatalf("restarted mixed-outcome correction request changed:\nfirst=%s\nrestarted=%s", first.String(), restarted.String())
+	}
+	if len(final.State.CorrectionAttempts) != 0 || final.State.CumulativeCorrectionLines != 0 {
+		t.Fatalf("read-only STATUS consumed authority accounting: %#v", final.State)
 	}
 }
 

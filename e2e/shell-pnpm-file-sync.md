@@ -1,0 +1,7 @@
+# Durable PNPM staging without serial flush latency
+
+PNPM staging first copies and closes files, then synchronizes every regular staged file through eight workers and an eight-file queue. A descriptor anchored before copying guards the later root-relative, no-follow opens; each file's identity is checked before queuing. Links are not followed because generated targets may name the destination that has not yet been published.
+
+Successful staging waits for every synchronization and close before inventory comparison, source preimage verification, directory synchronization, or publication. Failure cleanup drains any queued files first. Existing relocation, symlink, mode, cancellation, and source-reference checks remain unchanged. Older kernels without `openat2` retain immediate copy-and-sync behavior; the standalone copy helper remains synchronous.
+
+This changes synchronization scheduling, not durability or resource limits. Host-backed installation still requires end-to-end verification under the original time, memory, CPU, and task limits. Unit probes cover bounded overlap, queue draining, idempotent finish, synchronization and close errors, cancellation, root replacement, and complete regular-file coverage.

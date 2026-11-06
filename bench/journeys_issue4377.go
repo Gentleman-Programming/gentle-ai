@@ -9,17 +9,18 @@ import (
 	"strings"
 )
 
-// issue4377Journeys drives the customizable installer through its RDD choice
-// and final confirmation under a real PTY. The sandbox HOME is isolated, and
-// the exchange quits before installation, proving a cancelled choice cannot
-// change the user's global configuration. #4377 tests the deferred RDD choice;
-// ODD's default applicable test-first policy is not an installer choice.
+// issue4377Journeys drives the current customizable installer through its RDD
+// choice under a real PTY. The sandbox HOME is isolated, and the exchange
+// cancels before the installation plan, proving a cancelled choice cannot
+// change the user's global configuration. The current flow exposes RDD as a
+// configuration toggle before the plan; the retired deferred-review screen is
+// not part of this contract.
 func issue4377Journeys() []Journey {
 	return []Journey{{
 		ID:     "j127-customizable-install-rdd-choice",
 		Review: reviewUntouched,
-		Title:  "#4377: customizable installation explains, revises, and summarizes the deferred RDD choice",
-		Source: "#4377 requires a deferred global RDD choice before final installation confirmation without mutating a cancelled installation",
+		Title:  "#4377: customizable installation exposes the RDD default and cancellation",
+		Source: "#4377 requires a visible global RDD default and no mutation when the installation is cancelled",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: update-check cooldown in the sandbox HOME", Fixture: issue3766UpdateCooldownFixture},
@@ -41,78 +42,20 @@ func issue4377Journeys() []Journey {
 }
 
 func issue4377TTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
-	agentCheckboxRows := 0
-	communityToolCursorRows := 0
 	return waitForIssue4377TTY(reader, []string{"Start installation", "q: quit"}, func() error {
 		if _, err := io.WriteString(writer, "\r"); err != nil {
 			return err
 		}
-		return waitForIssue4377TTY(reader, []string{"Detected Configs", "Continue"}, func() error {
-			if _, err := io.WriteString(writer, "\r"); err != nil {
+		return waitForIssue4377TTY(reader, []string{"Configure Gentle-Shell experience", "[x] Global RDD: ON", "End: continue"}, func() error {
+			// Cancel from configuration before the plan exists. The visible
+			// default is enough to prove the operator can inspect it; the
+			// readback proves cancellation persisted nothing.
+			if _, err := io.WriteString(writer, "\x1b"); err != nil {
 				return err
 			}
-			return waitForIssue4377TTY(reader, []string{"[x] claude-code", "Continue"}, func() error {
-				if agentCheckboxRows == 0 {
-					return fmt.Errorf("agent picker rendered no checkbox rows")
-				}
-				if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", agentCheckboxRows)+"\r"); err != nil {
-					return err
-				}
-				return waitForIssue4377TTY(reader, []string{"Choose your Persona", "gentleman"}, func() error {
-					if _, err := io.WriteString(writer, "\r"); err != nil {
-						return err
-					}
-					return waitForIssue4377TTY(reader, []string{"Select Ecosystem Preset", "Memory Only"}, func() error {
-						if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", 2)+"\r"); err != nil {
-							return err
-						}
-						// #4377 keeps the deferred RDD decision after community tools;
-						// there is no separate Strict TDD installer choice to confirm.
-						return waitForIssue4377TTY(reader, []string{"Community Tools", "Continue"}, func() error {
-							if communityToolCursorRows == 0 {
-								return fmt.Errorf("community tools rendered no tool rows")
-							}
-							if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", communityToolCursorRows)+"\r"); err != nil {
-								return err
-							}
-							return waitForIssue4377TTY(reader, []string{"Install Plan", "Continue"}, func() error {
-								if _, err := io.WriteString(writer, "\r"); err != nil {
-									return err
-								}
-								return waitForIssue4377TTY(reader, []string{
-									"Receipt-Driven Development",
-									"RDD is ON by default. You can opt out.",
-									"Disable RDD",
-									"No global RDD preference is configured.",
-								}, func() error {
-									// Confirm default ON, then return and explicitly opt out.
-									// Cancelling must persist neither selection.
-									if _, err := io.WriteString(writer, "\r"); err != nil {
-										return err
-									}
-									return waitForIssue4377TTY(reader, []string{"Review and Confirm", "Receipt-Driven Development", "RDD ON"}, func() error {
-										if _, err := io.WriteString(writer, "\x1b[B\r"); err != nil {
-											return err
-										}
-										return waitForIssue4377TTY(reader, []string{"Receipt-Driven Development", "Enable RDD"}, func() error {
-											if _, err := io.WriteString(writer, "\x1b[B\r"); err != nil {
-												return err
-											}
-											return waitForIssue4377TTY(reader, []string{"Review and Confirm", "Receipt-Driven Development", "RDD OFF"}, func() error {
-												_, err := io.WriteString(writer, "q")
-												return err
-											})
-										})
-									})
-								})
-							})
-						}, func(screen string) {
-							communityToolCursorRows = strings.Count(screen, "View repo:") * 2
-						})
-					})
-				})
-			}, func(screen string) {
-				agentCheckboxRows = strings.Count(screen, "[x]") + strings.Count(screen, "[ ]")
+			return waitForIssue4377TTY(reader, []string{"Start installation", "q: quit"}, func() error {
+				_, err := io.WriteString(writer, "q")
+				return err
 			})
 		})
 	})

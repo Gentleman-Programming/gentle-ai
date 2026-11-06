@@ -96,6 +96,7 @@ expected_contract = [
 	current_contract_root / "schemas/opencode-provider-role.schema.json",
 	current_contract_root / "schemas/operation.schema.json",
 	current_contract_root / "schemas/repair.schema.json",
+	current_contract_root / "schemas/review-acknowledged.schema.json",
 	current_contract_root / "schemas/start-v4.schema.json",
 	current_contract_root / "schemas/start.schema.json",
 	current_contract_root / "schemas/status-v4.schema.json",
