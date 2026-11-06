@@ -18,7 +18,7 @@ func RestoreManagedBackup(manifest backup.Manifest) error {
 	if err != nil {
 		return err
 	}
-	roots := []string{homeDir}
+	roots := restoreRootsForManifest(homeDir, manifest)
 	codexRoot := system.CodexConfigDir(homeDir)
 	codexRoots := []string{codexRoot}
 	// Keep the environment spelling only when it resolves to the selected root.
@@ -32,7 +32,7 @@ func RestoreManagedBackup(manifest backup.Manifest) error {
 	}
 	for _, entry := range manifest.Entries {
 		for _, root := range codexRoots {
-			if pathInsideCodexRoot(entry.OriginalPath, root) {
+			if pathStrictlyInside(entry.OriginalPath, root) {
 				if err := system.ValidateCodexHome(homeDir); err != nil {
 					return err
 				}
@@ -44,9 +44,66 @@ func RestoreManagedBackup(manifest backup.Manifest) error {
 	return (backup.RestoreService{Roots: roots}).Restore(manifest)
 }
 
-// pathInsideCodexRoot checks lexical strict containment for absolute paths.
+// StandaloneRestoreRoots returns the directories a standalone restore of
+// manifest may write under: the home root, plus this process's working
+// directory when a manifest entry actually resolves inside it.
+//
+// Both standalone entries use it — `gentle-ai restore` through
+// RestoreManagedBackup and the TUI restore screen through app.tuiRestore — so a
+// snapshot whose entries live in a workspace outside the home root (the
+// workspace .mcp.json and project settings a workspace-scoped uninstall backs
+// up) is restorable again. The uninstaller keeps those same roots in its
+// Result; a standalone restore has no Result, so it learns the workspace from
+// its own environment and never from the manifest.
+func StandaloneRestoreRoots(manifest backup.Manifest) ([]string, error) {
+	homeDir, err := backup.UserHomeDirFn()
+	if err != nil {
+		return nil, err
+	}
+	return restoreRootsForManifest(homeDir, manifest), nil
+}
+
+// restoreRootsForManifest keeps the historical home root and adds the working
+// directory only when it differs from the home root and an entry resolves
+// strictly inside it. It mirrors uninstall.restoreRootsForPlan, which adds the
+// workspace root only when the plan's own backup targets reach it.
+func restoreRootsForManifest(homeDir string, manifest backup.Manifest) []string {
+	roots := []string{homeDir}
+	workspaceDir, ok := workspaceRestoreRoot(homeDir, manifest)
+	// guard:population workspace-restore-root too-loose: Only this process's working directory, when a manifest entry resolves strictly inside it and it differs from the home root, extends standalone restore roots; every other entry is still refused by RestoreService.
+	if ok {
+		roots = append(roots, workspaceDir)
+	}
+	return roots
+}
+
+// workspaceRestoreRoot reports the working directory a restore of manifest
+// legitimately spans. The value comes from this process, so a tampered manifest
+// cannot widen the roots: an entry can only match a directory this process is
+// already running in.
+func workspaceRestoreRoot(homeDir string, manifest backup.Manifest) (string, bool) {
+	workspaceDir, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	workspaceDir, err = filepath.Abs(workspaceDir)
+	if err != nil {
+		return "", false
+	}
+	if filepath.Clean(workspaceDir) == filepath.Clean(homeDir) {
+		return "", false
+	}
+	for _, entry := range manifest.Entries {
+		if pathStrictlyInside(entry.OriginalPath, workspaceDir) {
+			return workspaceDir, true
+		}
+	}
+	return "", false
+}
+
+// pathStrictlyInside checks lexical strict containment for absolute paths.
 // RestoreService performs the subsequent filesystem and symlink validation.
-func pathInsideCodexRoot(path, root string) bool {
+func pathStrictlyInside(path, root string) bool {
 	if !filepath.IsAbs(path) || !filepath.IsAbs(root) {
 		return false
 	}
