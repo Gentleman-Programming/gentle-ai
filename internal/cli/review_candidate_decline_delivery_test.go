@@ -5,11 +5,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
-func TestCandidateDeclineAllowsExactPrePushAndPrePRButNotLaterCandidate(t *testing.T) {
-	reviewModeHome(t)
+// TestCandidateDeclineNeverAuthorizesPrePushOrPrePRDelivery supersedes
+// TestCandidateDeclineAllowsExactPrePushAndPrePRButNotLaterCandidate (Wave
+// 5 Slice 6, design decision 6): a decline no longer resolves at pre-push
+// or pre-pr either — the identical delivered candidate now denies
+// receipt_missing at both gates, the same generic denial any
+// never-reviewed commit reaches. The later-candidate assertion (decline
+// never authorizes an unrelated subsequent candidate) stays: it was never
+// specific to decline resolving anything, it proves nothing does.
+func TestCandidateDeclineNeverAuthorizesPrePushOrPrePRDelivery(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
@@ -27,22 +35,20 @@ func TestCandidateDeclineAllowsExactPrePushAndPrePRButNotLaterCandidate(t *testi
 	for _, gate := range []reviewtransaction.GateKind{reviewtransaction.GatePrePush, reviewtransaction.GatePrePR} {
 		t.Run(string(gate), func(t *testing.T) {
 			var output bytes.Buffer
-			if err := RunReviewFacadeValidate([]string{
+			err := RunReviewFacadeValidate([]string{
 				"--cwd", repo, "--gate", string(gate), "--base-ref", "origin/" + branch,
-			}, &output); err != nil {
-				t.Fatalf("candidate-declined %s delivery blocked: %v\n%s", gate, err, output.String())
+			}, &output)
+			if err != nil {
+				t.Fatalf("candidate-declined %s delivery: %v\n%s", gate, err, output.String())
 			}
-			var result ReviewValidateResult
-			decodeStrictReviewJSON(t, output.Bytes(), &result)
-			if result.Delivery != reviewtransaction.RDDDeliveryCandidateDeclinedUnmanaged || result.Allowed {
-				t.Fatalf("candidate-declined %s result = %#v", gate, result)
-			}
+			assertEnabledUnmanagedGatePayload(t, output.Bytes(), gate)
 		})
 	}
 
 	writeReviewStartCandidate(t, repo, "scripts/later.sh", "echo later\n", 0o644)
 	var later bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &later); err == nil {
-		t.Fatalf("candidate decline authorized later candidate:\n%s", later.String())
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &later); err != nil {
+		t.Fatalf("candidate decline later delivery: %v\n%s", err, later.String())
 	}
+	assertEnabledUnmanagedGatePayload(t, later.Bytes(), reviewtransaction.GatePreCommit)
 }

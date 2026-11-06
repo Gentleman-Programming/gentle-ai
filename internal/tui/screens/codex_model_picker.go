@@ -1,13 +1,14 @@
 package screens
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"strings"
 	"unicode"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 // CodexModelPreset represents a named effort-tier preset for Codex per-phase
@@ -32,23 +33,27 @@ var codexPresetOrder = []CodexModelPreset{
 }
 
 var codexPresetDescriptions = map[CodexModelPreset]string{
-	CodexPresetLowCost:     "Lowest-cost GPT-5.6 mix — Terra for work, Luna for lightweight phases",
-	CodexPresetRecommended: "Balanced GPT-5.6 mix — Sol for reasoning, Terra for code, Luna for light work",
-	CodexPresetPowerful:    "High-effort GPT-5.6 mix — Sol for reasoning, Terra for code, Luna for light work",
+	CodexPresetLowCost:     "Lowest-cost GPT-6.1 mix — Sol for reasoning, Luna for code and light work",
+	CodexPresetRecommended: "Balanced GPT-6.1 mix — Sol for reasoning, Luna for code and light work",
+	CodexPresetPowerful:    "High-effort GPT-6.1 mix — Astra for reasoning, Sol for code, Luna for light work",
 }
 
 var codexPresetConstructors = map[CodexModelPreset]func() map[string]model.CodexEffort{
-	CodexPresetLowCost:     model.CodexModelPresetLowCost,
-	CodexPresetRecommended: model.CodexModelPresetRecommended,
-	CodexPresetPowerful:    model.CodexModelPresetPowerful,
+	CodexPresetLowCost: func() map[string]model.CodexEffort { return model.CodexODDEffortsForPreset(string(CodexPresetLowCost)) },
+	CodexPresetRecommended: func() map[string]model.CodexEffort {
+		return model.CodexODDEffortsForPreset(string(CodexPresetRecommended))
+	},
+	CodexPresetPowerful: func() map[string]model.CodexEffort {
+		return model.CodexODDEffortsForPreset(string(CodexPresetPowerful))
+	},
 }
 
-// codexCustomPhases is the ordered list of the 13 SDD phases for the Custom
+// codexCustomPhases is the ordered list of ODD and RDD roles for the Custom
 // per-phase model picker. Order matches codexTierGroups phase groupings.
 var codexCustomPhases = []string{
-	"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
-	"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
 	"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
+	"odd-explorer", "odd-worker", "odd-verify",
+	"rdd-risk", "rdd-readability", "rdd-reliability", "rdd-resilience", "rdd-refuter", "rdd-validator",
 }
 
 // CodexCustomMode represents the active sub-mode of the Custom picker flow.
@@ -57,12 +62,15 @@ type CodexCustomMode int
 const (
 	// CodexCustomModeNone means the main picker is showing (no Custom sub-mode active).
 	CodexCustomModeNone CodexCustomMode = iota
-	// CodexCustomModePhaseList shows the 13 phases with their current assignments.
+	// CodexCustomModePhaseList shows all roles with their current assignments.
 	CodexCustomModePhaseList
 	// CodexCustomModeModelSelect shows the searchable model list for a selected phase.
 	CodexCustomModeModelSelect
 	// CodexCustomModeEffortSelect shows the effort level list for the selected model.
 	CodexCustomModeEffortSelect
+	// CodexCustomModeServiceTier shows the global speed (service tier) choice
+	// after a preset is chosen. Fast is a service tier, never an effort.
+	CodexCustomModeServiceTier
 )
 
 // CodexCustomAssignment holds the model id + reasoning effort for one phase in
@@ -84,14 +92,25 @@ type CodexModelPickerState struct {
 	CustomModelCursor  int                              // cursor position in filtered model list
 	CustomEffortCursor int                              // cursor position in effort list
 	CustomPendingModel string                           // model ID selected in model-select (pending effort)
+	AvailableModels    []string                         // discovered model IDs for Custom mode
 	CustomAssignments  map[string]CodexCustomAssignment // phase → assignment
 	CustomConfirmed    bool                             // true after user presses Confirm
+
+	// ModelCapabilities holds runtime-advertised efforts and service tiers per
+	// model; models absent here use the curated effort list.
+	ModelCapabilities map[string]model.CodexModelCapabilities
+	// ServiceTier is the one global Codex service tier ("" = standard). Codex
+	// children inherit the session tier, so it is not a per-role choice.
+	ServiceTier       string
+	ServiceTierCursor int
+	PendingPreset     CodexModelPreset // preset awaiting its service tier choice
 }
 
 // NewCodexModelPickerState returns the initial picker state: Recommended preset.
 func NewCodexModelPickerState() CodexModelPickerState {
 	return CodexModelPickerState{
 		Preset:            CodexPresetRecommended,
+		AvailableModels:   model.CodexAvailableModels(),
 		CustomAssignments: make(map[string]CodexCustomAssignment),
 	}
 }
@@ -107,9 +126,10 @@ func NewCodexModelPickerStateFromAssignments(assignments map[string]model.CodexE
 	}
 	for _, preset := range codexPresetOrder {
 		constructor := codexPresetConstructors[preset]
-		if codexAssignmentsEqual(constructor(), assignments) {
+		if codexAssignmentsEqual(constructor(), assignments) || codexPresetMatchesCustomEfforts(preset, assignments) || codexAssignmentsEqual(legacyCodexPreset(preset), assignments) {
 			return CodexModelPickerState{
 				Preset:            preset,
+				AvailableModels:   model.CodexAvailableModels(),
 				CustomAssignments: make(map[string]CodexCustomAssignment),
 			}
 		}
@@ -117,8 +137,33 @@ func NewCodexModelPickerStateFromAssignments(assignments map[string]model.CodexE
 	// Unknown assignments → fall back to Recommended.
 	return CodexModelPickerState{
 		Preset:            CodexPresetRecommended,
+		AvailableModels:   model.CodexAvailableModels(),
 		CustomAssignments: make(map[string]CodexCustomAssignment),
 	}
+}
+
+func legacyCodexPreset(preset CodexModelPreset) map[string]model.CodexEffort {
+	switch preset {
+	case CodexPresetLowCost:
+		return model.CodexModelPresetLowCost()
+	case CodexPresetPowerful:
+		return model.CodexModelPresetPowerful()
+	default:
+		return model.CodexModelPresetRecommended()
+	}
+}
+
+func codexPresetMatchesCustomEfforts(preset CodexModelPreset, assignments map[string]model.CodexEffort) bool {
+	defaults := codexPresetConstructors[preset]()
+	if len(assignments) < len(defaults) {
+		return false
+	}
+	for phase, effort := range defaults {
+		if assignments[phase] != effort {
+			return false
+		}
+	}
+	return true
 }
 
 func codexAssignmentsEqual(a, b map[string]model.CodexEffort) bool {
@@ -133,10 +178,18 @@ func codexAssignmentsEqual(a, b map[string]model.CodexEffort) bool {
 	return true
 }
 
+func filteredCodexModels(state CodexModelPickerState) []string {
+	models := state.AvailableModels
+	if len(models) == 0 {
+		models = model.CodexAvailableModels()
+	}
+	return model.FilterCodexModelList(models, state.CustomModelSearch)
+}
+
 // CodexModelPickerOptionCount returns the total number of selectable rows based
 // on the active sub-mode:
 //   - Main picker: 3 presets + Custom + Back = 5
-//   - Phase list: 13 phases + Confirm = 14
+//   - Phase list: ODD worker classes + RDD roles + Confirm
 //   - Model select / Effort select: navigated by HandleCodexModelPickerNav
 //     directly (cursor is managed by the sub-flow, not the outer optionCount).
 func CodexModelPickerOptionCount(state CodexModelPickerState) int {
@@ -144,13 +197,15 @@ func CodexModelPickerOptionCount(state CodexModelPickerState) int {
 	case CodexCustomModePhaseList:
 		return len(codexCustomPhases) + 1 // phases + Confirm
 	case CodexCustomModeModelSelect:
-		models := model.FilterCodexModels(state.CustomModelSearch)
+		models := filteredCodexModels(state)
 		if len(models) == 0 {
 			return 0
 		}
 		return len(models)
 	case CodexCustomModeEffortSelect:
-		return len(codexEffortOptions)
+		return len(codexEffortOptions(state))
+	case CodexCustomModeServiceTier:
+		return len(codexServiceTierOptions(state))
 	}
 	return len(codexPresetOrder) + 1 + 1 // presets + Custom + Back
 }
@@ -193,6 +248,8 @@ func HandleCodexModelPickerNav(
 
 	// Custom row: index len(codexPresetOrder) = 3.
 	if cursor == len(codexPresetOrder) {
+		state.AvailableModels = model.CodexAvailableModels()
+		state.ModelCapabilities = nil
 		state.CustomMode = CodexCustomModePhaseList
 		state.CustomPhaseIdx = 0
 		state.CustomModelSearch = ""
@@ -207,13 +264,60 @@ func HandleCodexModelPickerNav(
 	// Preset rows.
 	if cursor < len(codexPresetOrder) {
 		selected := codexPresetOrder[cursor]
-		state.Preset = selected
-		// Clear Custom state so a later re-entry to Custom starts fresh.
-		state.CustomConfirmed = false
-		a := maps.Clone(codexPresetConstructors[selected]())
-		return true, a
+		orchestrator := model.CodexPresetOrchestratorAssignment(string(selected)).Model
+		if capabilities := state.ModelCapabilities[orchestrator]; capabilities.ServiceTiersReported {
+			if len(capabilities.ServiceTiers) > 0 {
+				state.PendingPreset = selected
+				state.CustomMode = CodexCustomModeServiceTier
+				state.ServiceTierCursor = 0
+				for i, tier := range capabilities.ServiceTiers {
+					if tier.ID == state.ServiceTier {
+						state.ServiceTierCursor = i + 1
+					}
+				}
+				return true, nil
+			}
+			// The runtime reports no tier for this orchestrator model. Unreported
+			// tiers (discovery unavailable or an older Codex) keep the selection.
+			state.ServiceTier = ""
+		}
+		return true, confirmCodexPreset(state, selected)
 	}
 
+	return false, nil
+}
+
+func confirmCodexPreset(state *CodexModelPickerState, selected CodexModelPreset) map[string]model.CodexEffort {
+	state.Preset = selected
+	// Clear Custom state so a later re-entry to Custom starts fresh.
+	state.CustomConfirmed = false
+	return maps.Clone(codexPresetConstructors[selected]())
+}
+
+// codexServiceTierOptions lists Standard ("" — no service_tier) followed by
+// the tiers the runtime advertises for the pending preset's orchestrator.
+func codexServiceTierOptions(state CodexModelPickerState) []model.CodexServiceTier {
+	orchestrator := model.CodexPresetOrchestratorAssignment(string(state.PendingPreset)).Model
+	return append([]model.CodexServiceTier{{Name: "Standard"}}, state.ModelCapabilities[orchestrator].ServiceTiers...)
+}
+
+func handleServiceTierNav(key string, state *CodexModelPickerState) (bool, map[string]model.CodexEffort) {
+	options := codexServiceTierOptions(*state)
+	switch key {
+	case "up", "k":
+		state.ServiceTierCursor = max(0, state.ServiceTierCursor-1)
+		return true, nil
+	case "down", "j":
+		state.ServiceTierCursor = min(len(options)-1, state.ServiceTierCursor+1)
+		return true, nil
+	case "enter":
+		state.ServiceTier = options[min(state.ServiceTierCursor, len(options)-1)].ID
+		state.CustomMode = CodexCustomModeNone
+		return true, confirmCodexPreset(state, state.PendingPreset)
+	case "esc":
+		state.CustomMode = CodexCustomModeNone
+		return true, nil
+	}
 	return false, nil
 }
 
@@ -240,6 +344,8 @@ func handleCodexCustomNav(key string, state *CodexModelPickerState, cursor int) 
 		// Same rationale as ModelSelect: CustomEffortCursor is the single source
 		// of truth. Do NOT sync from the outer cursor.
 		return handleCustomEffortSelectNav(key, state)
+	case CodexCustomModeServiceTier:
+		return handleServiceTierNav(key, state)
 	}
 	return false, nil
 }
@@ -258,8 +364,12 @@ func handleCustomPhaseListNav(key string, state *CodexModelPickerState, cursor i
 		// Confirm row is at index phaseCount.
 		if cursor == phaseCount {
 			// Build effort assignments from CustomAssignments.
-			// Phases without a custom assignment use Recommended preset defaults.
-			base := model.CodexModelPresetRecommended()
+			// Phases without a custom assignment use the selected preset defaults.
+			constructor := codexPresetConstructors[state.Preset]
+			if constructor == nil {
+				constructor = model.CodexModelPresetRecommended
+			}
+			base := constructor()
 			for phase, a := range state.CustomAssignments {
 				if a.Effort != "" {
 					base[phase] = a.Effort
@@ -282,7 +392,8 @@ func handleCustomPhaseListNav(key string, state *CodexModelPickerState, cursor i
 }
 
 func handleCustomModelSelectNav(key string, state *CodexModelPickerState) (bool, map[string]model.CodexEffort) {
-	models := model.FilterCodexModels(state.CustomModelSearch)
+	models := filteredCodexModels(*state)
+	state.CustomModelCursor = min(max(0, state.CustomModelCursor), max(0, len(models)-1))
 
 	switch key {
 	case "up", "k":
@@ -330,14 +441,31 @@ func handleCustomModelSelectNav(key string, state *CodexModelPickerState) (bool,
 	return false, nil
 }
 
-var codexEffortOptions = []model.CodexEffort{
+// codexCuratedEffortOptions applies when the runtime did not report a model's
+// efforts; max and ultra are offered only when the runtime advertises them.
+var codexCuratedEffortOptions = []model.CodexEffort{
 	model.CodexEffortLow,
 	model.CodexEffortMedium,
 	model.CodexEffortHigh,
 	model.CodexEffortXHigh,
 }
 
+func codexEffortOptions(state CodexModelPickerState) []model.CodexEffort {
+	if efforts := state.ModelCapabilities[state.CustomPendingModel].Efforts; len(efforts) > 0 {
+		return efforts
+	}
+	return codexCuratedEffortOptions
+}
+
+// ClampCodexEffortCursor keeps the effort cursor inside the current list,
+// which can shrink when runtime discovery arrives after the cursor moved.
+func ClampCodexEffortCursor(state *CodexModelPickerState) {
+	state.CustomEffortCursor = min(max(0, state.CustomEffortCursor), len(codexEffortOptions(*state))-1)
+}
+
 func handleCustomEffortSelectNav(key string, state *CodexModelPickerState) (bool, map[string]model.CodexEffort) {
+	codexEffortOptions := codexEffortOptions(*state)
+	ClampCodexEffortCursor(state)
 	switch key {
 	case "up", "k":
 		if state.CustomEffortCursor > 0 {
@@ -383,14 +511,20 @@ func isCodexSearchInput(key string) bool {
 // RenderCodexModelPicker renders the Codex preset selection screen.
 // In default mode: title + 3 presets + Custom + Back.
 // In custom sub-modes: delegates to the appropriate sub-renderer.
-func RenderCodexModelPicker(state CodexModelPickerState, cursor int) string {
+func RenderCodexModelPicker(state CodexModelPickerState, cursor int, height ...int) string {
 	switch state.CustomMode {
 	case CodexCustomModePhaseList:
-		return renderCodexCustomPhaseList(state, cursor)
+		availableHeight := 0
+		if len(height) > 0 {
+			availableHeight = height[0]
+		}
+		return renderCodexCustomPhaseList(state, cursor, availableHeight)
 	case CodexCustomModeModelSelect:
 		return renderCodexCustomModelSelect(state)
 	case CodexCustomModeEffortSelect:
 		return renderCodexCustomEffortSelect(state)
+	case CodexCustomModeServiceTier:
+		return renderCodexServiceTierSelect(state)
 	}
 	return renderCodexMainPicker(state, cursor)
 }
@@ -400,7 +534,7 @@ func renderCodexMainPicker(state CodexModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Codex Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose the reasoning_effort tier for Codex SDD phases (tied to your ChatGPT plan):"))
+	b.WriteString(styles.SubtextStyle.Render("Choose the reasoning_effort tier for Codex ODD workers (tied to your ChatGPT plan):"))
 	b.WriteString("\n\n")
 
 	for idx, preset := range codexPresetOrder {
@@ -419,7 +553,7 @@ func renderCodexMainPicker(state CodexModelPickerState, cursor int) string {
 	} else {
 		b.WriteString(styles.UnselectedStyle.Render("  "+customLabel) + "\n")
 	}
-	b.WriteString(styles.SubtextStyle.Render("    Assign a specific model and effort to each of the 13 SDD phases") + "\n")
+	b.WriteString(styles.SubtextStyle.Render("    Assign a specific model and effort to ODD and RDD roles") + "\n")
 
 	b.WriteString("\n")
 	b.WriteString(renderOptions([]string{"← Back"}, cursor-len(codexPresetOrder)-1))
@@ -429,15 +563,26 @@ func renderCodexMainPicker(state CodexModelPickerState, cursor int) string {
 	return b.String()
 }
 
-func renderCodexCustomPhaseList(state CodexModelPickerState, cursor int) string {
+func renderCodexCustomPhaseList(state CodexModelPickerState, cursor, height int) string {
+	// Reserve six lines for title, instruction and help; scroll the role list
+	// with the cursor so the RDD roles and Confirm remain reachable on short terminals.
+	start, end := 0, len(codexCustomPhases)+1
+	if height > 0 && height < end+6 {
+		visible := max(1, height-6)
+		start = max(0, min(cursor-visible+1, end-visible))
+		end = min(end, start+visible)
+	}
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Custom — Per-Phase Model & Effort"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Select a phase to assign its model and effort. Unassigned phases use Recommended defaults."))
+	b.WriteString(styles.SubtextStyle.Render("Select a role to assign its model and effort. Unassigned roles use preset defaults (RDD: native defaults)."))
 	b.WriteString("\n\n")
 
 	for idx, phase := range codexCustomPhases {
+		if idx < start || idx >= end {
+			continue
+		}
 		focused := idx == cursor
 		a, hasAssignment := state.CustomAssignments[phase]
 
@@ -458,10 +603,12 @@ func renderCodexCustomPhaseList(state CodexModelPickerState, cursor int) string 
 	b.WriteString("\n")
 	confirmIdx := len(codexCustomPhases)
 	confirmFocused := cursor == confirmIdx
-	if confirmFocused {
-		b.WriteString(styles.SelectedStyle.Render(styles.Cursor+"Confirm assignments") + "\n")
-	} else {
-		b.WriteString(styles.UnselectedStyle.Render("  Confirm assignments") + "\n")
+	if confirmIdx >= start && confirmIdx < end {
+		if confirmFocused {
+			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+"Confirm assignments") + "\n")
+		} else {
+			b.WriteString(styles.UnselectedStyle.Render("  Confirm assignments") + "\n")
+		}
 	}
 
 	b.WriteString("\n")
@@ -483,7 +630,7 @@ func renderCodexCustomModelSelect(state CodexModelPickerState) string {
 	b.WriteString(styles.SubtextStyle.Render("Search: " + codexModelSearchDisplay(state.CustomModelSearch)))
 	b.WriteString("\n\n")
 
-	models := model.FilterCodexModels(state.CustomModelSearch)
+	models := filteredCodexModels(state)
 	cursor := state.CustomModelCursor
 	if cursor >= len(models) && len(models) > 0 {
 		cursor = len(models) - 1
@@ -517,10 +664,37 @@ func renderCodexCustomEffortSelect(state CodexModelPickerState) string {
 	b.WriteString(styles.TitleStyle.Render(fmt.Sprintf("Select effort for %s:", state.CustomPendingModel)))
 	b.WriteString("\n\n")
 
-	for i, effort := range codexEffortOptions {
+	for i, effort := range codexEffortOptions(state) {
 		focused := i == state.CustomEffortCursor
 		label := string(effort)
 		if focused {
+			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
+		} else {
+			b.WriteString(styles.UnselectedStyle.Render("  "+label) + "\n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
+
+	return b.String()
+}
+
+func renderCodexServiceTierSelect(state CodexModelPickerState) string {
+	var b strings.Builder
+
+	orchestrator := model.CodexPresetOrchestratorAssignment(string(state.PendingPreset)).Model
+	b.WriteString(styles.TitleStyle.Render(fmt.Sprintf("Select speed for %s:", orchestrator)))
+	b.WriteString("\n\n")
+	b.WriteString(styles.SubtextStyle.Render("Applies to the whole Codex session; workers inherit it when their model supports it."))
+	b.WriteString("\n\n")
+
+	for i, tier := range codexServiceTierOptions(state) {
+		label := tier.Name + " — no service_tier"
+		if tier.ID != "" {
+			label = fmt.Sprintf("%s — service_tier = %q", cmp.Or(tier.Name, tier.ID), tier.ID)
+		}
+		if i == state.ServiceTierCursor {
 			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
 		} else {
 			b.WriteString(styles.UnselectedStyle.Render("  "+label) + "\n")
@@ -542,7 +716,7 @@ func codexModelSearchDisplay(query string) string {
 
 // CodexPresetLabel returns the human-readable plan label for a preset.
 // Labels are self-describing: they include the model id and effort tier per
-// carril so the user can see what will be written to profile files.
+// carril so the user can see the workload policy.
 //
 // Every preset runs the main orchestrator at medium effort, but not on the
 // same model: low-cost runs it on gpt-5.6-terra. The label reads the real

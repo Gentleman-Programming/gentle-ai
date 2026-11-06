@@ -2,6 +2,7 @@ package reviewtransaction
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -20,6 +21,129 @@ func derivePlanFixture(t *testing.T, repo, actor, reason string) AuthorityDispos
 		t.Fatalf("deriveAuthorityDispositionPlanAtRepo: %v", err)
 	}
 	return plan
+}
+
+// TestAuthorityDispositionClosureMultiChainAssumption satisfies tasks.md 1.1
+// (S1 spike, load-bearing for S2/S3/S5): before Wave 6 writes any ordering or
+// admission-relaxation production code, this proves authorityDispositionClosure's
+// BFS `children` map — built from every edge's PredecessorLineageID ->
+// SuccessorLineageID — actually derives a real multi-chain, multi-hop closure
+// from report.Edges shaped exactly as InspectCompactRecoveryEdges emits it
+// (compact_inspect.go inspectCompactRecoveryRecordSet: one edge per record
+// carrying a non-nil Recovery, valid or invalid, no filtering by anomaly
+// class). Two independent chains share one report: chain one is three nodes
+// deep (seed -> child -> grandchild, two hops), chain two is a disjoint,
+// unrelated pair. Per tasks.md 1.2, a failure here means STOP and escalate —
+// do not patch around it ad hoc; S2 (ordered N-node transaction), S3
+// (forward-only resume), and S5 (ds09+ bench journeys) all assume this
+// closure derivation is correct.
+func TestAuthorityDispositionClosureMultiChainAssumption(t *testing.T) {
+	report := CompactRecoveryInspectionReport{
+		Complete: true, Valid: false,
+		Edges: []CompactRecoveryEdgeInspection{
+			// Chain one: seed -> child -> grandchild (three nodes, two hops).
+			// The seed->child edge is the classified, invalid anomaly edge a
+			// real derivation would seed from; child->grandchild is an
+			// ordinary valid recovery edge — closure must still walk it.
+			{PredecessorLineageID: "seed", SuccessorLineageID: "child", Valid: false, AnomalyClasses: []string{compactContentMismatchedRecoveryAuthorizationClass}},
+			{PredecessorLineageID: "child", SuccessorLineageID: "grandchild", Valid: true},
+			// Chain two: unrelated-root -> unrelated-leaf, disjoint from chain
+			// one and reachable from a different seed only.
+			{PredecessorLineageID: "unrelated-root", SuccessorLineageID: "unrelated-leaf", Valid: true},
+		},
+	}
+
+	closure := authorityDispositionClosure(report, "seed")
+
+	want := map[string]bool{"seed": true, "child": true, "grandchild": true}
+	if len(closure) != len(want) {
+		t.Fatalf("closure(%q) = %v, want exactly the 3-node chain %v — multi-hop descendant derivation failed", "seed", closure, want)
+	}
+	sawGrandchild := false
+	for _, lineage := range closure {
+		if !want[lineage] {
+			t.Fatalf("closure %v contains %q, which belongs to the disjoint chain — over-collection", closure, lineage)
+		}
+		if lineage == "grandchild" {
+			sawGrandchild = true
+		}
+	}
+	if !sawGrandchild {
+		t.Fatalf("closure %v did not include the second-hop descendant %q — BFS children map does not walk multi-hop chains as the design assumes", closure, "grandchild")
+	}
+}
+
+// TestAuthorityDispositionClosureDescendantFirstSeedLastOrdering satisfies
+// tasks.md 1.3 and rdd-authority-disposition-plan's "Ordering is
+// descendant-first, seed-last" scenario. N=1 stays the identity of the old
+// lexicographic sort (a single-entry closure has no ordering to prove); N>=2
+// asserts every descendant precedes the seed and, for ties at the same BFS
+// depth, lexicographic order still breaks the tie deterministically.
+func TestAuthorityDispositionClosureDescendantFirstSeedLastOrdering(t *testing.T) {
+	t.Run("N=1 identity of the old sort", func(t *testing.T) {
+		report := CompactRecoveryInspectionReport{
+			Edges: []CompactRecoveryEdgeInspection{
+				{PredecessorLineageID: "unrelated-root", SuccessorLineageID: "unrelated-leaf", Valid: true},
+			},
+		}
+		closure := authorityDispositionClosure(report, "seed")
+		if len(closure) != 1 || closure[0] != "seed" {
+			t.Fatalf("N=1 closure = %v, want [\"seed\"]", closure)
+		}
+	})
+
+	t.Run("N>=2 multi-chain is descendant-first, seed-last", func(t *testing.T) {
+		report := CompactRecoveryInspectionReport{
+			Edges: []CompactRecoveryEdgeInspection{
+				{PredecessorLineageID: "seed", SuccessorLineageID: "child", Valid: false},
+				{PredecessorLineageID: "child", SuccessorLineageID: "grandchild", Valid: true},
+			},
+		}
+		closure := authorityDispositionClosure(report, "seed")
+		want := []string{"grandchild", "child", "seed"}
+		if !reflect.DeepEqual(closure, want) {
+			t.Fatalf("closure = %v, want deepest-descendant-first, seed-last %v", closure, want)
+		}
+	})
+
+	t.Run("same-depth ties break lexicographically", func(t *testing.T) {
+		report := CompactRecoveryInspectionReport{
+			Edges: []CompactRecoveryEdgeInspection{
+				{PredecessorLineageID: "seed", SuccessorLineageID: "zebra", Valid: false},
+				{PredecessorLineageID: "seed", SuccessorLineageID: "alpha", Valid: false},
+			},
+		}
+		closure := authorityDispositionClosure(report, "seed")
+		want := []string{"alpha", "zebra", "seed"}
+		if !reflect.DeepEqual(closure, want) {
+			t.Fatalf("closure = %v, want lexicographic tie-break within depth then seed-last %v", closure, want)
+		}
+	})
+}
+
+// TestAuthorityDispositionPlanDigestN1ByteStability satisfies tasks.md 1.5:
+// pins plan_digest for a cardinality-one closure to a literal, pre-Wave-6
+// value so the topological-ordering change (task 1.4) cannot silently alter
+// N=1 digest bytes. Closure = {seed} has no ordering choice to make, so this
+// is the unit-level half of "every Wave 2 leaf digest, golden, and ds06/ds08
+// journey stays byte-stable" (design.md); the bench axis run against
+// ds06/ds08 is the end-to-end half (tasks.md 1.11).
+func TestAuthorityDispositionPlanDigestN1ByteStability(t *testing.T) {
+	plan := AuthorityDispositionPlan{
+		Schema: AuthorityDispositionPlanSchema, RepositoryBinding: "repository-binding",
+		AuthorityInventoryRevision: "sha256:inventory-revision", AnomalyClass: compactContentMismatchedRecoveryAuthorizationClass,
+		SeedSet: []string{"leaf-seed"}, Closure: []string{"leaf-seed"},
+		ExpectedRevisions: map[string]string{"leaf-seed": "sha256:leaf-revision"},
+		Actor:             "maintainer@example.com", Reason: "quarantine forged recovery authorization",
+	}
+	digest, err := authorityDispositionPlanDigest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantDigest = "sha256:7084e2abc8a42b812a785dad4a4426483e63af71a8ced06ac51c7e88f21843e6"
+	if digest != wantDigest {
+		t.Fatalf("N=1 plan_digest = %q, want pinned pre-Wave-6 value %q — topological ordering change altered N=1 digest bytes", digest, wantDigest)
+	}
 }
 
 // TestAuthorityDispositionPlanFieldSet satisfies tasks.md 1.3 and
@@ -101,6 +225,166 @@ func TestAuthorityDispositionPlanRequiresClosedClassification(t *testing.T) {
 		}
 		if _, err := deriveAuthorityDispositionPlan(report, map[string]CompactRecord{}, "binding", "maintainer@example.com", "incomplete"); !errors.Is(err, errAuthorityDispositionPlanNotDerivable) {
 			t.Fatalf("incomplete inspection derivation error = %v, want errAuthorityDispositionPlanNotDerivable", err)
+		}
+	})
+}
+
+func TestReleasedHistoricalCompactRecordRemainsForensicallyClassifiable(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("..", "..", "bench", "testdata", "issue2879", "released-v2.2.4-review-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record CompactRecord
+	if err := json.Unmarshal(payload, &record); err != nil {
+		t.Fatal(err)
+	}
+	want, _, err := makeCompactRecord(record.State)
+	if err != nil {
+		t.Fatalf("released record cannot be reconstructed: %v", err)
+	}
+	if want.Revision != record.Revision {
+		t.Fatalf("released record checksum = %q, reconstructed = %q", record.Revision, want.Revision)
+	}
+	if _, ok := forensicHistoricalCompactRecord(payload, "review-f8708016a901b4ff"); !ok {
+		t.Fatalf("released v2.2.4 record no longer classifies as outdated compact authority: %v", record.State.Validate())
+	}
+}
+
+func TestHistoricalAuthorityDispositionPlanRejectsAnyAdditionalDiagnostic(t *testing.T) {
+	const historicalLineage = "released-historical-authority"
+	report := CompactRecoveryInspectionReport{
+		EntryDiagnostics: []CompactRecoveryEntryDiagnostic{{LineageID: historicalLineage, Problem: compactInspectionEntryOutdated}},
+		historical: map[string]historicalCompactForensicRecord{
+			historicalLineage: {RawDigest: "sha256:" + strings.Repeat("a", 64)},
+		},
+	}
+	if _, err := deriveAuthorityDispositionPlan(report, map[string]CompactRecord{}, "binding", "", ""); err != nil {
+		t.Fatalf("sole historical diagnostic did not derive its quarantine plan: %v", err)
+	}
+	for _, problem := range []string{
+		compactInspectionEntryMalformed,
+		compactInspectionEntryUnreadable,
+		compactInspectionEntryMissing,
+	} {
+		t.Run(problem, func(t *testing.T) {
+			blocked := report
+			blocked.EntryDiagnostics = append([]CompactRecoveryEntryDiagnostic{}, report.EntryDiagnostics...)
+			blocked.EntryDiagnostics = append(blocked.EntryDiagnostics, CompactRecoveryEntryDiagnostic{LineageID: "unrelated-authority", Problem: problem})
+			if _, err := deriveAuthorityDispositionPlan(blocked, map[string]CompactRecord{}, "binding", "", ""); !errors.Is(err, errAuthorityDispositionPlanNotDerivable) {
+				t.Fatalf("additional %s diagnostic derivation error = %v, want errAuthorityDispositionPlanNotDerivable", problem, err)
+			}
+		})
+	}
+}
+
+// TestHistoricalDispositionPlanForSelectorRefusesRetainedEdgeReference pins
+// the fail-closed edge-detachment guard on the historical selector path: a
+// historical entry that any retained report edge still names (on either
+// side) must not admit a per-entry disposition plan while the graph still
+// references it. The PREDECESSOR side of the reference is reachable in real
+// stores — edges are built from loaded successors, so a loaded successor
+// naming a now-historical predecessor yields the retained reference (#2995)
+// — while the SUCCESSOR side stays drift hardening: a historical entry never
+// loads, so it can never be an edge successor.
+func TestHistoricalDispositionPlanForSelectorRefusesRetainedEdgeReference(t *testing.T) {
+	const historicalLineage = "edge-referenced-historical-authority"
+	const counterpart = "retained-edge-counterpart"
+	digest := "sha256:" + strings.Repeat("b", 64)
+	base := CompactRecoveryInspectionReport{
+		EntryDiagnostics: []CompactRecoveryEntryDiagnostic{{LineageID: historicalLineage, Problem: compactInspectionEntryOutdated}},
+		historical:       map[string]historicalCompactForensicRecord{historicalLineage: {RawDigest: digest}},
+	}
+	selector := AuthorityDispositionSelector{SuccessorLineageID: historicalLineage, SuccessorExpectedRevision: digest}
+
+	t.Run("entry referenced as an edge successor refuses", func(t *testing.T) {
+		report := base
+		report.Edges = []CompactRecoveryEdgeInspection{{PredecessorLineageID: counterpart, SuccessorLineageID: historicalLineage, Valid: false}}
+		_, err := deriveAuthorityDispositionPlan(report, map[string]CompactRecord{}, "binding", "maintainer@example.com", "edge-detached forensic quarantine", selector)
+		if !errors.Is(err, errAuthorityDispositionPlanNotDerivable) || !strings.Contains(err.Error(), historicalLineage) || !strings.Contains(err.Error(), counterpart) {
+			t.Fatalf("successor-referenced historical entry derivation error = %v, want errAuthorityDispositionPlanNotDerivable naming the retained edge", err)
+		}
+	})
+	t.Run("entry referenced as an edge predecessor refuses", func(t *testing.T) {
+		report := base
+		report.Edges = []CompactRecoveryEdgeInspection{{PredecessorLineageID: historicalLineage, SuccessorLineageID: counterpart, Valid: false}}
+		_, err := deriveAuthorityDispositionPlan(report, map[string]CompactRecord{}, "binding", "maintainer@example.com", "edge-detached forensic quarantine", selector)
+		if !errors.Is(err, errAuthorityDispositionPlanNotDerivable) || !strings.Contains(err.Error(), historicalLineage) || !strings.Contains(err.Error(), counterpart) {
+			t.Fatalf("predecessor-referenced historical entry derivation error = %v, want errAuthorityDispositionPlanNotDerivable naming the retained edge", err)
+		}
+	})
+	t.Run("a retained edge naming no selected entry leaves derivation intact", func(t *testing.T) {
+		report := base
+		report.Edges = []CompactRecoveryEdgeInspection{{PredecessorLineageID: counterpart, SuccessorLineageID: "unrelated-successor", Valid: false}}
+		if _, err := deriveAuthorityDispositionPlan(report, map[string]CompactRecord{}, "binding", "maintainer@example.com", "edge-detached forensic quarantine", selector); err != nil {
+			t.Fatalf("unrelated retained edge blocked the historical plan: %v", err)
+		}
+	})
+}
+
+// TestHistoricalDispositionPlanSelectorlessRefusesEdgeReferencedEntry pins
+// the same edge-detachment invariant on the selectorless historical gate:
+// a store whose single historical entry a retained edge still references
+// (the PREDECESSOR side — reachable in real stores through a loaded
+// successor naming a now-historical predecessor, #2995) must refuse to mint
+// the historical plan exactly like the exact-selector path does, so the
+// gate and the per-entry selector path share one eligibility contract.
+func TestHistoricalDispositionPlanSelectorlessRefusesEdgeReferencedEntry(t *testing.T) {
+	const historicalLineage = "edge-referenced-historical-authority"
+	const successor = "loaded-edge-successor"
+	digest := "sha256:" + strings.Repeat("b", 64)
+	report := CompactRecoveryInspectionReport{
+		EntryDiagnostics: []CompactRecoveryEntryDiagnostic{{LineageID: historicalLineage, Problem: compactInspectionEntryOutdated}},
+		historical:       map[string]historicalCompactForensicRecord{historicalLineage: {RawDigest: digest}},
+		Edges:            []CompactRecoveryEdgeInspection{{PredecessorLineageID: historicalLineage, SuccessorLineageID: successor, Valid: false, Problems: []string{"missing predecessor"}}},
+	}
+	// A loaded successor record, modeling the real store shape that produced
+	// the retained reference above; its fields are not read before refusal.
+	records := map[string]CompactRecord{successor: {
+		Revision: "sha256:" + strings.Repeat("c", 64),
+		State:    CompactState{LineageID: successor, Recovery: &CompactRecoveryProvenance{PredecessorLineageID: historicalLineage, PredecessorRevision: digest}},
+	}}
+	if _, err := deriveAuthorityDispositionPlan(report, records, "binding", "", ""); !errors.Is(err, errAuthorityDispositionPlanNotDerivable) {
+		t.Fatalf("selectorless derivation on an edge-referenced historical entry = %v, want errAuthorityDispositionPlanNotDerivable", err)
+	}
+}
+
+func TestAuthorityDispositionPlanScopesEntryDiagnosticsToClosure(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	predecessor, successor, _ := forgedRecoveryPair(t, repo, "diagnostic-scope", "diagnostic scope target\n")
+	report, records, err := loadCompactRecoveryRecords(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector := AuthorityDispositionSelector{
+		PredecessorLineageID: predecessor.State.LineageID, PredecessorExpectedRevision: predecessor.Revision,
+		SuccessorLineageID: successor.State.LineageID, SuccessorExpectedRevision: successor.Revision,
+	}
+
+	t.Run("foreign entry diagnostic does not block the selected closure", func(t *testing.T) {
+		withForeignDiagnostic := report
+		withForeignDiagnostic.Complete = false
+		withForeignDiagnostic.EntryDiagnostics = []CompactRecoveryEntryDiagnostic{
+			{LineageID: "unrelated-entry", Problem: compactInspectionEntryMalformed},
+		}
+
+		plan, err := deriveAuthorityDispositionPlan(withForeignDiagnostic, records, "binding", "maintainer@example.com", "diagnostic scope", selector)
+		if err != nil {
+			t.Fatalf("foreign entry diagnostic blocked selected closure derivation: %v", err)
+		}
+		if !reflect.DeepEqual(plan.Closure, []string{successor.State.LineageID}) {
+			t.Fatalf("plan closure = %v, want selected successor only", plan.Closure)
+		}
+	})
+
+	t.Run("closure-member entry diagnostic still fails closed", func(t *testing.T) {
+		withClosureDiagnostic := report
+		withClosureDiagnostic.Complete = false
+		withClosureDiagnostic.EntryDiagnostics = []CompactRecoveryEntryDiagnostic{
+			{LineageID: successor.State.LineageID, Problem: compactInspectionEntryMalformed},
+		}
+
+		if _, err := deriveAuthorityDispositionPlan(withClosureDiagnostic, records, "binding", "maintainer@example.com", "diagnostic scope", selector); !errors.Is(err, errAuthorityDispositionPlanNotDerivable) {
+			t.Fatalf("closure-member diagnostic derivation error = %v, want errAuthorityDispositionPlanNotDerivable", err)
 		}
 	})
 }

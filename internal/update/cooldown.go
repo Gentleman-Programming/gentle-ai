@@ -6,17 +6,41 @@ import (
 	"os"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
-// UpdateCheckTTL is the minimum time between remote update checks. Launches
-// within this window reuse the cached state and skip the GitHub API call.
+// UpdateCheckTTL is the minimum time between automatic remote update checks.
+// Launches within this window skip the GitHub API call; results are not cached.
 const UpdateCheckTTL = 6 * time.Hour
 
 // checkAllFn is the function type that matches CheckAll's signature, used to
 // allow injection of a stub in tests.
 type checkAllFn func(ctx context.Context, currentVersion string, profile system.PlatformProfile) []UpdateResult
+
+type installStateWriter func(string, state.InstallState) error
+
+// CheckState distinguishes verified results from omitted or failed checks.
+type CheckState int
+
+const (
+	CheckCompleted CheckState = iota
+	CheckSkipped
+	CheckUnsuccessful
+)
+
+// CheckReport preserves the provenance of an update result set.
+type CheckReport struct {
+	Results []UpdateResult
+	State   CheckState
+}
+
+// CheckAllWithCooldownReport is the status-aware variant of CheckAllWithCooldown.
+// A zero ttl forces a fresh check, while retaining successful-check persistence.
+func CheckAllWithCooldownReport(ctx context.Context, currentVersion string, profile system.PlatformProfile, homeDir string, ttl time.Duration, nowFn func() time.Time, checkFn checkAllFn) CheckReport {
+	return checkAllWithCooldownReport(ctx, currentVersion, profile, homeDir, ttl, nowFn, checkFn, persistLastUpdateCheck)
+}
 
 // CheckAllWithCooldown gates CheckAll behind a TTL-based cooldown. It reads
 // LastUpdateCheck from state.json in homeDir; if the elapsed time since the
@@ -40,6 +64,23 @@ func CheckAllWithCooldown(
 	nowFn func() time.Time,
 	checkFn checkAllFn,
 ) []UpdateResult {
+	return checkAllWithCooldown(ctx, currentVersion, profile, homeDir, ttl, nowFn, checkFn, persistLastUpdateCheck)
+}
+
+func checkAllWithCooldown(
+	ctx context.Context,
+	currentVersion string,
+	profile system.PlatformProfile,
+	homeDir string,
+	ttl time.Duration,
+	nowFn func() time.Time,
+	checkFn checkAllFn,
+	persistTimestamp func(string, time.Time) error,
+) []UpdateResult {
+	return checkAllWithCooldownReport(ctx, currentVersion, profile, homeDir, ttl, nowFn, checkFn, persistTimestamp).Results
+}
+
+func checkAllWithCooldownReport(ctx context.Context, currentVersion string, profile system.PlatformProfile, homeDir string, ttl time.Duration, nowFn func() time.Time, checkFn checkAllFn, persistTimestamp func(string, time.Time) error) CheckReport {
 	now := nowFn()
 
 	// When homeDir is empty (home resolution failed), skip both state read and
@@ -53,8 +94,8 @@ func CheckAllWithCooldown(
 			// A future LastUpdateCheck (negative elapsed from clock skew) must
 			// not suppress the check.
 			if elapsed >= 0 && elapsed < ttl {
-				// Cache is fresh — skip network call.
-				return nil
+				// Only the timestamp is fresh; no verified results are cached.
+				return CheckReport{State: CheckSkipped}
 			}
 		}
 		// err != nil means no state file (first run) → always check.
@@ -67,23 +108,33 @@ func CheckAllWithCooldown(
 	// non-failed result, or empty-but-no-error; never if all are CheckFailed).
 	// Also skip write when homeDir is empty.
 	if homeDir != "" && checkSucceeded(results) {
-		// Re-read state to avoid clobbering unrelated fields written concurrently.
-		current, readErr := state.Read(homeDir)
-		if readErr != nil {
-			if !errors.Is(readErr, os.ErrNotExist) {
-				// File exists but is unreadable/corrupt — do not overwrite; skip
-				// persisting the timestamp this round to avoid data loss.
-				return results
-			}
-			// File genuinely missing (first run) — start fresh.
-			current = state.InstallState{}
-		}
-		current.LastUpdateCheck = &now
-		// Ignore write errors — non-fatal; next launch will retry.
-		_ = state.Write(homeDir, current)
+		// Ignore persistence errors — non-fatal; next launch will retry.
+		_ = persistTimestamp(homeDir, now)
 	}
 
-	return results
+	status := CheckCompleted
+	if !checkSucceeded(results) {
+		status = CheckUnsuccessful
+	}
+	return CheckReport{Results: results, State: status}
+}
+
+func persistLastUpdateCheck(homeDir string, timestamp time.Time) error {
+	return persistLastUpdateCheckWithWriter(homeDir, timestamp, state.WriteReconciled)
+}
+
+func persistLastUpdateCheckWithWriter(homeDir string, timestamp time.Time, write installStateWriter) error {
+	return statecoord.WithLock(homeDir, func() error {
+		current, err := state.Read(homeDir)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			current = state.InstallState{}
+		}
+		current.LastUpdateCheck = &timestamp
+		return write(homeDir, current)
+	})
 }
 
 // checkSucceeded returns true when the result set should be considered a

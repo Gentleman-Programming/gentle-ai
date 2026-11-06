@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // This file is the RED-first proof for organic-dx Phase 3b: in-band route
@@ -27,17 +27,12 @@ func TestReceiptDiscoveryFailuresNameTheWayIn(t *testing.T) {
 	}
 }
 
-// TestGateEscalatedDenialAndFinalVerificationRetryDenialNameStatus is task
-// 3b.3: STATUS already re-derives escalated-gate and retry eligibility, but
-// neither denial told the caller so.
-func TestGateEscalatedDenialAndFinalVerificationRetryDenialNameStatus(t *testing.T) {
+// TestGateEscalatedDenialNamesStatus is task 3b.3: STATUS re-derives
+// escalated-gate recovery eligibility and the denial names that route.
+func TestGateEscalatedDenialNamesStatus(t *testing.T) {
 	escalated := newReviewIntegrationFailure("review.validate", nil, ReviewGateDeniedError{Result: reviewtransaction.GateEscalated})
 	if escalated.Code != "gate_escalated" || escalated.NextAction != "review.status" {
 		t.Fatalf("escalated gate denial failure = %#v, want next_action %q", escalated, "review.status")
-	}
-	retryDenied := newReviewIntegrationFailure(ReviewIntegrationOperationRetryFinalVerification, nil, &reviewtransaction.FinalVerificationRetryDeniedError{Code: "ineligible", Why: "no matching leaf"})
-	if retryDenied.Code != "final_verification_retry_denied" || retryDenied.NextAction != "review.status" {
-		t.Fatalf("final_verification_retry_denied failure = %#v, want next_action %q", retryDenied, "review.status")
 	}
 }
 

@@ -43,7 +43,7 @@
       ]
     },
     {
-      "path": "internal/assets/antigravity/sdd-orchestrator.md",
+      "path": "internal/assets/antigravity/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -55,61 +55,61 @@
       ]
     },
     {
-      "path": "internal/assets/claude/sdd-orchestrator.md",
+      "path": "internal/assets/claude/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
     },
     {
-      "path": "internal/assets/codex/sdd-orchestrator.md",
+      "path": "internal/assets/codex/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
     },
     {
-      "path": "internal/assets/cursor/sdd-orchestrator.md",
+      "path": "internal/assets/cursor/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
     },
     {
-      "path": "internal/assets/gemini/sdd-orchestrator.md",
+      "path": "internal/assets/gemini/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
     },
     {
-      "path": "internal/assets/generic/sdd-orchestrator.md",
+      "path": "internal/assets/generic/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
     },
     {
-      "path": "internal/assets/hermes/sdd-orchestrator.md",
+      "path": "internal/assets/hermes/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
     },
     {
-      "path": "internal/assets/kimi/sdd-orchestrator.md",
+      "path": "internal/assets/kimi/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
     },
     {
-      "path": "internal/assets/kiro/sdd-orchestrator.md",
+      "path": "internal/assets/kiro/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
     },
     {
-      "path": "internal/assets/opencode/sdd-orchestrator.md",
+      "path": "internal/assets/opencode/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
     },
     {
-      "path": "internal/assets/qwen/sdd-orchestrator.md",
+      "path": "internal/assets/qwen/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -117,11 +117,12 @@
     {
       "path": "internal/assets/skills/_shared/review-ledger-contract.md",
       "proof": [
-        "internal/components/sdd/review_ledger_contract_test.go"
+        "internal/assets/shared_skill_files_test.go",
+        "internal/cli/review_next_transition_docs_test.go"
       ]
     },
     {
-      "path": "internal/assets/windsurf/sdd-orchestrator.md",
+      "path": "internal/assets/windsurf/orchestrator.md",
       "proof": [
         "internal/assets/assets_test.go"
       ]
@@ -187,12 +188,6 @@
       ]
     },
     {
-      "path": "internal/cli/sdd_attempt.go",
-      "proof": [
-        "internal/cli/sdd_attempt_test.go"
-      ]
-    },
-    {
       "path": "internal/cli/sync.go",
       "proof": [
         "internal/cli/sync_test.go"
@@ -247,28 +242,29 @@
       ]
     },
     {
-      "path": "internal/components/sdd/bounded_review_contract_test.go",
-      "proof": [
-        "internal/components/sdd/bounded_review_contract_test.go"
-      ]
+      "destinationProof": [
+        "internal/components/reviewassets/reviewassets_test.go"
+      ],
+      "path": "internal/components/sdd/bounded_review_contract_test.go"
     },
     {
-      "path": "internal/components/sdd/boundedreview.go",
-      "proof": [
-        "internal/components/sdd/bounded_review_contract_test.go"
-      ]
+      "destinationProof": [
+        "internal/components/reviewassets/reviewassets_test.go",
+        "internal/providercontractbundle/review_execution_contract_test.go"
+      ],
+      "path": "internal/components/sdd/boundedreview.go"
     },
     {
-      "path": "internal/components/sdd/inject.go",
-      "proof": [
-        "internal/components/sdd/inject_test.go"
-      ]
+      "destinationProof": [
+        "internal/components/reviewassets/install_test.go"
+      ],
+      "path": "internal/components/sdd/inject.go"
     },
     {
-      "path": "internal/components/sdd/inject_test.go",
-      "proof": [
-        "internal/components/sdd/inject_test.go"
-      ]
+      "destinationProof": [
+        "internal/components/reviewassets/install_test.go"
+      ],
+      "path": "internal/components/sdd/inject_test.go"
     },
     {
       "destinationProof": [
@@ -358,18 +354,6 @@
       "path": "internal/reviewtransaction/verification_contract_test.go",
       "proof": [
         "internal/reviewtransaction/verification_contract_test.go"
-      ]
-    },
-    {
-      "path": "internal/sddstatus/runtime_ledger.go",
-      "proof": [
-        "internal/sddstatus/runtime_ledger_test.go"
-      ]
-    },
-    {
-      "path": "internal/sddstatus/runtime_ledger_test.go",
-      "proof": [
-        "internal/sddstatus/runtime_ledger_test.go"
       ]
     },
     {

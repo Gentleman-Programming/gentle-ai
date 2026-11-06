@@ -36,10 +36,7 @@ var (
 // by a RAR authority object. It is not an outcome projection.
 type RARNativeReceiptVersion string
 
-const (
-	RARReceiptCompactV2    RARNativeReceiptVersion = "compact_v2"
-	RARReceiptHistoricalV1 RARNativeReceiptVersion = "historical_v1"
-)
+const RARReceiptHistoricalV1 RARNativeReceiptVersion = "historical_v1"
 
 // RARNativeReceiptAuthority preserves one exact, canonical receipt issued by
 // the native review kernel and the revision of the authority that issued it.
@@ -50,8 +47,7 @@ type RARNativeReceiptAuthority struct {
 	Version           RARNativeReceiptVersion `json:"version"`
 	AuthorityRevision string                  `json:"authority_revision"`
 	ReceiptRef        string                  `json:"receipt_ref"`
-	Compact           *CompactReceipt         `json:"compact,omitempty"`
-	Historical        *Receipt                `json:"historical,omitempty"`
+	Historical        *Receipt                `json:"historical"`
 }
 
 // Validate verifies the preserved receipt preimage and its content identity.
@@ -63,56 +59,32 @@ func (authority RARNativeReceiptAuthority) Validate() error {
 		!validSHA256(authority.ReceiptRef) {
 		return errors.New("invalid RAR native receipt identity")
 	}
-	if (authority.Compact == nil) == (authority.Historical == nil) {
-		return errors.New("RAR native receipt must preserve exactly one receipt preimage")
+	if authority.Version != RARReceiptHistoricalV1 || authority.Historical == nil {
+		return errors.New("RAR native receipt requires the exact historical v1 receipt") // refusal:by-design operator-knowledge: only the persisted authority's historical receipt can prove this legacy record; no command can reconstruct it
 	}
-	var (
-		payload  []byte
-		terminal TerminalState
-		err      error
-	)
-	switch authority.Version {
-	case RARReceiptCompactV2:
-		if authority.Compact == nil || authority.Historical != nil {
-			return errors.New("compact RAR receipt version requires the exact compact receipt")
-		}
-		if err = authority.Compact.Validate(); err != nil {
-			return fmt.Errorf("validate compact RAR receipt: %w", err)
-		}
-		terminal = authority.Compact.TerminalState
-		payload, err = canonicalRARReceiptPayload(*authority.Compact)
-	case RARReceiptHistoricalV1:
-		if authority.Historical == nil || authority.Compact != nil {
-			return errors.New("historical RAR receipt version requires the exact v1 receipt")
-		}
-		if err = validateReceiptStructure(*authority.Historical); err != nil {
-			return fmt.Errorf("validate historical RAR receipt: %w", err)
-		}
-		terminal = authority.Historical.TerminalState
-		payload, err = canonicalRARReceiptPayload(*authority.Historical)
-	default:
-		return fmt.Errorf("unsupported RAR native receipt version %q", authority.Version)
+	if err := validateReceiptStructure(*authority.Historical); err != nil {
+		return fmt.Errorf("validate historical RAR receipt: %w", err)
 	}
+	terminal := authority.Historical.TerminalState
+	payload, err := canonicalRARReceiptPayload(*authority.Historical)
 	if err != nil {
 		return err
 	}
 	if terminal != TerminalApproved {
 		return errors.New("RAR authority requires a terminal approved native receipt")
 	}
-	if authority.ReceiptRef != sha256Ref(payload) {
+	receiptDigest := sha256.Sum256(payload)
+	if authority.ReceiptRef != "sha256:"+hex.EncodeToString(receiptDigest[:]) {
 		return errors.New("RAR native receipt ref does not match its exact canonical preimage")
 	}
 	return nil
 }
 
 func (authority RARNativeReceiptAuthority) lineageID() string {
-	if authority.Compact != nil {
-		return authority.Compact.LineageID
+	if authority.Historical == nil {
+		return ""
 	}
-	if authority.Historical != nil {
-		return authority.Historical.LineageID
-	}
-	return ""
+	return authority.Historical.LineageID
 }
 
 // LineageID returns the lineage encoded by the preserved native receipt.
@@ -121,13 +93,10 @@ func (authority RARNativeReceiptAuthority) LineageID() string {
 }
 
 func (authority RARNativeReceiptAuthority) candidateTree() string {
-	if authority.Compact != nil {
-		return authority.Compact.FinalCandidateTree
+	if authority.Historical == nil {
+		return ""
 	}
-	if authority.Historical != nil {
-		return authority.Historical.FinalCandidateTree
-	}
-	return ""
+	return authority.Historical.FinalCandidateTree
 }
 
 // CandidateTree returns the terminal candidate encoded by the preserved
@@ -137,23 +106,17 @@ func (authority RARNativeReceiptAuthority) CandidateTree() string {
 }
 
 func (authority RARNativeReceiptAuthority) policyHash() string {
-	if authority.Compact != nil {
-		return authority.Compact.PolicyHash
+	if authority.Historical == nil {
+		return ""
 	}
-	if authority.Historical != nil {
-		return authority.Historical.PolicyHash
-	}
-	return ""
+	return authority.Historical.PolicyHash
 }
 
 func (authority RARNativeReceiptAuthority) pathsDigest() string {
-	if authority.Compact != nil {
-		return authority.Compact.PathsDigest
+	if authority.Historical == nil {
+		return ""
 	}
-	if authority.Historical != nil {
-		return authority.Historical.PathsDigest
-	}
-	return ""
+	return authority.Historical.PathsDigest
 }
 
 // PathsDigest returns the reviewed path-set identity encoded by the receipt.
@@ -303,6 +266,34 @@ func (repository *RARAuthorityRepository) Publish(
 	if err := repository.validateIdentity(ctx); err != nil {
 		return RARVerificationAuthority{}, err
 	}
+	// converge is the single lock-exhaustion convergence predicate for
+	// Publish. The pair index and authority object are immutable and published
+	// by atomic no-replace renames, so an exact read-back of this caller's
+	// receipt+result pair proves a winner already completed the exact
+	// publication; ResolveReceiptResult then applies the same live-authority
+	// gate the winner passes after publishing. Anything else — missing pair,
+	// divergent contracts, stale native receipt, cancellation — reports false
+	// and the caller keeps its original typed failure instead of converging.
+	// This is an internal predicate, not a refusal: a non-convergent caller
+	// observes only the caller's own lock error, never a second error from
+	// here.
+	converge := func() (RARVerificationAuthority, bool) {
+		if _, err := readPrivateRARFile(repository.pairIndexPath(request.ReceiptRef, request.Result.ResultRef)); err != nil {
+			return RARVerificationAuthority{}, false
+		}
+		replay, err := repository.ResolveReceiptResult(ctx, request.ReceiptRef, request.Result.ResultRef)
+		if err != nil {
+			return RARVerificationAuthority{}, false
+		}
+		if replay.Receipt.lineageID() != request.LineageID ||
+			!reflect.DeepEqual(replay.Applicability, request.Applicability) ||
+			!reflect.DeepEqual(replay.Registry, request.Registry) ||
+			!reflect.DeepEqual(replay.Plan, request.Plan) ||
+			!reflect.DeepEqual(replay.Result, request.Result) {
+			return RARVerificationAuthority{}, false
+		}
+		return replay, true
+	}
 
 	native, subject, release, err := repository.lockNativeReceipt(
 		ctx,
@@ -310,23 +301,24 @@ func (repository *RARAuthorityRepository) Publish(
 		request.ReceiptRef,
 	)
 	if err != nil {
-		// Bounded lock exhaustion converges only when a winner published this
-		// caller's exact immutable pair and it still matches live native authority.
 		if errors.Is(err, ErrAuthorityLockTimeout) {
-			if _, readErr := readPrivateRARFile(repository.pairIndexPath(request.ReceiptRef, request.Result.ResultRef)); readErr == nil {
-				replay, resolveErr := repository.ResolveReceiptResult(ctx, request.ReceiptRef, request.Result.ResultRef)
-				if resolveErr == nil && replay.Receipt.lineageID() == request.LineageID &&
-					reflect.DeepEqual(replay.Applicability, request.Applicability) &&
-					reflect.DeepEqual(replay.Registry, request.Registry) &&
-					reflect.DeepEqual(replay.Plan, request.Plan) &&
-					reflect.DeepEqual(replay.Result, request.Result) {
-					return replay, nil
-				}
+			if replay, converged := converge(); converged {
+				return replay, nil
 			}
 		}
 		return RARVerificationAuthority{}, err
 	}
-	defer release()
+	// The native receipt lock must be released before lock-exhaustion
+	// convergence: the convergence predicate re-resolves live authority
+	// through ResolveReceiptResult, which re-acquires this same lock.
+	released := false
+	releaseOnce := func() {
+		if !released {
+			released = true
+			release()
+		}
+	}
+	defer releaseOnce()
 	if request.Result.Subject != subject ||
 		request.Applicability.Subject != subject ||
 		request.Plan.Subject != subject ||
@@ -366,6 +358,22 @@ func (repository *RARAuthorityRepository) Publish(
 	}
 	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(repository.root, "LOCK"))
 	if err != nil {
+		// Bounded lock exhaustion converges only when a winner published this
+		// caller's exact immutable pair and it still matches live native
+		// authority: the pair index and authority object are published by
+		// atomic no-replace renames, so an exact read-back of the pair proves
+		// this caller's publication already completed, and ResolveReceiptResult
+		// then applies the same live-authority gate the winner passes after
+		// publishing. Everything else keeps the typed error — cancellation, a
+		// missing pair, divergent contracts, a stale native receipt, or a
+		// replaced repository identity mean there is nothing proven to
+		// converge on, and liveness is never broadened beyond that gate.
+		if errors.Is(err, ErrAuthorityLockTimeout) {
+			releaseOnce()
+			if replay, converged := converge(); converged {
+				return replay, nil
+			}
+		}
 		return RARVerificationAuthority{}, err
 	}
 	defer lock.release()
@@ -686,11 +694,6 @@ func canonicalRARReceiptPayload(receipt any) ([]byte, error) {
 		return nil, err
 	}
 	return append(payload, '\n'), nil
-}
-
-func sha256Ref(payload []byte) string {
-	sum := sha256.Sum256(payload)
-	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func hashPathComponent(ref string) string {

@@ -1,0 +1,64 @@
+{
+  "schema": "gentle-ai.review-state-record/v2",
+  "revision": "sha256:63295f005ab32d0ab0ddcd8c234f92cda7765f2377315d6ccbee0b6aec0344d8",
+  "state": {
+    "schema": "gentle-ai.review-state/v2",
+    "lineage_id": "review-a39b858db5f00bbb",
+    "generation": 1,
+    "state": "approved",
+    "initial_snapshot": {
+      "kind": "base-diff",
+      "base_tree": "4cf9f177c4c015836fca6a31f9c3917e89ae29ec",
+      "candidate_tree": "d2b2f94df408acd9ee162fb843920190fd602446",
+      "paths_digest": "sha256:483a9662fdcb2c45435c92c1c0f23b71bc13c5bef10324f5f884b100ad042764",
+      "intended_untracked": [],
+      "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
+      "paths": [
+        "file.txt",
+        "main.go"
+      ],
+      "identity": "sha256:a39b858db5f00bbbb50d66995ee3b927184b96e0aa8b021da6b02bb7697b4b45"
+    },
+    "current_snapshot": {
+      "kind": "base-diff",
+      "base_tree": "4cf9f177c4c015836fca6a31f9c3917e89ae29ec",
+      "candidate_tree": "d2b2f94df408acd9ee162fb843920190fd602446",
+      "paths_digest": "sha256:483a9662fdcb2c45435c92c1c0f23b71bc13c5bef10324f5f884b100ad042764",
+      "intended_untracked": [],
+      "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
+      "paths": [
+        "file.txt",
+        "main.go"
+      ],
+      "identity": "sha256:a39b858db5f00bbbb50d66995ee3b927184b96e0aa8b021da6b02bb7697b4b45"
+    },
+    "genesis_paths": [
+      "file.txt",
+      "main.go"
+    ],
+    "policy_hash": "sha256:34fb63d7f29f8613cd4431382b1057398a4816f8a4c20fc34677fffc80a184f6",
+    "risk_level": "medium",
+    "selected_lenses": [
+      "review-reliability"
+    ],
+    "original_changed_lines": 8,
+    "correction_budget": 4,
+    "lens_results": [
+      {
+        "lens": "review-reliability",
+        "findings": [],
+        "evidence": [
+          "Reviewed the complete frozen candidate: file.txt gained one line and main.go was added with a trivial fmt.Println; no defects found."
+        ],
+        "result_hash": "sha256:c6286743169d6121908cfbece50b01e100c567b2ac71716b9b5cb67f2d2d630d"
+      }
+    ],
+    "findings": [],
+    "classifications": {},
+    "outcomes": {},
+    "fix_finding_ids": [],
+    "follow_ups": [],
+    "fix_delta_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "evidence_hash": "sha256:385d48f6f85747c9a6a1c577ab3e68b76f10882da43f4a025414d11bbff7fe8c"
+  }
+}

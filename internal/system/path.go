@@ -10,6 +10,22 @@ import (
 	"strings"
 )
 
+type userPathPowerShellRunner interface {
+	Run(context.Context, ...string) ([]byte, error)
+}
+
+// UserPathAddition records the PATH entries this invocation created.
+type UserPathAddition struct {
+	ProcessAdded    bool
+	PersistentAdded bool
+}
+
+var (
+	userPathGOOS                = runtime.GOOS
+	userPathRunningInGoTest     = runningInGoTest
+	newUserPathPowerShellRunner = func() userPathPowerShellRunner { return NewPowerShellRunner() }
+)
+
 // AddToUserPath adds a directory to the Windows user PATH persistently.
 // Uses PowerShell to modify the user-scoped environment variable in the registry,
 // which survives terminal restarts without requiring admin privileges.
@@ -18,29 +34,30 @@ import (
 // to the current process PATH). This is safe to call on all platforms since the
 // binary is cross-compiled — build tags are NOT used.
 func AddToUserPath(dir string) error {
-	if runtime.GOOS != "windows" {
+	_, err := AddToUserPathWithResult(dir)
+	return err
+}
+
+// AddToUserPathWithResult adds dir and reports exactly which PATH scopes changed.
+// Callers that must compensate a failed larger transaction can safely restore only
+// entries created by this invocation.
+func AddToUserPathWithResult(dir string) (UserPathAddition, error) {
+	addition := UserPathAddition{ProcessAdded: !processPathContains(dir)}
+	if userPathGOOS != "windows" {
 		// Still add to the current process PATH on non-Windows (harmless for callers).
-		return addToProcessPath(dir)
+		return addition, addToProcessPath(dir)
 	}
-	if runningInGoTest() {
+	if userPathRunningInGoTest() {
 		// Go tests must not mutate the real Windows user PATH registry. Keep the
 		// test process behavior identical for callers that need the new directory
 		// available later in the same run.
-		return addToProcessPath(dir)
-	}
-
-	// Check whether dir is already present in PATH (case-insensitive on Windows).
-	currentPath := os.Getenv("PATH")
-	for _, p := range filepath.SplitList(currentPath) {
-		if strings.EqualFold(filepath.Clean(p), filepath.Clean(dir)) {
-			return nil // already present — nothing to do
-		}
+		return addition, addToProcessPath(dir)
 	}
 
 	// 1. Update the current process PATH so subsequent commands in this run can
 	//    find the newly installed binary immediately.
 	if err := addToProcessPath(dir); err != nil {
-		return err
+		return UserPathAddition{}, err
 	}
 
 	// 2. Persist via PowerShell: modifies the user-scoped PATH in the registry.
@@ -50,19 +67,71 @@ func AddToUserPath(dir string) error {
 	//    escapePowerShellString replaces ' with '' (PowerShell's escape for single quotes
 	//    within single-quoted strings) to prevent injection via path names like C:\O'Brien.
 	safeDir := escapePowerShellString(dir)
-	script := fmt.Sprintf(
-		`$current = [Environment]::GetEnvironmentVariable('PATH', 'User'); `+
-			`if (($current.Split(';')) -notcontains '%s') { `+
-			`[Environment]::SetEnvironmentVariable('PATH', '%s;' + $current, 'User') }`,
-		safeDir, safeDir,
-	)
-	_, err := NewPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", script)
+	script := persistentUserPathScript(fmt.Sprintf(
+		`$exists = $false; if ($current) { $exists = $current.Split(';') | Where-Object { Test-UserPathEntry ($_.Trim().Trim('"')) '%s' } | Select-Object -First 1 }; `+
+			`if (-not $exists) { `+
+			`$updated = if ($current) { '%s;' + $current } else { '%s' }; `+
+			`$pathKey.SetValue('Path', $updated, $kind); $pathChanged = $true; 'changed' `+
+			`} else { 'unchanged' }`,
+		safeDir, safeDir, safeDir,
+	))
+	output, err := newUserPathPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", script)
+	if err != nil {
+		return addition, err
+	}
+	switch strings.TrimSpace(string(output)) {
+	case "changed":
+		addition.PersistentAdded = true
+	case "unchanged":
+	default:
+		return addition, fmt.Errorf("add persistent user PATH: unexpected PowerShell result %q", strings.TrimSpace(string(output)))
+	}
+	return addition, nil
+}
+
+// RemoveFromUserPath removes one matching directory from the Windows user PATH
+// and the current process PATH. Matching trims whitespace and quotes and is
+// case-insensitive, while all unrelated entries retain their original order.
+func RemoveFromUserPath(dir string) error {
+	if userPathGOOS == "windows" && !userPathRunningInGoTest() {
+		if err := removeFromPersistentUserPath(dir); err != nil {
+			return err
+		}
+	}
+
+	return removeFromProcessPath(dir)
+}
+
+// RollbackUserPathAddition restores only PATH entries created by
+// AddToUserPathWithResult.
+func RollbackUserPathAddition(dir string, addition UserPathAddition) error {
+	if addition.PersistentAdded && userPathGOOS == "windows" && !userPathRunningInGoTest() {
+		if err := removeFromPersistentUserPath(dir); err != nil {
+			return err
+		}
+	}
+	if addition.ProcessAdded {
+		return removeFromProcessPath(dir)
+	}
+	return nil
+}
+
+func removeFromPersistentUserPath(dir string) error {
+	safeDir := escapePowerShellString(strings.Trim(strings.TrimSpace(dir), `"`))
+	script := persistentUserPathScript(fmt.Sprintf(
+		`$dir = '%s'; `+
+			`$entries = @(); $removed = $false; `+
+			`if ($current) { foreach ($entry in $current.Split(';')) { if (-not $removed -and (Test-UserPathEntry ($entry.Trim().Trim('"')) $dir)) { $removed = $true; continue }; $entries += $entry } }; `+
+			`if ($removed) { $pathKey.SetValue('Path', ($entries -join ';'), $kind); $pathChanged = $true }`,
+		safeDir,
+	))
+	_, err := newUserPathPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", script)
 	return err
 }
 
 // PrioritizeUserPath moves dir to the front of PATH for the current process and,
 // on Windows, the user-scoped persistent PATH. Existing entries are preserved;
-// only exact matches for dir are removed before the refreshed dir is prepended.
+// literal and expanded matches are removed before the preferred entry is prepended.
 func PrioritizeUserPath(dir string) error {
 	dir = strings.Trim(strings.TrimSpace(dir), `"`)
 	if dir == "" {
@@ -72,36 +141,74 @@ func PrioritizeUserPath(dir string) error {
 	if err := prioritizeProcessPath(dir); err != nil {
 		return err
 	}
-	if runtime.GOOS != "windows" || runningInGoTest() {
+	if userPathGOOS != "windows" || userPathRunningInGoTest() {
 		return nil
 	}
 
 	safeDir := escapePowerShellString(dir)
-	script := fmt.Sprintf(
+	script := persistentUserPathScript(fmt.Sprintf(
 		`$dir = '%s'; `+
-			`$current = [Environment]::GetEnvironmentVariable('PATH', 'User'); `+
-			`$entries = @(); `+
-			`if ($current) { $entries = $current.Split(';') | Where-Object { $_ -and ([string]::Compare($_.Trim('"'), $dir, $true) -ne 0) } }; `+
-			`[Environment]::SetEnvironmentVariable('PATH', ($dir + ';' + ($entries -join ';')).TrimEnd(';'), 'User')`,
+			`$entries = @(); $preferred = $dir; $matched = $false; `+
+			`if ($current) { foreach ($entry in $current.Split(';')) { if (Test-UserPathEntry ($entry.Trim('"')) $dir) { if (-not $matched) { if ([string]::Compare($entry.Trim('"'), $dir, $true) -ne 0) { $preferred = $entry }; $matched = $true } } elseif ($entry) { $entries += $entry } } }; `+
+			`$updated = ($preferred + ';' + ($entries -join ';')).TrimEnd(';'); `+
+			`$pathKey.SetValue('Path', $updated, $kind); $pathChanged = $true`,
 		safeDir,
-	)
-	_, err := NewPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", script)
+	))
+	_, err := newUserPathPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", script)
 	return err
+}
+
+// persistentUserPathScript preserves both the raw variable references and the
+// registry value kind. Environment.GetEnvironmentVariable expands references on
+// read, and SetEnvironmentVariable writes REG_SZ regardless of the original kind.
+// Keep the environment-change notification previously sent by the .NET setter.
+func persistentUserPathScript(body string) string {
+	return `$ErrorActionPreference = 'Stop'; ` +
+		`$pathKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment'); ` +
+		`try { ` +
+		`$current = $pathKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); ` +
+		`$kind = [Microsoft.Win32.RegistryValueKind]::ExpandString; ` +
+		`if ($pathKey.GetValueNames() -contains 'Path') { $kind = $pathKey.GetValueKind('Path') }; ` +
+		// Compare expanded entries without changing the raw value used for writes.
+		`function Test-UserPathEntry([string]$literal, [string]$target) { ` +
+		`return ([string]::Compare($literal, $target, $true) -eq 0 -or [string]::Compare([Environment]::ExpandEnvironmentVariables($literal), $target, $true) -eq 0) }; ` +
+		`$pathChanged = $false; ` + body +
+		` } finally { $pathKey.Close() }; ` +
+		`if ($pathChanged) { try { ` +
+		`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class GentleAIPathNotification { [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result); }'; ` +
+		`$result = [UIntPtr]::Zero; ` +
+		`[void][GentleAIPathNotification]::SendMessageTimeout([IntPtr]0xffff, 0x1a, [UIntPtr]::Zero, 'Environment', 2, 1000, [ref]$result) } catch { } }`
 }
 
 // UserPathEntries returns the persistent user-scoped PATH entries for the given
 // platform. On Windows it reads the User PATH registry-backed environment value;
 // on other platforms it returns the current process PATH entries.
 func UserPathEntries(goos string) ([]string, error) {
-	if goos != "windows" {
+	if goos != "windows" || userPathGOOS != "windows" || userPathRunningInGoTest() {
 		return filepath.SplitList(os.Getenv("PATH")), nil
 	}
 
-	output, err := NewPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", `[Environment]::GetEnvironmentVariable('PATH', 'User')`)
+	output, err := newUserPathPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", `[Environment]::GetEnvironmentVariable('PATH', 'User')`)
 	if err != nil {
 		return nil, err
 	}
 	return splitWindowsPath(strings.TrimSpace(string(output))), nil
+}
+
+// NewShellPath returns the PATH a newly started shell inherits. On Windows it
+// reads the persistent machine PATH followed by the persistent user PATH, the
+// order new processes receive; elsewhere, and under go test, it returns the
+// current process PATH.
+func NewShellPath() (string, error) {
+	if userPathGOOS != "windows" || userPathRunningInGoTest() {
+		return os.Getenv("PATH"), nil
+	}
+	output, err := newUserPathPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command",
+		`[Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('PATH', 'User')`)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 func splitWindowsPath(value string) []string {
@@ -138,6 +245,26 @@ func addToProcessPath(dir string) error {
 		return os.Setenv("PATH", dir)
 	}
 	return os.Setenv("PATH", dir+string(os.PathListSeparator)+currentPath)
+}
+
+func processPathContains(dir string) bool {
+	for _, entry := range filepath.SplitList(os.Getenv("PATH")) {
+		if strings.EqualFold(filepath.Clean(entry), filepath.Clean(dir)) {
+			return true
+		}
+	}
+	return false
+}
+
+func removeFromProcessPath(dir string) error {
+	currentPath := os.Getenv("PATH")
+	entries := filepath.SplitList(currentPath)
+	for index, entry := range entries {
+		if strings.EqualFold(filepath.Clean(strings.Trim(strings.TrimSpace(entry), `"`)), filepath.Clean(strings.Trim(strings.TrimSpace(dir), `"`))) {
+			return os.Setenv("PATH", strings.Join(append(entries[:index], entries[index+1:]...), string(os.PathListSeparator)))
+		}
+	}
+	return nil
 }
 
 func prioritizeProcessPath(dir string) error {

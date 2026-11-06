@@ -194,6 +194,11 @@ type accumulator struct {
 	pendingBlock  int
 	pendingActive bool
 	records       []CommandRecord
+
+	// deadTransitions collects every execute transition the product emitted
+	// with nothing runnable in it, across every observation of the journey.
+	// It is a corpus error, not a metric: see DeadExecuteTransitions.
+	deadTransitions []string
 }
 
 func newAccumulator() *accumulator {
@@ -237,6 +242,14 @@ func (a *accumulator) observe(step string, o Observation, gitCalls *int, modelRu
 	if gitCalls != nil {
 		a.gitCalls += *gitCalls
 		a.gitObserved = true
+	}
+
+	// Checked before the unsupported and block branches on purpose: a dead
+	// execute transition is not a class of block, it is the product breaking
+	// its own promise, and it has to be seen no matter how the invocation
+	// would otherwise be counted.
+	for _, dead := range DeadExecuteTransitions(o.Stdout) {
+		a.deadTransitions = append(a.deadTransitions, step+": "+dead)
 	}
 
 	if IsUnsupported(o) {

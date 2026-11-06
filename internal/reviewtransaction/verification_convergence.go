@@ -80,6 +80,10 @@ func ResnapshotVerificationSubject(
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("resnapshot verification subject: %w", err)
 	}
+	// The live tree is freshly rebuilt, but reviewer representation is part of
+	// the frozen authority. Carry the validated expected interpretation across
+	// this content resnapshot instead of silently upgrading a legacy authority.
+	live.GeneratedPathInterpretation = expected.GeneratedPathInterpretation
 	if SnapshotsEqualExact(expected, live) {
 		return live, nil
 	}

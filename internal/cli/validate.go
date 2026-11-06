@@ -2,12 +2,14 @@ package cli
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type InstallInput struct {
@@ -15,6 +17,10 @@ type InstallInput struct {
 	Scope     InstallScope
 	Channel   InstallChannel
 	DryRun    bool
+
+	// ClaudeOrchestratorModules opts a global install that selects Claude into
+	// the user-global module pilot (#5256).
+	ClaudeOrchestratorModules bool
 }
 
 func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult) (InstallInput, error) {
@@ -30,9 +36,12 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	}
 	selection.Agents = unique(agents)
 
-	persona, err := normalizePersona(flags.Persona)
+	persona, personaRemapped, err := normalizePersona(flags.Persona)
 	if err != nil {
 		return InstallInput{}, err
+	}
+	if personaRemapped {
+		fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
 	}
 	selection.Persona = persona
 
@@ -68,25 +77,88 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	if err != nil {
 		return InstallInput{}, err
 	}
+	// Rejected here, before the runtime is created or anything is written.
+	if flags.ClaudeOrchestratorModules {
+		hasClaude := containsAgent(selection.Agents, model.AgentClaudeCode)
+		if scope != ScopeGlobal || !hasClaude {
+			// --agent selects installation targets here, not the runtime calling
+			// review. Preserve the caller's selection in the corrected command.
+			agentNames := make([]string, 0, len(selection.Agents)+1)
+			for _, agent := range selection.Agents {
+				agentNames = append(agentNames, string(agent))
+			}
+			if !hasClaude {
+				agentNames = append(agentNames, string(model.AgentClaudeCode))
+			}
+			agents := strings.Join(agentNames, ",")
+			if scope != ScopeGlobal {
+				return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires --scope global, got %q; rerun gentle-ai install --agent %s --scope global --claude-orchestrator-modules", scope, agents)
+			}
+			return InstallInput{}, fmt.Errorf("--claude-orchestrator-modules requires the claude-code agent in the selection; rerun gentle-ai install --agent %s --scope global --claude-orchestrator-modules", agents)
+		}
+	}
 
 	channel, err := ResolveInstallChannel(flags.Channel)
 	if err != nil {
 		return InstallInput{}, err
 	}
 
-	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun}, nil
+	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun, ClaudeOrchestratorModules: flags.ClaudeOrchestratorModules}, nil
 }
 
-func normalizePersona(value string) (model.PersonaID, error) {
+// validateInstallModifierConsumers checks explicit payloads against the final plan,
+// after dependency expansion. Implicit defaults and custom persona opt-out do not
+// request a component payload.
+func validateInstallModifierConsumers(flags InstallFlags, selection model.Selection, components []model.ComponentID) error {
+	modifiers := []struct {
+		flag     string
+		explicit bool
+		consumer model.ComponentID
+	}{
+		{"--persona", strings.TrimSpace(flags.Persona) != "" && selection.Persona != model.PersonaCustom, model.ComponentPersona},
+		{"--skill/--skills", len(flags.Skills) > 0, model.ComponentSkills},
+	}
+	for _, modifier := range modifiers {
+		if !modifier.explicit {
+			continue
+		}
+		found := false
+		for _, component := range components {
+			if component == modifier.consumer {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("%s requires component %s in the resolved install plan; rerun gentle-ai install with --component %s added to your existing component list, or remove %s", modifier.flag, modifier.consumer, modifier.consumer, modifier.flag)
+		}
+	}
+	return nil
+}
+
+// personaAliasRemapNotice is printed whenever the legacy
+// gentleman-neutral-artifacts alias is remapped to the neutral persona.
+const personaAliasRemapNotice = `"gentleman-neutral-artifacts" now maps to "neutral". For a voseo conversation use --persona gentleman.`
+
+// personaNoticeWriter is swappable in tests.
+var personaNoticeWriter io.Writer = os.Stderr
+
+// normalizePersona resolves a --persona flag or persisted state value.
+// The second return is true when the legacy gentleman-neutral-artifacts
+// alias was remapped to neutral: its name promised a neutral tone, so the
+// name now wins; users who want voseo have --persona gentleman.
+func normalizePersona(value string) (model.PersonaID, bool, error) {
 	if strings.TrimSpace(value) == "" {
-		return model.PersonaGentleman, nil
+		return model.PersonaGentleman, false, nil
 	}
 
 	switch model.PersonaID(value) {
-	case model.PersonaGentleman, model.PersonaGentlemanNeutralArtifacts, model.PersonaNeutral, model.PersonaCustom:
-		return model.PersonaID(value), nil
+	case model.PersonaGentlemanNeutralArtifacts:
+		return model.PersonaNeutral, true, nil
+	case model.PersonaGentleman, model.PersonaNeutral, model.PersonaCustom:
+		return model.PersonaID(value), false, nil
 	default:
-		return "", fmt.Errorf("unsupported persona %q", value)
+		return "", false, fmt.Errorf("unsupported persona %q", value)
 	}
 }
 
@@ -184,6 +256,8 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 			agents = append(agents, model.AgentCursor)
 		case string(model.AgentVSCodeCopilot):
 			agents = append(agents, model.AgentVSCodeCopilot)
+		case string(model.AgentGitHubCopilotCLI):
+			agents = append(agents, model.AgentGitHubCopilotCLI)
 		case string(model.AgentCodex):
 			agents = append(agents, model.AgentCodex)
 		case string(model.AgentAntigravity):
@@ -255,7 +329,7 @@ func isPiOnlyAgents(agents []model.AgentID) bool {
 }
 
 func piOnlyComponents() []model.ComponentID {
-	return []model.ComponentID{model.ComponentEngram}
+	return []model.ComponentID{model.ComponentEngram, model.ComponentPersona}
 }
 
 func unique[T comparable](items []T) []T {

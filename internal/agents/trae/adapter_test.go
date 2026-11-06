@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 const testHome = "/tmp/home"
@@ -233,9 +233,6 @@ func TestCapabilities(t *testing.T) {
 	}
 	if !a.SupportsMCP() {
 		t.Fatal("Trae should support MCP")
-	}
-	if a.SupportsAutoInstall() {
-		t.Fatal("Trae should NOT support auto-install (desktop app)")
 	}
 	if a.SupportsOutputStyles() {
 		t.Fatal("Trae should NOT support output styles")

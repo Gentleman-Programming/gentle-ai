@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -8,8 +9,16 @@ import (
 )
 
 const (
+	// MinimumGPT56RuntimeVersion is a floor, not a pin: any installed Codex
+	// at or above this version satisfies GPT-5.6 profiles.
 	MinimumGPT56RuntimeVersion = "0.144.0"
-	codexUpdateCommand         = "npm install -g --ignore-scripts @openai/codex@0.144.0"
+	// codexUpdateCommand advises the latest release rather than pinning to
+	// the floor above. gentle-ai no longer installs anything on the user's
+	// behalf (see agentInstallStep in internal/cli/run.go), so this string is
+	// advice a human reads and runs themselves — pinning it to the exact
+	// floor value would go stale the moment a newer Codex ships and would
+	// tell users to downgrade to years-old releases as time passes.
+	codexUpdateCommand = "npm install -g --ignore-scripts @openai/codex@latest"
 )
 
 var (
@@ -20,6 +29,25 @@ var (
 		return exec.Command("codex", "--version").CombinedOutput()
 	}
 )
+
+// gpt56RuntimeUnavailableError marks a missing Codex executable. It preserves
+// the normal requirement message while allowing shared-file configuration to
+// proceed without creating CLI-only GPT-5.6 profiles.
+type gpt56RuntimeUnavailableError struct {
+	requirement error
+	cause       error
+}
+
+func (e *gpt56RuntimeUnavailableError) Error() string { return e.requirement.Error() }
+func (e *gpt56RuntimeUnavailableError) Unwrap() error { return e.cause }
+
+// IsGPT56RuntimeUnavailable reports whether validation failed because the Codex
+// executable was not found. Other execution and version-validation errors remain
+// runtime requirement failures.
+func IsGPT56RuntimeUnavailable(err error) bool {
+	var unavailable *gpt56RuntimeUnavailableError
+	return errors.As(err, &unavailable)
+}
 
 type semanticVersion struct {
 	core       [3]string
@@ -35,7 +63,11 @@ func ValidateGPT56Runtime() error {
 		if detail := strings.TrimSpace(string(output)); detail != "" {
 			reason += ": " + detail
 		}
-		return runtimeRequirementError(reason)
+		requirementErr := runtimeRequirementError(reason)
+		if errors.Is(err, exec.ErrNotFound) {
+			return &gpt56RuntimeUnavailableError{requirement: requirementErr, cause: err}
+		}
+		return requirementErr
 	}
 	installed, err := parseCodexVersion(string(output))
 	if err != nil {

@@ -1,4 +1,7 @@
-# Engram Command Reference
+# Engram™ Command Reference
+
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
 
 <- [Back to README](../README.md)
 
@@ -63,6 +66,81 @@ Add `.engram/` to your repo and commit it. When a teammate clones and runs `engr
 
 ---
 
+## Cloud Sync (Optional)
+
+Engram Cloud is optional replication for people who want project memories to follow them across machines they own. Local SQLite memory remains the default and authoritative source. Gentle AI ships the Engram client, but the cloud runtime and server lifecycle are owned by Engram upstream.
+
+Use this only when you already have an Engram Cloud server URL and token.
+
+### Quick path
+
+```bash
+# Persist the cloud server URL in ~/.engram/cloud.json
+engram cloud config --server https://your-cloud-server.example
+
+# Keep the token out of repos and docs; provide it through your user environment
+export ENGRAM_CLOUD_TOKEN=<your-token>
+
+# Confirm the local client can reach the configured server
+engram cloud status
+
+# Enroll one project explicitly, then run the first cloud sync
+engram cloud enroll <project-name>
+engram sync --cloud --project <project-name>
+```
+
+On each additional machine, configure the same server and token, enroll the project, and import existing cloud memories:
+
+```bash
+engram cloud enroll <project-name>
+engram sync --cloud --import --project <project-name>
+```
+
+To let Engram's own runtime attempt background cloud sync, set autosync in the environment used to launch that runtime:
+
+```bash
+export ENGRAM_CLOUD_AUTOSYNC=1
+```
+
+`ENGRAM_CLOUD_SERVER` can also provide the server URL at runtime, but `engram cloud config --server ...` is easier to inspect and repeat.
+
+### Environment carriers
+
+| Setup | Environment carrier |
+|---|---|
+| macOS GUI sessions | `launchctl setenv ENGRAM_CLOUD_TOKEN <token>` and `launchctl setenv ENGRAM_CLOUD_AUTOSYNC 1` |
+| Linux systemd user sessions | `systemctl --user import-environment ENGRAM_CLOUD_TOKEN ENGRAM_CLOUD_AUTOSYNC` after exporting them in the current shell |
+| Shell-only use | `export ENGRAM_CLOUD_TOKEN=<token>` and `export ENGRAM_CLOUD_AUTOSYNC=1` in your shell profile |
+
+The macOS and Linux manager commands update the current launchd or systemd user-manager environment. Reapply them after that manager restarts or after reboot, unless you configure a persistent service environment for the Engram process.
+
+Treat `ENGRAM_CLOUD_TOKEN` like any other credential: do not commit it, paste it into issue reports, or put it in project-local scripts. Environment variables are inherited by child processes, so use the narrowest carrier that fits how you launch Engram.
+
+### Verify and repair
+
+```bash
+# Readiness for the configured cloud connection
+engram cloud status
+
+# Inspect cloud-sync state for one project
+engram sync --cloud --status --project <project-name>
+
+# Diagnose and repair upgrade issues for one project
+engram cloud upgrade doctor --project <project-name>
+engram cloud upgrade repair --project <project-name> --dry-run
+engram cloud upgrade repair --project <project-name> --apply
+```
+
+### What Gentle AI does not manage
+
+- It does not provision or operate an Engram Cloud server.
+- It does not make cloud sync mandatory; local memory is still the default.
+- It does not replace git-based team sharing via `engram sync` and `.engram/`.
+
+Full upstream docs: [Engram Cloud](https://github.com/Gentleman-Programming/engram/blob/main/docs/engram-cloud/README.md) and [Engram cloud CLI reference](https://github.com/Gentleman-Programming/engram/blob/main/DOCS.md#cloud-cli-opt-in).
+
+---
+
 ## MCP Tools Reference
 
 These are the tools the AI agent uses behind the scenes. You never call them directly, but understanding them helps you know what your agent is doing.
@@ -78,7 +156,7 @@ These are the tools the AI agent uses behind the scenes. You never call them dir
 | `mem_get_observation` | Retrieves full untruncated content of a specific observation by ID |
 | `mem_save_prompt` | Saves the user's prompt and feeds session activity so a later `mem_save` can capture/dedupe it |
 
-`mem_save` accepts optional `capture_prompt`. Leave it unset for normal human/proactive saves. Use `capture_prompt: false` only for automated artifacts such as SDD proposal/spec/design/tasks/apply/verify/archive/init reports, testing-capabilities caches, onboarding/state artifacts, or skill-registry output. If the MCP server has no prompt context, `mem_save` still succeeds and does not invent prompt text.
+`mem_save` accepts optional `capture_prompt`. Leave it unset for normal human/proactive saves. Use `capture_prompt: false` only for automated artifacts such as testing-capabilities caches, onboarding/state artifacts, or skill-registry output. If the MCP server has no prompt context, `mem_save` still succeeds and does not invent prompt text.
 
 Agents or plugin hooks that can observe the user's prompt should call `mem_save_prompt` before any derived `mem_save` calls so Engram can attach and dedupe the real prompt context.
 
@@ -107,6 +185,16 @@ Agents or plugin hooks that can observe the user's prompt should call `mem_save_
 Since v1.11.0, engram reads the git remote URL at startup, normalizes it to lowercase, and uses that as the project name. If it finds similar existing project names, it warns you. This prevents the most common issue -- the same project accumulating memories under slightly different names.
 
 If you're working outside a git repo, engram falls back to the directory name.
+
+### Startup project resolution
+
+The injected protocol makes the agent call `mem_current_project` and wait for it before its first `mem_context`, `mem_search`, or `mem_review`:
+
+- **Unique**: a non-empty `project` with no `available_projects` (including the `dir_basename` fallback) is passed as the exact `project` value.
+- **Ambiguous**: when `available_projects` is non-empty or `project_source` is `ambiguous`, the agent asks you to choose one. The choice is a workspace alternative, not a project key; the agent re-resolves it only when the tool accepts a `cwd`, and otherwise skips initial reads.
+- **Unverified or no project**: checked first, when the workspace is unknown, the returned `cwd` does not match it, or the call fails, the agent stops and skips initial project-scoped reads; an empty `project` with no alternatives also skips them. It never guesses or searches all projects.
+
+Explicit requests to recall memory across projects, or from a named other project, are still honored; asking to work on another project is not one. In Engram 2.2.1 `mem_current_project` takes no arguments and resolves from the MCP server's working directory, so start the agent from the repository you want memory for.
 
 ---
 

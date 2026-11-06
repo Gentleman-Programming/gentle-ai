@@ -74,7 +74,7 @@ func ClaudeEffortsForModel(alias ClaudeModelAlias) []ClaudeEffort {
 	case ClaudeModelFable, ClaudeModelOpus:
 		return []ClaudeEffort{ClaudeEffortDefault, ClaudeEffortLow, ClaudeEffortMedium, ClaudeEffortHigh, ClaudeEffortXHigh, ClaudeEffortMax}
 	case ClaudeModelSonnet:
-		return []ClaudeEffort{ClaudeEffortDefault, ClaudeEffortLow, ClaudeEffortMedium, ClaudeEffortHigh, ClaudeEffortMax}
+		return []ClaudeEffort{ClaudeEffortDefault, ClaudeEffortLow, ClaudeEffortMedium, ClaudeEffortHigh, ClaudeEffortXHigh, ClaudeEffortMax}
 	case ClaudeModelHaiku:
 		return []ClaudeEffort{ClaudeEffortDefault}
 	default:
@@ -136,6 +136,7 @@ func ClaudeModelPresetBalanced() map[string]ClaudeModelAlias {
 	return map[string]ClaudeModelAlias{
 		"orchestrator": ClaudeModelOpus,
 		"sdd-explore":  ClaudeModelSonnet,
+		"sdd-research": ClaudeModelSonnet,
 		"sdd-propose":  ClaudeModelOpus,
 		"sdd-spec":     ClaudeModelSonnet,
 		"sdd-design":   ClaudeModelOpus,
@@ -157,6 +158,7 @@ func ClaudeModelPresetPerformance() map[string]ClaudeModelAlias {
 	return map[string]ClaudeModelAlias{
 		"orchestrator": ClaudeModelOpus,
 		"sdd-explore":  ClaudeModelSonnet,
+		"sdd-research": ClaudeModelSonnet,
 		"sdd-propose":  ClaudeModelOpus,
 		"sdd-spec":     ClaudeModelSonnet,
 		"sdd-design":   ClaudeModelOpus,
@@ -178,6 +180,7 @@ func ClaudeModelPresetEconomy() map[string]ClaudeModelAlias {
 	return map[string]ClaudeModelAlias{
 		"orchestrator": ClaudeModelSonnet,
 		"sdd-explore":  ClaudeModelSonnet,
+		"sdd-research": ClaudeModelSonnet,
 		"sdd-propose":  ClaudeModelSonnet,
 		"sdd-spec":     ClaudeModelSonnet,
 		"sdd-design":   ClaudeModelSonnet,

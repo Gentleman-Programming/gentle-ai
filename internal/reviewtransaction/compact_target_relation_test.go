@@ -82,3 +82,18 @@ func TestCompactTargetRelationRejectsInexactCompatibilityEvidence(t *testing.T) 
 		t.Fatalf("inexact compatibility evidence authorized relation: %#v", got)
 	}
 }
+
+func TestCompactTargetRelationRecognizesVerifiedLocalMerge(t *testing.T) {
+	frozen := Snapshot{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseTree: tree("1"), CandidateTree: tree("2"), Paths: []string{"a.go"}}
+	proof := BaseAdvanceCompatibility{
+		Status: baseAdvanceCompatibleLocalStatus, Compatible: true,
+		OriginalMergeBaseTree: frozen.BaseTree, NewBaseTree: tree("3"),
+		OriginalPatchIdentity: hash("1"), DeliveredPatchIdentity: hash("1"),
+		DeliveredPathsDigest: digestPaths(frozen.Paths), BaseAdvancePathsDigest: hash("3"), PathsDisjoint: true,
+		MergedResultTree: tree("4"), CIStatus: currentChangesBoundaryCIStatus,
+	}
+	live := Snapshot{Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionStaged, BaseTree: proof.NewBaseTree, CandidateTree: proof.MergedResultTree, Paths: frozen.Paths}
+	if got := classifyCompactTargetRelation(frozen, live, frozen.Paths, compactTargetRelationEvidence{CompatibleAdvance: &proof}); got.Kind != compactTargetCompatibleAdvance {
+		t.Fatalf("verified B1-to-M local merge relation = %#v", got)
+	}
+}

@@ -6,10 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 var LookPathOverride = exec.LookPath
@@ -66,14 +65,14 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 	return capabilitymanifest.MustForAgent(model.AgentGeminiCLI)
 }
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return a.CapabilityManifest().Features.AutoInstall
-}
-
+// InstallCommand returns the display-only command shown when Gemini CLI is
+// not detected — gentle-ai never executes this (see agentInstallStep in
+// internal/cli/run.go). Gemini CLI installs via npm on all platforms;
+// postinstall scripts are blocked to mitigate supply-chain risk. The version
+// advises "latest" rather than a pin: a human reads and runs this, and a
+// hardcoded version goes stale the moment a newer Gemini CLI ships.
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	// Gemini CLI installs via npm on all platforms. Version is pinned and
-	// postinstall scripts are blocked to mitigate supply-chain risk.
-	pkg := "@google/gemini-cli@" + versions.GeminiCLI
+	const pkg = "@google/gemini-cli@latest"
 	if profile.OS == "linux" && !profile.NpmWritable {
 		return [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	}
@@ -90,8 +89,12 @@ func (a *Adapter) SystemPromptDir(homeDir string) string {
 	return filepath.Join(homeDir, ".gemini")
 }
 
+// SystemPromptFile is a gentle-ai-owned staging file Gemini CLI does not
+// load. Every prompt writer appends its section here, and geminimodules
+// publishes the sections as modules that ~/.gemini/GEMINI.md imports, keeping
+// that file small for Antigravity, which loads it too (#1989).
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, ".gemini", "GEMINI.md")
+	return filepath.Join(homeDir, ".gemini", "gentle-ai", "guidance.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {
