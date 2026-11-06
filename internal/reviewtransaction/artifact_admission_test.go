@@ -105,11 +105,8 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 		{name: "unknown repository proof", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings[0].ProofRefs = []string{"diff: missing/old.go:3"}
 		}, decision: ArtifactAdmissionOutOfScope},
-		{name: "unknown repository evidence", mutate: func(r *ArtifactAdmissionRequest) {
-			r.Result.Evidence = append(r.Result.Evidence, "diff: missing.go:42")
-		}, decision: ArtifactAdmissionOutOfScope},
-		{name: "directory repository evidence does not recurse", mutate: func(r *ArtifactAdmissionRequest) {
-			r.Result.Evidence = append(r.Result.Evidence, "directory: `internal:1`")
+		{name: "directory repository proof does not recurse", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings[0].ProofRefs = []string{"directory: `internal:1`"}
 		}, decision: ArtifactAdmissionOutOfScope},
 		{name: "non-canonical repository proof", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings[0].ProofRefs = []string{"diff: ./secret.go:42"}
@@ -313,6 +310,7 @@ func TestAdmitArtifactAllowsSupportingProofOutsideChangedManifest(t *testing.T) 
 	}
 	request.Inspection.Paths = []string{"internal/a.go", "internal/b.go"}
 	request.Result.Evidence = []string{"live-only proof: live-only.go:1"}
+	request.Result.Findings[0].ProofRefs = []string{"live-only.go:1"}
 	if _, rejected, err := AdmitArtifact(t.Context(), request); err == nil || rejected.Decision != ArtifactAdmissionOutOfScope {
 		t.Fatalf("live-worktree-only proof was admitted: decision=%q error=%v", rejected.Decision, err)
 	}
@@ -592,9 +590,7 @@ func TestFindingAdmissionDiagnosticRequiresCompatibleLocation(t *testing.T) {
 		{"candidate range", "candidate_causality_unproven", "internal/a.go:7-9", "line_not_changed_by_candidate", true},
 		{"invalid valid line", "invalid_finding_location", "internal/a.go:7", "line_suffix_not_integer", false},
 		{"invalid reason mismatch", "invalid_finding_location", "internal/a.go:7-9", "line_must_be_positive", false},
-		{"evidence unknown path", "evidence_path_out_of_scope", "bogus.go:7", "unknown_or_malformed_repository_path", true},
 		{"proof unknown path", "proof_path_out_of_scope", "bogus.go:7", "unknown_or_malformed_repository_path", true},
-		{"evidence reason mismatch", "evidence_path_out_of_scope", "bogus.go:7", "line_not_changed_by_candidate", false},
 		{"proof malformed shape", "proof_path_out_of_scope", "/home/private/leak.go:5", "unknown_or_malformed_repository_path", false},
 	}
 	for _, tt := range tests {
@@ -608,33 +604,13 @@ func TestFindingAdmissionDiagnosticRequiresCompatibleLocation(t *testing.T) {
 }
 
 // TestAdmitArtifactNamesOutOfScopeCitationToken is the RED-first proof for the
-// undiagnosable out_of_scope rejection: a free-text evidence or proof_refs
-// token shaped like path:line that names an unknown or malformed repository
-// path rejected the entire reviewer result without naming the offending
-// token, so the incident could not be diagnosed after the fact.
+// undiagnosable out_of_scope rejection: a proof_refs token shaped like
+// path:line that names an unknown or malformed repository path rejected the
+// entire reviewer result without naming the offending token, so the incident
+// could not be diagnosed after the fact. Evidence prose carries no such token
+// any more: it is admitted as written (see
+// TestAdmitArtifactAdmitsFreeFormEvidenceSocketAddresses).
 func TestAdmitArtifactNamesOutOfScopeCitationToken(t *testing.T) {
-	t.Run("evidence rejection names the offending token", func(t *testing.T) {
-		_, _, request := admittedArtifactFixture(t)
-		request.Result.Evidence = append(request.Result.Evidence, "helper moved: bogus.go:7")
-		_, admission, err := AdmitArtifact(t.Context(), request)
-		wantMessage := "reviewer evidence references a path outside the frozen repository"
-		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope || admission.Diagnostic != wantMessage {
-			t.Fatalf("AdmitArtifact() = %q, %q, %v; want out-of-scope %q", admission.Decision, admission.Diagnostic, err, wantMessage)
-		}
-		var admissionErr *ArtifactAdmissionError
-		if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil {
-			t.Fatalf("evidence rejection carries no structured diagnostic: %v", err)
-		}
-		if admissionErr.Diagnostic.Code != "evidence_path_out_of_scope" ||
-			admissionErr.Diagnostic.FindingID != "" ||
-			admissionErr.Diagnostic.Location != "bogus.go:7" ||
-			admissionErr.Diagnostic.Reason != "unknown_or_malformed_repository_path" {
-			t.Fatalf("evidence diagnostic = %#v", admissionErr.Diagnostic)
-		}
-		if !strings.Contains(err.Error(), "bogus.go:7") {
-			t.Fatalf("error surface does not name the offending token: %v", err)
-		}
-	})
 	t.Run("proof rejection names the offending token and finding", func(t *testing.T) {
 		_, _, request := admittedArtifactFixture(t)
 		request.Result.Findings[0].ProofRefs = []string{"diff: bogus.go:7"}
@@ -659,13 +635,60 @@ func TestAdmitArtifactNamesOutOfScopeCitationToken(t *testing.T) {
 	})
 	t.Run("unsafe offending token stays out of the error surface", func(t *testing.T) {
 		_, _, request := admittedArtifactFixture(t)
-		request.Result.Evidence = append(request.Result.Evidence, "read /home/private/leak.go:5")
+		request.Result.Findings[0].ProofRefs = []string{"diff: /home/private/leak.go:5"}
 		_, _, err := AdmitArtifact(t.Context(), request)
 		var admissionErr *ArtifactAdmissionError
 		if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil ||
-			admissionErr.Diagnostic.Code != "evidence_path_out_of_scope" ||
+			admissionErr.Diagnostic.Code != "proof_path_out_of_scope" ||
 			admissionErr.Diagnostic.Location != "" || strings.Contains(err.Error(), "/home/private/leak.go") {
-			t.Fatalf("unsafe token escaped the structured diagnostic: %#v, %v", admissionErr.Diagnostic, err)
+			t.Fatalf("unsafe token escaped the structured diagnostic: %v", err)
+		}
+	})
+}
+
+// TestAdmitArtifactAdmitsFreeFormEvidenceSocketAddresses is the RED-first proof
+// for issue #5624: a reviewer's evidence prose may quote the host:port literal
+// it is reviewing ("bind = 127.0.0.1:8000"). Admission path-adjudicated that
+// sentence -- it read the dotted host as a repository path with a line number --
+// and refused the whole artifact with evidence_path_out_of_scope, so a review of
+// any service or deployment config whose value is a socket address could never
+// be captured: the reviewer was structurally unable to describe the candidate,
+// and every retry reproduced the identical refusal.
+//
+// Free-form evidence is prose, not a citation. Only the fields that carry path
+// semantics (finding.location, proof_refs) are adjudicated against the frozen
+// changed-path manifest, because only those claim the reviewer read a file.
+func TestAdmitArtifactAdmitsFreeFormEvidenceSocketAddresses(t *testing.T) {
+	tests := []struct {
+		name     string
+		evidence string
+	}{
+		{"ipv4 host and port", "No BLOCKER or CRITICAL finding: the new gunicorn.conf.py binds to 127.0.0.1:8000 only"},
+		{"dotted host and port", "deploy/Caddyfile keeps reverse_proxy api.example.test:8000 behind the new middleware"},
+		{"bracketed ipv6 host and port", "the systemd unit still passes --bind [::1]:8000"},
+		{"path-shaped prose naming no candidate file", "helper moved: bogus.go:7"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, request := admittedArtifactFixture(t)
+			request.Result.Evidence = append(request.Result.Evidence, tt.evidence)
+			_, admission, err := AdmitArtifact(t.Context(), request)
+			if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+				t.Fatalf("AdmitArtifact() = %q, %v; want completed for free-form evidence %q", admission.Decision, err, tt.evidence)
+			}
+		})
+	}
+	// The path-semantic fields keep the guard: the same token shape in a proof
+	// citation is a claim that must resolve inside the frozen candidate.
+	t.Run("proof citations are still adjudicated", func(t *testing.T) {
+		_, _, request := admittedArtifactFixture(t)
+		request.Result.Findings[0].ProofRefs = []string{"diff: bogus.go:7"}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		var admissionErr *ArtifactAdmissionError
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope ||
+			!errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil ||
+			admissionErr.Diagnostic.Code != "proof_path_out_of_scope" {
+			t.Fatalf("AdmitArtifact() = %q, %v; want proof_path_out_of_scope", admission.Decision, err)
 		}
 	})
 }
@@ -801,19 +824,7 @@ func TestAdmitArtifactResolvesUnambiguousBasenameCitations(t *testing.T) {
 		}
 	}
 
-	t.Run("unambiguous basename is the candidate path it names", func(t *testing.T) {
-		_, admission, err := AdmitArtifact(t.Context(), newRequest("inspection: a.go:3"))
-		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
-			t.Fatalf("basename citation admission = %q, %v; want completed", admission.Decision, err)
-		}
-	})
-	t.Run("ambiguous basename stays out of scope", func(t *testing.T) {
-		_, admission, err := AdmitArtifact(t.Context(), newRequest("inspection: dup.go:1"))
-		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
-			t.Fatalf("ambiguous basename admission = %q, %v; want out of scope", admission.Decision, err)
-		}
-	})
-	t.Run("a finding location resolves the same way its evidence does", func(t *testing.T) {
+	t.Run("a finding location resolves a basename to the candidate path", func(t *testing.T) {
 		request := newRequest("inspection: internal/a.go:3")
 		request.Result.Findings = []Finding{{
 			ID: "R3-001", Lens: "reliability", Location: "a.go:3", Severity: "WARNING",
@@ -846,16 +857,26 @@ func TestAdmitArtifactResolvesUnambiguousBasenameCitations(t *testing.T) {
 			t.Fatalf("basename proof admission = %q, %v; want completed", admission.Decision, err)
 		}
 	})
-	t.Run("a citation carrying a directory prefix is not a basename", func(t *testing.T) {
+	t.Run("a proof citation carrying a directory prefix is not a basename", func(t *testing.T) {
 		// It said where it meant. Being wrong about that is not ambiguity to
 		// resolve, so it stays refused even though its last segment is unique.
-		_, admission, err := AdmitArtifact(t.Context(), newRequest("inspection: wrong/a.go:3"))
+		request := newRequest("inspection: internal/a.go:3")
+		request.Result.Findings = []Finding{{
+			ID: "R3-001", Lens: "reliability", Location: "internal/a.go:3", Severity: "WARNING",
+			Claim: "the candidate loses the retry error", ProofRefs: []string{"diff: wrong/a.go:3"},
+		}}
+		_, admission, err := AdmitArtifact(t.Context(), request)
 		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
 			t.Fatalf("prefixed citation admission = %q, %v; want out of scope", admission.Decision, err)
 		}
 	})
-	t.Run("unknown basename stays out of scope", func(t *testing.T) {
-		_, admission, err := AdmitArtifact(t.Context(), newRequest("inspection: nowhere.go:1"))
+	t.Run("unknown proof basename stays out of scope", func(t *testing.T) {
+		request := newRequest("inspection: internal/a.go:3")
+		request.Result.Findings = []Finding{{
+			ID: "R3-001", Lens: "reliability", Location: "internal/a.go:3", Severity: "WARNING",
+			Claim: "the candidate loses the retry error", ProofRefs: []string{"diff: nowhere.go:1"},
+		}}
+		_, admission, err := AdmitArtifact(t.Context(), request)
 		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
 			t.Fatalf("unknown basename admission = %q, %v; want out of scope", admission.Decision, err)
 		}

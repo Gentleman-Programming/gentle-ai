@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
@@ -287,6 +288,9 @@ func NeedsOpenCodeCodeGraphReconcile(homeDir string) bool {
 func ReconcileOpenCodeCodeGraph(homeDir string, runner Runner) (GuidanceInjectionResult, error) {
 	if !NeedsOpenCodeCodeGraphReconcile(homeDir) {
 		return GuidanceInjectionResult{}, nil
+	}
+	if err := opencode.NewAdapter().NativeCodeGraphWiringError(homeDir); err != nil {
+		return GuidanceInjectionResult{}, err
 	}
 	if runner == nil {
 		return GuidanceInjectionResult{}, fmt.Errorf("OpenCode CodeGraph reconciliation runner is not configured")

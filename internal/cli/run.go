@@ -29,9 +29,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agenthooks"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mcp"
@@ -359,6 +361,7 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		ClaudeModelAssignments:      claudeLegacyAssignmentsForState(input.Selection.ClaudeModelAssignments, claudePhaseState),
 		ClaudePhaseAssignments:      claudePhaseState,
 		KiroModelAssignments:        kiroAliasesToStrings(input.Selection.KiroModelAssignments),
+		AntigravityModelAssignments: model.AntigravityModelTiersToStrings(input.Selection.AntigravityModelAssignments),
 		CodexModelAssignments:       codexEffortsToStrings(input.Selection.CodexModelAssignments),
 		CodexOrchestratorAssignment: codexOrchestratorToState(input.Selection.CodexOrchestratorAssignment),
 		CodexCarrilModelAssignments: input.Selection.CodexCarrilModelAssignments,
@@ -429,6 +432,7 @@ func mergeFullInstallState(existing, fresh state.InstallState) state.InstallStat
 	merged.CommunityTools, merged.CommunityToolsConfigured = fresh.CommunityTools, fresh.CommunityToolsConfigured
 	merged.ClaudeModelAssignments, merged.ClaudePhaseAssignments = fresh.ClaudeModelAssignments, fresh.ClaudePhaseAssignments
 	merged.KiroModelAssignments, merged.CodexModelAssignments = fresh.KiroModelAssignments, fresh.CodexModelAssignments
+	merged.AntigravityModelAssignments = fresh.AntigravityModelAssignments
 	merged.CodexOrchestratorAssignment = fresh.CodexOrchestratorAssignment
 	merged.CodexCarrilModelAssignments, merged.CodexPhaseModelAssignments = fresh.CodexCarrilModelAssignments, fresh.CodexPhaseModelAssignments
 	merged.ModelAssignments, merged.Persona = fresh.ModelAssignments, fresh.Persona
@@ -476,6 +480,9 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	}
 	if newState.KiroModelAssignments != nil {
 		merged.KiroModelAssignments = newState.KiroModelAssignments
+	}
+	if newState.AntigravityModelAssignments != nil {
+		merged.AntigravityModelAssignments = newState.AntigravityModelAssignments
 	}
 	if newState.CodexOrchestratorAssignment != nil {
 		merged.CodexOrchestratorAssignment = newState.CodexOrchestratorAssignment
@@ -949,7 +956,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
 		piAgentDir = piagent.AgentConfigPath(r.homeDir)
 	}
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, piAgentDir: piAgentDir})
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, piAgentDir: piAgentDir, codexHomeDir: codexRollbackRoot(r.homeDir, r.resolved.Agents)})
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
 	}
@@ -959,6 +966,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if r.piBackgroundProjection != nil {
 		apply = append(apply, piBackgroundProjectionStep{id: "pi:background-projection", plan: r.piBackgroundProjection})
 	}
+	// Before every prompt writer.
+	apply = append(apply, geminiLegacyRootSteps("agent:gemini-legacy-root", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil)...)
 
 	// Before installing components, ensure modular agents have their system prompt hub.
 	// This ensures that SDD or Engram can inject their modules even if Persona is skipped.
@@ -1042,6 +1051,10 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state})
 	}
 
+	// After every prompt writer, including community-tool guidance.
+	apply = append(apply, geminiModulesSteps("agent:gemini-modules", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil)...)
+	apply = append(apply, antigravityRulesSteps("agent:antigravity-rules", r.homeDir, r.workspaceDir, r.scope, r.resolved.Agents, nil)...)
+
 	if needsCompatibilitySkillsRefresh(r.resolved.OrderedComponents) {
 		apply = append(apply, compatibilitySkillsRefreshStep{
 			id:          "component:compatibility-skills-refresh",
@@ -1083,10 +1096,11 @@ func (s nativeReviewAgentStep) Run() error {
 	adapter := resolveAdapters([]model.AgentID{s.agent})[0]
 	target := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 	res, err := reviewassets.InstallNativeAgents(target, adapter, reviewassets.InstallOptions{
-		ClaudeModelAssignments:    s.selection.ClaudeModelAssignments,
-		ClaudePhaseAssignments:    s.selection.ClaudePhaseAssignments,
-		KiroModelAssignments:      s.selection.KiroModelAssignments,
-		CodeGraphGuidanceMarkdown: nativeReviewCodeGraphGuidanceMarkdown(s.homeDir, s.selection.CommunityTools),
+		ClaudeModelAssignments:      s.selection.ClaudeModelAssignments,
+		ClaudePhaseAssignments:      s.selection.ClaudePhaseAssignments,
+		KiroModelAssignments:        s.selection.KiroModelAssignments,
+		AntigravityModelAssignments: s.selection.AntigravityModelAssignments,
+		CodeGraphGuidanceMarkdown:   nativeReviewCodeGraphGuidanceMarkdown(s.homeDir, s.selection.CommunityTools),
 	})
 	if err != nil {
 		return fmt.Errorf("install native review agents for %q: %w", s.agent, err)
@@ -1244,6 +1258,7 @@ func retiredSDDAgentBackupPaths(homeDir string, scope InstallScope, adapters []a
 // retiredOpenCodeSDDTarget is one OpenCode-family settings file that may hold
 // retired SDD agents, with the shared prompt directory retired beside it.
 type retiredOpenCodeSDDTarget struct {
+	homeDir  string
 	agent    model.AgentID
 	settings string
 	prompts  string
@@ -1265,7 +1280,7 @@ func retiredOpenCodeSDDTargets(homeDir, workspaceDir string, scope InstallScope,
 			// the global markdown agents beside it.
 			config := opencodeagent.ConfigPath(homeDir)
 			target := retiredOpenCodeSDDTarget{
-				agent: agent, settings: syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter()),
+				homeDir: homeDir, agent: agent, settings: syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter()),
 				agentDirs: []string{filepath.Join(config, "agent"), filepath.Join(config, "agents")},
 			}
 			if scope != ScopeWorkspace {
@@ -1277,6 +1292,17 @@ func retiredOpenCodeSDDTargets(homeDir, workspaceDir string, scope InstallScope,
 		}
 	}
 	return targets
+}
+
+// settingsPaths includes both global spellings, whose surviving entries may
+// still reference shared prompts even when project settings are selected.
+func (t retiredOpenCodeSDDTarget) settingsPaths() []string {
+	paths := []string{t.settings}
+	if t.prompts != "" {
+		config := filepath.Dir(filepath.Dir(t.prompts))
+		paths = append(paths, filepath.Join(config, "opencode.json"), filepath.Join(config, "opencode.jsonc"))
+	}
+	return dedupPaths(paths)
 }
 
 // retiredOpenCodeSDDSettingsSteps schedules the settings retirement for every
@@ -1335,7 +1361,15 @@ func (s retiredOpenCodeSDDSettingsStep) Run() error {
 	}
 	actions := settings.ManualActions()
 	if s.target.prompts != "" {
-		prompts, err := legacyassets.RetireOpenCodeSDDPrompts(s.target.prompts)
+		var references []string
+		for _, path := range s.target.settingsPaths() {
+			refs, err := opencodeactivation.SettingsFileReferences(path, s.target.homeDir)
+			if err != nil {
+				return err
+			}
+			references = append(references, refs...)
+		}
+		prompts, err := legacyassets.RetireOpenCodeSDDPrompts(s.target.prompts, references...)
 		if s.changedFiles != nil {
 			*s.changedFiles = append(*s.changedFiles, prompts.Removed...)
 		}
@@ -2622,6 +2656,110 @@ func managedOrchestratorPromptFromSettings(raw []byte) (string, bool) {
 	return prompt, ok
 }
 
+// publishedGuidanceStep runs a publisher whose output file names depend on
+// the guidance the prompt writers staged, which does not exist when the run's
+// backup is taken. It snapshots exactly what the publisher may touch right
+// before it runs and restores that on rollback: files this run created are
+// removed, previous ones come back byte for byte, and an emptied directory
+// this run created is removed.
+type publishedGuidanceStep struct {
+	id           string
+	dir          string
+	paths        func() []string
+	publish      func() ([]string, error)
+	changedFiles *[]string
+	before       map[string]syncFileSnapshot
+	createdDir   bool
+}
+
+func (s *publishedGuidanceStep) ID() string { return s.id }
+
+func (s *publishedGuidanceStep) Run() (runErr error) {
+	if _, err := os.Lstat(s.dir); os.IsNotExist(err) {
+		s.createdDir = true
+	}
+	before, err := snapshotSyncFiles(s.paths())
+	if err != nil {
+		return fmt.Errorf("snapshot %s: %w", s.id, err)
+	}
+	s.before = before
+	defer func() {
+		if runErr != nil {
+			runErr = errors.Join(runErr, s.Rollback())
+		}
+	}()
+
+	files, err := s.publish()
+	if err != nil {
+		return err
+	}
+	if s.changedFiles != nil {
+		*s.changedFiles = append(*s.changedFiles, files...)
+	}
+	return nil
+}
+
+func (s *publishedGuidanceStep) Rollback() error {
+	err := restoreSyncFiles(s.before)
+	if s.createdDir {
+		// Only an emptied directory this run created is removed.
+		_ = os.Remove(s.dir)
+	}
+	return err
+}
+
+// antigravityRulesSteps schedules the publisher once when Antigravity is
+// selected; it writes beside the scoped prompt the writers staged. It
+// publishes the staged guidance as size-capped agy rule files, then retires
+// the sections older releases appended to the GEMINI.md agy also loads
+// (#5676, #1989, #5608).
+func antigravityRulesSteps(id, homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID, changedFiles *[]string) []pipeline.Step {
+	if !containsAgent(agentIDs, model.AgentAntigravity) {
+		return nil
+	}
+	baseDir := ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+	return []pipeline.Step{&publishedGuidanceStep{
+		id:           id,
+		dir:          antigravityrules.RulesDir(baseDir),
+		paths:        func() []string { return antigravityRulesBackupPaths(homeDir, workspaceDir, scope, agentIDs) },
+		changedFiles: changedFiles,
+		publish: func() ([]string, error) {
+			published, err := antigravityrules.Publish(baseDir)
+			if err != nil {
+				return nil, fmt.Errorf("publish Antigravity rules: %w", err)
+			}
+			geminiCLIManaged := antigravityrules.GeminiCLIManaged(homeDir, agentIDs)
+			migrated, err := antigravityrules.MigrateLegacyPrompt(baseDir, geminiCLIManaged)
+			files := append(published.Files, migrated.Files...)
+			if err != nil {
+				return files, fmt.Errorf("retire Antigravity sections from GEMINI.md: %w", err)
+			}
+			if geminiCLIManaged {
+				return files, nil
+			}
+			// Without a managed Gemini CLI nothing imports the modules an
+			// earlier install published; they are Gentle AI's own leftovers.
+			retired, err := geminimodules.Retire(baseDir)
+			if err != nil {
+				return files, fmt.Errorf("retire Gemini CLI guidance modules: %w", err)
+			}
+			return append(files, retired.Files...), nil
+		},
+	}}
+}
+
+// antigravityRulesBackupPaths lists the rule files the publisher may write or
+// remove, the legacy GEMINI.md it may rewrite, and the Gemini CLI modules it
+// may retire.
+func antigravityRulesBackupPaths(homeDir, workspaceDir string, scope InstallScope, agentIDs []model.AgentID) []string {
+	if !containsAgent(agentIDs, model.AgentAntigravity) {
+		return nil
+	}
+	baseDir := ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+	paths := append(antigravityrules.ManagedPaths(baseDir), antigravityrules.LegacyPromptPath(baseDir))
+	return append(paths, geminimodules.ManagedPaths(baseDir)...)
+}
+
 type piCodeGraphReconcileStep struct {
 	id, homeDir, workspaceDir string
 	selected                  bool
@@ -2762,6 +2900,7 @@ type rollbackRestoreStep struct {
 	workspaceDir       string
 	telemetryConfigDir string // Selected adapter authority, potentially outside HOME via XDG.
 	piAgentDir         string // Selected Pi adapter authority, never derived from the manifest.
+	codexHomeDir       string // Selected Codex CODEX_HOME override, potentially outside HOME.
 }
 
 type openCodeBackgroundActivationStep struct {
@@ -2802,6 +2941,10 @@ func (s rollbackRestoreStep) Rollback() error {
 	if s.piAgentDir != "" {
 		roots = append(roots, s.piAgentDir)
 	}
+	// guard:population codex-home-rollback-root too-loose: Only the CODEX_HOME override of a selected Codex adapter extends restore roots; unselected agents, isolated homes, and the default root add nothing.
+	if s.codexHomeDir != "" {
+		roots = append(roots, s.codexHomeDir)
+	}
 	if s.telemetryConfigDir != "" {
 		roots = append(roots, s.telemetryConfigDir)
 		// The retained journals, never the generic backup, own this pair's rollback.
@@ -2822,6 +2965,16 @@ func (s rollbackRestoreStep) Rollback() error {
 		return telemetryErr
 	}
 	return errors.Join(telemetryErr, (backup.RestoreService{Roots: roots}).Restore(manifest))
+}
+
+// codexRollbackRoot returns the CODEX_HOME override a selected Codex adapter
+// writes under, or "" when no override applies. The default ~/.codex already
+// lives under the home restore root.
+func codexRollbackRoot(homeDir string, agents []model.AgentID) string {
+	if !containsAgent(agents, model.AgentCodex) || !system.CodexHomeOverridden(homeDir) {
+		return ""
+	}
+	return system.CodexConfigDir(homeDir)
 }
 
 // rollbackRoots returns the directories this install/sync run could
@@ -3910,6 +4063,11 @@ func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, sele
 				}
 			}
 		}
+		if component == model.ComponentEngram {
+			for _, path := range antigravityLegacyEngramPluginPaths(homeDir, workspaceDir, scope, adapters) {
+				paths[path] = struct{}{}
+			}
+		}
 		// Persona backup captures every managed output-style file, not just the
 		// selected one, so a failed persona switch can restore the file its
 		// cleanup removed. Backup-only: verification stays on the selected file.
@@ -3944,6 +4102,12 @@ func installBackupTargets(homeDir, workspaceDir string, scope InstallScope, sele
 		paths[path] = struct{}{}
 	}
 	for _, path := range retiredSDDAssetBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range antigravityRulesBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range geminiModulesBackupPaths(homeDir, workspaceDir, scope, resolved.Agents) {
 		paths[path] = struct{}{}
 	}
 	for _, adapter := range adapters {
@@ -4172,6 +4336,10 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					if p := adapter.SettingsPath(homeDir); p != "" {
 						paths = append(paths, p)
 					}
+					// Engram registration is plugin-owned (#797); declaring
+					// the assets snapshots them, so sync reports only plugin
+					// files whose bytes really changed (#5614).
+					paths = append(paths, engram.AntigravityPluginAssetPaths(targetDir)...)
 				}
 			case model.StrategyMergeIntoYAML:
 				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
@@ -4435,6 +4603,19 @@ func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScop
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
 }
 
+// antigravityLegacyEngramPluginPaths returns the Engram plugin assets older
+// gentle-ai versions wrote under antigravity-cli/plugins. Engram injection
+// retires them (#5930), so they are backup-only targets: never verified.
+func antigravityLegacyEngramPluginPaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	var paths []string
+	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentAntigravity {
+			paths = append(paths, engram.AntigravityLegacyPluginAssetPaths(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))...)
+		}
+	}
+	return paths
+}
+
 // piPersonaConfigPaths returns the Pi persona state files managed by install.
 // Like every scoped component, global install writes only the global file,
 // which GENTLE_AI_PI_CONFIG_DIR may relocate; workspace install writes only
@@ -4523,11 +4704,14 @@ func openCodeSDDPluginPaths(adapter agents.Adapter, targetDir string) []string {
 	return paths
 }
 
-// verificationComponentPaths excludes retired Codex SDD profiles and Pi's
-// mcp.json from active health checks. Pi Engram is native-only (gentle-engram),
-// so Engram provisioning writes mcp.json only to migrate mcp-adapter.json
-// servers and its absence is healthy (#5103). The shared component path
-// inventory retains both for snapshots and rollback of user-owned files.
+// verificationComponentPaths excludes retired Codex SDD profiles, Pi's
+// mcp.json, and Antigravity's global mcp_config.json from active health checks.
+// Pi Engram is native-only (gentle-engram), so Engram provisioning writes
+// mcp.json only to migrate mcp-adapter.json servers and its absence is healthy
+// (#5103). Antigravity Engram registration is plugin-owned (#797): Engram only
+// removes a managed duplicate from the global config and never creates it. The
+// shared component path inventory retains them for snapshots and rollback of
+// user-owned files.
 func verificationComponentPaths(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component)
 	if component != model.ComponentEngram {
@@ -4543,7 +4727,7 @@ func verificationComponentPaths(homeDir, workspaceDir string, scope InstallScope
 					excluded[profile] = true
 				}
 			}
-		case model.AgentPi:
+		case model.AgentPi, model.AgentAntigravity:
 			if config := adapter.MCPConfigPath(targetDir, "engram"); config != "" {
 				excluded[config] = true
 			}
@@ -4758,10 +4942,10 @@ func engramInstallCommand(agentIDs []model.AgentID) string {
 }
 
 // antigravityCollisionCheck returns a soft verify check that warns the user
-// when Antigravity and Gemini CLI are selected together. These agents
-// intentionally share ~/.gemini/GEMINI.md because Antigravity uses a
-// Gemini-compatible prompt surface; the last synced agent routing guidance
-// controls the shared gentle-ai:agent-routing section.
+// when Antigravity and Gemini CLI are selected together. Antigravity reads its
+// Gentle AI guidance from published agy rules, but agy also loads the
+// ~/.gemini/GEMINI.md Gemini CLI owns, which keeps only user content and the
+// import lines agy does not expand.
 func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
 	hasAntigravitySurface := false
 	hasGemini := false
@@ -4779,13 +4963,14 @@ func antigravityCollisionCheck(agents []model.AgentID) []verify.Check {
 	return []verify.Check{
 		{
 			ID:          "verify:antigravity:rules-collision",
-			Description: "Antigravity and Gemini CLI share ~/.gemini/GEMINI.md",
+			Description: "Antigravity also loads the Gemini CLI prompt ~/.gemini/GEMINI.md",
 			Soft:        true,
 			Run: func(context.Context) error {
+				// refusal:by-design human-authority: keeping Gemini CLI selected beside Antigravity is the user's choice
 				return fmt.Errorf(
-					"Antigravity and Gemini CLI write rules to ~/.gemini/GEMINI.md\n" +
-						"Antigravity intentionally uses the Gemini-compatible global prompt surface; the last synced agent routing guidance controls the shared gentle-ai:agent-routing section.\n" +
-						"Prefer Antigravity for new installs; keep Gemini CLI selected only when you intentionally want that legacy prompt to be the active one.",
+					"Antigravity loads its Gentle AI guidance from ~/.gemini/config/rules/gentle-ai-*.md and also loads ~/.gemini/GEMINI.md, which Gemini CLI owns.\n" +
+						"Gemini CLI keeps only your content and @./gentle-ai/... import lines there, which Antigravity does not expand, so its sessions do not load the Gemini CLI guidance.\n" +
+						"Keep Gemini CLI selected only if you also use it; otherwise remove it from your Gentle AI selection.",
 				)
 			},
 		},

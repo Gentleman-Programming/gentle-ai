@@ -13,14 +13,17 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
@@ -405,6 +408,15 @@ func (s *Service) CompleteUninstall() (Result, error) {
 type plan struct {
 	backupTargets []string
 	operations    []operation
+	// antigravityRules republishes the Antigravity rules from the staging
+	// file after its sections were removed; retireLegacyAntigravityPrompt
+	// also strips the sections older releases appended to GEMINI.md.
+	antigravityRules              bool
+	retireLegacyAntigravityPrompt bool
+	// geminiModules moves what older releases wrote into GEMINI.md to the
+	// Gemini CLI staging file the operations target, then republishes the
+	// modules from what is left.
+	geminiModules bool
 }
 
 func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.ComponentID) (plan, error) {
@@ -534,6 +546,22 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			}
 		}
 	}
+	publishAntigravity := slices.Contains(agentIDs, model.AgentAntigravity)
+	retireLegacyAntigravity := publishAntigravity && removesAllAgentComponents(componentIDs)
+	if publishAntigravity {
+		for _, path := range antigravityrules.ManagedPaths(s.homeDir) {
+			backupTargets[path] = struct{}{}
+		}
+	}
+	if retireLegacyAntigravity {
+		backupTargets[antigravityrules.LegacyPromptPath(s.homeDir)] = struct{}{}
+	}
+	geminiModules := slices.Contains(agentIDs, model.AgentGeminiCLI)
+	if geminiModules || retireLegacyAntigravity {
+		for _, path := range geminimodules.ManagedPaths(s.homeDir) {
+			backupTargets[path] = struct{}{}
+		}
+	}
 	if slices.Contains(agentIDs, model.AgentClaudeCode) && removesAllAgentComponents(componentIDs) {
 		// Only a complete Claude removal retires the module pilot (see
 		// retireClaudeGlobalModules); snapshot every file it may change. An
@@ -605,7 +633,7 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	}
 	slices.SortFunc(operations, compareOperations)
 
-	return plan{backupTargets: orderedTargets, operations: operations}, nil
+	return plan{backupTargets: orderedTargets, operations: operations, antigravityRules: publishAntigravity, retireLegacyAntigravityPrompt: retireLegacyAntigravity, geminiModules: geminiModules}, nil
 }
 
 func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, error) {
@@ -672,6 +700,18 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		}
 	}
 
+	var geminiFiles []string
+	if p.geminiModules {
+		migrated, err := geminimodules.MigrateLegacyRoot(s.homeDir)
+		if err != nil {
+			failures = append(failures, operationFailure{path: geminimodules.RootPath(s.homeDir), agents: []model.AgentID{model.AgentGeminiCLI}, err: err})
+		}
+		// Without the migration the operations miss the guidance, so the
+		// modules are not republished from an incomplete staging file.
+		p.geminiModules = err == nil
+		geminiFiles = migrated.Files
+	}
+
 	for _, op := range p.operations {
 		changed, removed, err := op.apply(op.path)
 		if op.report != nil {
@@ -703,6 +743,24 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 			if removed {
 				result.RemovedDirectories = append(result.RemovedDirectories, op.path)
 			}
+		}
+	}
+
+	if p.geminiModules {
+		published, err := geminimodules.Publish(s.homeDir)
+		reportPublishedFiles(&result, append(geminiFiles, published.Files...))
+		if err != nil {
+			failures = append(failures, operationFailure{path: geminimodules.ModulesDir(s.homeDir), agents: []model.AgentID{model.AgentGeminiCLI}, err: err})
+		}
+	}
+
+	if p.antigravityRules {
+		if err := s.publishAntigravityRules(&result, p.retireLegacyAntigravityPrompt); err != nil {
+			failures = append(failures, operationFailure{
+				path:   antigravityrules.RulesDir(s.homeDir),
+				agents: []model.AgentID{model.AgentAntigravity},
+				err:    err,
+			})
 		}
 	}
 
@@ -746,6 +804,54 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		return result, errors.Join(errs...)
 	}
 	return result, nil
+}
+
+// publishAntigravityRules runs after the staging file lost its removed
+// sections, so the published rules match what is left: an emptied staging
+// file retires every owned rule. A complete removal also strips the sections
+// older releases appended to GEMINI.md.
+func (s *Service) publishAntigravityRules(result *Result, retireLegacy bool) error {
+	published, err := antigravityrules.Publish(s.homeDir)
+	if err != nil {
+		return err
+	}
+	files := published.Files
+	if retireLegacy {
+		migrated, err := antigravityrules.MigrateLegacyPrompt(s.homeDir, antigravityrules.GeminiCLIManaged(s.homeDir, nil))
+		if err != nil {
+			return err
+		}
+		files = append(files, migrated.Files...)
+		// The staging directory is Gentle AI's own; it stays only while it
+		// holds guidance uninstall retains (routing), which is no leftover.
+		stagingDir := filepath.Dir(antigravityrules.StagingPath(s.homeDir))
+		if err := os.Remove(stagingDir); err == nil {
+			result.RemovedDirectories = append(result.RemovedDirectories, stagingDir)
+		}
+		if !antigravityrules.GeminiCLIManaged(s.homeDir, nil) {
+			// Nothing imports the modules an earlier Gemini CLI install left.
+			retired, err := geminimodules.Retire(s.homeDir)
+			files = append(files, retired.Files...)
+			if err != nil {
+				reportPublishedFiles(result, files)
+				return err
+			}
+		}
+	}
+	reportPublishedFiles(result, files)
+	return nil
+}
+
+// reportPublishedFiles records each path a publisher touched as it is on disk
+// afterwards: removed or changed.
+func reportPublishedFiles(result *Result, files []string) {
+	for _, path := range slices.Compact(slices.Sorted(slices.Values(files))) {
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			result.RemovedFiles = append(result.RemovedFiles, path)
+		} else {
+			result.ChangedFiles = append(result.ChangedFiles, path)
+		}
+	}
 }
 
 // retireClaudeGlobalModules returns a complete Claude removal from the module
@@ -997,6 +1103,12 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 	case model.ComponentContext7:
 		targets = append(targets, context7Targets(adapter, homeDir)...)
 		ops = append(ops, context7Operations(adapter, homeDir)...)
+		legacyOps, legacyTargets, err := antigravityLegacyMCPOperations(adapter, homeDir, "context7")
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = append(ops, legacyOps...)
+		targets = append(targets, legacyTargets...)
 	case model.ComponentEngram:
 		if s.engramUninstallScope == model.EngramUninstallScopeProject {
 			projectDataPath := filepath.Join(s.workspaceDir, ".engram")
@@ -1009,6 +1121,12 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 
 		targets = append(targets, engramTargets(adapter, homeDir)...)
 		ops = append(ops, engramOperations(adapter, homeDir)...)
+		legacyOps, legacyTargets, err := antigravityLegacyMCPOperations(adapter, homeDir, "engram")
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = append(ops, legacyOps...)
+		targets = append(targets, legacyTargets...)
 		if adapter.SupportsSystemPrompt() {
 			path := adapter.SystemPromptFile(homeDir)
 			targets = append(targets, path)
@@ -1058,34 +1176,24 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		if skillDir == "" {
 			break
 		}
-		entries, err := fs.ReadDir(assets.FS, "skills")
-		if err != nil {
-			return nil, nil, fmt.Errorf("read embedded skills: %w", err)
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), "sdd-") || entry.Name() == "_shared" {
-				continue
-			}
-			dirPath := filepath.Join(skillDir, entry.Name())
-			targets = append(targets, dirPath)
-			ops = append(ops, removeTree(dirPath), removeDirIfEmpty(skillDir))
-		}
-		// _shared may hold user-authored notes, so only the embedded references
-		// the skills component writes are removed, never the whole directory.
-		shared, err := skills.SharedReferencePaths(skillDir)
+		skillOps, skillTargets, err := skillDirOperations(skillDir)
 		if err != nil {
 			return nil, nil, err
 		}
-		for _, path := range shared {
-			targets = append(targets, path)
-			ops = append(ops, removeFile(path))
+		ops = append(ops, skillOps...)
+		targets = append(targets, skillTargets...)
+		for _, root := range antigravityLegacyRoots(adapter, homeDir) {
+			legacyOps, legacyTargets, err := skillDirOperations(filepath.Join(root, "skills"))
+			if err != nil {
+				return nil, nil, err
+			}
+			legacyOps, legacyTargets, err = guardAntigravityLegacyOperations(root, legacyOps, legacyTargets)
+			if err != nil {
+				return nil, nil, err
+			}
+			ops = append(ops, legacyOps...)
+			targets = append(targets, legacyTargets...)
 		}
-		// Upgraded installs may still hold the obsolete generated marker; install
-		// only ever removes it as a regular file, so uninstall does the same.
-		marker := skills.LegacySharedMarkerPath(skillDir)
-		targets = append(targets, marker)
-		ops = append(ops, removeRegularFile(marker))
-		ops = append(ops, removeDirIfEmpty(filepath.Join(skillDir, "_shared")))
 		commands, err := skills.AllSkillCommandPaths(homeDir, adapter)
 		if err != nil {
 			return nil, nil, err
@@ -1105,6 +1213,124 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 	}
 
 	return ops, targets, nil
+}
+
+// skillDirOperations removes the embedded skills and shared references the
+// skills component writes into skillDir, leaving user-authored skills alone.
+func skillDirOperations(skillDir string) ([]operation, []string, error) {
+	var ops []operation
+	var targets []string
+	entries, err := fs.ReadDir(assets.FS, "skills")
+	if err != nil {
+		return nil, nil, fmt.Errorf("read embedded skills: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), "sdd-") || entry.Name() == "_shared" {
+			continue
+		}
+		dirPath := filepath.Join(skillDir, entry.Name())
+		targets = append(targets, dirPath)
+		ops = append(ops, removeTree(dirPath), removeDirIfEmpty(skillDir))
+	}
+	// _shared may hold user-authored notes, so only the embedded references
+	// the skills component writes are removed, never the whole directory.
+	shared, err := skills.SharedReferencePaths(skillDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, path := range shared {
+		targets = append(targets, path)
+		ops = append(ops, removeFile(path))
+	}
+	// Upgraded installs may still hold the obsolete generated marker; install
+	// only ever removes it as a regular file, so uninstall does the same.
+	marker := skills.LegacySharedMarkerPath(skillDir)
+	targets = append(targets, marker)
+	ops = append(ops, removeRegularFile(marker))
+	ops = append(ops, removeDirIfEmpty(filepath.Join(skillDir, "_shared")))
+	return ops, targets, nil
+}
+
+// antigravityLegacyRoots returns the Antigravity variant directories that
+// installs made before the shared ~/.gemini/config root wrote skills and MCP
+// entries into. Install never writes there anymore; only uninstall cleans them.
+func antigravityLegacyRoots(adapter agents.Adapter, homeDir string) []string {
+	if adapter.Agent() != model.AgentAntigravity {
+		return nil
+	}
+	return antigravity.LegacyVariantDirs(homeDir)
+}
+
+// antigravityLegacyMCPOperations removes one managed server from a legacy
+// variant mcp_config.json. On migrated layouts that file is a symlink into the
+// shared root, which the adapter path already cleans, so it is skipped.
+func antigravityLegacyMCPOperations(adapter agents.Adapter, homeDir, server string) ([]operation, []string, error) {
+	var ops []operation
+	var targets []string
+	for _, root := range antigravityLegacyRoots(adapter, homeDir) {
+		path := filepath.Join(root, "mcp_config.json")
+		guardedOps, guardedTargets, err := guardAntigravityLegacyOperations(root, []operation{rewriteJSONFile(path, jsonPath{"mcpServers", server})}, []string{path})
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = append(ops, guardedOps...)
+		targets = append(targets, guardedTargets...)
+	}
+	return ops, targets, nil
+}
+
+// guardAntigravityLegacyOperations keeps legacy cleanup inside real files and
+// directories under root. Backup targets are filtered at plan time, and every
+// operation re-checks at apply time, so a symlink into ~/.gemini/config is
+// never followed, rewritten, or replaced.
+func guardAntigravityLegacyOperations(root string, ops []operation, targets []string) ([]operation, []string, error) {
+	kept := make([]string, 0, len(targets))
+	for _, target := range targets {
+		real, err := isRealPathBelow(root, target)
+		if err != nil {
+			return nil, nil, err
+		}
+		if real {
+			kept = append(kept, target)
+		}
+	}
+	guarded := make([]operation, 0, len(ops))
+	for _, op := range ops {
+		apply := op.apply
+		op.apply = func(path string) (bool, bool, error) {
+			real, err := isRealPathBelow(root, path)
+			if !real || err != nil {
+				return false, false, err
+			}
+			return apply(path)
+		}
+		guarded = append(guarded, op)
+	}
+	return guarded, kept, nil
+}
+
+// isRealPathBelow reports whether path exists below root and neither root nor
+// any entry between root and path is a symlink.
+func isRealPathBelow(root, path string) (bool, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, err
+	}
+	current := root
+	for _, part := range append([]string{"."}, strings.Split(rel, string(filepath.Separator))...) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func context7Targets(adapter agents.Adapter, homeDir string) []string {
@@ -1172,12 +1398,13 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 		targets = append(targets, adapter.MCPConfigPath(homeDir, "engram"))
 		if adapter.Agent() == model.AgentAntigravity {
 			targets = append(targets, engram.AntigravityPluginAssetPaths(homeDir)...)
+			targets = append(targets, engram.AntigravityLegacyPluginAssetPaths(homeDir)...)
 		}
 	case model.StrategyTOMLFile:
 		targets = append(targets,
 			adapter.MCPConfigPath(homeDir, "engram"),
-			filepath.Join(homeDir, ".codex", "engram-instructions.md"),
-			filepath.Join(homeDir, ".codex", "engram-compact-prompt.md"),
+			filepath.Join(system.CodexConfigDir(homeDir), "engram-instructions.md"),
+			filepath.Join(system.CodexConfigDir(homeDir), "engram-compact-prompt.md"),
 		)
 	}
 	return targets
@@ -1211,23 +1438,34 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 			// #779: since #5065 Antigravity Engram registration is
 			// plugin-owned; the rewrite above only clears a legacy duplicate
 			// entry. Remove the plugin assets install wrote, leaving any
-			// edited asset (and so its directory) in place.
+			// edited asset (and so its directory) in place. #5930: the plugin
+			// moved to the shared config root; a legacy copy that was never
+			// migrated is retired the same way.
 			for _, asset := range engram.AntigravityPluginAssetPaths(homeDir) {
 				ops = append(ops, removeManagedAntigravityPluginAsset(asset))
 			}
 			ops = append(ops, removeDirIfEmpty(engram.AntigravityPluginDir(homeDir)))
+			for _, asset := range engram.AntigravityLegacyPluginAssetPaths(homeDir) {
+				ops = append(ops, removeManagedAntigravityPluginAsset(asset))
+			}
+			ops = append(ops, removeDirIfEmpty(engram.AntigravityLegacyPluginDir(homeDir)))
 		}
 		return ops
 	case model.StrategyTOMLFile:
 		configPath := adapter.MCPConfigPath(homeDir, "engram")
-		instructionsPath := filepath.Join(homeDir, ".codex", "engram-instructions.md")
-		compactPath := filepath.Join(homeDir, ".codex", "engram-compact-prompt.md")
-		return []operation{
+		instructionsPath := filepath.Join(system.CodexConfigDir(homeDir), "engram-instructions.md")
+		compactPath := filepath.Join(system.CodexConfigDir(homeDir), "engram-compact-prompt.md")
+		ops := []operation{
 			rewriteTOMLFile(configPath, cleanCodexTOML),
 			removeFile(instructionsPath),
 			removeFile(compactPath),
-			removeDirIfEmpty(filepath.Dir(instructionsPath)),
 		}
+		// A CODEX_HOME override is the user's directory, and ValidateCodexHome
+		// requires it to exist; only the default ~/.codex is pruned when empty.
+		if !system.CodexHomeOverridden(homeDir) {
+			ops = append(ops, removeDirIfEmpty(filepath.Dir(instructionsPath)))
+		}
+		return ops
 	default:
 		return nil
 	}

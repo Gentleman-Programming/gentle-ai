@@ -11,6 +11,12 @@ const preparing = requestedAction === 'prepare-prior';
 const action = preparing ? 'install' : requestedAction;
 const selectingSDK = action === 'select-main-sdk-package';
 const verifyingSelectedSDK = action === 'verify-main-sdk-selected';
+// Both launch-time verifications read the whole installed graph; the receipt
+// fast path below serves them identically. A stable-channel launch verifies
+// through the stock 'verify' action (userVerifyInstalledGlobal with a nil
+// MainSDK), a Main SDK launch through 'verify-main-sdk-selected' — same tree,
+// same byte-audit cost, same receipt.
+const launchVerify = action === 'verify' || verifyingSelectedSDK;
 const mainRuntimeActions = ['materialize-main-sdk-runtime', 'verify-main-sdk-runtime', 'select-main-sdk-package', 'verify-main-sdk-selected'];
 const mainActions = ['verify-main-source', 'verify-main-sdk-source', 'materialize-main-sdk-source', 'verify-main-sdk-composition', ...mainRuntimeActions];
 // Main runtime placement and selection are qualified where the stock native
@@ -136,7 +142,10 @@ function newestReviewedListVersion(table) {
 function physical(absolute, directory = false) {
   if (!path.isAbsolute(absolute) || path.resolve(absolute) !== absolute || fs.realpathSync(absolute) !== absolute) reject('noncanonical path');
   const stat = fs.lstatSync(absolute);
-  if (stat.uid !== uid || (stat.mode & 0o022) !== 0 || (directory ? !stat.isDirectory() : !stat.isFile())) reject('foreign or nonphysical object');
+  if (stat.uid !== uid || (stat.mode & 0o022) !== 0 || (directory ? !stat.isDirectory() : !stat.isFile()))
+    // Name the observed values (#5713): a foreign-uid or writable-mode object
+    // is only diagnosable when the refusal says which path and why.
+    reject(`foreign or nonphysical object: ${JSON.stringify(absolute)} uid=${stat.uid} want=${uid} mode=${(stat.mode & 0o7777).toString(8)}${directory ? ' want directory' : ''}`);
   return stat;
 }
 function read(absolute) {
@@ -554,6 +563,75 @@ if (action === 'restore') {
   }
   const observed = [];
   let comparedFiles = 0;
+  // Launch fast path: the byte-level graph audit below re-reads every installed
+  // file against its acquired source on every verify action. For the launch-time
+  // verify-main-sdk-selected action a receipt of lstat stamps (dev/ino/uid/mode/
+  // size/mtime/ctime — ctime cannot be forged from userspace, so any content
+  // rewrite misses) proves the tree is byte-identical to the state a previous
+  // full audit authenticated. The receipt never decides by itself: malformed,
+  // stale, or drifting records fall back to the full audit, which alone rewrites
+  // it, and all structural checks outside the byte walk keep running.
+  const graphReceiptPath = path.join(state, 'main-graph-verify-receipt.json');
+  let graphFast = null;
+  let graphReceiptCandidate = null;
+  function graphStamps(directory) {
+    const entries = {};
+    let members = 0;
+    function record(relative, value) {
+      if (++members > 131072) throw Error('graph receipt member bound');
+      entries[relative] = value;
+    }
+    function visit(absolute, relative) {
+      const info = fs.lstatSync(absolute);
+      const stamp = `${info.dev}:${info.ino}:${info.uid}:${info.mode}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+      if (info.isSymbolicLink()) record(relative, { stamp, link: fs.readlinkSync(absolute) });
+      else if (info.isDirectory()) {
+        record(relative, { stamp, dir: true });
+        for (const name of fs.readdirSync(absolute).sort()) visit(path.join(absolute, name), relative ? `${relative}/${name}` : name);
+      } else if (info.isFile()) record(relative, { stamp });
+      else throw Error('graph receipt special file');
+    }
+    visit(directory, '');
+    return entries;
+  }
+  function graphStampsEqual(left, right) {
+    const leftKeys = Object.keys(left), rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    for (const key of leftKeys) {
+      const a = left[key], b = right[key];
+      if (b === null || typeof b !== 'object' || Array.isArray(b)) return false;
+      if (a.stamp !== b.stamp || Boolean(a.dir) !== Boolean(b.dir) || (a.link ?? null) !== (b.link ?? null)) return false;
+    }
+    return true;
+  }
+  function graphReceiptHeader() {
+    const installationPath = path.join(root, 'installation.json');
+    if (!fs.existsSync(installationPath)) return null;
+    return {
+      schema: 'gentle-shell-main-graph-verify-receipt/v1',
+      root, prefix, agent, finalPrefix, finalRoot, mode,
+      installation: digest(read(installationPath)),
+      lock: digest(lockBytes),
+    };
+  }
+  function graphFastPath() {
+    try {
+      const header = graphReceiptHeader();
+      if (!header) return null;
+      const bytes = fs.readFileSync(graphReceiptPath);
+      if (bytes.length > 67108864) return null;
+      const receipt = JSON.parse(bytes);
+      if (receipt === null || typeof receipt !== 'object' || Array.isArray(receipt)) return null;
+      for (const [key, value] of Object.entries(header)) if (receipt[key] !== value) return null;
+      if (!Array.isArray(receipt.observed) || receipt.observed.length === 0 || receipt.observed.length > 4096) return null;
+      if (receipt.entries === null || typeof receipt.entries !== 'object' || Array.isArray(receipt.entries)) return null;
+      if (!graphStampsEqual(receipt.entries, graphStamps(modules))) return null;
+      return receipt.observed;
+    } catch {
+      return null;
+    }
+  }
+  if (launchVerify) graphFast = graphFastPath();
   function sourceBytes(directory, acquired, gentle = false) {
     const include = name => name !== 'node_modules' && !(gentle && name === '.gentle-ai');
     const entries = fs.readdirSync(directory).filter(include).sort();
@@ -673,7 +751,20 @@ if (action === 'restore') {
     observed.length = 0;
     materializeGlobal();
   }
-  packages(modules);
+  if (graphFast) {
+    // The receipt proved the installed tree is byte-identical to the state a
+    // previous full audit authenticated; reuse its observed records.
+    observed.push(...graphFast);
+  } else {
+    packages(modules);
+    if (launchVerify) {
+      graphReceiptCandidate = {
+        ...graphReceiptHeader(),
+        entries: graphStamps(modules),
+        observed: [...observed],
+      };
+    }
+  }
   const semver = createRequire(npm)('semver'); // Authenticated stock Node/npm closure.
   function resolve(directory, name) {
     for (let parent = directory; parent.startsWith(modules); parent = path.dirname(parent)) {
@@ -946,6 +1037,12 @@ if (action === 'restore') {
       assertMainBindings(main, stock);
       console.log('Main declared stock bindings verified; source API/runtime unqualified; activated=false');
     }
+  }
+  if (graphReceiptCandidate) {
+    const stage = path.join(state, `.graph-receipt-${crypto.randomUUID()}`);
+    writeExclusive(stage, `${JSON.stringify(graphReceiptCandidate)}\n`);
+    fs.renameSync(stage, graphReceiptPath);
+    sync(path.dirname(graphReceiptPath));
   }
   console.log(`Global readback verified; authenticated packages=${observed.length}; functional Ready=false`);
 }

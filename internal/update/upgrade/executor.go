@@ -25,6 +25,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
@@ -273,6 +275,24 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	switch adapter.Agent() {
+	case model.AgentAntigravity:
+		// The upgraded binary's sync republishes the staged guidance as agy
+		// rules and retires the sections older releases appended to GEMINI.md.
+		owned, err := antigravityrules.OwnedRulePaths(homeDir)
+		if err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: skipping Antigravity rules: %v", err)
+		}
+		add(owned...)
+		add(presentPaths([]string{antigravityrules.LegacyPromptPath(homeDir)})...)
+	case model.AgentGeminiCLI:
+		// The upgraded binary's sync moves the guidance older releases wrote
+		// into GEMINI.md to the staging file and republishes the modules
+		// GEMINI.md imports.
+		if _, err := geminimodules.OwnedModulePaths(homeDir); err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: Gemini CLI module manifest unreadable: %v", err)
+		}
+		// Owned and to-be-written modules, the manifest, staging and root.
+		add(presentPaths(geminimodules.ManagedPaths(homeDir))...)
 	case model.AgentClaudeCode:
 		add(claude.UserConfigPath(homeDir))
 		add(theme.VisualThemePaths(homeDir, adapter)...)
@@ -765,16 +785,13 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 //     or placeholder keys still take the binary path and fail authentication;
 //     signature failures never trigger a Go fallback.
 //
-//   - Windows publishes no official binary and no Scoop manifest while publicly
-//     trusted Authenticode signing is pending, so there is no signed asset to
-//     download and minisign is not an option there. With Go on PATH, a pinned
-//     `go install <importPath>@vX.Y.Z` is the automatic upgrade. That is not an
-//     unverified install: goInstallUpgrade deliberately does not touch cmd.Env,
-//     so the Go checksum database (sum.golang.org) still verifies the module
-//     against its transparency log. The trust anchor moves from our minisign key
-//     to Go's checksum log — a different anchor, not a missing one. (The `@main`
-//     beta path in goInstallMainUpgrade DOES bypass sumdb via goProxyBypassEnv;
-//     that is a separate, opt-in channel and is not this path.)
+//   - On Windows, an active executable owned by Scoop is upgraded by Scoop. The
+//     ownership check resolves both the executable and Scoop's current package
+//     directory, so a separate AppData or Go installation is never redirected.
+//     Otherwise, with Go on PATH, a pinned `go install <importPath>@vX.Y.Z` is
+//     the automatic upgrade. That is not an unverified install: goInstallUpgrade
+//     deliberately does not touch cmd.Env, so the Go checksum database
+//     (sum.golang.org) still verifies the module against its transparency log.
 //     `go install` can write somewhere the shell does not resolve, which is why
 //     goInstallUpgrade verifies the destination afterwards and warns on mismatch.
 //
@@ -786,6 +803,9 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 // legacy InstallScript declaration on Windows, where scriptUpgrade has no bash
 // and would point the user at a releases page that publishes no Windows assets.
 func gentleAISelfUpgradeMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
+	if profile.OS == "windows" && scoopGentleAIOwned() {
+		return update.InstallScoop
+	}
 	if (profile.OS == "windows" || isUnanchoredSourceBuild(profile)) && profile.GoAvailable && tool.GoImportPath != "" {
 		return update.InstallGoInstall
 	}

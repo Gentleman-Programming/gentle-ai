@@ -106,6 +106,16 @@ Community Tools are opt-in and are not included by presets or automatic detectio
 |---|---|---|
 | CodeGraph | Installs its CLI and configures supported agent MCP/guidance integration. | Use CodeGraph’s upstream lifecycle commands. |
 
+### OpenCode CodeGraph wiring
+
+Existing native `mcp.servers.codegraph` wiring is preserved byte-for-byte, including JSONC comments. A local string-array command may use `codegraph serve --mcp`, an absolute `codegraph` executable path (including Windows `.exe`/`.cmd`), and the supported `--no-watch` option.
+
+An entry, native or legacy `mcp.codegraph`, whose local `codegraph serve --mcp` command pins a project with a non-empty `--path <directory>`, `--path=<directory>`, or `-p <directory>` serves that fixed project regardless of the client's workspace, so it is not managed wiring. Install, status, and sync treat it as configured by the user: they never run the installer, fail, or rewrite that entry, whatever its enable flags. A pin that is not a valid CodeGraph serve command (another program, a non-local type, or a missing or empty path value) still gets the native diagnostic or the legacy installer path.
+
+When both `opencode.jsonc` and `opencode.json` exist, the CodeGraph entry in JSONC takes priority; JSON is consulted only if JSONC has no CodeGraph entry. An invalid or disabled higher-priority entry never falls back to the lower-priority file.
+
+If a native entry is disabled or has an unsupported type or command, sync stops and names the configuration path, key, and unmet condition instead of repeatedly invoking a legacy installer. Correct unsupported wiring to complete sync. For a disabled native entry, enable or remove that entry to complete sync; leaving it disabled keeps sync blocked. Disabled native entries never fall back to legacy wiring. Missing or ineffective legacy-only wiring still uses CodeGraph's upstream installer.
+
 ### CodeGraph initialization workspace
 
 For project initialization, the explicit agent working directory is the target—not an enclosing Git repository. Check its local `.git` (directory or worktree file) and `.codegraph/` first. Ancestor Git-root discovery is only appropriate for an already-selected existing repository.
@@ -135,8 +145,8 @@ Skill files organized by category, embedded in the binary and injected into your
 | Go Testing | `go-testing` | Go testing patterns including Bubbletea TUI testing |
 | Skill Creator | `skill-creator` | Create new AI agent skills following the Agent Skills spec |
 | Skill Improver | `skill-improver` | Audit and improve existing skills against the repository style guide |
-| Branch & PR | `branch-pr` | PR creation workflow with conventional commits, branch naming, and issue-first enforcement |
-| Issue Creation | `issue-creation` | Issue filing workflow with bug report and feature request templates |
+| Branch & PR | `branch-pr` | PR preparation following the destination repository's issue, label, naming and template policy |
+| Issue Creation | `issue-creation` | Issue filing using the target's YAML forms, Markdown templates or supported no-template policy |
 | Skill Registry | `skill-registry` | Build an index of installed skills with triggers, scopes, and exact `SKILL.md` paths |
 | Chained PR | `chained-pr` | Plan and create reviewable stacked/chained pull requests |
 | Cognitive Doc Design | `cognitive-doc-design` | Write docs that reduce review and onboarding cognitive load |
@@ -144,7 +154,7 @@ Skill files organized by category, embedded in the binary and injected into your
 | Work Unit Commits | `work-unit-commits` | Split implementation into reviewable work units |
 | RDD Defect Workflow | `rdd-defect-workflow` | Guide receipt-driven defect work with truthful evidence and authority boundaries |
 
-Of these, `go-testing`, `skill-creator`, `skill-improver`, `skill-registry`, `chained-pr`, `cognitive-doc-design` and `work-unit-commits` are installed by default with both the `full-gentleman` (Dev Stack + Polish) and `ecosystem-only` (Dev Stack) presets. `branch-pr`, `issue-creation`, `comment-writer` and `rdd-defect-workflow` are repository-contributor workflow skills: they remain selectable with an explicit `--skills <id>`, but no default preset installs them.
+Of these, `go-testing`, `skill-creator`, `skill-improver`, `skill-registry`, `chained-pr`, `cognitive-doc-design` and `work-unit-commits` are installed by default with both the `full-gentleman` (Dev Stack + Polish) and `ecosystem-only` (Dev Stack) presets. `branch-pr`, `issue-creation`, `comment-writer` and `rdd-defect-workflow` are opt-in collaboration/workflow skills: they remain selectable with an explicit `--skills <id>`, but no default preset installs them. The portable contribution skills follow the destination repository's policy; installing them does not require an issue before every PR, Gentle AI labels, naming regexes or YAML forms in unrelated projects. Gentle AI's own repository-specific contribution skill still enforces this repository's rules.
 
 ### Coding Skills (separate repository)
 

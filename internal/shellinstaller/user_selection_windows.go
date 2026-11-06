@@ -4,6 +4,7 @@ package shellinstaller
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 )
 
@@ -66,4 +67,18 @@ func UserInstallFromEntry(args []string) (UserInstallRequest, error) {
 		channel = userChannelMain
 	}
 	return UserInstallRequest{Destination: args[0], Mode: args[1], SharedPrefix: args[2], SharedAgent: args[3], Confirmation: args[4], Channel: channel, Experience: profile, Scope: scope}, nil
+}
+
+// userWindowsStagedSelection marshals the request for the staged provision
+// helper, which requires its exact six-field selection ABI (Channel,
+// Confirmation, Destination, Mode, SharedAgent, SharedPrefix). Preferences
+// live in the staged configuration files and the component scope was already
+// applied to the stage by the reuse pass, so both optional fields drop: a
+// staged request carrying a non-empty Scope marshals seven keys and the
+// provisioner refuses the whole update with "publication channel/selection".
+func userWindowsStagedSelection(req UserInstallRequest) []byte {
+	req.Experience = nil
+	req.Scope = ""
+	data, _ := json.Marshal(req)
+	return data
 }

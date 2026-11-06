@@ -635,10 +635,10 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 		}
 	}
 	freshPrefix, identityErr := userIdentity(prefix)
-	if identityErr != nil || freshPrefix != manifest.PrefixIdentity {
+	if identityErr != nil || !userIdentityMatches(manifest.PrefixIdentity, freshPrefix) {
 		return result, privateError("preimage", identityErr)
 	}
-	if freshAgent, identityErr := userSelectedAgentIdentity(manifest.Mode, agent); identityErr != nil || freshAgent != manifest.AgentIdentity {
+	if freshAgent, identityErr := userSelectedAgentIdentity(manifest.Mode, agent); identityErr != nil || !userIdentityMatches(manifest.AgentIdentity, freshAgent) {
 		return result, privateError("preimage", identityErr)
 	}
 	if err = privateDestination(manifest.Destination); err != nil || ctx.Err() != nil {
@@ -1199,10 +1199,10 @@ func userReadRecordedManifest(ctx context.Context, root string, reuse *userInsta
 			return manifest, err
 		}
 	}
-	if actual, err := userIdentity(manifest.Prefix); err != nil || actual != manifest.PrefixIdentity {
+	if actual, err := userIdentity(manifest.Prefix); err != nil || !userIdentityMatches(manifest.PrefixIdentity, actual) {
 		return manifest, privateError("preimage", err)
 	}
-	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || actual != manifest.AgentIdentity {
+	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || !userIdentityMatches(manifest.AgentIdentity, actual) {
 		return manifest, privateError("preimage", err)
 	}
 	if reuse == nil {
@@ -1238,7 +1238,10 @@ func userRecordedPin(ctx context.Context, root, relative, pin string) error {
 	if len(pin) != 64 {
 		return privateError("source", nil)
 	}
-	_, err := privateNativeFile(ctx, filepath.Join(root, relative), 0700, -1, pin)
+	// The pinned supervisor and node binaries are large; the stamp cache keeps
+	// the full privateNativeFile hash for starts where ctime proves the bytes
+	// unchanged (user_launch_pin_cache_unix.go).
+	_, err := userPinnedFileCached(ctx, root, relative, 0700, pin)
 	return err
 }
 
@@ -1308,8 +1311,16 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	if _, err := userSourceFile(ctx, cli, -1, ""); err != nil {
 		return userGraphRepairError(root, manifest.Mode, err)
 	}
-	if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
-		return userGraphRepairError(root, manifest.Mode, err)
+	// userReadManifest already proved the Main SDK graph for this exact launch
+	// (its reuse==nil path runs userVerifyInstalledGlobal for MainSDK) and only
+	// stat/read operations ran since; re-running the provisioner here doubled
+	// every launch's verification cost while leaving the unverified window at
+	// least as wide as the one it closed. Stock-only installs keep their single
+	// pre-exec verification, which only this call performs.
+	if manifest.MainSDK == nil {
+		if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
+			return userGraphRepairError(root, manifest.Mode, err)
+		}
 	}
 	// S23/M1: a tree without a staged reviewed list keeps its supplier files
 	// authenticated against the embedded entry on every launch.
