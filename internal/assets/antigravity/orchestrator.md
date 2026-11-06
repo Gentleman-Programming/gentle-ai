@@ -55,7 +55,7 @@ When it is ours, never offer to switch to, inspect, modify, or directly repair t
 
 ### Dynamic Delegation Protocol (MANDATORY)
 
-For bounded ODD work, call `define_subagent` to create a general-purpose worker with a scoped mission, then `invoke_subagent` with the defined name. Pass approved edit surfaces, constraints, relevant context, exact skill paths and validation expectations. Enable configured MCP tools only when needed for the authorized task. Read the child result, verify claimed changes, and synthesize decisions, outcomes, and risks. Dynamic delegation MUST NOT exceed 10 levels deep.
+With Gentle Shell (`pi-bridge` active), route all delegation through `call_mcp_tool` on `pi-bridge` (governed by models in `~/.pi/gentle-ai/models.json`); do not call `define_subagent` or `invoke_subagent`. Otherwise, for native standalone Antigravity bounded ODD work, call `define_subagent` to create a general-purpose worker with a scoped mission, then `invoke_subagent` with the defined name. Pass approved edit surfaces, constraints, relevant context, exact skill paths and validation expectations. Enable configured MCP tools only when needed for the authorized task. Read the child result, verify claimed changes, and synthesize decisions, outcomes, and risks. Dynamic delegation MUST NOT exceed 10 levels deep.
 
 ### Language Domain Contract
 
