@@ -58,9 +58,30 @@ func TestReviewStatusSelectorFreeResolvesRepositoryRoot(t *testing.T) {
 		}
 	})
 
-	if err := RunReview([]string{"status", "--cwd", t.TempDir()}, &bytes.Buffer{}); err == nil {
-		t.Fatal("review status accepted a path outside a repository")
-	}
+	t.Run("unversioned directory", func(t *testing.T) {
+		workspace := t.TempDir()
+		candidate := filepath.Join(workspace, "candidate.txt")
+		if err := os.WriteFile(candidate, []byte("candidate\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		var output bytes.Buffer
+		if err := RunReview([]string{"status", "--cwd", workspace}, &output); err != nil {
+			t.Fatalf("review status in unversioned directory: %v", err)
+		}
+		var report struct {
+			Entries []struct {
+				LineageID string `json:"lineage_id"`
+			} `json:"entries"`
+		}
+		if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+			t.Fatal(err)
+		}
+		if len(report.Entries) != 0 {
+			t.Fatalf("unversioned directory status entries = %#v, want none", report.Entries)
+		}
+		assertLocalGitBootstrapPreservedWorkspace(t, workspace, candidate)
+	})
 
 	nestedRepository := filepath.Join(repo, "nested-repository")
 	if err := os.Mkdir(nestedRepository, 0o755); err != nil {

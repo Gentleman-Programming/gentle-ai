@@ -8,10 +8,11 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui"
 )
 
 func TestInstallDefaultsMatchTUIModelDefaults(t *testing.T) {
@@ -42,7 +43,7 @@ func TestInstallPlannerParityWithTUISelection(t *testing.T) {
 	detection := system.DetectionResult{}
 	model := tui.NewModel(detection, "dev")
 
-	result, err := cli.RunInstall([]string{"--dry-run"}, detection)
+	result, err := runInstallForParity([]string{"--dry-run"}, detection)
 	if err != nil {
 		t.Fatalf("RunInstall() error = %v", err)
 	}
@@ -145,7 +146,7 @@ func TestGuardFlowLinuxDryRunPropagatesDecision(t *testing.T) {
 		},
 	}
 
-	result, err := cli.RunInstall([]string{"--dry-run"}, detection)
+	result, err := runInstallForParity([]string{"--dry-run"}, detection)
 	if err != nil {
 		t.Fatalf("RunInstall() dry-run error = %v", err)
 	}
@@ -231,6 +232,16 @@ func TestRunArgsSyncUnknownFlagReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunArgsSyncHelpIncludesBackgroundFlag(t *testing.T) {
+	var buf bytes.Buffer
+	if err := RunArgs([]string{"sync", "--help"}, &buf); err != nil {
+		t.Fatalf("RunArgs(sync --help) error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "--opencode-background-subagents=auto|on|off") || !strings.Contains(buf.String(), cli.OpenCodeBackgroundSubagentsEnv) {
+		t.Fatalf("sync help omits background contract: %s", buf.String())
+	}
+}
+
 // TestRunArgsSyncNoAgentsIsNoOp verifies that `gentle-ai sync` with no
 // agents flag and an empty home dir (no config dirs) completes as a no-op
 // and does NOT return an error.
@@ -255,7 +266,7 @@ func TestRunArgsSyncNoAgentsIsNoOp(t *testing.T) {
 func TestMacOSDefaultProfileFallbackWhenDetectionEmpty(t *testing.T) {
 	// When DetectionResult is zero-value (no profile), CLI defaults to macOS/brew.
 	detection := system.DetectionResult{}
-	result, err := cli.RunInstall([]string{"--dry-run"}, detection)
+	result, err := runInstallForParity([]string{"--dry-run"}, detection)
 	if err != nil {
 		t.Fatalf("RunInstall() error = %v", err)
 	}
@@ -273,7 +284,7 @@ func TestMacOSDefaultProfileFallbackWhenDetectionEmpty(t *testing.T) {
 
 func TestLinuxDryRunPreservesSameResolverOutputAsMacOS(t *testing.T) {
 	// Platform decision differs but the resolver output (agents, components, order) should be identical.
-	macOSResult, err := cli.RunInstall([]string{"--dry-run"}, system.DetectionResult{})
+	macOSResult, err := runInstallForParity([]string{"--dry-run"}, system.DetectionResult{})
 	if err != nil {
 		t.Fatalf("macOS RunInstall() error = %v", err)
 	}
@@ -292,7 +303,7 @@ func TestLinuxDryRunPreservesSameResolverOutputAsMacOS(t *testing.T) {
 			},
 		},
 	}
-	linuxResult, err := cli.RunInstall([]string{"--dry-run"}, linuxDetection)
+	linuxResult, err := runInstallForParity([]string{"--dry-run"}, linuxDetection)
 	if err != nil {
 		t.Fatalf("Linux RunInstall() error = %v", err)
 	}
@@ -355,28 +366,34 @@ func TestInstallPlannerParityLinuxPreservesComponentOrder(t *testing.T) {
 		},
 	}
 
-	result, err := cli.RunInstall([]string{"--dry-run", "--agent", "opencode", "--component", "engram,sdd,skills"}, linuxDetection)
+	result, err := runInstallForParity([]string{"--dry-run", "--agent", "opencode", "--component", "persona,engram,skills"}, linuxDetection)
 	if err != nil {
 		t.Fatalf("RunInstall() error = %v", err)
 	}
 
-	// Engram must come before SDD, SDD before Skills (dependency order)
-	order := result.Resolved.OrderedComponents
-	engramIdx, sddIdx, skillsIdx := -1, -1, -1
-	for i, c := range order {
-		switch c {
-		case "engram":
-			engramIdx = i
-		case "sdd":
-			sddIdx = i
-		case "skills":
-			skillsIdx = i
-		}
+	// Persona writes the base instructions; Engram appends to them. Skills
+	// remains independently installable. ODD and RDD are retained runtime
+	// guidance, not separate selectable installer components.
+	want := []model.ComponentID{model.ComponentPersona, model.ComponentEngram, model.ComponentSkills}
+	if !reflect.DeepEqual(result.Resolved.OrderedComponents, want) {
+		t.Fatalf("ordered components = %v, want %v", result.Resolved.OrderedComponents, want)
 	}
-	if engramIdx < 0 || sddIdx < 0 || skillsIdx < 0 {
-		t.Fatalf("missing expected components in order: %v", order)
+	if !reflect.DeepEqual(result.Selection.Components, []model.ComponentID{model.ComponentPersona, model.ComponentEngram, model.ComponentSkills}) {
+		t.Fatalf("selection components = %v, want %v", result.Selection.Components, want)
 	}
-	if engramIdx >= sddIdx || sddIdx >= skillsIdx {
-		t.Fatalf("dependency order violated: engram@%d sdd@%d skills@%d", engramIdx, sddIdx, skillsIdx)
+	if result.Resolved.PlatformDecision.OS != "linux" || result.Resolved.PlatformDecision.PackageManager != "apt" || !result.Resolved.PlatformDecision.Supported {
+		t.Fatalf("Linux platform decision = %+v", result.Resolved.PlatformDecision)
 	}
+	if wantReview := planner.BuildReviewPayload(result.Selection, result.Resolved); !reflect.DeepEqual(result.Review, wantReview) {
+		t.Fatalf("review mismatch\ncli=%#v\nplanner=%#v", result.Review, wantReview)
+	}
+}
+
+// runInstallForParity exercises the same prepared-plan path as production dispatch.
+func runInstallForParity(args []string, detection system.DetectionResult) (cli.InstallResult, error) {
+	prepared, err := cli.PrepareInstall(args, detection)
+	if err != nil {
+		return cli.InstallResult{}, err
+	}
+	return cli.RunPreparedInstall(prepared, detection)
 }

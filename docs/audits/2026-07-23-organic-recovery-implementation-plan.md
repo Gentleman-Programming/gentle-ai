@@ -1,5 +1,8 @@
 # Organic Recovery Architecture and Implementation Plan
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 - **Decision date:** 2026-07-23
 - **Status:** Gentle AI provider release-ready subject to exact-candidate CI; 51 of 52 acceptance criteria proved; ecosystem activation remains pending on the sole deferred Gentle Pi consumer matrix
 - **Architecture baseline:** `main` at `0d95c399c79edb341e3d874032eba4654b2b3f17`

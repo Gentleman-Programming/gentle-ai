@@ -1,0 +1,344 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// retiredAtomicJourneyReplacements records every ordinary-path journey that
+// asserted the pre-#3417 durable-receipt or deciding-gate model. The
+// registered corpus replaces that retired surface
+// with j59, j60, and j111's worktree-bound, explicit-active, and terminal-burn
+// journeys.
+var retiredAtomicJourneyReplacements = map[string]string{
+	"j01-docs-happy-path":                                                  "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j06-pre-push-after-publication":                                       "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j07-disabled-with-stale-receipts":                                     "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j15-linked-worktree":                                                  "j59-current-status-and-start-ignore-sibling-worktree-transaction",
+	"j32-recovery-of-a-recovery":                                           "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j33-escalate-then-recover":                                            "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j43-recovery-guard-rails-as-an-operator-meets-them":                   "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j44-corrected-current-changes-delivery":                               "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j45-completed-final-verification-retry":                               "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j46-correction-required-staged-recovery":                              "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j48-recovered-workspace-preserves-full-candidate-scope":               "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j50-candidate-decline-denies-generically-then-disabled":               "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j61-pre-pr-multi-segment-delivery-denies-without-composition":         "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j65-selectorless-committed-correction-continuation":                   "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j76-scope-changed-four-lens-successor":                                "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j82-reviewed-superset-pre-push-allows-unpublished-subset":             "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j83-pre-pr-moving-advertised-base-binds-merge-base":                   "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j86-approved-base-diff-local-parent-merge-preserves-approved-receipt": "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j90-explicit-frozen-reviewing-lineage-resumes-after-drift":            "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j94-escalated-changed-scope-negotiates-recovery":                      "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j97-pre-push-preserves-ls-remote-failure":                             "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j100-pre-push-unqualified-selector-ignores-unreachable-remote":        "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	// #3587 removes the public FINALIZE/evidence/retry path. These scenarios'
+	// sole subjects were that retired surface; the replacements below keep the
+	// corresponding clean close, correction, and unmanaged-delivery evidence.
+	"j03-kill-switch":                                                    "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j04-size-does-not-escalate":                                         "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j08-finalize-without-reviewer-results":                              "j114-last-reviewer-capture-closes-and-burns",
+	"j09-finalize-without-evidence":                                      "j114-last-reviewer-capture-closes-and-burns",
+	"j11-unborn-head":                                                    "j110-untracked-terminal-burn-and-unmanaged-staged-validation",
+	"j16-detached-head":                                                  "j114-last-reviewer-capture-closes-and-burns",
+	"j18-space-and-non-ascii-path":                                       "j114-last-reviewer-capture-closes-and-burns",
+	"j19-submodule-gitlink":                                              "j114-last-reviewer-capture-closes-and-burns",
+	"j20-symlink-candidate":                                              "j114-last-reviewer-capture-closes-and-burns",
+	"j21-mode-only-change":                                               "j114-last-reviewer-capture-closes-and-burns",
+	"j22-pure-rename":                                                    "j114-last-reviewer-capture-closes-and-burns",
+	"j23-deletion-only":                                                  "j114-last-reviewer-capture-closes-and-burns",
+	"j24-empty-file":                                                     "j114-last-reviewer-capture-closes-and-burns",
+	"j25-no-trailing-newline":                                            "j114-last-reviewer-capture-closes-and-burns",
+	"j26-crlf-content":                                                   "j114-last-reviewer-capture-closes-and-burns",
+	"j27-merge-in-progress":                                              "j114-last-reviewer-capture-closes-and-burns",
+	"j28-rebase-in-progress":                                             "j114-last-reviewer-capture-closes-and-burns",
+	"j29-cherry-pick-in-progress":                                        "j114-last-reviewer-capture-closes-and-burns",
+	"j30-kill-switch-flipped-mid-review":                                 "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j35-correction-budget-exactly-zero":                                 "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j66-v5-capture-evidence-descriptors-execute":                        "j114-last-reviewer-capture-closes-and-burns",
+	"j67-v5-capture-evidence-correction-descriptor-executes":             "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j85-review-parse-refusals-are-preflight":                            "j114-last-reviewer-capture-closes-and-burns",
+	"j91-audited-abandon-preplan-over-budget-correction":                 "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j95-targeted-validator-inspects-provider-bound-corrected-tree":      "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j99-issue-2906-finalize-missing-contract":                           "j114-last-reviewer-capture-closes-and-burns",
+	"j47-disabled-mode-archives-discovered-scope-changed-authority":      "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j49-status-without-cwd-honors-kill-switch":                          "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j96-sdd-same-parent-repository-edit-authority":                      "j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow",
+	"j98-sdd-flat-root-spec-is-discovered":                               "j59-current-status-and-start-ignore-sibling-worktree-transaction",
+	"j107-sdd-approved-active-change-allows-shared-openspec-scaffolding": "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j128-historical-verification-does-not-block-apply":                  "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j108-sdd-post-review-verify-report-is-natively-bound":               "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+	"j109-sdd-legacy-post-review-report-requires-current-attestation":    "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+}
+
+func removeRetiredAtomicJourneys(journeys []Journey) []Journey {
+	active := make([]Journey, 0, len(journeys))
+	for _, journey := range journeys {
+		if _, retired := retiredAtomicJourneyReplacements[journey.ID]; !retired {
+			active = append(active, journey)
+		}
+	}
+	return active
+}
+
+// j111 proves #3417's terminal boundary at the built-binary surface. Approval is
+// the end of the exact transaction, not a receipt that later gates can reuse.
+func atomicBurnLineageFor(r *journeyRun) (string, error) {
+	if r.sandbox.Lineage == "" {
+		return "", fmt.Errorf("atomic burn journey has no selectorless START lineage")
+	}
+	return r.sandbox.Lineage, nil
+}
+
+func startAtomicBurnFromSelectorlessStatus(r *journeyRun) error {
+	lineage, err := startAtomicTransactionFromSelectorlessStatus(r)
+	if err != nil {
+		return fmt.Errorf("initial selectorless START: %w", err)
+	}
+	r.sandbox.Lineage = lineage
+	r.sandbox.Scratch[atomicBurnInitialKey] = lineage
+	status, err := readAtomicReviewStatus(r, lineage)
+	if err != nil {
+		return err
+	}
+	if status.TargetIdentity == "" {
+		return fmt.Errorf("initial transaction has no target identity")
+	}
+	r.sandbox.Scratch["atomic-burn-target-identity"] = status.TargetIdentity
+	return requireExplicitAtomicFourLensStatusFor(r, lineage)
+}
+
+func captureAtomicBurnReviewerSlots(r *journeyRun) error {
+	lineage, err := atomicBurnLineageFor(r)
+	if err != nil {
+		return err
+	}
+	return captureAtomicReviewerSlotsWithTerminalVerifier(r, lineage, false, requireAtomicLastCaptureReviewerResults)
+}
+
+func requirePendingApproval(lineage string) func(*Sandbox, Observation) error {
+	return func(_ *Sandbox, observation Observation) error {
+		var finalized struct {
+			Action      string `json:"action"`
+			LineageID   string `json:"lineage_id"`
+			State       string `json:"state"`
+			ReceiptPath string `json:"receipt_path"`
+		}
+		if err := json.Unmarshal([]byte(observation.Stdout), &finalized); err != nil {
+			return fmt.Errorf("parse burned approval: %w", err)
+		}
+		if finalized.LineageID != lineage || finalized.State != "approved" ||
+			!strings.Contains(strings.ToLower(finalized.Action), "burn") || finalized.ReceiptPath != "" {
+			return fmt.Errorf("burned approval = %+v, want approved #3417 terminal action without a receipt path", finalized)
+		}
+		return nil
+	}
+}
+
+func requireUnmanagedShippedGate(observation Observation, wantGate string) error {
+	var gate struct {
+		Result   string         `json:"result"`
+		Allowed  bool           `json:"allowed"`
+		Delivery string         `json:"delivery"`
+		Context  map[string]any `json:"context"`
+	}
+	if err := json.Unmarshal([]byte(observation.Stdout), &gate); err != nil {
+		return fmt.Errorf("parse informational shipped gate: %w", err)
+	}
+	if observation.ExitCode != 0 || gate.Result != "invalidated" || gate.Allowed || gate.Delivery != "unmanaged" ||
+		len(gate.Context) != 1 || gate.Context["gate"] != wantGate {
+		return fmt.Errorf("shipped gate = exit %d payload=%+v, want informational unmanaged %s", observation.ExitCode, gate, wantGate)
+	}
+	for _, forbidden := range []string{"receipt", "lineage", "approval"} {
+		if strings.Contains(strings.ToLower(observation.Stdout), forbidden) {
+			return fmt.Errorf("shipped unmanaged gate retained deciding %q: %s", forbidden, observation.Stdout)
+		}
+	}
+	return nil
+}
+
+func requireAllUnmanagedShippedGates(r *journeyRun) error {
+	for _, gate := range []string{"post-apply", "pre-commit", "pre-push", "pre-pr", "release"} {
+		observation := r.run([]string{"review", "validate", "--gate", gate, "--cwd", r.sandbox.Repo}, false)
+		if err := requireUnmanagedShippedGate(observation, gate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireAtomicBurnSelectorlessStatusTerminal(r *journeyRun) error {
+	target := r.sandbox.Scratch["atomic-burn-target-identity"]
+	if r.sandbox.Scratch[atomicBurnInitialKey] == "" || target == "" {
+		return fmt.Errorf("atomic burn journey did not record the burned selectorless binding and target")
+	}
+	// #4405 replaces the automatic post-burn START offer with terminal STATUS
+	// for the exact unchanged target. Explicit START is reserved for an
+	// intentionally independent review; this step must never execute it.
+	status, err := readAtomicReviewStatus(r, "")
+	if err != nil {
+		return err
+	}
+	if status.TargetIdentity != target || status.NextTransition.Kind != "stop" ||
+		status.NextTransition.ReasonCode != "target_already_acknowledged" ||
+		status.Authority.LineageID != "" || status.Authority.State != "" || status.Authority.Revision != "" ||
+		status.NextTransition.Execute.Operation != "" || status.NextTransition.Execute.Command != "" ||
+		len(status.NextTransition.Execute.Arguments) != 0 || len(status.NextTransition.Collect.Inputs) != 0 ||
+		status.NextTransition.Continuation != nil {
+		return fmt.Errorf("selectorless STATUS after burn = %+v, want authority-free terminal target_already_acknowledged for %q without START", status, target)
+	}
+	return nil
+}
+
+func requireExplicitAtomicFourLensStatusFor(r *journeyRun, lineage string) error {
+	status, err := readAtomicReviewStatus(r, lineage)
+	if err != nil {
+		return err
+	}
+	if status.Authority.LineageID != lineage || status.Authority.State != "reviewing" ||
+		status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "reviewer_results_required" ||
+		len(status.NextTransition.Collect.Inputs) != 4 {
+		return fmt.Errorf("post-burn STATUS = authority=%+v transition=%+v, want a new active four-lens transaction", status.Authority, status.NextTransition)
+	}
+	return nil
+}
+
+func atomicReviewJourneys() []Journey {
+	return []Journey{{
+		ID:     "j111-approved-transaction-burns-and-shipped-gates-are-unmanaged",
+		Title:  "#3797/#4453/#4405: initial printed START and canonical reviewer results end in acknowledgement; unchanged selectorless STATUS is terminal",
+		Source: "#3797 compact binding and #4453 terminal readback preserve canonical results before acknowledgement; #4405 replaces automatic post-burn START with target_already_acknowledged for the exact unchanged target. Explicit START is only for an intentionally independent review; delivery gates remain informational and unmanaged",
+		Steps: []Step{
+			{Name: "fixture: repository", Fixture: baseRepo},
+			{Name: "fixture: high-risk candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
+			{Name: "selectorless STATUS renders and executes the initial printed START", Requires: atomicReviewStatusCapability, Composite: startAtomicBurnFromSelectorlessStatus},
+			{Name: "capture every exact four-lens result; the last response exposes canonical results before acknowledgement", Requires: captureResultCapability, Composite: captureAtomicBurnReviewerSlots},
+			{Name: "the exact acknowledgement leaves no reusable authority, receipt, or evidence", Requires: statusCapability, Composite: func(r *journeyRun) error {
+				return requireAtomicLineageAcknowledged(r, r.sandbox.Lineage)
+			}},
+			{Name: "all shipped gates are informational, non-deciding, and unmanaged", Requires: validateCapability, Composite: requireAllUnmanagedShippedGates},
+			{Name: "repeat selectorless STATUS for the exact unchanged target: terminal STOP target_already_acknowledged without START", Requires: atomicReviewStatusCapability, Composite: requireAtomicBurnSelectorlessStatusTerminal},
+		},
+	}, {
+		ID: "j1658-native-status-recovery-executes-without-authored-authorization", Review: reviewOptedIn,
+		Title:  "#1658: bound native STATUS recovery runs without authored authorization",
+		Source: "#1658 CLI boundary only, not OpenCode runtime proof: failed criteria over unchanged bytes stop; changed bytes recover with native binding, and explicit wrong/empty/partial inputs and an existing successor fail closed",
+		Steps: []Step{
+			{Name: "fixture: repository", Fixture: baseRepo},
+			{Name: "fixture: high-risk correction candidate", Fixture: stageAtomicHighRiskCorrectionCandidate},
+			{Name: "start the exact recovery predecessor", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", nativeRecoveryJourneyLineage)},
+			{Name: "capture all four lenses and a severe finding", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+				return captureAtomicReviewerSlots(r, nativeRecoveryJourneyLineage, true)
+			}},
+			{Name: "capture the native bounded correction plan", Requires: captureCorrectionPlanCapability, Composite: func(r *journeyRun) error {
+				return captureCorrectionPlanFor(r, nativeRecoveryJourneyLineage, 2)
+			}},
+			{Name: "fixture: correct the candidate", Fixture: writeCorrectedCandidate},
+			{Name: "reject original criteria through the CLI relay", Requires: capturedProviderValidatorStatusCapability, Composite: func(r *journeyRun) error {
+				return captureRejectedProviderValidatorSlotFor(r, nativeRecoveryJourneyLineage)
+			}},
+			{Name: "unchanged failed-criteria candidate must stop", Requires: atomicReviewStatusCapability, Composite: requireNativeRecoveryFailedCriteriaStop},
+			{Name: "fixture: change the failed candidate", Fixture: writeNormalCandidateAfterRejectedValidator},
+			{Name: "repeat STATUS, reject explicit wrong/empty/partial inputs, execute printed four-argument recovery, and diagnose an existing successor", Requires: atomicReviewStatusCapability, Composite: executeNativeRecoveryJourney},
+		},
+	}}
+}
+
+const nativeRecoveryJourneyLineage = "native-status-recovery"
+
+func requireNativeRecoveryFailedCriteriaStop(r *journeyRun) error {
+	status, err := readAtomicReviewStatus(r, nativeRecoveryJourneyLineage)
+	if err != nil {
+		return err
+	}
+	if status.Authority.State != "escalated" || status.NextTransition.Kind != "stop" || status.NextTransition.Execute.Command != "" {
+		return fmt.Errorf("unchanged failed criteria did not stop: %+v", status.NextTransition)
+	}
+	return nil
+}
+
+func requireNativeRecoveryRefusal(r *journeyRun, extra ...string) error {
+	args := append([]string{"review", "status", "--contract", reviewContractV2, "--next-transition", "--lineage", nativeRecoveryJourneyLineage}, extra...)
+	observation := r.runAt(r.sandbox.Repo, args, true)
+	var failure struct {
+		Code            string `json:"code"`
+		Cause           string `json:"cause"`
+		MutationOutcome string `json:"mutation_outcome"`
+	}
+	if err := json.Unmarshal([]byte(observation.Stdout), &failure); err != nil {
+		return err
+	}
+	if observation.ExitCode == 0 || failure.Code != "invalid_request" || failure.MutationOutcome != "not_started" {
+		return fmt.Errorf("recovery refusal = exit %d %+v", observation.ExitCode, failure)
+	}
+	_, command, named := strings.Cut(failure.Cause, "re-run: ")
+	if !named || command != "gentle-ai review inspect-authority" {
+		return fmt.Errorf("refusal has no read-only diagnostic: %+v", failure)
+	}
+	printed, err := printedCommandArguments(command)
+	if err != nil {
+		return err
+	}
+	if diagnostic := r.runAt(r.sandbox.Repo, printed, false); diagnostic.ExitCode != 0 {
+		return fmt.Errorf("printed inspection refused: %s", diagnostic.Stderr)
+	}
+	return nil
+}
+
+func executeNativeRecoveryJourney(r *journeyRun) error {
+	status, err := readAtomicReviewStatus(r, nativeRecoveryJourneyLineage)
+	if err != nil {
+		return err
+	}
+	if status.NextTransition.Kind != "execute" || status.NextTransition.Execute.Operation != "review.recover" || len(status.NextTransition.Execute.Arguments) != 4 {
+		return fmt.Errorf("STATUS did not render four-argument recovery: %+v", status.NextTransition)
+	}
+	for _, argument := range status.NextTransition.Execute.Arguments {
+		if argument.Token == "" || argument.Name == "actor" || argument.Name == "reason" || argument.Name == "maintainer-authorization" {
+			return fmt.Errorf("native recovery required authored input: %+v", argument)
+		}
+	}
+	repeated, err := readAtomicReviewStatus(r, nativeRecoveryJourneyLineage)
+	if err != nil || repeated.NextTransition.Execute.Command != status.NextTransition.Execute.Command {
+		return fmt.Errorf("repeated STATUS changed recovery: %v", err)
+	}
+	for _, extra := range [][]string{{"--recovery-authorization="}, {"--recovery-authorization=wrong"}, {"--recovery-actor=partial"}} {
+		if err := requireNativeRecoveryRefusal(r, extra...); err != nil {
+			return err
+		}
+	}
+	observation, err := runPrintedTransitionAt(r, r.sandbox.Repo, status)
+	if err != nil {
+		return err
+	}
+	var recovered struct {
+		LineageID      string `json:"lineage_id"`
+		TargetIdentity string `json:"target_identity"`
+		State          string `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(observation.Stdout), &recovered); err != nil {
+		return err
+	}
+	if observation.ExitCode != 0 || recovered.LineageID != status.executeArgument("successor-lineage") || recovered.TargetIdentity != status.TargetIdentity || recovered.State != "reviewing" {
+		return fmt.Errorf("printed recovery did not create its bound successor: %+v; %s", recovered, observation.Stderr)
+	}
+	if err := requireExplicitAtomicFourLensStatusFor(r, recovered.LineageID); err != nil {
+		return err
+	}
+	if err := requireNativeRecoveryRefusal(r); err != nil {
+		return err
+	}
+	// No next-transition: inspect the predecessor's native binding without
+	// asking to create another successor. Its digest must remain unchanged.
+	readback := r.runAt(r.sandbox.Repo, []string{"review", "status", "--contract", reviewContractV2, "--lineage", nativeRecoveryJourneyLineage}, false)
+	var predecessor statusEnvelope
+	if err := json.Unmarshal([]byte(readback.Stdout), &predecessor); err != nil {
+		return err
+	}
+	if readback.ExitCode != 0 || predecessor.Authority.Revision != status.Authority.Revision {
+		return fmt.Errorf("recovery or diagnostics changed predecessor: %+v", predecessor.Authority)
+	}
+	return nil
+}

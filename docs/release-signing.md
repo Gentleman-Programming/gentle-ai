@@ -1,6 +1,9 @@
 # Release signing and key rotation
 
-Gentle AI releases only when the protected `release` environment provides a real Minisign credential whose public key matches the trust anchors embedded in the binary. An unset, malformed, placeholder, or isolated test key stops both the updater and release workflow.
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
+Gentle AI™ releases only when the protected `release` environment provides a real Minisign credential whose public key matches the trust anchors embedded in the binary. An unset, malformed, placeholder, or isolated test key stops both the updater and release workflow.
 
 ## User verification
 
@@ -45,10 +48,10 @@ The public key is not secret, but its provenance is security-critical. A key fet
 The workflow validates the complete repository-variable value, exports a separate canonical value, and permits GoReleaser to inject only that validated output through this exact linker variable:
 
 ```text
-github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys
+github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade.releaseMinisignPublicKeys
 ```
 
-Source/test builds retain `UNSET`; their binary self-updater refuses network replacement. There is no grace version and no unsigned fallback.
+Source/test builds retain `UNSET`; their binary downloader refuses network replacement. On Linux/macOS, `gentle-ai upgrade` routes these source builds through `go install` when Go is on `PATH` and a Go import path is declared, pinned to the exact target release with the normal Go checksum database settings. Without those prerequisites, it prints a manual source-install command before creating backups or changing files. Run `gentle-ai sync` after a manual binary update. There is no grace version or unsigned binary fallback; empty/malformed configured keys and failed signatures never trigger a Go fallback.
 
 The updater caps a release archive at **128 MiB**. It rejects both oversized `Content-Length` declarations and chunked or otherwise unknown-length responses that cross the same ceiling, deleting partial downloads without changing the installed binary.
 
@@ -70,6 +73,16 @@ If a key may be compromised, stop releases. Do not silently replace a trust anch
 
 ## Release gates
 
+### Release-note upgrade instruction
+
+Every release note that tells users to replace or upgrade the binary must include this step:
+
+```bash
+gentle-ai sync
+```
+
+Never publish binary-only upgrade guidance. Managed reviewer and runtime assets are version-bound to the binary, and review lifecycle operations fail closed until sync repairs missing or mismatched writer provenance.
+
 ### Windows distribution restoration gate
 
 Windows source compatibility, CI, and runtime tests remain supported. Official
@@ -78,7 +91,7 @@ Because there is no signed Windows asset to download, Windows never downloads an
 unsigned executable and never executes a remote update script. Instead:
 
 - With Go 1.25.10+ on `PATH`, the built-in upgrader runs
-  `go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@vX.Y.Z`,
+  `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@vX.Y.Z`,
   pinned to the exact release tag. This is verified — just against a different
   trust anchor: the module is checked against the Go checksum database
   (`sum.golang.org`) rather than our minisign release signature. The upgrader
@@ -86,17 +99,18 @@ unsigned executable and never executes a remote update script. Instead:
 - Without Go on `PATH`, the upgrader fails closed to `go install` guidance and
   performs no download or execution at all.
 
-Linux and macOS are unaffected by this: they continue to download the signed
-release archive and verify it with minisign, and they never route through
-`go install`.
+Linux and macOS official release builds continue to download the signed release
+archive and verify it with minisign, even when Go is available. Source builds
+with the exact `UNSET` trust-anchor sentinel instead use the pinned Go path
+described above. Homebrew-owned installations continue to upgrade with Homebrew.
 
 Restore Windows distribution only after all of these conditions are enforced:
 
 1. Provision publicly trusted RSA Authenticode signing, preferably managed OIDC
    with Azure Artifact Signing; self-signed or mock credentials are not acceptable.
 2. Sign both amd64 and arm64 executables before archive and checksum generation.
-3. Add pre-publication and remote-release verification that fails if either
-   executable is unsigned or its signature is not publicly trusted.
+3. Add pre-publication and remote-release verification that
+   fails if either executable is unsigned or its signature is not publicly trusted.
 4. Restore the Windows GoReleaser targets and Scoop publisher together, with
    regression coverage proving no unsigned artifact can be emitted.
 

@@ -4,236 +4,27 @@
   "title": "Gentle AI negotiated review operation result",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema",
-    "contract",
-    "operation",
-    "result"
-  ],
+  "required": ["schema", "contract", "operation", "result"],
   "properties": {
-    "schema": {
-      "const": "gentle-ai.review-integration.operation/v1"
-    },
-    "contract": {
-      "const": "gentle-ai.review-integration/v1"
-    },
-    "operation": {
-      "enum": [
-        "review.finalize",
-        "review.validate",
-        "review.bind_sdd",
-        "review.retry_final_verification"
-      ]
-    },
-    "result": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/finalize"
-        },
-        {
-          "$ref": "#/$defs/validate"
-        },
-        {
-          "$ref": "#/$defs/bind_sdd"
-        },
-        {
-          "$ref": "#/$defs/retry_final_verification"
-        }
-      ]
-    }
+    "schema": {"const": "gentle-ai.review-integration.operation/v1"},
+    "contract": {"const": "gentle-ai.review-integration/v1"},
+    "operation": {"const": "review.validate"},
+    "result": {"$ref": "#/$defs/validate"}
   },
   "$defs": {
-    "sha256": {
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
-    },
-    "finalize": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "operation",
-        "lineage_id",
-        "state",
-        "action",
-        "store_revision"
-      ],
-      "properties": {
-        "operation": {
-          "const": "review/finalize"
-        },
-        "lineage_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "state": {
-          "type": "string",
-          "minLength": 1
-        },
-        "action": {
-          "type": "string",
-          "minLength": 1
-        },
-        "store_revision": {
-          "$ref": "#/$defs/sha256"
-        },
-        "eligibility": {
-          "$ref": "status.schema.json#/$defs/action_eligibility"
-        },
-        "next_transition": {
-          "$ref": "status.schema.json#/$defs/next_transition"
-        },
-        "validation_request": {
-          "$ref": "targeted-validation-request.schema.json"
-        },
-        "escalation": {
-          "$comment": "Present only when the authority is escalated. Carries the accounting sentence with spent, remaining and total correction lines, so a caller learns the numbers without a second call.",
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "required": [
-              "validation_request"
-            ]
-          },
-          "then": {
-            "properties": {
-              "state": {
-                "const": "correction_required"
-              }
-            }
-          }
-        }
-      ]
-    },
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "validate": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schema",
-        "result",
-        "allowed",
-        "action",
-        "reason",
-        "context"
-      ],
+      "required": ["schema", "result", "allowed", "action", "reason", "context"],
       "properties": {
-        "schema": {
-          "const": "gentle-ai.review-gate-result/v1"
-        },
-        "result": {
-          "enum": [
-            "allow",
-            "scope-changed",
-            "invalidated",
-            "escalated"
-          ]
-        },
-        "allowed": {
-          "type": "boolean"
-        },
-        "action": {
-          "type": "string",
-          "minLength": 1
-        },
-        "reason": {
-          "type": "string",
-          "minLength": 1
-        },
-        "context": {
-          "type": "object"
-        },
-        "delivery": {
-          "const": "disabled/unmanaged"
-        }
-      }
-    },
-    "bind_sdd": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "schema",
-        "revision",
-        "change",
-        "lineage",
-        "authority_revision",
-        "receipt_hash",
-        "gate_context"
-      ],
-      "properties": {
-        "schema": {
-          "const": "gentle-ai.sdd-review-binding/v1"
-        },
-        "revision": {
-          "$ref": "#/$defs/sha256"
-        },
-        "change": {
-          "type": "string",
-          "minLength": 1
-        },
-        "lineage": {
-          "type": "string",
-          "minLength": 1
-        },
-        "authority_revision": {
-          "$ref": "#/$defs/sha256"
-        },
-        "receipt_hash": {
-          "$ref": "#/$defs/sha256"
-        },
-        "gate_context": {
-          "type": "object"
-        }
-      }
-    },
-    "retry_final_verification": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "operation",
-        "predecessor_lineage_id",
-        "predecessor_revision",
-        "lineage_id",
-        "state",
-        "store_revision",
-        "target_identity",
-        "incident_digest",
-        "recovery_disposition"
-      ],
-      "properties": {
-        "operation": {
-          "const": "review.retry_final_verification"
-        },
-        "predecessor_lineage_id": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-        },
-        "predecessor_revision": {
-          "$ref": "#/$defs/sha256"
-        },
-        "lineage_id": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-        },
-        "state": {
-          "const": "validating"
-        },
-        "store_revision": {
-          "$ref": "#/$defs/sha256"
-        },
-        "target_identity": {
-          "$ref": "#/$defs/sha256"
-        },
-        "incident_digest": {
-          "$ref": "#/$defs/sha256"
-        },
-        "recovery_disposition": {
-          "const": "final_verification_retry"
-        }
+        "schema": {"const": "gentle-ai.review-gate-result/v1"},
+        "result": {"enum": ["allow", "scope-changed", "invalidated", "escalated"]},
+        "allowed": {"type": "boolean"},
+        "action": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "context": {"type": "object"},
+        "delivery": {"enum": ["disabled/unmanaged", "unmanaged"]}
       }
     }
   }

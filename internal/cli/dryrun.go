@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func RenderDryRun(result InstallResult) string {
@@ -18,14 +18,26 @@ func RenderDryRun(result InstallResult) string {
 	_, _ = fmt.Fprintf(b, "Unsupported agents: %s\n", joinAgentIDs(result.Resolved.UnsupportedAgents))
 	_, _ = fmt.Fprintf(b, "Persona: %s\n", result.Selection.Persona)
 	_, _ = fmt.Fprintf(b, "Preset: %s\n", result.Selection.Preset)
-	if result.Selection.SDDMode != "" {
-		_, _ = fmt.Fprintf(b, "SDD mode: %s\n", result.Selection.SDDMode)
-	}
 	_, _ = fmt.Fprintf(b, "Components order: %s\n", joinComponentIDs(result.Resolved.OrderedComponents))
 	_, _ = fmt.Fprintf(b, "Auto-added dependencies: %s\n", joinComponentIDs(result.Resolved.AddedDependencies))
 	_, _ = fmt.Fprintf(b, "Platform decision: %s\n", formatPlatformDecision(result.Review.PlatformDecision))
 	_, _ = fmt.Fprintf(b, "Prepare steps: %d\n", len(result.Plan.Prepare))
 	_, _ = fmt.Fprintf(b, "Apply steps: %d\n", len(result.Plan.Apply))
+	if containsAgent(result.Resolved.Agents, model.AgentOpenCode) {
+		_, _ = fmt.Fprintf(b, "OpenCode background intent: %s (policy effective: %s)\n", result.Background.Intent, result.Background.Effective)
+	}
+	if containsAgent(result.Resolved.Agents, model.AgentPi) {
+		_, _ = fmt.Fprintf(b, "Pi background intent: %s (policy effective: %s)\n", result.PiBackground.Intent, result.PiBackground.Effective)
+	}
+	if len(result.PiExcludedPackages) > 0 {
+		_, _ = fmt.Fprintf(b, "Pi excluded packages: %s\n", strings.Join(result.PiExcludedPackages, ","))
+	}
+	if containsAgent(result.Resolved.Agents, model.AgentOpenCode) && result.Background.Activation.Action != "" {
+		if result.Background.Effective == model.OpenCodeBackgroundOn {
+			_, _ = fmt.Fprintln(b, renderOpenCodeBackgroundRuntime(result.Background, result.BackgroundPolicyEnabled))
+		}
+		_, _ = fmt.Fprintln(b, renderOpenCodeBackgroundActivation(result.Background))
+	}
 
 	if len(result.Dependencies.Dependencies) > 0 {
 		_, _ = fmt.Fprintln(b, "")

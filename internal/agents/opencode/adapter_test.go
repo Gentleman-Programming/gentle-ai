@@ -8,8 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestDetect(t *testing.T) {
@@ -99,33 +98,40 @@ func TestInstallCommand(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "darwin resolves official anomalyco brew tap",
+			name:    "darwin resolves V2 npm package",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    [][]string{{"brew", "install", "anomalyco/tap/opencode"}},
+			want:    [][]string{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "ubuntu resolves npm install",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "arch resolves npm install",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "fedora resolves npm install",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "fedora with writable npm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    [][]string{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
-			name:    "unsupported package manager returns error",
-			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "zypper"},
+			// Issue #2499: the probe (#2493) accepts any Linux package manager
+			// on PATH, so zypper resolves like every other probed manager.
+			name:    "opensuse resolves npm install",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "opensuse-leap", PackageManager: "zypper"},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
+		},
+		{
+			name:    "linux without package manager returns error",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: ""},
 			wantErr: true,
 		},
 	}
@@ -177,6 +183,22 @@ func TestConfigPathsRespectXDGConfigHome(t *testing.T) {
 	}
 	if got := a.MCPConfigPath(home, "codegraph"); got != filepath.Join(wantDir, "opencode.json") {
 		t.Fatalf("MCPConfigPath() = %q, want XDG path", got)
+	}
+}
+
+func TestSettingsPathIgnoresNonRegularJSONC(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	configDir := filepath.Join(xdg, "opencode")
+	if err := os.MkdirAll(filepath.Join(configDir, "opencode.jsonc"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(opencode.jsonc directory) error = %v", err)
+	}
+
+	if got, want := NewAdapter().SettingsPath(home), filepath.Join(configDir, "opencode.json"); got != want {
+		t.Fatalf("SettingsPath() = %q, want %q", got, want)
 	}
 }
 

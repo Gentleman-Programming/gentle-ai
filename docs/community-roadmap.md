@@ -1,5 +1,8 @@
 # Community Roadmap
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 Where to find work that is ready to be picked up, and what "ready" means here.
 
 ## Start here
@@ -75,14 +78,15 @@ into applying a decision rather than making one.
 
 ## Where the design lives
 
-Before changing review, delivery or SDD behaviour, read:
+Before changing review, delivery or routing behaviour, read:
 
-- [Organic RDD architecture](architecture/organic-rdd.md) — how a candidate
-  becomes a receipt, and what each gate validates
+- [Organic RDD architecture](architecture/organic-rdd.md) — how a candidate is
+  reviewed as evidence while ordinary repository policy controls delivery
 - [Review authority threat model](review-authority-threat-model.md) — what the
   authority store defends against, and what it deliberately does not
 - [Organic implementation routing](trigger-rules.md) — how work is routed
   before review ever runs
 
-RDD is **Receipt-Driven Development**. The receipt is what every delivery gate
-validates; reviewing is one step on the way to producing it.
+RDD is **Receipt-Driven Development**. Its review evidence never authorizes
+commit, push, PR, release, or archive; reviewing is separate from ordinary
+repository delivery policy.

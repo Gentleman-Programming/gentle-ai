@@ -6,10 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 var LookPathOverride = exec.LookPath
@@ -44,7 +43,7 @@ func (a *Adapter) Tier() model.SupportTier {
 // --- Detection ---
 
 func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
-	configPath := filepath.Join(homeDir, ".codex")
+	configPath := system.CodexConfigDir(homeDir)
 
 	binaryPath, err := a.lookPath("codex")
 	installed := err == nil
@@ -66,14 +65,14 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 	return capabilitymanifest.MustForAgent(model.AgentCodex)
 }
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return a.CapabilityManifest().Features.AutoInstall
-}
-
+// InstallCommand returns the display-only command shown when Codex is not
+// detected — gentle-ai never executes this (see agentInstallStep in
+// internal/cli/run.go). Codex CLI installs via npm on all platforms;
+// postinstall scripts are blocked to mitigate supply-chain risk. The version
+// advises "latest" rather than a pin: a human reads and runs this, and a
+// hardcoded version goes stale the moment a newer Codex ships.
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	// Codex CLI installs via npm on all platforms. Version is pinned and
-	// postinstall scripts are blocked to mitigate supply-chain risk.
-	pkg := "@openai/codex@" + versions.Codex
+	const pkg = "@openai/codex@latest"
 	if profile.OS == "linux" && !profile.NpmWritable {
 		return [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	}
@@ -83,19 +82,19 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 // --- Config paths ---
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
-	return filepath.Join(homeDir, ".codex")
+	return system.CodexConfigDir(homeDir)
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {
-	return filepath.Join(homeDir, ".codex")
+	return system.CodexConfigDir(homeDir)
 }
 
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, ".codex", "AGENTS.md")
+	return filepath.Join(system.CodexConfigDir(homeDir), "AGENTS.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {
-	return filepath.Join(homeDir, ".codex", "skills")
+	return filepath.Join(system.CodexConfigDir(homeDir), "skills")
 }
 
 func (a *Adapter) SettingsPath(_ string) string {
@@ -115,10 +114,12 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 
 // --- MCP ---
 
-// MCPConfigPath returns the path to Codex's TOML config file (~/.codex/config.toml).
-// The serverName argument is ignored — Codex uses a single config file for all MCP servers.
+// MCPConfigPath returns the path to Codex's TOML config file
+// (<resolved Codex home>/config.toml, honoring CODEX_HOME for the real user
+// home — issue #5031). The serverName argument is ignored — Codex uses a
+// single config file for all MCP servers.
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(homeDir, ".codex", "config.toml")
+	return filepath.Join(system.CodexConfigDir(homeDir), "config.toml")
 }
 
 // --- Optional capabilities ---

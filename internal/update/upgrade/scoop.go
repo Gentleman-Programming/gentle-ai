@@ -61,6 +61,11 @@ func scoopRootWith(getenv func(string) string, userHome func() (string, error), 
 	if root := strings.TrimSpace(getenv("SCOOP")); root != "" {
 		return root
 	}
+	// A global (scoop install -g) root is the remaining candidate; the default
+	// per-user root below does not cover it.
+	if root := strings.TrimSpace(getenv("SCOOP_GLOBAL")); root != "" {
+		return root
+	}
 	homeDir, err := userHome()
 	if err != nil {
 		return ""
@@ -114,6 +119,7 @@ func scoopUpgrade(ctx context.Context) (err error) {
 		}
 	}()
 
+	// A hard kill (second Ctrl-C or a crash) leaves this set until restored manually.
 	if _, err = scoopCommand(ctx, "config", "IGNORE_RUNNING_PROCESSES", "true"); err != nil {
 		return err
 	}

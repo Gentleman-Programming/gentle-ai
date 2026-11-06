@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestDefaultRegistryManifestsMatchEveryAdapterProjection(t *testing.T) {
@@ -82,7 +82,7 @@ func TestRegistryRejectsWeakenedRoutingManifest(t *testing.T) {
 	t.Parallel()
 
 	manifest := capabilitymanifest.MustForAgent(model.AgentClaudeCode)
-	manifest.ImplementationRouting.DelegatedDirect.MappingMinUnderstandingFiles = 5
+	manifest.ImplementationRouting.DirectInline.MaxEvidenceCalls = 4
 	adapter := tamperedManifestAdapter{
 		mockAdapter: mockAdapter{agent: model.AgentClaudeCode},
 		manifest:    manifest,
@@ -98,8 +98,8 @@ type projectionMismatchAdapter struct {
 	mockAdapter
 }
 
-func (a projectionMismatchAdapter) SupportsAutoInstall() bool {
-	return !a.CapabilityManifest().Features.AutoInstall
+func (a projectionMismatchAdapter) SupportsSkills() bool {
+	return !a.CapabilityManifest().Features.Skills
 }
 
 func TestRegistryRejectsLegacyProjectionMismatch(t *testing.T) {

@@ -4,23 +4,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
 // skillLabels maps each SkillID to a human-readable display label.
 var skillLabels = map[model.SkillID]string{
-	model.SkillSDDInit:       "SDD Init",
-	model.SkillSDDExplore:    "SDD Explore",
-	model.SkillSDDPropose:    "SDD Propose",
-	model.SkillSDDSpec:       "SDD Spec",
-	model.SkillSDDDesign:     "SDD Design",
-	model.SkillSDDTasks:      "SDD Tasks",
-	model.SkillSDDApply:      "SDD Apply",
-	model.SkillSDDVerify:     "SDD Verify",
-	model.SkillSDDArchive:    "SDD Archive",
-	model.SkillSDDOnboard:    "SDD Onboard",
 	model.SkillJudgmentDay:   "Judgment Day",
 	model.SkillGoTesting:     "Go Testing",
 	model.SkillCreator:       "Skill Creator",
@@ -29,13 +19,15 @@ var skillLabels = map[model.SkillID]string{
 }
 
 var additionalSkillLabels = map[model.SkillID]string{
-	model.SkillImprover:          "Skill Improver",
-	model.SkillSkillRegistry:     "Skill Registry",
-	model.SkillChainedPR:         "Chained PR",
-	model.SkillCognitiveDoc:      "Cognitive Doc Design",
-	model.SkillCommentWriter:     "Comment Writer",
-	model.SkillWorkUnitCommits:   "Work Unit Commits",
-	model.SkillRDDDefectWorkflow: "RDD Defect Workflow",
+	model.SkillImprover:            "Skill Improver",
+	model.SkillSkillRegistry:       "Skill Registry",
+	model.SkillChainedPR:           "Chained PR",
+	model.SkillCognitiveDoc:        "Cognitive Doc Design",
+	model.SkillCommentWriter:       "Comment Writer",
+	model.SkillWorkUnitCommits:     "Work Unit Commits",
+	model.SkillRDDDefectWorkflow:   "RDD Defect Workflow",
+	model.SkillSystemicIssueTriage: "Systemic Issue Triage",
+	model.SkillGentleAIBench:       "Gentle AI Bench",
 }
 
 // SkillPickerOptions returns the action buttons shown after the skill checkboxes.
@@ -43,7 +35,7 @@ func SkillPickerOptions() []string {
 	return []string{"Continue", "Back"}
 }
 
-// AllSkillsOrdered returns all skills in display order: SDD group first, then Foundation.
+// AllSkillsOrdered returns all skills in display order: Review group first, then Foundation.
 func AllSkillsOrdered() []model.SkillID {
 	return skills.AllSkillIDs()
 }
@@ -68,13 +60,13 @@ func RenderSkillPicker(selectedSkills []model.SkillID, cursor, height int) strin
 	}
 
 	allSkills, actions := AllSkillsOrdered(), SkillPickerOptions()
-	total, sddCount := len(allSkills)+len(actions), len(skills.SkillsForPreset(model.PresetMinimal))
+	total, reviewCount := len(allSkills)+len(actions), len(skills.SkillsForPreset(model.PresetMinimal))
 	start, end := skillPickerWindow(cursor, height, total)
 	for idx := start; idx < end; idx++ {
 		if idx < len(allSkills) {
-			if idx == start || idx == sddCount {
-				heading := "SDD Skills"
-				if idx >= sddCount {
+			if idx == start || idx == reviewCount {
+				heading := "Review Skills"
+				if idx >= reviewCount {
 					b.WriteString("\n")
 					heading = "Foundation Skills"
 				}

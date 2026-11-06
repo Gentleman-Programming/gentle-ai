@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 // RenderUpgradeReport produces a plain-text report of upgrade results.

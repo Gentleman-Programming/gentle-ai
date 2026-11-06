@@ -54,6 +54,18 @@ func TestRunExitsZeroWhenEverythingCompleted(t *testing.T) {
 	}
 }
 
+func TestExecutableForGOOSUsesPlatformNativeExecutableRules(t *testing.T) {
+	if !executableMode(0o644, "windows") {
+		t.Fatal("Windows executable preflight rejected a regular executable file without Unix mode bits")
+	}
+	if executableMode(0o644, "linux") {
+		t.Fatal("Unix executable preflight accepted a file without execute bits")
+	}
+	if !executableMode(0o755, "linux") {
+		t.Fatal("Unix executable preflight rejected a file with execute bits")
+	}
+}
+
 func TestCommandRunSelection(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a temporary executable to exercise the benchmark command boundary")
@@ -63,6 +75,10 @@ func TestCommandRunSelection(t *testing.T) {
 	journeys := func() []Journey {
 		return []Journey{{
 			ID: "known",
+			// This journey drives a stub binary through the command
+			// boundary, not the review lifecycle, so the runner must leave
+			// the kill switch alone.
+			Review: reviewUntouched,
 			Steps: []Step{{
 				Name: "invoke test binary",
 				Fixture: func(sandbox *Sandbox) error {

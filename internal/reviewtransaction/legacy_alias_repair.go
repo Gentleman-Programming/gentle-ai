@@ -50,13 +50,13 @@ func legacyAliasRepairAuthorizationBinding(repository, lineage, revision, diagno
 		"\nactor=" + strings.TrimSpace(actor) + "\nreason=" + strings.TrimSpace(reason)
 }
 
-// RepairHistoricalLegacyAlias quarantines one historical legacy-v1 lineage
-// rejected solely by an approved operation alias. It requires the exact HEAD,
-// a complete LF authorization binding, a re-derived chain proof, and the
-// authority-wide maintenance lease. It never makes historical events valid.
-func RepairHistoricalLegacyAlias(ctx context.Context, repo string, request LegacyAliasRepairRequest) (CompactReclaimRecord, error) {
-	return repairHistoricalLegacyAlias(ctx, repo, request, legacyAliasRepairOptions{})
-}
+// RepairHistoricalLegacyAlias, the exported zero-option wrapper the retired
+// `review repair-legacy-alias` CLI verb called directly, retired with that
+// verb in Wave 7 S5a/S5c (WU14/WU16). repairHistoricalLegacyAlias below --
+// the actual engine -- stays live: RepairClassifiedAuthority
+// (authority_repair.go) calls it directly with a classifiedAudit option as
+// ITS OWN underlying execution mechanism, so it is not "compatibility-only"
+// the way the exported wrapper and the CLI verb it served were.
 
 type legacyAliasRepairOptions struct {
 	waitForCooperativeRepair bool

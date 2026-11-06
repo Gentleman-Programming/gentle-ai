@@ -8,8 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestDetect(t *testing.T) {
@@ -99,22 +98,22 @@ func TestInstallCommand(t *testing.T) {
 		{
 			name:    "darwin uses npm without sudo",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@" + versions.GeminiCLI}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@latest"}},
 		},
 		{
 			name:    "linux system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@" + versions.GeminiCLI}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@latest"}},
 		},
 		{
 			name:    "linux nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", NpmWritable: true},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@" + versions.GeminiCLI}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@latest"}},
 		},
 		{
 			name:    "windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", NpmWritable: true},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@" + versions.GeminiCLI}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@latest"}},
 		},
 	}
 
@@ -148,7 +147,7 @@ func TestConfigPathsCrossPlatform(t *testing.T) {
 		t.Fatalf("MCPConfigPath() = %q, want %q", got, filepath.Join(home, ".gemini", "settings.json"))
 	}
 
-	if got := a.SystemPromptFile(home); got != filepath.Join(home, ".gemini", "GEMINI.md") {
-		t.Fatalf("SystemPromptFile() = %q, want %q", got, filepath.Join(home, ".gemini", "GEMINI.md"))
+	if got := a.SystemPromptFile(home); got != filepath.Join(home, ".gemini", "gentle-ai", "guidance.md") {
+		t.Fatalf("SystemPromptFile() = %q, want the staging file %q", got, filepath.Join(home, ".gemini", "gentle-ai", "guidance.md"))
 	}
 }

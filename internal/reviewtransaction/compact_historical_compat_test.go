@@ -43,6 +43,39 @@ func injectRetiredCompactStateField(t *testing.T, statePath, field string) strin
 	return record["revision"].(string)
 }
 
+func injectRetiredCompactStateFields(t *testing.T, statePath string, fields map[string]any) string {
+	t.Helper()
+	payload, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(payload, &record); err != nil {
+		t.Fatal(err)
+	}
+	state, ok := record["state"].(map[string]any)
+	if !ok {
+		t.Fatal("compact record has no state object")
+	}
+	for name, value := range fields {
+		state[name] = value
+	}
+	statePayload, err := json.Marshal(record["state"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(append([]byte(CompactStateSchema+"\x00"), statePayload...))
+	record["revision"] = "sha256:" + hex.EncodeToString(sum[:])
+	updated, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, append(updated, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return record["revision"].(string)
+}
+
 func injectRetiredCompactNestedStateField(t *testing.T, statePath, parent, field string, value any) string {
 	t.Helper()
 	payload, err := os.ReadFile(statePath)
@@ -213,6 +246,51 @@ func TestNewCompactAuthorityNeverPersistsRetiredRecoveryReviewStart(t *testing.T
 	}
 }
 
+func TestCompactStoreLoadsAllRetiredSemanticProjectionsReadOnly(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "historical-retired-projections")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace("", "review/start", state); err != nil {
+		t.Fatal(err)
+	}
+	revision := injectRetiredCompactStateFields(t, store.StatePath(), map[string]any{
+		"lens_results":    []any{map[string]any{"lens": "review-reliability", "findings": []any{map[string]any{"id": "R3-retired"}}}},
+		"findings":        []any{map[string]any{"id": "R3-retired", "severity": "CRITICAL"}},
+		"classifications": map[string]any{"R3-retired": map[string]any{"finding_id": "R3-retired", "causality": "introduced"}},
+		"outcomes":        map[string]any{"R3-retired": "corroborated"},
+		"follow_ups":      []any{map[string]any{"observation": "contradictory retired follow-up"}},
+	})
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.HistoricalCompat || record.Revision != revision {
+		t.Fatalf("historical retired record = %#v", record)
+	}
+	view, err := record.State.CompactReviewView()
+	if err != nil || len(view.Findings) != 0 || len(view.FixFindingIDs) != 0 {
+		t.Fatalf("retired projections influenced active semantics: view=%#v err=%v", view, err)
+	}
+	if _, err := store.Replace(record.Revision, "review/invalidate", record.State); !errors.Is(err, ErrHistoricalCompatReadOnly) {
+		t.Fatalf("historical projection authority mutation = %v", err)
+	}
+	request := compactAtomicStartFixture(t, repo, state.LineageID)
+	if _, err := store.CreateOrReplayAtomicStart(context.Background(), request); !errors.Is(err, ErrHistoricalCompatReadOnly) {
+		t.Fatalf("historical projection authority seeded atomic START: %v", err)
+	}
+	if after, err := os.ReadFile(store.StatePath()); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("historical projection bytes changed: %v", err)
+	}
+}
+
 func TestCompactStoreLoadsHistoricalCandidateArtifactRequiredWithoutRewrite(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -310,16 +388,37 @@ func TestCompactStoreStillRejectsUnknownNonRetiredFieldsAfterCompatibilityFallba
 		t.Fatal(err)
 	}
 	injectRetiredCompactStateField(t, store.StatePath(), "candidate_artifact_required")
-	injectRetiredCompactStateField(t, store.StatePath(), "zz_future_unknown_field")
-	if _, err := store.Load(); err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("unknown non-retired field load error = %v", err)
-	}
-	payload, err := os.ReadFile(store.StatePath())
+	injectRetiredCompactStateField(t, store.StatePath(), "evidence_record_digest")
+	before, err := os.ReadFile(store.StatePath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseHistoricalCompactRecord(payload); err == nil || !strings.Contains(err.Error(), `unknown field "zz_future_unknown_field"`) {
-		t.Fatalf("historical compatibility fallback error = %v", err)
+	record, loadErr := store.Load()
+	if loadErr == nil || record.Revision != "" || record.State.LineageID != "" {
+		t.Fatalf("rejected load returned authority: record=%#v err=%v", record, loadErr)
+	}
+	want := `compact review state "unknown-field-lineage": strict decode: json: unknown field "candidate_artifact_required"; historical compatibility: json: unknown field "evidence_record_digest"`
+	if loadErr.Error() != want {
+		t.Errorf("load diagnostic = %q, want %q", loadErr, want)
+	}
+	if strictErr := errors.Unwrap(loadErr); strictErr == nil || strictErr.Error() != `json: unknown field "candidate_artifact_required"` {
+		t.Errorf("wrapped strict cause = %v", strictErr)
+	}
+	if errors.Is(loadErr, ErrCompactAuthorityFromNewerRelease) || errors.Is(loadErr, ErrHistoricalCompatReadOnly) {
+		t.Errorf("rejected record acquired a different authority classification: %v", loadErr)
+	}
+	report, err := InspectCompactRecoveryEdges(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Complete || report.Valid || report.Totals.CompactEntries != 1 || report.Totals.LoadedEntries != 0 || len(report.Edges) != 0 || len(report.EntryDiagnostics) != 1 {
+		t.Fatalf("rejected record inspection = %#v", report)
+	}
+	if diagnostic := report.EntryDiagnostics[0]; diagnostic.LineageID != state.LineageID || diagnostic.Problem != "malformed_compact_state" {
+		t.Errorf("rejected record diagnostic = %#v", diagnostic)
+	}
+	if after, err := os.ReadFile(store.StatePath()); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected authority bytes changed: %v", err)
 	}
 }
 

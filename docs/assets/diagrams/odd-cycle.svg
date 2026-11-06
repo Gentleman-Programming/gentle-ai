@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 860" width="1240" height="860" role="img" aria-labelledby="oddTitle oddDesc" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+  <title id="oddTitle">Organic Driven Development keeps work proportional</title>
+  <desc id="oddDesc">Organic Driven Development starts by authorizing and exploring a request. Read-only work explores or explains before closing with an answer. Authorized work resolves real uncertainty, then classifies as small or substantial. Both routes have equal weight: small work stays light, while substantial work creates a feature document and Engram mirror before the first source write. Both implement, check, and close with a verified outcome. The human remains in control of delivery.</desc>
+
+  <defs>
+    <radialGradient id="oddAmbient" cx="12%" cy="0%" r="70%">
+      <stop offset="0%" stop-color="#F095C8" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#F095C8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1240" height="860" rx="24" fill="#1A1218"/>
+  <rect width="1240" height="860" rx="24" fill="url(#oddAmbient)"/>
+
+  <!-- Header -->
+  <text x="40" y="58" font-size="27" font-weight="700" fill="#F7ECF2">ODD &#8212; progress with only the structure you need</text>
+  <text x="41" y="88" font-size="14.5" fill="#A88E9B">Understand the work first. Then keep the path proportional and the outcome honest.</text>
+  <rect x="980" y="38" width="220" height="34" rx="17" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="1090" y="60" font-size="12.5" text-anchor="middle" fill="#D7A0B8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">default workflow</text>
+
+  <!-- 01 Understand -->
+  <rect x="40" y="126" width="1160" height="214" rx="20" fill="#221820" stroke="#392A33"/>
+  <text x="68" y="202" font-size="34" font-weight="700" fill="#F095C8" opacity="0.22">01</text>
+  <text x="68" y="228" font-size="13" font-weight="700" letter-spacing="2" fill="#D7A0B8">UNDERSTAND</text>
+  <line x1="200" y1="154" x2="200" y2="312" stroke="#392A33"/>
+
+  <rect x="224" y="160" width="276" height="90" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="244" y="193" font-size="10.5" font-weight="700" letter-spacing="1.2" fill="#F095C8" opacity="0.6">01 &#183; AUTHORIZE</text>
+  <text x="244" y="218" font-size="17" font-weight="600" fill="#F7ECF2">Is a change authorized?</text>
+  <text x="244" y="238" font-size="11.5" fill="#9C8391">Read-only requests stay read-only.</text>
+
+  <path d="M500 205 H516" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round"/>
+  <path d="M509 199 L517 205 L509 211" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="526" y="160" width="276" height="90" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="546" y="193" font-size="10.5" font-weight="700" letter-spacing="1.2" fill="#F095C8" opacity="0.6">02 &#183; EXPLORE</text>
+  <text x="546" y="218" font-size="17" font-weight="600" fill="#F7ECF2">Understand before changing</text>
+  <text x="546" y="238" font-size="11.5" fill="#9C8391">Code, requirements and scope.</text>
+
+  <path d="M802 205 H818" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round"/>
+  <path d="M811 199 L819 205 L811 211" fill="none" stroke="#6B4F5D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="828" y="160" width="348" height="90" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="848" y="193" font-size="10.5" font-weight="700" letter-spacing="1.2" fill="#F095C8" opacity="0.6">03 &#183; RESOLVE UNCERTAINTY</text>
+  <text x="848" y="218" font-size="17" font-weight="600" fill="#F7ECF2">Ask only when a real decision remains</text>
+  <text x="848" y="238" font-size="11.5" fill="#9C8391">Research is optional and scoped to the uncertainty.</text>
+
+  <!-- Read-only work still receives exploration before it closes. -->
+  <path d="M664 250 V270" fill="none" stroke="#6B4F5D" stroke-width="1.75" stroke-dasharray="4 4" stroke-linecap="round"/>
+  <path d="M658 264 L664 271 L670 264" fill="none" stroke="#6B4F5D" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="526" y="280" width="276" height="36" rx="12" fill="#251A21" stroke="#6B4F5D" stroke-dasharray="5 4"/>
+  <text x="664" y="303" font-size="11" text-anchor="middle" fill="#D7A0B8">READ-ONLY &#183; explore or explain, then close</text>
+
+  <!-- 02 Adapt -->
+  <rect x="40" y="364" width="1160" height="252" rx="20" fill="#221820" stroke="#392A33"/>
+  <text x="68" y="458" font-size="34" font-weight="700" fill="#F095C8" opacity="0.22">02</text>
+  <text x="68" y="484" font-size="13" font-weight="700" letter-spacing="2" fill="#D7A0B8">ADAPT</text>
+  <line x1="200" y1="392" x2="200" y2="588" stroke="#392A33"/>
+
+  <path d="M1002 250 V374 H700 V384" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M693 377 L700 385 L707 377" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="224" y="398" width="952" height="76" rx="14" fill="#2A1B24" stroke="#F095C8" stroke-opacity="0.5"/>
+  <text x="246" y="426" font-size="10.5" font-weight="700" letter-spacing="1.2" fill="#F095C8" opacity="0.7">04 &#183; CLASSIFY</text>
+  <text x="246" y="452" font-size="17" font-weight="600" fill="#F7ECF2">What does this understood, authorized work need?</text>
+
+  <path d="M700 474 V492 H449 V510" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M700 474 V492 H951 V510" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M443 503 L449 511 L455 503" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M945 503 L951 511 L957 503" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Equal-size, equal-emphasis routes: neither path is a lesser outcome. -->
+  <rect x="224" y="520" width="450" height="82" rx="14" fill="#2A1B24" stroke="#F095C8" stroke-opacity="0.5"/>
+  <text x="246" y="546" font-size="10.5" font-weight="700" letter-spacing="1.2" fill="#F095C8" opacity="0.75">05 &#183; SMALL, UNDERSTOOD WORK</text>
+  <text x="246" y="570" font-size="16.5" font-weight="600" fill="#F7ECF2">Stay light</text>
+  <text x="246" y="588" font-size="11.5" fill="#9C8391">No durable task artifacts. Use the smallest safe topology.</text>
+
+  <rect x="726" y="520" width="450" height="82" rx="14" fill="#2A1B24" stroke="#F095C8" stroke-opacity="0.5"/>
+  <text x="748" y="546" font-size="10.5" font-weight="700" letter-spacing="1.2" fill="#F095C8" opacity="0.75">05 &#183; SUBSTANTIAL IMPLEMENTATION</text>
+  <text x="748" y="570" font-size="16.5" font-weight="600" fill="#F7ECF2">Keep a recoverable feature record</text>
+  <text x="748" y="588" font-size="11.5" fill="#D7A0B8">Feature document + Engram mirror before the first write.</text>
+
+  <!-- 03 Advance -->
+  <rect x="40" y="640" width="1160" height="164" rx="20" fill="#221820" stroke="#392A33"/>
+  <text x="68" y="714" font-size="34" font-weight="700" fill="#F095C8" opacity="0.22">03</text>
+  <text x="68" y="740" font-size="13" font-weight="700" letter-spacing="2" fill="#D7A0B8">ADVANCE</text>
+  <line x1="200" y1="668" x2="200" y2="776" stroke="#392A33"/>
+
+  <path d="M449 602 V634 H449 V674" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M951 602 V634 H449" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M443 667 L449 675 L455 667" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="224" y="684" width="450" height="92" rx="14" fill="#2C1F27" stroke="#4A3540"/>
+  <text x="246" y="714" font-size="10.5" font-weight="700" letter-spacing="1.2" fill="#F095C8" opacity="0.65">06 &#183; IMPLEMENT + CHECK</text>
+  <text x="246" y="741" font-size="17" font-weight="600" fill="#F7ECF2">Implement the next authorized task</text>
+  <text x="246" y="761" font-size="11.5" fill="#9C8391">Run the configured TDD mode and proportionate checks.</text>
+
+  <path d="M674 730 H718" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M711 724 L719 730 L711 736" fill="none" stroke="#F095C8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="726" y="684" width="450" height="92" rx="14" fill="#2A1B24" stroke="#F095C8" stroke-opacity="0.5"/>
+  <text x="748" y="714" font-size="10.5" font-weight="700" letter-spacing="1.2" fill="#F095C8" opacity="0.75">07 &#183; CLOSE</text>
+  <text x="748" y="741" font-size="17" font-weight="600" fill="#F7ECF2">Close with a verified outcome</text>
+  <text x="748" y="761" font-size="11.5" fill="#D7A0B8">Record failed or pending checks and the next step.</text>
+
+  <line x1="40" y1="830" x2="1200" y2="830" stroke="#392A33"/>
+  <text x="620" y="850" font-size="12" text-anchor="middle" fill="#8A6E7C">Understand first. Keep work proportional. Close with evidence.</text>
+</svg>

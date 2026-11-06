@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # lib.sh — shared test helpers for gentle-ai E2E tests
 # Sourced by e2e_test.sh; never executed directly.
-set -euo pipefail
+#
+# Deliberately NO `set -e` here: `source` shares shell options with the
+# caller, and this suite counts failures and continues (log_fail counters +
+# print_summary). Under a leaked `-e`, the first unguarded failing assertion
+# aborts the whole script — no remaining tests, no summary, no totals
+# (issue #2466). Failures still fail the run: print_summary returns nonzero
+# when FAILED > 0.
+set -uo pipefail
 
 # ---------------------------------------------------------------------------
 # Colors
@@ -18,13 +25,16 @@ NC='\033[0m' # No Color
 PASSED=0
 FAILED=0
 SKIPPED=0
+# Labels of every failed check, replayed by print_summary so a long run
+# ends with the full list of what failed, not just a count.
+FAILED_CHECKS=()
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 log_test()  { printf "${YELLOW}[TEST]${NC}  %s\n" "$1"; }
 log_pass()  { printf "${GREEN}[PASS]${NC}  %s\n" "$1"; PASSED=$((PASSED + 1)); }
-log_fail()  { printf "${RED}[FAIL]${NC}  %s\n" "$1"; FAILED=$((FAILED + 1)); }
+log_fail()  { printf "${RED}[FAIL]${NC}  %s\n" "$1"; FAILED=$((FAILED + 1)); FAILED_CHECKS+=("$1"); }
 log_skip()  { printf "${BLUE}[SKIP]${NC}  %s\n" "$1"; SKIPPED=$((SKIPPED + 1)); }
 log_info()  { printf "${BLUE}[INFO]${NC}  %s\n" "$1"; }
 
@@ -382,7 +392,10 @@ assert_no_duplicate_section() {
     fi
     local marker="<!-- gentle-ai:${section_id} -->"
     local count
-    count=$(grep -c "$marker" "$file" 2>/dev/null || echo "0")
+    # `grep -c` prints "0" AND exits 1 on zero matches, so `|| echo 0` would
+    # yield the two-line string "0\n0" and break the numeric comparisons below.
+    count=$(grep -c "$marker" "$file" 2>/dev/null || true)
+    count=${count:-0}
     if [ "$count" -eq 1 ]; then
         log_pass "$label"
         return 0
@@ -397,6 +410,22 @@ assert_no_duplicate_section() {
 
 # assert_output_contains OUTPUT PATTERN LABEL
 # Checks that the output string contains a grep-compatible pattern.
+# Print a bounded excerpt of captured output so failing assertions stay
+# diagnosable: a flaky check otherwise loses exactly the evidence that
+# explains it. Bounded so suite logs remain readable.
+log_output_excerpt() {
+    local output="$1"
+    local lines="${2:-10}"
+    local excerpt
+    excerpt="$(printf '%s\n' "$output" | head -"$lines")"
+    if [ -n "$excerpt" ]; then
+        log_info "Actual output (first $lines lines):"
+        printf '%s\n' "$excerpt" | sed 's/^/    /'
+    else
+        log_info "Actual output was empty."
+    fi
+}
+
 assert_output_contains() {
     local output="$1"
     local pattern="$2"
@@ -406,6 +435,7 @@ assert_output_contains() {
         return 0
     else
         log_fail "Output does NOT contain '$pattern'"
+        log_output_excerpt "$output"
         return 1
     fi
 }
@@ -417,6 +447,8 @@ assert_output_not_contains() {
     local label="${3:-output does NOT contain '$pattern'}"
     if echo "$output" | grep -qi "$pattern"; then
         log_fail "Output unexpectedly contains '$pattern'"
+        log_info "Matching line(s):"
+        echo "$output" | grep -i "$pattern" | head -5 | sed 's/^/    /'
         return 1
     else
         log_pass "$label"
@@ -437,6 +469,11 @@ print_summary() {
     echo "========================================"
 
     if [ "$FAILED" -gt 0 ]; then
+        printf "\n%bFailed checks:%b\n" "$RED" "$NC"
+        local check
+        for check in "${FAILED_CHECKS[@]}"; do
+            printf "  - %s\n" "$check"
+        done
         printf "\n%bSome tests failed.%b\n" "$RED" "$NC"
         return 1
     fi

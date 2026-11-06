@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 func TestScoopOwnsExecutableWith(t *testing.T) {
@@ -154,12 +154,14 @@ func TestScoopRootWith(t *testing.T) {
 	homeDir := t.TempDir()
 	configuredRoot := filepath.Join(t.TempDir(), "custom-scoop")
 	environmentRoot := filepath.Join(t.TempDir(), "environment-scoop")
+	globalEnvironmentRoot := filepath.Join(t.TempDir(), "global-environment-scoop")
 
 	tests := []struct {
 		name       string
 		output     string
 		commandErr error
 		envRoot    string
+		globalRoot string
 		want       string
 	}{
 		{
@@ -190,14 +192,23 @@ func TestScoopRootWith(t *testing.T) {
 			envRoot:    environmentRoot,
 			want:       environmentRoot,
 		},
+		{
+			name:       "unset root path falls back to the global SCOOP_GLOBAL environment",
+			output:     "'root_path' is not set\n",
+			globalRoot: globalEnvironmentRoot,
+			want:       globalEnvironmentRoot,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := scoopRootWith(
 				func(key string) string {
-					if key == "SCOOP" {
+					switch key {
+					case "SCOOP":
 						return tc.envRoot
+					case "SCOOP_GLOBAL":
+						return tc.globalRoot
 					}
 					return ""
 				},

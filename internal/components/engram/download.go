@@ -5,9 +5,8 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,7 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 const (
@@ -494,8 +494,33 @@ func engramChecksumURL(baseURL, version string) string {
 		baseURL, engramOwner, engramRepo, version)
 }
 
-// engramDownloadToFile downloads the resource at url to outPath and returns
-// the SHA256 hex digest of the downloaded content.
+// ensureTraversableDownloadDir creates the directory that will hold a downloaded
+// archive or binary at 0755. os.MkdirAll applies the process umask, so a hardened
+// umask (for example 077) would leave a fresh download directory at 0700 and
+// contradict the documented contract that this path stays traversable. An
+// existing directory keeps the operator's chosen mode: only a directory this
+// call created is corrected.
+func ensureTraversableDownloadDir(dir string) error {
+	created := false
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		created = true
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if !created {
+		return nil
+	}
+	return os.Chmod(dir, 0o755)
+}
+
+// engramDownloadToFile downloads the resource at url to outPath and returns the
+// SHA256 hex digest of the bytes that landed there.
+//
+// The digest is read back from outPath, not accumulated from the response body.
+// A digest taken from the stream certifies its own copy: it matched the release
+// manifest even when a write-back failure left the archive incomplete on disk,
+// so verification confirmed corruption instead of catching it (#1998).
 func engramDownloadToFile(ctx context.Context, url string, outPath string) (hexDigest string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -511,21 +536,16 @@ func engramDownloadToFile(ctx context.Context, url string, outPath string) (hexD
 		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+	// Create the parent at 0755 explicitly: the writer's own parent creation is
+	// tuned for private config files, and a download directory on PATH is not one.
+	if err := ensureTraversableDownloadDir(filepath.Dir(outPath)); err != nil {
 		return "", fmt.Errorf("create dir: %w", err)
 	}
-	f, err := os.Create(outPath)
+	result, err := filemerge.WriteStreamAtomic(outPath, resp.Body, 0o644)
 	if err != nil {
-		return "", fmt.Errorf("create %s: %w", outPath, err)
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
 		return "", fmt.Errorf("write %s: %w", outPath, err)
 	}
-
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return result.Digest, nil
 }
 
 // engramFetchChecksums downloads checksums.txt from url and returns its content.
@@ -839,51 +859,21 @@ func engramGoInstallFromMain(pkg string) (string, error) {
 	return filepath.Join(gobin, binaryName), nil
 }
 
-// writeExecutable writes the content from r to outPath with executable permissions.
 // writeExecutable writes a binary to outPath using an atomic rename to avoid
 // ETXTBSY ("text file busy") errors on Linux when the target binary is
 // currently running (e.g. engram as an MCP server). The rename trick works
 // because os.Rename replaces the directory entry — the running process keeps
 // its open file descriptor to the old inode, while new executions pick up
 // the new binary.
+//
+// The staged file is synchronized before publication, so if recovery preserves
+// the new name it also preserves complete content (#2216).
 func writeExecutable(r io.Reader, outPath string) error {
-	dir := filepath.Dir(outPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ensureTraversableDownloadDir(filepath.Dir(outPath)); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
-
-	// Write to a temp file in the same directory so Rename is always
-	// same-filesystem (atomic on POSIX).
-	tmp, err := os.CreateTemp(dir, ".engram-upgrade-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+	if _, err := filemerge.WriteStreamAtomic(outPath, r, 0o755); err != nil {
+		return fmt.Errorf("write %s: %w", outPath, err)
 	}
-	tmpPath := tmp.Name()
-
-	// Clean up on any failure path.
-	defer func() {
-		if tmpPath != "" {
-			os.Remove(tmpPath)
-		}
-	}()
-
-	if _, err := io.Copy(tmp, r); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write %s: %w", tmpPath, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp file: %w", err)
-	}
-
-	if err := os.Chmod(tmpPath, 0o755); err != nil {
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, outPath); err != nil {
-		return fmt.Errorf("rename %s -> %s: %w", tmpPath, outPath, err)
-	}
-
-	// Rename succeeded — disarm the deferred cleanup.
-	tmpPath = ""
 	return nil
 }

@@ -168,7 +168,20 @@ func TestHasEnvelopeContinuation(t *testing.T) {
 		want   bool
 	}{
 		{"collect capture operation", `{"next_transition":{"kind":"collect","collect":{"inputs":[{"capture_operation":"review.capture-result"}]}}}`, true},
-		{"execute operation", `{"next_transition":{"kind":"execute","execute":{"operation":"review.finalize"}}}`, true},
+		{"execute operation with a runnable command", `{"next_transition":{"kind":"execute","execute":{"operation":"review.finalize","command":"gentle-ai review finalize --lineage=review-1"}}}`, true},
+		// The defect this benchmark missed: an execute transition names an
+		// operation, carries an empty command, and the reader is told to run
+		// something with nothing to run. An operation alone is a label, not a
+		// continuation.
+		{"execute operation with no command at all", `{"next_transition":{"kind":"execute","execute":{"operation":"review.recover"}}}`, false},
+		{"execute operation with an empty command", `{"next_transition":{"kind":"execute","execute":{"operation":"review.recover","command":""}}}`, false},
+		{"execute command that is still a template", `{"next_transition":{"kind":"execute","execute":{"operation":"review.validate","command":"gentle-ai review validate --gate <gate>"}}}`, false},
+		{"execute command naming no arguments", `{"next_transition":{"kind":"execute","execute":{"operation":"review.status","command":"gentle-ai"}}}`, false},
+		{"execute with a command but no operation", `{"next_transition":{"kind":"execute","execute":{"operation":"","command":"gentle-ai review status --cwd=."}}}`, false},
+		// A dead execute transition must not be rescued by a continuation key
+		// nested inside it: the transition the reader was handed is the thing
+		// under test, not the vocabulary it happens to mention.
+		{"nested key does not rescue a commandless execute", `{"next_transition":{"kind":"execute","execute":{"operation":"review.recover","binding":{"recovery_operation":"review.recover"}}}}`, false},
 		{"next_action", `{"next_action":"review.repair"}`, true},
 		{"recovery_operation", `{"context":{"recovery_operation":"review.recover"}}`, true},
 		{"stop is not a continuation", `{"next_action":"stop"}`, false},
@@ -336,7 +349,7 @@ func TestValidateCorpusFailsLoudly(t *testing.T) {
 	step := func(mutate func(*Step)) Journey {
 		base := Step{Name: "s", Args: productArgs("review", "start")}
 		mutate(&base)
-		return Journey{ID: "jXX", Steps: []Step{base}}
+		return Journey{ID: "jXX", Review: reviewOptedIn, Steps: []Step{base}}
 	}
 	cases := []struct {
 		name    string
@@ -353,6 +366,16 @@ func TestValidateCorpusFailsLoudly(t *testing.T) {
 			s.DeadEnd = true
 			s.ByDesign = &ByDesignDeclaration{Shape: ByDesignWorldAction, NextAction: "free some disk space"}
 		}), "opposite"},
+		{"no review precondition", func() Journey {
+			journey := step(func(*Step) {})
+			journey.Review = reviewPreconditionUndeclared
+			return journey
+		}(), "declares no review precondition"},
+		{"unrecognised review precondition", func() Journey {
+			journey := step(func(*Step) {})
+			journey.Review = ReviewPrecondition("sometimes")
+			return journey
+		}(), "unrecognised review precondition"},
 		{"declared on a step that never invokes", func() Journey {
 			journey := step(func(s *Step) {
 				s.ByDesign = &ByDesignDeclaration{Shape: ByDesignWorldAction, NextAction: "free some disk space"}

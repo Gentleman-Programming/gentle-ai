@@ -1,0 +1,16 @@
+# Grafana dashboard provider for the gentle-telemetry usage dashboard.
+# Installed by deploy/telemetry/install.sh --with-grafana, which also
+# copies ../dashboards/gentle-ai-usage.json into the path below.
+apiVersion: 1
+
+providers:
+  - name: gentle-telemetry
+    orgId: 1
+    folder: "Gentle AI"
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 3600
+    options:
+      path: /etc/grafana/provisioning/dashboards/gentle-ai
+      foldersFromFilesStructure: false

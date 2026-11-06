@@ -1,5 +1,8 @@
 # RDD Freeze-Expansion Policy — Wave 0
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 **Decision**: Wave 0 stops additive old-facade recovery and transport work on the RDD lifecycle, except for a proven security defect meeting all four criteria below. This is maintainer-internal guidance, not CI-enforced, and expires when Wave 7 completes or the tracker branch (`feature/rdd-root-simplification`) is abandoned.
 
 This policy exists because the problem statement in `docs/architecture/rdd-root-simplification-design.md` names a repeatable failure pattern: a local patch adds a reason code, contract field, command, state field, adapter rule, or persisted artifact to fix one edge, while a sibling flow still implements the old interpretation. Every wave-0 through wave-7 PR on the tracker chain is exempt from this policy by definition — the policy freezes *additive* work on the *old* facade, not the migration that replaces it.
@@ -24,7 +27,7 @@ For a contributor whose change touches a surface listed under **Scope**:
 
 ## Scope
 
-Frozen: any inventory row in `docs/architecture/rdd-ownership-inventory.md` whose **Target disposition** is `REMOVE`, `MERGE`, or `DERIVE` — i.e., every surface the target architecture consolidates or deletes, not the two `KEEP` artifacts or the five `KEEP` gates that already match the target model.
+Frozen: any inventory row in `docs/architecture/rdd-ownership-inventory.md` whose **Target disposition** is `REMOVE`, `MERGE`, or `DERIVE` — i.e., every surface the target architecture consolidates or deletes, not the two `KEEP` review-lifecycle artifacts or the five `KEEP` review-context hooks that already match the target model. None of those hooks is delivery authority; ordinary repository policy owns delivery.
 
 | Row ID(s) | Surface | Path glob |
 |---|---|---|
@@ -44,7 +47,7 @@ Frozen: any inventory row in `docs/architecture/rdd-ownership-inventory.md` whos
 - Documentation of any kind.
 - Tests that pin *existing* behavior (regression coverage on a `KEEP` row or on already-shipped behavior).
 - Wave work on the tracker chain (`feature/rdd-root-simplification` and its child PRs) — that work builds the *replacement*, it is not additive old-facade growth.
-- The two `KEEP` artifacts (ART-01 authority record, ART-02 terminal receipt) and the five `KEEP` gates (CON-01–CON-05) — ordinary maintenance and bugfixes on already-target-shaped surfaces continue.
+- The two `KEEP` review-lifecycle artifacts (ART-01 authority record, ART-02 terminal receipt) and the five `KEEP` review-context hooks (CON-01–CON-05) — ordinary maintenance and bugfixes on already-target-shaped surfaces continue. Their outputs remain informational and never govern delivery or archive.
 - CON-08 (SDD attempt-ledger) and CON-09–CON-11 (adapter dispatch) — flagged findings, not frozen surfaces; fixing their split-ownership is itself wave work.
 
 ## Proven security defect

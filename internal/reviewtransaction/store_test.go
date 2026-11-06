@@ -17,6 +17,18 @@ import (
 	"time"
 )
 
+func TestSnapshotEqualityRejectsGeneratedPathInterpretationMutation(t *testing.T) {
+	snapshot := Snapshot{GeneratedPathInterpretation: GeneratedPathInterpretationSummaryV1}
+	changed := snapshot
+	changed.GeneratedPathInterpretation = ""
+	if SnapshotsEqualExact(snapshot, changed) {
+		t.Fatal("SnapshotsEqualExact() ignored generated-path interpretation mutation")
+	}
+	if snapshotsEqual(snapshot, changed) {
+		t.Fatal("snapshotsEqual() ignored generated-path interpretation mutation")
+	}
+}
+
 func TestWriteAtomicPropagatesParentDirectorySyncFailure(t *testing.T) {
 	originalGOOS := reviewRuntimeGOOS
 	originalSync := syncReviewDirectory
@@ -61,8 +73,113 @@ func TestWriteAtomicToleratesUnsupportedParentDirectorySync(t *testing.T) {
 	}
 }
 
+// TestMkdirAllSyncSyncsParentOfEveryCreatedDirectory is issue #1721: a newly
+// created Unix authority directory entry must be durable (its parent synced)
+// before any dependent state is published beneath it. This uses the same
+// syncReviewDirectory recording seam as the writeAtomic tests above.
+func TestMkdirAllSyncSyncsParentOfEveryCreatedDirectory(t *testing.T) {
+	originalSync := syncReviewDirectory
+	var synced []string
+	syncReviewDirectory = func(path string) error {
+		synced = append(synced, path)
+		return nil
+	}
+	t.Cleanup(func() { syncReviewDirectory = originalSync })
+
+	root := t.TempDir()
+	target := filepath.Join(root, "v2", "lineage-one", "leaf")
+	if err := mkdirAllSync(target, 0o755); err != nil {
+		t.Fatalf("mkdirAllSync() error = %v", err)
+	}
+	for _, dir := range []string{target, filepath.Dir(target), filepath.Join(root, "v2")} {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Fatalf("expected directory at %s, stat = %v, %v", dir, info, err)
+		}
+	}
+	want := map[string]bool{root: false, filepath.Join(root, "v2"): false, filepath.Join(root, "v2", "lineage-one"): false}
+	for _, path := range synced {
+		if _, tracked := want[path]; tracked {
+			want[path] = true
+		}
+	}
+	for parent, seen := range want {
+		if !seen {
+			t.Fatalf("mkdirAllSync() never synced parent %s of a newly created directory; recorded = %v", parent, synced)
+		}
+	}
+
+	// A second call against the same, now fully-existing chain must not
+	// re-sync anything: nothing new was created.
+	synced = nil
+	if err := mkdirAllSync(target, 0o755); err != nil {
+		t.Fatalf("mkdirAllSync() on existing chain error = %v", err)
+	}
+	if len(synced) != 0 {
+		t.Fatalf("mkdirAllSync() synced already-existing directories: %v", synced)
+	}
+}
+
+// TestMkdirAllSyncRejectsAFileWhereADirectoryIsRequired keeps the TOCTOU-free
+// Mkdir-per-component design from silently accepting a name collision.
+func TestMkdirAllSyncRejectsAFileWhereADirectoryIsRequired(t *testing.T) {
+	root := t.TempDir()
+	blocked := filepath.Join(root, "not-a-dir")
+	if err := os.WriteFile(blocked, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := mkdirAllSync(filepath.Join(blocked, "child"), 0o755); err == nil {
+		t.Fatal("mkdirAllSync() accepted a file where a directory was required")
+	}
+}
+
+// TestStoreAppendRefusesHeadPublicationWhenEventsDirectorySyncFails is issue
+// #1721: the events/ directory must be durable before HEAD can name an event
+// inside it. Injecting a sync failure scoped to exactly the events/ path
+// proves the ordering: HEAD must never be written past that failure.
+func TestStoreAppendRefusesHeadPublicationWhenEventsDirectorySyncFails(t *testing.T) {
+	// EvalSymlinks: on macOS, t.TempDir() resolves through the /var ->
+	// /private/var symlink, which the store lock's O_NOFOLLOW parent walk
+	// (secure_open_unix.go) refuses to traverse for a root outside a real
+	// gentle-ai/review-transactions layout. Using the resolved path keeps
+	// this test about the events/-before-HEAD ordering, not that unrelated
+	// platform detail.
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := Store{Dir: filepath.Join(base, "review-store")}
+	eventsDir := filepath.Join(store.Dir, "events")
+	originalSync := syncReviewDirectory
+	syncReviewDirectory = func(path string) error {
+		if path == eventsDir {
+			return errors.New("simulated events/ sync failure")
+		}
+		return originalSync(path)
+	}
+	t.Cleanup(func() { syncReviewDirectory = originalSync })
+
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append("", Record{Operation: "review/start", Transaction: *tx}); err == nil ||
+		!strings.Contains(err.Error(), "sync parent directory") {
+		t.Fatalf("Append() error = %v, want an events/ sync failure", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, "HEAD")); !os.IsNotExist(err) {
+		t.Fatalf("HEAD published despite a failed events/ directory sync: stat = %v", err)
+	}
+	entries, err := os.ReadDir(eventsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(events) error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("event count = %d, want the event durably published even though HEAD was refused", len(entries))
+	}
+}
+
 func TestStoreIsAppendOnlyAtomicAndRejectsStaleWriters(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	if err := tx.StartReview(); err != nil {
 		t.Fatal(err)
@@ -91,7 +208,7 @@ func TestStoreIsAppendOnlyAtomicAndRejectsStaleWriters(t *testing.T) {
 }
 
 func TestStoreAppendRepairsInterruptedEventAndIsIdempotentAtHead(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	_ = tx.StartReview()
 	first, err := store.Append("", Record{Operation: "review/start", Transaction: *tx})
@@ -154,7 +271,7 @@ func TestStoreLockReportsLiveOwnerAndCannotBeStolen(t *testing.T) {
 }
 
 func TestCompactStartLockAcquisitionIsBoundedAndCancellable(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "review-store", "LOCK")
+	path := filepath.Join(canonicalTempDir(t), "review-store", "LOCK")
 	held, err := acquireStoreLock(path)
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +316,7 @@ func TestCompactStartLockDefaultsMatchPublicBound(t *testing.T) {
 }
 
 func TestCancelledCompactStartDoesNotCreateLockInode(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "review-store", "LOCK")
+	path := filepath.Join(canonicalTempDir(t), "review-store", "LOCK")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := acquireCompactStartLock(ctx, path); !errors.Is(err, ErrAuthorityLockCancelled) {
@@ -309,7 +426,7 @@ func TestConcurrentStoreLockRecoverersCannotBothWin(t *testing.T) {
 }
 
 func TestStoreRejectsRegressiveOrUnrelatedSuccessorAtCurrentRevision(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	if err := tx.StartReview(); err != nil {
 		t.Fatal(err)
@@ -348,7 +465,7 @@ func TestStoreRejectsRegressiveOrUnrelatedSuccessorAtCurrentRevision(t *testing.
 }
 
 func TestStoreRejectsCounterAndOutcomeRegression(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	_ = tx.StartReview()
 	first, err := store.Append("", Record{Operation: "review/start", Transaction: *tx})
@@ -376,7 +493,7 @@ func TestStoreRejectsCounterAndOutcomeRegression(t *testing.T) {
 }
 
 func TestStoreLoadsLegacyClassificationAndAppendsItsLegalSuccessor(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	_ = tx.StartReview()
 	genesis := writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *tx})
@@ -413,7 +530,7 @@ func TestStoreLoadsLegacyClassificationAndAppendsItsLegalSuccessor(t *testing.T)
 }
 
 func TestStoreLoadsLegacyBoundedLineageAndCompletesFixWithoutNewBudgetSemantics(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	originalChangedLines := 196
 	tx, err := NewTransaction(Start{
 		LineageID: "legacy-bounded", Mode: ModeOrdinaryBounded, Generation: 1,
@@ -466,7 +583,7 @@ func TestStoreLoadsLegacyBoundedLineageAndCompletesFixWithoutNewBudgetSemantics(
 
 func TestStoreReplaysOnlyDocumentedHistoricalV1Aliases(t *testing.T) {
 	t.Run("ordinary targeted validation operation in legacy fix delta position", func(t *testing.T) {
-		store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+		store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 		tx := newTestTransaction(t, ModeOrdinary4R)
 		if err := tx.StartReview(); err != nil {
 			t.Fatal(err)
@@ -493,24 +610,8 @@ func TestStoreReplaysOnlyDocumentedHistoricalV1Aliases(t *testing.T) {
 		assertHistoricalChainRoundTrips(t, store, head, legacy)
 	})
 
-	t.Run("Judgment Day historical findings freeze", func(t *testing.T) {
-		store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
-		tx := newTestTransaction(t, ModeJudgmentDay)
-		if err := tx.StartReview(); err != nil {
-			t.Fatal(err)
-		}
-		head := writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *tx})
-		if err := tx.RecordJudgeProofs([]JudgeProof{{JudgeID: "judge-a", ExecutionHash: hash("a"), ResultHash: hash("b"), Blind: true, Confirmed: true}, {JudgeID: "judge-b", ExecutionHash: hash("c"), ResultHash: hash("d"), Blind: true, Confirmed: true}}, hash("e")); err != nil {
-			t.Fatal(err)
-		}
-		head = writeStoreEvent(t, store, Record{Operation: "review/record-judge-proofs", PreviousRevision: head, Transaction: *tx})
-		legacy := historicalFreezeTransition(t, *tx)
-		head = writeStoreEvent(t, store, Record{Operation: "review/freeze-findings", PreviousRevision: head, Transaction: legacy})
-		assertHistoricalChainRoundTrips(t, store, head, legacy)
-	})
-
 	t.Run("ordinary v1.49 historical findings freeze", func(t *testing.T) {
-		store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+		store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 		tx := newTestTransaction(t, ModeOrdinary4R)
 		if err := tx.StartReview(); err != nil {
 			t.Fatal(err)
@@ -522,7 +623,7 @@ func TestStoreReplaysOnlyDocumentedHistoricalV1Aliases(t *testing.T) {
 	})
 
 	t.Run("misplaced targeted validation operation", func(t *testing.T) {
-		store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+		store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 		tx := newTestTransaction(t, ModeOrdinary4R)
 		if err := tx.StartReview(); err != nil {
 			t.Fatal(err)
@@ -742,7 +843,7 @@ func mustJSON(t *testing.T, value any) []byte {
 }
 
 func TestStoreRejectsFreshLegacyShapedBoundedGenesis(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx, err := NewTransaction(boundedStart(t, []string{LensReliability}))
 	if err != nil {
 		t.Fatal(err)
@@ -883,8 +984,11 @@ func withoutCorrectionBudgetFields(t *testing.T, transaction Transaction) Transa
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := ParseTransaction(payload)
-	if err != nil {
+	var legacy Transaction
+	if err := json.Unmarshal(payload, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.validate(); err != nil {
 		t.Fatal(err)
 	}
 	return legacy
@@ -1067,7 +1171,7 @@ func TestStoreLoadRejectsIncompleteAndIllegalPredecessorChains(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+			store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 			if tt.seed != nil {
 				tt.seed(t, store)
 			}
@@ -1139,7 +1243,7 @@ func TestStoreLoadRejectsHashValidSemanticFindingBypasses(t *testing.T) {
 }
 
 func TestStoreLoadsV149FreezeWithRetainedExternalLedgerHash(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	if err := tx.StartReview(); err != nil {
 		t.Fatal(err)
@@ -1252,7 +1356,7 @@ func gitSnapshotWithoutLocalEnv(t *testing.T, repo string, args ...string) strin
 }
 
 func TestStoreLoadChainBindsGenesisHeadAndOrderedIdentity(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	if err := tx.StartReview(); err != nil {
 		t.Fatal(err)

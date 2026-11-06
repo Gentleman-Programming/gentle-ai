@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
 )
 
 // ─── Issue #145: Review screen must show individual skills ───────────────────
@@ -25,7 +25,7 @@ func TestRenderReviewShowsSkillNames(t *testing.T) {
 		Skills: []model.SkillID{"sdd-apply", "sdd-spec", "go-testing"},
 	}
 
-	out := RenderReview(payload, 0)
+	out := RenderReview(payload, 0, "")
 
 	for _, skillName := range []string{"sdd-apply", "sdd-spec", "go-testing"} {
 		if !strings.Contains(out, skillName) {
@@ -46,7 +46,7 @@ func TestRenderReviewHidesSkillsSectionWhenEmpty(t *testing.T) {
 		// No Skills field.
 	}
 
-	out := RenderReview(payload, 0)
+	out := RenderReview(payload, 0, "")
 
 	// Should not panic and should render something.
 	if len(out) == 0 {
@@ -54,77 +54,26 @@ func TestRenderReviewHidesSkillsSectionWhenEmpty(t *testing.T) {
 	}
 }
 
-// ─── Issue #149: Review screen must show Strict TDD status ───────────────────
+// ─── Legacy Strict TDD selections are not installer review choices ───────────
 
-// TestRenderReviewShowsStrictTDDEnabled verifies that RenderReview output contains
-// "Strict TDD" and "Enabled" when HasSDD=true and StrictTDD=true.
-//
-// Closes #149.
-func TestRenderReviewShowsStrictTDDEnabled(t *testing.T) {
-	payload := planner.ReviewPayload{
-		Agents:  []model.AgentID{model.AgentClaudeCode},
-		Persona: model.PersonaGentleman,
-		Preset:  model.PresetFullGentleman,
-		Components: []planner.ComponentAction{
-			{ID: model.ComponentSDD, Action: "selected"},
-		},
-		HasSDD:    true,
-		StrictTDD: true,
-	}
-
-	out := RenderReview(payload, 0)
-
-	if !strings.Contains(out, "Strict TDD") {
-		t.Errorf("RenderReview missing 'Strict TDD'; output:\n%s", out)
-	}
-	if !strings.Contains(out, "Enabled") {
-		t.Errorf("RenderReview missing 'Enabled' for StrictTDD=true; output:\n%s", out)
+func TestRenderReviewOmitsLegacyStrictTDDChoice(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		t.Run(map[bool]string{false: "disabled", true: "enabled"}[strict], func(t *testing.T) {
+			payload := planner.ReviewPayload{
+				Components: []planner.ComponentAction{{ID: model.ComponentSDD, Action: "selected"}},
+				HasSDD:     true, StrictTDD: strict,
+			}
+			if out := RenderReview(payload, 0, ""); strings.Contains(out, "Strict TDD") {
+				t.Fatalf("legacy choice appears in review:\n%s", out)
+			}
+		})
 	}
 }
 
-// TestRenderReviewShowsStrictTDDDisabled verifies that RenderReview output contains
-// "Strict TDD" and "Disabled" when HasSDD=true and StrictTDD=false.
-//
-// Closes #149.
-func TestRenderReviewShowsStrictTDDDisabled(t *testing.T) {
-	payload := planner.ReviewPayload{
-		Agents:  []model.AgentID{model.AgentClaudeCode},
-		Persona: model.PersonaGentleman,
-		Preset:  model.PresetFullGentleman,
-		Components: []planner.ComponentAction{
-			{ID: model.ComponentSDD, Action: "selected"},
-		},
-		HasSDD:    true,
-		StrictTDD: false,
-	}
-
-	out := RenderReview(payload, 0)
-
-	if !strings.Contains(out, "Strict TDD") {
-		t.Errorf("RenderReview missing 'Strict TDD'; output:\n%s", out)
-	}
-	if !strings.Contains(out, "Disabled") {
-		t.Errorf("RenderReview missing 'Disabled' for StrictTDD=false; output:\n%s", out)
-	}
-}
-
-// TestRenderReviewHidesStrictTDDWhenNoSDD verifies that when HasSDD=false,
-// "Strict TDD" does not appear in the review output.
-//
-// Closes #149.
-func TestRenderReviewHidesStrictTDDWhenNoSDD(t *testing.T) {
-	payload := planner.ReviewPayload{
-		Agents:    []model.AgentID{model.AgentClaudeCode},
-		Persona:   model.PersonaGentleman,
-		Preset:    model.PresetFullGentleman,
-		HasSDD:    false,
-		StrictTDD: true,
-	}
-
-	out := RenderReview(payload, 0)
-
-	if strings.Contains(out, "Strict TDD") {
-		t.Errorf("RenderReview should NOT show 'Strict TDD' when HasSDD=false; output:\n%s", out)
+func TestRenderReviewShowsDeferredInstallReviewMode(t *testing.T) {
+	out := RenderReview(planner.ReviewPayload{}, 0, "RDD OFF (global setting after successful installation)")
+	if !strings.Contains(out, "Receipt-Driven Development") || !strings.Contains(out, "RDD OFF") {
+		t.Fatalf("review summary omitted selected RDD mode:\n%s", out)
 	}
 }
 
@@ -135,7 +84,7 @@ func TestRenderReviewClarifiesCustomPersonaAndPreset(t *testing.T) {
 		Preset:  model.PresetCustom,
 	}
 
-	out := RenderReview(payload, 0)
+	out := RenderReview(payload, 0, "")
 
 	if !strings.Contains(out, "keep existing persona unmanaged") {
 		t.Fatalf("RenderReview missing custom persona clarification; output:\n%s", out)
@@ -158,17 +107,56 @@ func TestRenderReviewSummarizesPersonaConversationAndArtifacts(t *testing.T) {
 		want    string
 	}{
 		{name: "Gentleman", persona: model.PersonaGentleman, want: "Voseo conversation; English technical artifacts"},
-		{name: "Gentleman with English artifacts", persona: model.PersonaGentlemanNeutralArtifacts, want: "Voseo conversation; English technical artifacts (legacy alias)"},
+		{name: "Gentleman with English artifacts", persona: model.PersonaGentlemanNeutralArtifacts, want: "No regional conversation tone; English technical artifacts (legacy alias, remapped)"},
 		{name: "Neutral", persona: model.PersonaNeutral, want: "No regional conversation tone; English technical artifacts"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := planner.ReviewPayload{Persona: tt.persona}
-			out := RenderReview(payload, 0)
+			out := RenderReview(payload, 0, "")
 			if !strings.Contains(out, tt.want) {
 				t.Fatalf("RenderReview() missing %q; output:\n%s", tt.want, out)
 			}
 		})
+	}
+}
+
+// ─── Conductor review note (PR #5060 review) ───────────────────────────────
+
+// TestRenderReviewShowsConductorNote verifies the review screen surfaces the
+// Conductor catalog note when Conductor is selected: its workspaces inherit
+// Claude Code configuration and no Conductor-specific files are written.
+func TestRenderReviewShowsConductorNote(t *testing.T) {
+	payload := planner.ReviewPayload{
+		Agents: []model.AgentID{model.AgentConductor},
+		AgentNotes: []planner.AgentNote{
+			{Agent: model.AgentConductor, Note: "Conductor workspaces inherit Claude Code configuration; Gentle AI writes no Conductor-specific files."},
+		},
+	}
+
+	out := RenderReview(payload, 0, "")
+
+	for _, required := range []string{
+		"Conductor workspaces inherit Claude Code configuration",
+		"no Conductor-specific files",
+	} {
+		if !strings.Contains(out, required) {
+			t.Fatalf("RenderReview() missing Conductor note %q; output:\n%s", required, out)
+		}
+	}
+}
+
+// TestRenderReviewHidesNotesForWritableAgents keeps the review screen free of
+// notes for writable agents: a payload without AgentNotes must render none.
+func TestRenderReviewHidesNotesForWritableAgents(t *testing.T) {
+	payload := planner.ReviewPayload{
+		Agents: []model.AgentID{model.AgentClaudeCode},
+	}
+
+	out := RenderReview(payload, 0, "")
+
+	if strings.Contains(out, "Conductor-specific") {
+		t.Fatalf("RenderReview() showed a Conductor note without one selected; output:\n%s", out)
 	}
 }

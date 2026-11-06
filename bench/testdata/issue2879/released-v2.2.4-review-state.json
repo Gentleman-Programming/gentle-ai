@@ -1,0 +1,55 @@
+{
+  "schema": "gentle-ai.review-state-record/v2",
+  "revision": "sha256:a3a11e21759e3c36b32f17ccb1d15995029226661e38b2ca9ba9bf79e676ceab",
+  "state": {
+    "schema": "gentle-ai.review-state/v2",
+    "lineage_id": "review-f8708016a901b4ff",
+    "generation": 1,
+    "state": "reviewing",
+    "initial_snapshot": {
+      "kind": "current-changes",
+      "base_tree": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "candidate_tree": "0b919d88a591bd39ee0b8e37efc92e5ab949dc31",
+      "paths_digest": "sha256:6b2d9e38101eb421286f943f259ed3c8a183106c8c75612e12db13b848bbec69",
+      "intended_untracked": [
+        "main.go"
+      ],
+      "intended_untracked_proof": "sha256:605b96e3f644cb6983ac789b3a54fc0f3a0383dfca832e33ad82b934cde199bb",
+      "paths": [
+        "main.go"
+      ],
+      "identity": "sha256:f8708016a901b4ffb8a3e000fca45ff07891ba851c480f562986e94d8007ced3"
+    },
+    "current_snapshot": {
+      "kind": "current-changes",
+      "base_tree": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "candidate_tree": "0b919d88a591bd39ee0b8e37efc92e5ab949dc31",
+      "paths_digest": "sha256:6b2d9e38101eb421286f943f259ed3c8a183106c8c75612e12db13b848bbec69",
+      "intended_untracked": [
+        "main.go"
+      ],
+      "intended_untracked_proof": "sha256:605b96e3f644cb6983ac789b3a54fc0f3a0383dfca832e33ad82b934cde199bb",
+      "paths": [
+        "main.go"
+      ],
+      "identity": "sha256:f8708016a901b4ffb8a3e000fca45ff07891ba851c480f562986e94d8007ced3"
+    },
+    "genesis_paths": [
+      "main.go"
+    ],
+    "policy_hash": "sha256:34fb63d7f29f8613cd4431382b1057398a4816f8a4c20fc34677fffc80a184f6",
+    "risk_level": "medium",
+    "selected_lenses": [
+      "review-reliability"
+    ],
+    "original_changed_lines": 3,
+    "correction_budget": 2,
+    "lens_results": [],
+    "findings": [],
+    "classifications": {},
+    "outcomes": {},
+    "fix_finding_ids": [],
+    "follow_ups": [],
+    "fix_delta_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

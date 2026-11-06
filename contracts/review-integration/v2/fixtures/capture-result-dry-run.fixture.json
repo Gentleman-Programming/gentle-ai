@@ -1,0 +1,10 @@
+{
+  "schema": "gentle-ai.review-capture-result-dry-run/v1",
+  "operation": "review/capture-result",
+  "validation": "accepted",
+  "lineage_id": "review-example",
+  "lens": "review-reliability",
+  "selected_order": 0,
+  "subject_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "admission_decision": "completed"
+}

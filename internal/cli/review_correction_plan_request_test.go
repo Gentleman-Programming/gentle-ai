@@ -8,13 +8,19 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) {
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
+
 	for _, tt := range []struct {
 		name             string
 		path             string
@@ -40,15 +46,13 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
-			if err := os.WriteFile(filepath.Join(repo, tt.path), []byte(tt.content), 0o644); err != nil {
-				t.Fatal(err)
-			}
+			writeReviewStartCandidate(t, repo, tt.path, tt.content, 0o644)
 			started := runNegotiatedReviewStart(t, repo, "correction-findings-"+strings.ReplaceAll(tt.name, " ", "-"))
 			if started.RiskLevel != tt.wantRisk || len(started.SelectedLenses) != tt.wantSelectedLens {
 				t.Fatalf("review routing = risk %q lenses %v", started.RiskLevel, started.SelectedLenses)
 			}
 
-			finalizeArgs := []string{"--cwd", repo, "--lineage", started.LineageID}
+			resultPaths := make([]string, 0, len(started.SelectedLenses))
 			for index, lens := range started.SelectedLenses {
 				resultPath := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", index))
 				findings := []facadeFinding{}
@@ -62,17 +66,14 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 					Lens: lens, Findings: findings, Evidence: []string{"inspected the exact frozen candidate"},
 				})
-				finalizeArgs = append(finalizeArgs, "--result", resultPath)
+				resultPaths = append(resultPaths, resultPath)
 			}
-			if err := finalizeReviewCLIArgs(t, repo, finalizeArgs, &bytes.Buffer{}); err != nil {
+			if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
 				t.Fatal(err)
 			}
+			corroborateRefuterClaimsForTest(t, repo, started.LineageID)
 			if tt.forecast > 0 {
-				if err := RunReviewFacadeFinalize([]string{
-					"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", fmt.Sprint(tt.forecast),
-				}, &bytes.Buffer{}); err != nil {
-					t.Fatal(err)
-				}
+				captureCorrectionPlanFromCurrentStatus(t, repo, started.LineageID, tt.forecast)
 			}
 
 			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
@@ -92,7 +93,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			}
 
 			args := []string{
-				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "claude-code",
+				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
 				"--next-transition", "--lineage", started.LineageID,
 			}
 			var first, restarted bytes.Buffer
@@ -112,8 +113,12 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				t.Fatalf("correction transition = %#v", transition)
 			}
 			request := transition.CorrectionRequest
-			classification := record.State.Classifications[record.State.FixFindingIDs[0]]
-			if request.LineageID != record.State.LineageID || request.ExpectedRevision != record.Revision ||
+			view, err := record.State.CompactReviewView()
+			if err != nil {
+				t.Fatal(err)
+			}
+			classification := view.Classifications[record.State.FixFindingIDs[0]]
+			if request.LineageID != record.State.LineageID || request.ExpectedRevision != record.State.CapturePhaseRevision ||
 				request.TargetIdentity != record.State.CurrentSnapshot.Identity || request.CorrectionBudget != record.State.CorrectionBudget ||
 				!reflect.DeepEqual(request.FixFindingIDs, record.State.FixFindingIDs) || len(request.Findings) != 1 ||
 				request.Findings[0].ID != record.State.FixFindingIDs[0] || request.Findings[0].Location != tt.path+":1" ||
@@ -135,11 +140,326 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			validateAgainstPublishedNextTransitionSchemaV4(t, transitionPayload)
+			validateAgainstPublishedNextTransitionSchemaV5(t, transitionPayload)
 			after, err := os.ReadFile(store.StatePath())
 			if err != nil || !bytes.Equal(before, after) || len(record.State.CorrectionAttempts) != 0 || record.State.CumulativeCorrectionLines != 0 {
 				t.Fatalf("read-only correction request consumed authority or budget: %v", err)
 			}
 		})
 	}
+}
+
+// TestNegotiatedStatusExposesMixedOutcomeCorrectionPlan pins issue #5888
+// end to end: a refuter batch admitting one corroborated and one inconclusive
+// outcome closes the lineage into correction_required, and the fresh
+// provider-issued STATUS continuation must expose a usable correction-plan
+// collection for the exact authorized fix set -- never the
+// corrupted_or_unverifiable_authority stop. The inconclusive outcome stays
+// inconclusive, and read-only STATUS spends no authority or budget.
+func TestNegotiatedStatusExposesMixedOutcomeCorrectionPlan(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "one\ntwo\nthree\n", 0o644)
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Findings = []facadeFinding{
+		{
+			ID: "R3-001", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate exposes the wrong behavior",
+			ProofRefs: []string{"tracked.txt:1 reproduced candidate failure"}, EvidenceClass: reviewtransaction.EvidenceInferential,
+			CausalDisposition: reviewtransaction.CausalBehaviorActivated,
+		},
+		{
+			ID: "R3-002", Location: "tracked.txt:2", Severity: "CRITICAL", Claim: "candidate worsens the behavior",
+			ProofRefs: []string{"tracked.txt:2 candidate-specific interpretation"}, EvidenceClass: reviewtransaction.EvidenceInferential,
+			CausalDisposition: reviewtransaction.CausalBehaviorActivated,
+		},
+	}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := reviewtransaction.DeriveReviewRepositoryContextHandle(context.Background(), repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: updated.State.LineageID, TargetIdentity: updated.State.InitialSnapshot.Identity, Revision: updated.State.CapturePhaseRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refuterRequest, err := reviewProviderNewRefuterRequest(context.Background(), repo, store.Dir, updated.State, updated.State.CapturePhaseRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refuterInput := filepath.Join(t.TempDir(), "refuter.json")
+	writeReviewCLIJSON(t, refuterInput, facadeRefuterResult{
+		RequestHash: refuterRequest.RequestHash,
+		Results: []facadeRefuterOutcome{
+			{FindingID: "R3-001", Outcome: reviewtransaction.OutcomeCorroborated, ProofRefs: []string{"independent reproduction"}},
+			{FindingID: "R3-002", Outcome: reviewtransaction.OutcomeInconclusive, ProofRefs: []string{"could not disprove"}},
+		},
+	})
+	submit := append(append([]string{"capture-refuter"}, piRefuterBinding(repo, updated, handle)...), "--agent", string(model.AgentPi), "--input", refuterInput)
+	if err := RunReview(submit, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	final, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.State.State != reviewtransaction.StateCorrectionRequired || !reflect.DeepEqual(final.State.FixFindingIDs, []string{"R3-001", "R3-002"}) {
+		t.Fatalf("mixed refuter batch closed into state %q with fix set %v", final.State.State, final.State.FixFindingIDs)
+	}
+
+	args := []string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--next-transition", "--lineage", started.LineageID,
+	}
+	var first, restarted bytes.Buffer
+	if err := RunReview(args, &first); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, first.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	transition := status.NextTransition
+	if transition == nil || transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "correction_plan_required" ||
+		transition.CorrectionRequest == nil {
+		t.Fatalf("mixed-outcome STATUS offered %#v instead of a usable correction plan", transition)
+	}
+	request := transition.CorrectionRequest
+	if !reflect.DeepEqual(request.FixFindingIDs, []string{"R3-001", "R3-002"}) || len(request.Findings) != 2 ||
+		request.Findings[0].ID != "R3-001" || request.Findings[1].ID != "R3-002" ||
+		reviewtransaction.ValidateCorrectionPlanRequest(*request) != nil {
+		t.Fatalf("mixed-outcome correction request = %#v", request)
+	}
+	view, err := final.State.CompactReviewView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Outcomes["R3-001"] != reviewtransaction.OutcomeCorroborated || view.Outcomes["R3-002"] != reviewtransaction.OutcomeInconclusive {
+		t.Fatalf("admitted outcomes were rewritten: %#v", view.Outcomes)
+	}
+	if err := RunReview(args, &restarted); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first.Bytes(), restarted.Bytes()) {
+		t.Fatalf("restarted mixed-outcome correction request changed:\nfirst=%s\nrestarted=%s", first.String(), restarted.String())
+	}
+	if len(final.State.CorrectionAttempts) != 0 || final.State.CumulativeCorrectionLines != 0 {
+		t.Fatalf("read-only STATUS consumed authority accounting: %#v", final.State)
+	}
+}
+
+func captureCorrectionPlanFromCurrentStatus(t *testing.T, cwd, lineage string, correctionLines int) {
+	t.Helper()
+	root, err := (reviewtransaction.SnapshotBuilder{Repo: cwd}).ResolveRepositoryRoot(context.Background())
+	if err != nil {
+		t.Fatalf("resolve correction repository root for STATUS: %v", err)
+	}
+	_, record, err := discoverCompactFacadeReview(context.Background(), root, lineage, false)
+	if err != nil {
+		t.Fatalf("discover correction authority for STATUS: %v", err)
+	}
+	if record.State.State == reviewtransaction.StateReviewing {
+		// A severe finding still awaits its refuter batch (L20); the host
+		// captures it before STATUS offers the correction plan.
+		corroborateRefuterClaimsForTest(t, root, lineage)
+		if _, record, err = discoverCompactFacadeReview(context.Background(), root, lineage, false); err != nil {
+			t.Fatalf("discover corroborated correction authority: %v", err)
+		}
+	}
+	args := []string{
+		"status", "--cwd", cwd, "--contract", ReviewIntegrationContractV2,
+		"--next-transition", "--lineage", lineage,
+	}
+	switch record.State.InitialSnapshot.Kind {
+	case reviewtransaction.TargetCurrentChanges:
+		if record.State.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged {
+			args = append(args, "--projection", string(reviewtransaction.ProjectionStaged))
+		}
+	case reviewtransaction.TargetBaseDiff:
+		args = append(args, "--base-ref", record.State.InitialSnapshot.BaseTree, "--committed-only")
+	case reviewtransaction.TargetBaseWorkspaceOverlay:
+		args = append(args, "--base-ref", record.State.InitialSnapshot.BaseTree, "--workspace-overlay")
+		if record.State.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged {
+			args = append(args, "--projection", string(reviewtransaction.ProjectionStaged))
+		}
+	default:
+		t.Fatalf("unsupported correction authority target kind %q", record.State.InitialSnapshot.Kind)
+	}
+	builder := reviewtransaction.SnapshotBuilder{Repo: root}
+	inventory, inventoryDigest, err := builder.IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatalf("discover correction untracked inventory for STATUS: %v", err)
+	}
+	if len(inventory) > 0 {
+		mode := "exclude"
+		if len(record.State.InitialSnapshot.IntendedUntracked) > 0 {
+			mode = "select"
+		}
+		args = append(args, "--untracked-scope", mode, "--expected-untracked-inventory", inventoryDigest)
+		for _, path := range record.State.InitialSnapshot.IntendedUntracked {
+			args = append(args, "--intended-untracked", path)
+		}
+	}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("read correction-plan STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	transition := status.NextTransition
+	if transition == nil || transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "correction_plan_required" ||
+		transition.CorrectionRequest == nil || transition.Collect == nil || len(transition.Collect.Inputs) != 1 ||
+		transition.Collect.Inputs[0].CaptureOperation != reviewCaptureCorrectionPlanOperation {
+		t.Fatalf("correction-plan STATUS = %#v", transition)
+	}
+	captureArgs := reviewTransitionInputTokens(t, cwd, transition.Collect.Inputs[0])
+	captureArgs = append(captureArgs, "--correction-lines", strconv.Itoa(correctionLines))
+	if err := RunReviewCaptureCorrectionPlan(captureArgs, &bytes.Buffer{}); err != nil {
+		t.Fatalf("capture current correction plan: %v", err)
+	}
+}
+
+// TestNegotiatedStatusRoutesCorrectionRequiredDriftCorrectly pins issue #4094
+// defect A: a bound STATUS re-entered after four admitted reviewer captures
+// closed the lineage into correction_required, with the working tree drifting
+// before capture-correction-plan runs. A tracked file outside the frozen
+// manifest must route to recovery (mirroring the reviewing-phase drift
+// guard), while an edit to a path already inside the frozen manifest must
+// still offer the correction plan instead of failing STATUS pre_native.
+func TestNegotiatedStatusRoutesCorrectionRequiredDriftCorrectly(t *testing.T) {
+	reviewEnabledHome(t)
+
+	t.Run("drift outside the frozen manifest routes to recovery", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		if err := os.WriteFile(filepath.Join(repo, "unrelated.go"), []byte("package unrelated\n\nfunc Value() int { return 1 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runReviewCLIGit(t, repo, "add", "unrelated.go")
+		runReviewCLIGit(t, repo, "commit", "-qm", "add unrelated tracked file")
+
+		lineage := closeReviewLineageIntoCorrectionRequired(t, repo, "drift-outside-manifest")
+
+		if err := os.WriteFile(filepath.Join(repo, "unrelated.go"), []byte("package unrelated\n\nfunc Value() int { return 2 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		status := negotiatedReviewStatusForLineage(t, repo, lineage)
+		if status.Action != reviewtransaction.TargetStatusActionRecover || status.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
+			status.Authority == nil || status.Authority.LineageID != lineage || status.NextTransition == nil ||
+			status.NextTransition.Kind != reviewNextTransitionExecute || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.recover" {
+			t.Fatalf("out-of-manifest drift status = %#v", status)
+		}
+	})
+
+	t.Run("drift inside the frozen manifest still offers the correction plan", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		lineage := closeReviewLineageIntoCorrectionRequired(t, repo, "drift-inside-manifest")
+
+		// Edit the SAME genesis path again, unstaged, before capturing the
+		// correction plan: the candidate tree drifts, but every changed path
+		// stays inside the frozen manifest.
+		if err := os.WriteFile(filepath.Join(repo, "candidate.go"), []byte("package candidate\n\nfunc value() int { return 3 }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		status := negotiatedReviewStatusForLineage(t, repo, lineage)
+		if status.Authority == nil || status.Authority.LineageID != lineage || status.NextTransition == nil ||
+			status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "correction_plan_required" ||
+			status.NextTransition.CorrectionRequest == nil {
+			t.Fatalf("in-manifest drift status = %#v", status)
+		}
+	})
+}
+
+// closeReviewLineageIntoCorrectionRequired starts a review on candidate.go,
+// captures every selected lens with one CRITICAL finding on the first lens,
+// and returns the lineage now sitting in correction_required with no
+// correction plan captured yet.
+func closeReviewLineageIntoCorrectionRequired(t *testing.T, repo, lineage string) string {
+	t.Helper()
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+	started := runNegotiatedReviewStart(t, repo, lineage)
+
+	resultPaths := make([]string, 0, len(started.SelectedLenses))
+	for index, lens := range started.SelectedLenses {
+		resultPath := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", index))
+		findings := []facadeFinding{}
+		if index == 0 {
+			findings = []facadeFinding{{
+				Location: "candidate.go:1", Severity: "CRITICAL", Claim: "candidate exposes the wrong behavior",
+				ProofRefs:     []string{"exact changed hunk", "reproduced candidate failure"},
+				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+		}
+		writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+			Lens: lens, Findings: findings, Evidence: []string{"inspected the exact frozen candidate"},
+		})
+		resultPaths = append(resultPaths, resultPath)
+	}
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
+		t.Fatal(err)
+	}
+	corroborateRefuterClaimsForTest(t, repo, started.LineageID)
+	return started.LineageID
+}
+
+// negotiatedReviewStatusForLineage runs one bound negotiated STATUS for the
+// given lineage and decodes its envelope, failing the test on any operation
+// error instead of returning it, so callers assert only routing shape.
+func negotiatedReviewStatusForLineage(t *testing.T, repo, lineage string) ReviewTargetStatusResult {
+	t.Helper()
+	args := []string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--next-transition", "--lineage", lineage,
+	}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("negotiated STATUS for lineage %q: %v\n%s", lineage, err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return status
+}
+
+// reviewTransitionInputTokens replays one collect input exactly as a host does.
+// The rendered transition carries no filesystem path, so the host supplies the
+// repository the provider-issued context digest is verified against -- either
+// by running in it, or by naming it as this helper does.
+func reviewTransitionInputTokens(t *testing.T, repo string, input ReviewTransitionInput) []string {
+	t.Helper()
+	args := make([]string, 0, len(input.Arguments)+1)
+	args = append(args, "--cwd="+repo)
+	for _, argument := range input.Arguments {
+		if argument.Token == "" {
+			t.Fatalf("transition argument %q has no exact token", argument.Name)
+		}
+		args = append(args, argument.Token)
+	}
+	return args
 }

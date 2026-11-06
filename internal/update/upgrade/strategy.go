@@ -2,23 +2,21 @@ package upgrade
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 // engramDownloadFn is the function used to download the engram binary on the stable channel.
@@ -41,16 +39,15 @@ var engramBetaInstallFn = func(profile system.PlatformProfile) (string, error) {
 // Package-level var for testability.
 var scriptHTTPClient = &http.Client{Timeout: 2 * time.Minute}
 
-var (
-	openCodeHomeDir = os.UserHomeDir
-	lookPathCommand = exec.LookPath
-)
-
 // maxScriptSize is the maximum number of bytes read from a downloaded install.sh.
 // This prevents unbounded memory use if the server returns an unexpectedly large body.
 // Note: HTTPS provides transport security but NOT content integrity — a compromised
 // server or CDN could still serve a malicious script within this size limit.
 const maxScriptSize = 1 * 1024 * 1024 // 1 MB
+
+type strategyOutcome struct {
+	exitRequested bool
+}
 
 // runStrategy executes the upgrade for a single tool using the appropriate strategy
 // for the given platform profile.
@@ -63,11 +60,10 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - script method + linux/darwin + gga → ggaScriptUpgrade (git clone approach)
 //   - script method + linux/darwin + other → scriptUpgrade (curl | bash install.sh)
 //   - script method + windows → manualFallback
-//   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
-func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) (bool, error) {
+func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
 	ownership := update.HomebrewNone
-	if profile.PackageManager == "brew" && r.Tool.InstallMethod != update.InstallOpenCodePlugin {
+	if profile.PackageManager == "brew" {
 		var err error
 		ownership, err = homebrewOwnershipDetector(r.Tool.Name)
 		if err != nil {
@@ -75,7 +71,7 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 		}
 	}
 	if isBetaGentleAIUpgrade(r) && profile.OS != "windows" && ownership == update.HomebrewNone {
-		return false, goInstallMainUpgrade(r.Tool)
+		return false, goInstallMainUpgrade(r)
 	}
 
 	method := effectiveMethod(r.Tool, profile)
@@ -89,7 +85,7 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	case update.InstallScoop:
 		return false, scoopUpgrade(ctx)
 	case update.InstallGoInstall:
-		return false, goInstallUpgrade(ctx, r.Tool, r.LatestVersion)
+		return false, goInstallUpgrade(ctx, r, profile, firstString(preflightDestination))
 	case update.InstallBinary:
 		return false, binaryUpgrade(ctx, r, profile)
 	case update.InstallScript:
@@ -102,8 +98,6 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 			return false, ggaScriptUpgrade(ctx, r)
 		}
 		return false, scriptUpgrade(ctx, r, profile)
-	case update.InstallOpenCodePlugin:
-		return false, opencodePluginUpgrade(ctx, r)
 	default:
 		return false, &ManualFallbackError{
 			Hint: fmt.Sprintf("upgrade %q: unsupported install method %q — please update manually. See: https://github.com/Gentleman-Programming/%s",
@@ -112,233 +106,9 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	}
 }
 
-func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
-	pkg := strings.TrimSpace(r.Tool.NpmPackage)
-	if pkg == "" {
-		return &ManualFallbackError{Hint: openCodePluginManualHint(r)}
-	}
-
-	homeDir, err := openCodeHomeDir()
-	if err != nil || strings.TrimSpace(homeDir) == "" {
-		return &ManualFallbackError{Hint: fmt.Sprintf("%s Could not resolve the user home directory; update %s manually.", openCodePluginManualHint(r), pkg)}
-	}
-
-	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
-	info, err := os.Stat(opencodeDir)
-	if err != nil || !info.IsDir() {
-		return &ManualFallbackError{Hint: fmt.Sprintf("%s OpenCode config directory was not found at %s; %s is not installed/materialized yet.", openCodePluginManualHint(r), opencodeDir, pkg)}
-	}
-
-	materialized, registered, err := openCodePluginRegisteredOrMaterialized(opencodeDir, pkg)
-	if err != nil {
-		return fmt.Errorf("inspect OpenCode plugin %s: %w", pkg, err)
-	}
-	if !materialized && !registered && r.Status != update.RegisteredNotMaterialized {
-		return &ManualFallbackError{Hint: fmt.Sprintf("%s %s is not registered in tui.json and is not present in node_modules; start/reload OpenCode first so it materializes the plugin.", openCodePluginManualHint(r), pkg)}
-	}
-
-	pm, err := selectOpenCodePackageManager(opencodeDir)
-	if err != nil {
-		return &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s can be upgraded from %s, but no supported package manager is available in PATH. Install bun or npm, then run update tools again.", pkg, opencodeDir)}
-	}
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
-	targets := []string{pkg + "@latest", "@opencode-ai/plugin@latest"}
-	var cmd *exec.Cmd
-	switch pm {
-	case "bun":
-		cmd = execCommand("bun", append([]string{"add"}, targets...)...)
-	case "npm":
-		cmd = execCommand("npm", append([]string{"install", "--save", "--no-audit", "--no-fund"}, targets...)...)
-	default:
-		return &ManualFallbackError{Hint: fmt.Sprintf("unsupported OpenCode package manager %q for %s", pm, pkg)}
-	}
-	cmd.Dir = opencodeDir
-	cmd.Stdin = nil
-	cmd.Env = openCodePluginUpgradeEnv(cmd.Env)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		outStr := string(out)
-		if pm == "npm" && npmErrorCode(outStr) == "ERESOLVE" {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-			fmt.Fprintln(os.Stderr, "WARNING: npm reported an ERESOLVE peer dependency conflict; retrying with --legacy-peer-deps")
-			retryCmd := execCommand("npm", append([]string{"install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps"}, targets...)...)
-			retryCmd.Dir = opencodeDir
-			retryCmd.Stdin = nil
-			retryCmd.Env = openCodePluginUpgradeEnv(retryCmd.Env)
-			if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
-				return fmt.Errorf("%s upgrade %s in %s: retry with --legacy-peer-deps failed: %w (retry output: %s); original error: %v (original output: %s)", pm, pkg, opencodeDir, retryErr, string(retryOut), err, outStr)
-			}
-		} else {
-			return fmt.Errorf("%s upgrade %s in %s: %w (output: %s)", pm, pkg, opencodeDir, err, outStr)
-		}
-	}
-	if err := clearOpenCodePluginPackageCache(homeDir, pkg); err != nil {
-		return fmt.Errorf("clear OpenCode package cache for %s: %w", pkg, err)
-	}
-	return nil
-}
-
-func npmErrorCode(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 4 && fields[0] == "npm" && fields[1] == "error" && fields[2] == "code" {
-			return fields[3]
-		}
-	}
-	return ""
-}
-
-func openCodePluginRegisteredOrMaterialized(opencodeDir, pkg string) (bool, bool, error) {
-	if info, err := os.Stat(filepath.Join(opencodeDir, "node_modules", pkg)); err == nil && info.IsDir() {
-		return true, false, nil
-	}
-	if _, ok := openCodePackageJSONDependencyVersion(opencodeDir, pkg); ok {
-		return false, true, nil
-	}
-
-	data, err := os.ReadFile(filepath.Join(opencodeDir, "tui.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, false, nil
-		}
-		return false, false, err
-	}
-	if strings.TrimSpace(string(data)) == "" {
-		return false, false, nil
-	}
-
-	var root struct {
-		Plugin []string `json:"plugin"`
-	}
-	if err := json.Unmarshal(data, &root); err != nil {
-		return false, false, fmt.Errorf("parse tui.json: %w", err)
-	}
-	for _, plugin := range root.Plugin {
-		if strings.TrimSpace(plugin) == pkg {
-			return false, true, nil
-		}
-	}
-	return false, false, nil
-}
-
-func openCodePackageJSONDependencyVersion(opencodeDir, pkg string) (string, bool) {
-	data, err := os.ReadFile(filepath.Join(opencodeDir, "package.json"))
-	if err != nil || strings.TrimSpace(string(data)) == "" {
-		return "", false
-	}
-
-	var manifest struct {
-		Dependencies    map[string]string `json:"dependencies"`
-		DevDependencies map[string]string `json:"devDependencies"`
-	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return "", false
-	}
-	if version, ok := manifest.Dependencies[pkg]; ok {
-		return version, true
-	}
-	if version, ok := manifest.DevDependencies[pkg]; ok {
-		return version, true
-	}
-	return "", false
-}
-
-func clearOpenCodePluginPackageCache(homeDir, pkg string) error {
-	return os.RemoveAll(filepath.Join(homeDir, ".cache", "opencode", "packages", pkg+"@latest"))
-}
-
-func selectOpenCodePackageManager(opencodeDir string) (string, error) {
-	candidates := make([]string, 0, 2)
-	if pm := openCodePackageManagerFromMetadata(opencodeDir); pm != "" {
-		candidates = append(candidates, pm)
-	}
-	for _, pm := range []string{"bun", "npm"} {
-		if !stringInSlice(candidates, pm) {
-			candidates = append(candidates, pm)
-		}
-	}
-
-	for _, pm := range candidates {
-		if _, err := lookPathCommand(pm); err == nil {
-			return pm, nil
-		}
-	}
-	return "", fmt.Errorf("bun/npm not found")
-}
-
-func openCodePackageManagerFromMetadata(opencodeDir string) string {
-	packageJSON := filepath.Join(opencodeDir, "package.json")
-	if data, err := os.ReadFile(packageJSON); err == nil {
-		var manifest struct {
-			PackageManager string `json:"packageManager"`
-		}
-		if json.Unmarshal(data, &manifest) == nil {
-			pm := strings.ToLower(strings.TrimSpace(manifest.PackageManager))
-			switch {
-			case strings.HasPrefix(pm, "bun@") || pm == "bun":
-				return "bun"
-			case strings.HasPrefix(pm, "npm@") || pm == "npm":
-				return "npm"
-			}
-		}
-	}
-
-	for _, lockfile := range []string{"bun.lock", "bun.lockb"} {
-		if _, err := os.Stat(filepath.Join(opencodeDir, lockfile)); err == nil {
-			return "bun"
-		}
-	}
-	for _, lockfile := range []string{"package-lock.json", "npm-shrinkwrap.json"} {
-		if _, err := os.Stat(filepath.Join(opencodeDir, lockfile)); err == nil {
-			return "npm"
-		}
-	}
-	return ""
-}
-
-func openCodePluginUpgradeEnv(existing []string) []string {
-	env := existing
-	if len(env) == 0 {
-		env = os.Environ()
-	}
-	return append(env,
-		"CI=1",
-		"npm_config_yes=true",
-		"npm_config_audit=false",
-		"npm_config_fund=false",
-	)
-}
-
-func stringInSlice(items []string, item string) bool {
-	for _, candidate := range items {
-		if candidate == item {
-			return true
-		}
-	}
-	return false
-}
-
-func openCodePluginManualHint(r update.UpdateResult) string {
-	if strings.TrimSpace(r.UpdateHint) != "" {
-		return r.UpdateHint
-	}
-	if strings.TrimSpace(r.Tool.NpmPackage) != "" {
-		return fmt.Sprintf("OpenCode manages %s from tui.json. Restart or reload OpenCode so it refreshes the plugin package.", r.Tool.NpmPackage)
-	}
-	return "OpenCode manages TUI plugin packages from tui.json. Restart or reload OpenCode so it refreshes plugins."
-}
-
-func openCodePluginRegisteredPendingHint(pkg string) string {
-	return fmt.Sprintf("OpenCode plugin %s is registered in ~/.config/opencode/tui.json but is not materialized in node_modules yet. Restart or reload OpenCode to materialize it; if it remains pending, check OpenCode logs for package or peer dependency errors before retrying upgrade.", pkg)
+func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (strategyOutcome, error) {
+	exitRequested, err := runStrategy(ctx, r, profile, preflightDestination...)
+	return strategyOutcome{exitRequested: exitRequested}, err
 }
 
 // brewUpgrade runs `brew update` (non-fatal) then `brew upgrade <toolName>`.
@@ -462,13 +232,13 @@ func homebrewFailureAdvice(toolName string, output string, detected ...update.Ho
 
 // goInstallUpgrade runs `go install <importPath>@v<version>`.
 //
-// `go install` writes to GOBIN (or GOPATH/bin), which is not necessarily the
-// directory the user's shell resolves for the tool. After a successful install
-// the destination is compared against the effective binary so a silent no-op
-// upgrade cannot pass as a clean success. A mismatch, or a destination that
-// cannot be resolved, is reported as a warning — never as a failure, because
-// the new binary genuinely was written.
-func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion string) error {
+// Generic Go-managed tools retain the post-install warning because the new
+// binary was genuinely written. Windows gentle-ai self-upgrades are different:
+// they must prove that Go owns the active executable before writing, or skip to
+// a manual recovery instead of creating a second PATH-visible binary.
+func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination string) error {
+	tool := r.Tool
+	latestVersion := r.LatestVersion
 	if tool.GoImportPath == "" {
 		return fmt.Errorf("upgrade %q: GoImportPath is empty — cannot run go install", tool.Name)
 	}
@@ -476,18 +246,107 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 	// GOBIN/GOPATH are static Go configuration that `go install` does not
 	// change, so they are read up front; the PATH lookup happens afterwards so
 	// a first-time install resolves correctly.
-	destDir, destErr := goInstallDestinationDir()
+	destDir := preflightDestination
+	var destErr error
+	if destDir == "" {
+		destDir, destErr = goInstallDestinationDir()
+		if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
+			return err
+		}
+	}
 
-	// Pin to the exact release version.
-	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
+	// Pin release installs to their exact version. The /vN suffix is derived
+	// from the target version via ModulePathForVersion so a v2 binary
+	// composing "go install ...@v3.0.1" resolves to .../v3/... and not the
+	// unresolvable /v2 path (issue #4687).
+	target := fmt.Sprintf("%s@v%s", update.ModulePathForVersion(tool.GoImportPath, tool.Repo, latestVersion), latestVersion)
+	betaGentleAI := isBetaGentleAIUpgrade(r)
+	if betaGentleAI {
+		pinned, err := update.ValidatedBetaSourceInstallCommand(r)
+		if err != nil {
+			return err
+		}
+		target = strings.TrimPrefix(pinned, "go install ")
+	}
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
+	if betaGentleAI {
+		cmd.Env = goProxyBypassEnv(cmd.Env, r.BetaModulePath)
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, string(out))
 	}
 
 	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
 	return nil
+}
+
+func preflightWindowsGentleAIGoInstall(r update.UpdateResult, profile system.PlatformProfile) (string, error) {
+	if profile.OS != "windows" || r.Tool.Name != "gentle-ai" {
+		return "", nil
+	}
+	destDir, destErr := goInstallDestinationDir()
+	if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
+		return "", err
+	}
+	return destDir, nil
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func preflightWindowsGentleAIGoInstallWithDestination(r update.UpdateResult, profile system.PlatformProfile, destDir string, destErr error) error {
+	if profile.OS != "windows" || r.Tool.Name != "gentle-ai" {
+		return nil
+	}
+	if destErr != nil {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, "", "")}
+	}
+
+	destination := absoluteBinaryPath(filepath.Join(destDir, goInstallBinaryName(r.Tool.Name, profile.OS)))
+	active, err := lookPathFn(r.Tool.Name)
+	if err != nil {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, "")}
+	}
+	active = absoluteBinaryPath(active)
+	if !sameBinaryPathForOS(destination, active, profile.OS) {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, active)}
+	}
+	return nil
+}
+
+func gentleAIWindowsGoInstallProvenanceHint(r update.UpdateResult, destination, active string) string {
+	details := "could not determine the Go installation destination"
+	switch {
+	case destination != "" && active == "":
+		details = fmt.Sprintf("could not resolve the active gentle-ai executable before Go would write to %s", destination)
+	case destination != "" && active != "":
+		details = fmt.Sprintf("resolves gentle-ai to %s, but Go would write to %s", active, destination)
+	}
+
+	hint := fmt.Sprintf("Windows self-upgrade %s. No files were changed. ", details)
+	if active != "" {
+		hint += fmt.Sprintf("Keep %s as the active installation, or intentionally migrate to %s with:\n  ", active, destination)
+	} else {
+		hint += "Confirm the active installation, then intentionally migrate with:\n  "
+	}
+	if isBetaGentleAIUpgrade(r) {
+		command, err := update.ValidatedBetaSourceInstallCommand(r)
+		if err != nil {
+			return hint + "Beta target metadata is unavailable; rerun the update check."
+		}
+		hint += command
+	} else {
+		hint += update.GentleAISourceInstallCommand(r.LatestVersion)
+	}
+	if destination != "" {
+		hint += fmt.Sprintf("\nAfter a successful migration, ensure only %s resolves for gentle-ai on PATH.", destination)
+	}
+	return hint
 }
 
 func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
@@ -497,24 +356,15 @@ func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
 		strings.HasPrefix(strings.TrimSpace(r.LatestVersion), "main@")
 }
 
-// goInstallMainUpgrade installs gentle-ai from HEAD on the beta channel. It runs
-// the same `go install` mechanism as goInstallUpgrade and therefore carries the
-// same risk of writing somewhere the shell does not resolve, so it performs the
-// same non-fatal destination verification.
-func goInstallMainUpgrade(tool update.ToolInfo) error {
-	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
-	if repository == "github.com//" {
-		repository = "github.com/gentleman-programming/gentle-ai"
+// goInstallMainUpgrade installs the checked beta revision, not mutable HEAD.
+func goInstallMainUpgrade(r update.UpdateResult) error {
+	command, err := update.ValidatedBetaSourceInstallCommand(r)
+	if err != nil {
+		return err
 	}
-	// Go derives the module path from the repository plus the major-version
-	// suffix: for major 2 and above the module path must end in /vN or the
-	// toolchain refuses every resolution of that repository, including the
-	// branch pseudo-versions this beta path installs.
-	module := repository + "/v2"
-
+	module := r.BetaModulePath
 	destDir, destErr := goInstallDestinationDir()
-
-	target := module + "/cmd/gentle-ai@main"
+	target := strings.TrimPrefix(command, "go install ")
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
 	cmd.Env = goProxyBypassEnv(cmd.Env, module)
@@ -522,7 +372,7 @@ func goInstallMainUpgrade(tool update.ToolInfo) error {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, strings.TrimSpace(string(out)))
 	}
 
-	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
+	warnGoInstallDestination(r.Tool.Name, detectOS(), destDir, destErr)
 	return nil
 }
 
@@ -581,6 +431,9 @@ func prependGoPattern(existing, pattern string) string {
 // works on all platforms including Windows. Other Windows binary upgrades return
 // ManualFallbackError so the executor surfaces them as UpgradeSkipped.
 func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
+	if needsSourceBuildManualUpgrade(r, profile) {
+		return &ManualFallbackError{Hint: gentleAISourceBuildUpgradeHint(r)}
+	}
 	if profile.OS == "windows" && r.Tool.Name == "gentle-ai" {
 		return &ManualFallbackError{Hint: gentleAIWindowsSourceInstallHint(r)}
 	}
@@ -608,10 +461,40 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 	return downloadAndReplace(ctx, r, profile)
 }
 
+// isUnanchoredSourceBuild recognizes the intentional source-build sentinel,
+// never a failed key parse or signature verification.
+func isUnanchoredSourceBuild(profile system.PlatformProfile) bool {
+	return (profile.OS == "linux" || profile.OS == "darwin") && releaseMinisignPublicKeys == unsetReleaseMinisignPublicKeys
+}
+
+func needsSourceBuildManualUpgrade(r update.UpdateResult, profile system.PlatformProfile) bool {
+	return r.Tool.Name == "gentle-ai" && isUnanchoredSourceBuild(profile) &&
+		!isBetaGentleAIUpgrade(r) && effectiveMethod(r.Tool, profile) == update.InstallBinary &&
+		(!profile.GoAvailable || r.Tool.GoImportPath == "")
+}
+
+func gentleAISourceBuildUpgradeHint(r update.UpdateResult) string {
+	return "This source build has no embedded release trust anchor. " +
+		"Automatic source upgrade requires Go on PATH and a declared Go import path. " +
+		"No files were changed. Install/update from source with Go 1.25.10+:\n  " +
+		gentleAISourceCommandForResult(r)
+}
+
 func gentleAIWindowsSourceInstallHint(r update.UpdateResult) string {
 	return update.WindowsDistributionHoldMessage + " " +
 		"No binary or remote script was downloaded or executed. Install/update from source with Go 1.25.10+:\n  " +
-		update.GentleAISourceInstallCommand(r.LatestVersion)
+		gentleAISourceCommandForResult(r)
+}
+
+func gentleAISourceCommandForResult(r update.UpdateResult) string {
+	if isBetaGentleAIUpgrade(r) {
+		command, err := update.ValidatedBetaSourceInstallCommand(r)
+		if err != nil {
+			return "Beta target metadata is unavailable; rerun the update check."
+		}
+		return command
+	}
+	return update.GentleAISourceInstallCommand(r.LatestVersion)
 }
 
 // engramBinaryUpgrade downloads or installs the latest engram binary.

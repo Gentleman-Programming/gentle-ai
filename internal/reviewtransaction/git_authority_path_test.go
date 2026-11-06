@@ -250,8 +250,8 @@ func TestGitCommonDirectoryMismatchFailsBeforeAuthorityMutation(t *testing.T) {
 			cleanup()
 			return err
 		}},
-		{name: "provider publication", run: func(ctx context.Context, repo string) error {
-			_, err := PublishReviewRepositoryContext(ctx, repo, ReviewRepositoryContextBinding{
+		{name: "self-contained context derivation", run: func(ctx context.Context, repo string) error {
+			_, err := DeriveReviewRepositoryContextHandle(ctx, repo, ReviewRepositoryContextBinding{
 				LineageID: "unrelated-common-provider", TargetIdentity: "sha256:" + strings.Repeat("a", 64),
 				Revision: "sha256:" + strings.Repeat("b", 64),
 			})

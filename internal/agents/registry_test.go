@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type mockAdapter struct {
@@ -19,9 +19,6 @@ func (m mockAdapter) Agent() model.AgentID    { return m.agent }
 func (m mockAdapter) Tier() model.SupportTier { return model.TierFull }
 func (m mockAdapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
 	return capabilitymanifest.MustForAgent(m.agent)
-}
-func (m mockAdapter) SupportsAutoInstall() bool {
-	return m.CapabilityManifest().Features.AutoInstall
 }
 func (m mockAdapter) Detect(_ context.Context, _ string) (bool, string, string, bool, error) {
 	return false, "", "", false, nil
@@ -120,6 +117,7 @@ func TestDefaultRegistryIncludesAllAgents(t *testing.T) {
 		model.AgentWindsurf,
 		model.AgentQwenCode,
 		model.AgentHermes,
+		model.AgentConductor,
 	} {
 		if _, ok := registry.Get(agent); !ok {
 			t.Fatalf("registry missing %s adapter", agent)

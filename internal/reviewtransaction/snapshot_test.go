@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -22,6 +23,9 @@ var (
 	snapshotRepoTemplateOnce sync.Once
 	snapshotRepoTemplateDir  string
 	snapshotRepoTemplateErr  error
+	mergeTreeProbeOnce       sync.Once
+	mergeTreeWriteTree       bool
+	mergeTreeProbeErr        error
 )
 
 func TestMain(m *testing.M) {
@@ -46,6 +50,19 @@ func TestMain(m *testing.M) {
 func TestCanonicalPathsRejectsDuplicateInput(t *testing.T) {
 	if _, err := canonicalPaths([]string{"tracked.txt", "tracked.txt"}); err == nil {
 		t.Fatal("canonicalPaths duplicate input error = nil")
+	}
+}
+
+func TestCanonicalTargetProjectsStagedBaseDiffToCommittedOnly(t *testing.T) {
+	requested := Target{
+		Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD~1", IntendedUntracked: []string{},
+	}
+	got := CanonicalTarget(requested)
+	if got.Projection != ProjectionWorkspace {
+		t.Fatalf("canonical base-diff projection = %q, want committed-only workspace", got.Projection)
+	}
+	if got.Kind != requested.Kind || got.BaseRef != requested.BaseRef || !reflect.DeepEqual(got.IntendedUntracked, requested.IntendedUntracked) {
+		t.Fatalf("canonical target = %#v, want only the executable projection changed", got)
 	}
 }
 
@@ -305,8 +322,9 @@ func TestSnapshotProjectionValidationAndIdentity(t *testing.T) {
 		t.Fatalf("unknown projection error = %v", err)
 	}
 	stagedBaseDiff, err := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD", IntendedUntracked: []string{}})
-	if err != nil || stagedBaseDiff.Projection != ProjectionStaged || stagedBaseDiff.CandidateTree != strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}")) {
-		t.Fatalf("staged base-diff snapshot = %#v, err=%v", stagedBaseDiff, err)
+	committedOnlyBaseDiff, committedOnlyErr := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionWorkspace, BaseRef: "HEAD", IntendedUntracked: []string{}})
+	if err != nil || committedOnlyErr != nil || !reflect.DeepEqual(stagedBaseDiff, committedOnlyBaseDiff) {
+		t.Fatalf("staged base-diff did not canonicalize to committed-only: staged=%#v err=%v committed-only=%#v err=%v", stagedBaseDiff, err, committedOnlyBaseDiff, committedOnlyErr)
 	}
 	if _, err := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD", IntendedUntracked: []string{"untracked.txt"}}); err == nil || !strings.Contains(err.Error(), "does not accept intended-untracked") {
 		t.Fatalf("staged base-diff intended-untracked error = %v", err)
@@ -316,6 +334,304 @@ func TestSnapshotProjectionValidationAndIdentity(t *testing.T) {
 	}
 	if _, err := builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{"untracked.txt"}}); err == nil || !strings.Contains(err.Error(), "does not accept intended-untracked") {
 		t.Fatalf("staged intended-untracked error = %v", err)
+	}
+}
+
+// installLargeStderrGitAddShim puts a `git` shim first on PATH that
+// reproduces #3993's byte-cap bound: `git add -u -- .` emits more than 64
+// KiB of incidental warning output (the shape thousands of tracked paths
+// triggering CRLF or embedded-repository warnings produce) and still exits
+// 0, exactly like a real large `git add -u` would. Every other invocation
+// delegates to the real git so the rest of buildCurrentChanges works
+// normally.
+func installLargeStderrGitAddShim(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH shim requires a POSIX shell")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is unavailable")
+	}
+	shimDir := t.TempDir()
+	shim := "#!/bin/sh\n" +
+		"prev=\"\"\n" +
+		"for arg in \"$@\"; do\n" +
+		"  if [ \"$prev\" = \"add\" ] && [ \"$arg\" = \"-u\" ]; then\n" +
+		"    i=0\n" +
+		"    while [ $i -lt 2000 ]; do\n" +
+		"      printf 'warning: adding embedded git repository or CRLF notice for path %d\\n' \"$i\" >&2\n" +
+		"      i=$((i + 1))\n" +
+		"    done\n" +
+		"    exit 0\n" +
+		"  fi\n" +
+		"  prev=\"$arg\"\n" +
+		"done\n" +
+		"exec \"$GENTLE_AI_TEST_REAL_GIT\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GENTLE_AI_TEST_REAL_GIT", realGit)
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestSnapshotGeneratedPathInterpretationPersistsWithoutChangingIdentity proves
+// fresh snapshots persist the current reviewer interpretation while legacy
+// snapshots retain their absent-field serialization and content identity.
+func TestSnapshotGeneratedPathInterpretationPersistsWithoutChangingIdentity(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "go.sum", "candidate dependency\n")
+	builder := SnapshotBuilder{Repo: repo}
+	snapshot, err := builder.Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"go.sum"},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if snapshot.GeneratedPathInterpretation != GeneratedPathInterpretationSummaryV1 {
+		t.Fatalf("fresh snapshot interpretation = %q, want %q", snapshot.GeneratedPathInterpretation, GeneratedPathInterpretationSummaryV1)
+	}
+	frozen, err := builder.FrozenCandidateContext(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("FrozenCandidateContext() error = %v", err)
+	}
+	if len(frozen.ChangedPathManifest) != 1 || !frozen.ChangedPathManifest[0].Generated {
+		t.Fatalf("fresh generated manifest = %#v, want one generated path", frozen.ChangedPathManifest)
+	}
+
+	identity := snapshot.Identity
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal fresh snapshot: %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"generated_path_interpretation":"`+GeneratedPathInterpretationSummaryV1+`"`)) {
+		t.Fatalf("fresh snapshot JSON omitted its interpretation: %s", encoded)
+	}
+
+	legacy := snapshot
+	legacy.GeneratedPathInterpretation = ""
+	legacy.LedgerIDs = nil
+	legacyEncoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("marshal historical snapshot: %v", err)
+	}
+	if bytes.Contains(legacyEncoded, []byte("generated_path_interpretation")) {
+		t.Fatalf("historical snapshot JSON did not omit empty interpretation: %s", legacyEncoded)
+	}
+	var roundTrip Snapshot
+	if err := json.Unmarshal(legacyEncoded, &roundTrip); err != nil {
+		t.Fatalf("unmarshal historical snapshot: %v", err)
+	}
+	if !reflect.DeepEqual(roundTrip, legacy) {
+		t.Fatalf("historical snapshot round trip changed state:\nwant=%#v\ngot=%#v", legacy, roundTrip)
+	}
+	if legacy.Identity != identity || IdentityForComponents(legacy.Kind, legacy.Projection, legacy.BaseTree, legacy.CandidateTree, legacy.PathsDigest) != identity {
+		t.Fatalf("interpretation changed content-only identity: historical=%q fresh=%q", legacy.Identity, identity)
+	}
+	freshRevision, err := CompactRevisionForState(CompactState{InitialSnapshot: snapshot})
+	if err != nil {
+		t.Fatalf("derive fresh authority revision: %v", err)
+	}
+	historicalRevision, err := CompactRevisionForState(CompactState{InitialSnapshot: roundTrip})
+	if err != nil {
+		t.Fatalf("derive historical authority revision: %v", err)
+	}
+	if freshRevision == historicalRevision {
+		t.Fatal("authority revision ignored persisted generated-path interpretation")
+	}
+	if err := builder.ValidateEvidence(context.Background(), roundTrip); err != nil {
+		t.Fatalf("historical snapshot no longer validates after round trip: %v", err)
+	}
+}
+
+func TestSnapshotUnknownGeneratedPathInterpretationFailsClosed(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "go.sum", "candidate dependency\n")
+	builder := SnapshotBuilder{Repo: repo}
+	snapshot, err := builder.Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"go.sum"},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	snapshot.GeneratedPathInterpretation = "generated-summary/v2"
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal unknown interpretation snapshot: %v", err)
+	}
+	var decoded Snapshot
+	if err := json.Unmarshal(payload, &decoded); err == nil || !strings.Contains(err.Error(), "unsupported generated path interpretation") {
+		t.Fatalf("unknown interpretation JSON error = %v", err)
+	}
+	if err := builder.ValidateEvidence(context.Background(), snapshot); err == nil || !strings.Contains(err.Error(), "unsupported generated path interpretation") {
+		t.Fatalf("unknown interpretation validation error = %v", err)
+	}
+	if _, err := builder.FrozenCandidateContext(context.Background(), snapshot); err == nil || !strings.Contains(err.Error(), "unsupported generated path interpretation") {
+		t.Fatalf("unknown interpretation context error = %v", err)
+	}
+}
+
+// TestBuildCurrentChangesToleratesLargeStagingOutput reproduces #3993: a
+// repository whose tracked paths make `git add -u -- .` emit more than the
+// shared 64 KiB stderr capture buffer must not fail candidate capture on
+// that account. Before the fix, the staging step used the same overflow-
+// rejecting capture as every other Git call, so this exact shape returned
+// "output exceeds deterministic 65536-byte limit" before an attempt token
+// was ever issued.
+func TestBuildCurrentChangesToleratesLargeStagingOutput(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "changed\n")
+	installLargeStderrGitAddShim(t)
+
+	if _, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}); err != nil {
+		t.Fatalf("Build() with a staging step producing >64 KiB of output error = %v, want tolerated", err)
+	}
+}
+
+// TestSnapshotIdentityIsRepresentationInvariant is the headline proof for
+// issue #2659 (root 21 of #2471): a declared intended-untracked path and the
+// exact same path staged into the index instead are two REPRESENTATIONS of
+// byte-identical candidate content, and the purified identity domain must not
+// distinguish them. Before the purification, snapshotIdentityForProjection
+// folded IntendedUntracked and its untracked-replay proof into the hash, so
+// these two snapshots carried different Identity values despite an identical
+// CandidateTree -- the bug this change fixes.
+func TestSnapshotIdentityIsRepresentationInvariant(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "declared.txt", "same bytes\n")
+	builder := SnapshotBuilder{Repo: repo}
+
+	declared, err := builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"declared.txt"}})
+	if err != nil {
+		t.Fatalf("Build(declared untracked) error = %v", err)
+	}
+
+	gitSnapshot(t, repo, "add", "--", "declared.txt")
+	staged, err := builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatalf("Build(staged instead) error = %v", err)
+	}
+
+	if declared.CandidateTree != staged.CandidateTree {
+		t.Fatalf("fixture is not content-identical: declared candidate=%s staged candidate=%s", declared.CandidateTree, staged.CandidateTree)
+	}
+	if declared.IntendedUntrackedProof == staged.IntendedUntrackedProof && !equalStrings(declared.IntendedUntracked, staged.IntendedUntracked) {
+		t.Fatalf("fixture did not actually change representation: declared=%#v staged=%#v", declared.IntendedUntracked, staged.IntendedUntracked)
+	}
+	if declared.Identity != staged.Identity {
+		t.Fatalf("purified identity is not representation-invariant: declared=%#v staged=%#v", declared, staged)
+	}
+}
+
+// TestLegacyFrozenSnapshotIdentityFailsValidationClosed is the maintainer-
+// directed inverse of the migration question for #2659: there is no dual
+// recognition of the retired pre-purification identity domain. A snapshot
+// whose Identity was minted under the OLD hash (kind/projection tag folding
+// IntendedUntracked and its proof into the hash) fails ValidateEvidence and
+// ValidateLiveSnapshot closed against the purified recomputation -- it does
+// not silently validate, and it does not panic or surface a cryptic
+// corruption/store error. It fails with the exact same "does not match Git
+// tree evidence" / "no longer matches" shape any other stale target produces,
+// which is the shape internal/cli already classifies as the actionable
+// reviewPreflightStaleTargetReason refusal (see
+// internal/cli/review_start_evidence_test.go, which proves that refusal shape
+// is reachable and actionable) -- so an operator who replays an old hint
+// lands on "re-derive the exact next transition", i.e. run review again, not
+// on a raw internal error.
+func TestLegacyFrozenSnapshotIdentityFailsValidationClosed(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "changed\n")
+	builder := SnapshotBuilder{Repo: repo}
+
+	snapshot, err := builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if err := builder.ValidateEvidence(context.Background(), snapshot); err != nil {
+		t.Fatalf("freshly minted snapshot must validate: %v", err)
+	}
+
+	legacy := snapshot
+	legacy.Identity = legacyPreCutSnapshotIdentityForTest(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree,
+		snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
+	if legacy.Identity == snapshot.Identity {
+		t.Fatal("legacy identity fixture did not actually differ from the purified identity")
+	}
+
+	err = builder.ValidateEvidence(context.Background(), legacy)
+	if err == nil {
+		t.Fatal("legacy-frozen identity validated against the purified recomputation")
+	}
+	if !strings.Contains(err.Error(), "match Git tree evidence") {
+		t.Fatalf("legacy-frozen identity failure is not the actionable stale-target shape: %v", err)
+	}
+
+	if err := builder.ValidateLiveSnapshot(context.Background(), legacy); err == nil {
+		t.Fatal("ValidateLiveSnapshot accepted a legacy-frozen identity")
+	} else if !strings.Contains(err.Error(), "match Git tree evidence") {
+		t.Fatalf("ValidateLiveSnapshot legacy-frozen failure is not the actionable stale-target shape: %v", err)
+	}
+}
+
+// legacyPreCutSnapshotIdentityForTest reconstructs, byte for byte, the
+// identity domain snapshotIdentityForProjection used before the #2659
+// purification: it folds proof and intended into the hash under the original
+// v1/v2/base-workspace-overlay-v1 tags. Production code deletes this domain
+// outright (maintainer decision: outdated identities are unusable, not
+// dual-recognized) so this exists ONLY here, as a fixture generator for
+// TestLegacyFrozenSnapshotIdentityFailsValidationClosed. It must stay a
+// byte-for-byte match of the retired formula or the test proves nothing.
+func legacyPreCutSnapshotIdentityForTest(kind TargetKind, projection Projection, baseTree, candidateTree, pathsDigest, proof string, intended, ledgerIDs []string) string {
+	hash := sha256.New()
+	if kind == TargetBaseWorkspaceOverlay {
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+	} else if projection == ProjectionStaged {
+		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+	} else {
+		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+	}
+	values := []string{string(kind), baseTree, candidateTree, pathsDigest, proof}
+	if projection == ProjectionStaged {
+		values = []string{string(kind), string(projection), baseTree, candidateTree, pathsDigest, proof}
+	}
+	for _, value := range values {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	for _, value := range intended {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	for _, value := range ledgerIDs {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+// TestSnapshotIdentityKindDomainSeparationRegression guards the one invariant
+// the #2659 purification explicitly keeps: kind and projection stay in the
+// identity hash domain. Identical baseTree/candidateTree/pathsDigest/ledgerIDs
+// under TargetCurrentChanges vs TargetBaseWorkspaceOverlay must still mint
+// different identities, or a current-changes receipt could be recognized as a
+// base-workspace-overlay review of identical bytes.
+func TestSnapshotIdentityKindDomainSeparationRegression(t *testing.T) {
+	baseTree := strings.Repeat("a", 40)
+	candidateTree := strings.Repeat("b", 40)
+	pathsDigest := digestPaths([]string{"shared.txt"})
+
+	currentChanges := snapshotIdentityForProjection(TargetCurrentChanges, "", baseTree, candidateTree, pathsDigest, "", nil, nil)
+	overlay := snapshotIdentityForProjection(TargetBaseWorkspaceOverlay, "", baseTree, candidateTree, pathsDigest, "", nil, nil)
+	if currentChanges == overlay {
+		t.Fatalf("current-changes and base-workspace-overlay identities collided for identical content: %s", currentChanges)
+	}
+
+	workspace := snapshotIdentityForProjection(TargetCurrentChanges, ProjectionWorkspace, baseTree, candidateTree, pathsDigest, "", nil, nil)
+	staged := snapshotIdentityForProjection(TargetCurrentChanges, ProjectionStaged, baseTree, candidateTree, pathsDigest, "", nil, nil)
+	if workspace == staged {
+		t.Fatalf("workspace and staged projection identities collided for identical content: %s", workspace)
 	}
 }
 
@@ -963,6 +1279,159 @@ func TestSnapshotBuilderExactRevisionIgnoresReplacementObjects(t *testing.T) {
 	}
 }
 
+// TestSnapshotBuilderExactRevisionRejectsActiveLocalGraft reproduces #1719:
+// a repository-local .git/info/grafts entry lets the same full commit ID
+// resolve to a different parent, base tree, and changed-path set while the
+// candidate tree stays identical. Unlike a replacement object
+// (TestSnapshotBuilderExactRevisionIgnoresReplacementObjects), Git's graft
+// mechanism is not disabled by --no-replace-objects, so exact-revision
+// derivation must detect and refuse it explicitly instead of silently
+// freezing a snapshot over rewritten ancestry.
+func TestSnapshotBuilderExactRevisionRejectsActiveLocalGraft(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands")
+	}
+	repo := initSnapshotRepo(t)
+	parentCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "second\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "second")
+	targetCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	target := Target{Kind: TargetExactRevision, Revision: targetCommit}
+
+	baseline, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatalf("Build(baseline, no graft) error = %v", err)
+	}
+
+	// Build an alternate history from the same original parent so the graft
+	// has a real, different tree to substitute.
+	gitSnapshot(t, repo, "checkout", "--detach", parentCommit)
+	writeSnapshotFile(t, repo, "other.txt", "alternate\n")
+	gitSnapshot(t, repo, "add", "--", "other.txt")
+	gitSnapshot(t, repo, "commit", "-m", "alternate")
+	alternateCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "checkout", "--detach", targetCommit)
+
+	commonDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-common-dir"))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repo, commonDir)
+	}
+	graftDir := filepath.Join(commonDir, "info")
+	if err := os.MkdirAll(graftDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", graftDir, err)
+	}
+	graftPath := filepath.Join(graftDir, "grafts")
+	graftLine := targetCommit + " " + alternateCommit + "\n"
+	if err := os.WriteFile(graftPath, []byte(graftLine), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", graftPath, err)
+	}
+
+	// Sanity-check the graft actually rewrites what plain Git reports, the
+	// same way the issue's reproduction confirms it before exercising the
+	// product.
+	graftedParents := strings.Fields(gitSnapshot(t, repo, "-c", "advice.graftFileDeprecated=false", "rev-list", "--parents", "-n", "1", targetCommit))
+	if len(graftedParents) != 2 || graftedParents[1] != alternateCommit {
+		t.Fatalf("graft fixture did not rewrite ancestry: rev-list --parents = %v", graftedParents)
+	}
+
+	_, err = (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	var graftErr *LocalGraftActiveError
+	if !errors.As(err, &graftErr) {
+		t.Fatalf("Build() with active graft error = %v, want *LocalGraftActiveError", err)
+	}
+	if !strings.Contains(err.Error(), graftPath) {
+		t.Fatalf("error %q does not name the graft file %q", err.Error(), graftPath)
+	}
+	if !strings.Contains(err.Error(), "rm "+graftPath) {
+		t.Fatalf("error %q does not name a runnable resolution", err.Error())
+	}
+
+	if err := os.Remove(graftPath); err != nil {
+		t.Fatalf("Remove(%s): %v", graftPath, err)
+	}
+	recovered, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatalf("Build() after removing graft error = %v", err)
+	}
+	if recovered.Identity != baseline.Identity {
+		t.Fatalf("Identity after removing graft = %q, want the ungrafted identity %q", recovered.Identity, baseline.Identity)
+	}
+}
+
+// TestSnapshotBuilderExactRevisionRejectsActiveLocalGraftFromLinkedWorktree
+// proves the graft check resolves the repository's actual COMMON Git
+// directory rather than the per-worktree one: info/grafts lives in the
+// common directory and is shared by every worktree, so a graft written
+// through the main checkout must still be caught when the snapshot is built
+// from a linked worktree.
+func TestSnapshotBuilderExactRevisionRejectsActiveLocalGraftFromLinkedWorktree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands")
+	}
+	repo := initSnapshotRepo(t)
+	parentCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "second\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "second")
+	targetCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+	gitSnapshot(t, repo, "checkout", "--detach", parentCommit)
+	writeSnapshotFile(t, repo, "other.txt", "alternate\n")
+	gitSnapshot(t, repo, "add", "--", "other.txt")
+	gitSnapshot(t, repo, "commit", "-m", "alternate")
+	alternateCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "checkout", "--detach", targetCommit)
+
+	commonDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-common-dir"))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repo, commonDir)
+	}
+	graftDir := filepath.Join(commonDir, "info")
+	if err := os.MkdirAll(graftDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", graftDir, err)
+	}
+	graftPath := filepath.Join(graftDir, "grafts")
+	if err := os.WriteFile(graftPath, []byte(targetCommit+" "+alternateCommit+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", graftPath, err)
+	}
+
+	worktree := canonicalTempDir(t)
+	if err := os.RemoveAll(worktree); err != nil {
+		t.Fatalf("RemoveAll(%s): %v", worktree, err)
+	}
+	gitSnapshot(t, repo, "worktree", "add", "--detach", worktree, targetCommit)
+
+	target := Target{Kind: TargetExactRevision, Revision: targetCommit}
+	_, err := (SnapshotBuilder{Repo: worktree}).Build(context.Background(), target)
+	var graftErr *LocalGraftActiveError
+	if !errors.As(err, &graftErr) {
+		t.Fatalf("Build() from linked worktree with active graft error = %v, want *LocalGraftActiveError", err)
+	}
+}
+
+func TestActiveGraftFileContentIgnoresCommentsAndBlankLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "empty", content: "", want: false},
+		{name: "blank lines only", content: "\n\n \n", want: false},
+		{name: "comment only", content: "# no grafts configured\n"},
+		{name: "comment and blank mixed", content: "# note\n\n"},
+		{name: "one entry", content: strings.Repeat("a", 40) + " " + strings.Repeat("b", 40) + "\n", want: true},
+		{name: "entry after comment", content: "# note\n" + strings.Repeat("a", 40) + "\n", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := activeGraftFileContent([]byte(tt.content)); got != tt.want {
+				t.Fatalf("activeGraftFileContent(%q) = %v, want %v", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBaseWorkspaceOverlayFreezesFullBoundaryWithoutMutation(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
@@ -1354,6 +1823,13 @@ func TestSnapshotBuilderRealGitFailuresAreNotTreatedAsUnborn(t *testing.T) {
 
 func TestSnapshotRepoTemplateContracts(t *testing.T) {
 	requireSnapshotGit(t)
+	template, err := snapshotRepoTemplate()
+	if err != nil {
+		t.Fatalf("snapshot repo template: %v", err)
+	}
+	if got := strings.TrimSpace(gitSnapshot(t, template, "config", "--local", "--get", "maintenance.auto")); got != "false" {
+		t.Fatalf("template maintenance.auto = %q, want false", got)
+	}
 	first := initSnapshotRepo(t)
 	second := initSnapshotRepo(t)
 	base := strings.TrimSpace(gitSnapshot(t, first, "rev-parse", "HEAD"))
@@ -1573,7 +2049,7 @@ func TestBatchGitProtocolReadersRejectDiagnostics(t *testing.T) {
 			return err
 		}},
 		{name: "cat-file-batch", run: func() error {
-			_, err := batchBlobContents(context.Background(), repo, []string{strings.Repeat("a", 40)})
+			_, err := batchBlobContents(context.Background(), repo, []string{strings.Repeat("a", 40)}, defaultGitOutputLimit)
 			return err
 		}},
 	}
@@ -1634,7 +2110,7 @@ func snapshotRepoTemplate() (string, error) {
 			snapshotRepoTemplateErr = fmt.Errorf("create template directory: %w", err)
 			return
 		}
-		for _, args := range [][]string{{"init"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}, {"config", "core.autocrlf", "false"}} {
+		for _, args := range [][]string{{"init"}, {"config", "--local", "maintenance.auto", "false"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}, {"config", "core.autocrlf", "false"}} {
 			if snapshotRepoTemplateErr = runSnapshotGit(template, args...); snapshotRepoTemplateErr != nil {
 				_ = os.RemoveAll(template)
 				return
@@ -1694,6 +2170,77 @@ func requireSnapshotGit(t *testing.T) {
 	}
 }
 
+func requireMergeTreeWriteTree(t *testing.T) {
+	t.Helper()
+	requireSnapshotGit(t)
+	mergeTreeProbeOnce.Do(func() {
+		output, err := exec.Command("git", "merge-tree", "-h").CombinedOutput()
+		mergeTreeWriteTree, mergeTreeProbeErr = classifyMergeTreeWriteTreeProbe(output, err)
+	})
+	if mergeTreeProbeErr != nil {
+		t.Fatalf("probe git merge-tree --write-tree capability: %v", mergeTreeProbeErr)
+	}
+	if !mergeTreeWriteTree {
+		t.Skip("git does not support merge-tree --write-tree (needs Git 2.38+)")
+	}
+}
+
+func classifyMergeTreeWriteTreeProbe(output []byte, err error) (bool, error) {
+	validHelp := bytes.Contains(output, []byte("git merge-tree"))
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 129 || !validHelp {
+			return false, fmt.Errorf("git merge-tree -h: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+	}
+	if !validHelp {
+		return false, fmt.Errorf("git merge-tree -h returned unrecognized help output: %q", strings.TrimSpace(string(output)))
+	}
+	return bytes.Contains(output, []byte("--write-tree")), nil
+}
+
+func TestClassifyMergeTreeWriteTreeProbe(t *testing.T) {
+	tests := []struct {
+		name      string
+		output    string
+		err       error
+		exitCode  string
+		want      bool
+		wantError bool
+	}{
+		{name: "supported", output: "usage: git merge-tree [--write-tree] <branch1> <branch2>", want: true},
+		{name: "unsupported", output: "usage: git merge-tree <base-tree> <branch1> <branch2>"},
+		{name: "unexpected command failure", output: "fatal: cannot execute", err: errors.New("exec failed"), wantError: true},
+		{name: "unrecognized successful output", output: "unexpected", wantError: true},
+		{name: "supported help exit", output: "usage: git merge-tree [--write-tree] <branch1> <branch2>", exitCode: "129", want: true},
+		{name: "unsupported help exit", output: "usage: git merge-tree <base-tree> <branch1> <branch2>", exitCode: "129"},
+		{name: "unexpected help exit", output: "usage: git merge-tree [--write-tree] <branch1> <branch2>", exitCode: "23", wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.err
+			if tt.exitCode != "" {
+				cmd := exec.Command(os.Args[0], "-test.run=^TestMergeTreeProbeExitHelper$")
+				cmd.Env = append(os.Environ(), "GENTLE_AI_TEST_MERGE_TREE_EXIT="+tt.exitCode)
+				err = cmd.Run()
+			}
+			got, err := classifyMergeTreeWriteTreeProbe([]byte(tt.output), err)
+			if got != tt.want || (err != nil) != tt.wantError {
+				t.Fatalf("classifyMergeTreeWriteTreeProbe() = (%v, %v), want (%v, error=%v)", got, err, tt.want, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestMergeTreeProbeExitHelper(t *testing.T) {
+	switch os.Getenv("GENTLE_AI_TEST_MERGE_TREE_EXIT") {
+	case "129":
+		os.Exit(129)
+	case "23":
+		os.Exit(23)
+	}
+}
+
 func writeSnapshotFile(t *testing.T, repo, name, content string) {
 	t.Helper()
 	path := filepath.Join(repo, name)
@@ -1718,4 +2265,109 @@ func gitSnapshot(t *testing.T, repo string, args ...string) string {
 func gitSnapshotSucceeds(repo string, args ...string) bool {
 	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
 	return cmd.Run() == nil
+}
+
+func TestCandidateLocationCausalityAnchorsBinaryMarkerToItsOwnLine(t *testing.T) {
+	t.Parallel()
+
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "notes.txt", "one\ntwo\n")
+	writeSnapshotFile(t, repo, "blob.bin", "\x00\x01\x02")
+	gitSnapshot(t, repo, "add", "--", "notes.txt", "blob.bin")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	// The text change quotes git's marker phrase inside an ordinary added line.
+	writeSnapshotFile(t, repo, "notes.txt", "one\nBinary files a/x and b/y differ\ntwo\n")
+	writeSnapshotFile(t, repo, "blob.bin", "\x00\x01\x03")
+	gitSnapshot(t, repo, "add", "--", "notes.txt", "blob.bin")
+	gitSnapshot(t, repo, "commit", "-m", "candidate")
+	candidate := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(t.Context(), Target{Kind: TargetExactRevision, Revision: candidate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := SnapshotBuilder{Repo: repo}
+
+	supported, degraded, err := builder.CandidateLocationSupportsCausality(t.Context(), snapshot, "notes.txt:2", CausalIntroduced)
+	if err != nil || !supported || degraded {
+		t.Fatalf("quoted marker inside a text hunk: supported=%v degraded=%v err=%v; want verified by hunk", supported, degraded, err)
+	}
+	supported, degraded, err = builder.CandidateLocationSupportsCausality(t.Context(), snapshot, "blob.bin:1", CausalIntroduced)
+	if err != nil || supported || !degraded {
+		t.Fatalf("real binary diff: supported=%v degraded=%v err=%v; want unsupported and degraded", supported, degraded, err)
+	}
+}
+
+func TestStagingCommandTimeoutIsBoundedByFloorAndCeiling(t *testing.T) {
+	t.Parallel()
+
+	floor := StagingCommandTimeoutFloor
+	perPath := StagingCommandTimeoutPerTrackedPath
+	ceiling := StagingCommandTimeoutCeiling
+	if ceiling <= floor {
+		t.Fatalf("ceiling %s must exceed floor %s", ceiling, floor)
+	}
+	if got := stagingCommandTimeout(0); got != floor {
+		t.Fatalf("zero tracked paths: got %s, want floor %s", got, floor)
+	}
+	small := int(floor/perPath) / 2
+	if got := stagingCommandTimeout(small); got != floor {
+		t.Fatalf("%d tracked paths: got %s, want floor %s", small, got, floor)
+	}
+	mid := int(floor/perPath) * 2
+	if got, want := stagingCommandTimeout(mid), time.Duration(mid)*perPath; got != want {
+		t.Fatalf("%d tracked paths: got %s, want proportional %s", mid, got, want)
+	}
+	huge := int(ceiling/perPath) * 100
+	if got := stagingCommandTimeout(huge); got != ceiling {
+		t.Fatalf("%d tracked paths: got %s, want ceiling %s", huge, got, ceiling)
+	}
+}
+
+// A legacy authority carries no generated-path interpretation, and no live
+// repository state can ever produce that absence again: every fresh rebuild
+// stamps the current interpretation. Live revalidation proves that a frozen
+// snapshot still describes its live target, which is a statement about
+// content, so a reviewer-representation discriminator must not decide it.
+func TestValidateLiveSnapshotPreservesHistoricalInterpretation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "candidate.txt"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	expected, err := builder.BuildStoredSnapshot(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"candidate.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.ValidateLiveSnapshot(context.Background(), expected); err != nil {
+		t.Fatalf("fresh snapshot must validate against its own live target: %v", err)
+	}
+	expected.GeneratedPathInterpretation = ""
+	if err := builder.ValidateLiveSnapshot(context.Background(), expected); err != nil {
+		t.Fatalf("historical snapshot rejected against an unchanged repository: %v", err)
+	}
+}
+
+// review/invalidate rebuilds live evidence for a stored authority. A legacy
+// authority must remain invalidatable: refusing it would strand every lineage
+// created before generated-path summaries existed.
+func TestRebuildCurrentSnapshotEvidenceAcceptsHistoricalInterpretation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "candidate.txt"), []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := SnapshotBuilder{Repo: repo}.BuildStoredSnapshot(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"candidate.txt"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuildCurrentSnapshotEvidence(context.Background(), repo, stored); err != nil {
+		t.Fatalf("fresh authority must rebuild its own live evidence: %v", err)
+	}
+	stored.GeneratedPathInterpretation = ""
+	if err := rebuildCurrentSnapshotEvidence(context.Background(), repo, stored); err != nil {
+		t.Fatalf("historical authority rejected against an unchanged repository: %v", err)
+	}
 }

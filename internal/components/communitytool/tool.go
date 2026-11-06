@@ -4,13 +4,16 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type Availability string
@@ -26,6 +29,7 @@ const (
 	AgentStatusUnavailable AgentStatusKind = "unavailable"
 	AgentStatusConfigured  AgentStatusKind = "configured"
 	AgentStatusMissing     AgentStatusKind = "missing"
+	AgentStatusPending     AgentStatusKind = "pending"
 )
 
 type Definition struct {
@@ -84,6 +88,8 @@ func (fn RunnerFunc) Run(name string, args ...string) error { return fn(name, ar
 var (
 	codeGraphPackageLookPath = exec.LookPath
 	codeGraphPnpmGlobalBin   = defaultPnpmGlobalBin
+	codeGraphCLIUsable       = defaultCodeGraphCLIUsable
+	codeGraphWSL             = defaultCodeGraphWSL
 )
 
 var definitions = []Definition{
@@ -166,7 +172,16 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		if err := validateCodeGraphInstallStatus(after); err != nil {
 			return rollback(err)
 		}
-		if openCodeResult.Changed || guidanceResult.Changed {
+		piPending := false
+		for _, agent := range after.Agents {
+			if agent.Agent == model.AgentPi && agent.Status == AgentStatusPending {
+				piPending = true
+				break
+			}
+		}
+		if piPending {
+			result.ManualActions = append(result.ManualActions, "CodeGraph configuration is reconciled for all detected supported agents. Pi activation health remains pending.")
+		} else if openCodeResult.Changed || guidanceResult.Changed {
 			result.ManualActions = append(result.ManualActions, "CodeGraph is already available and MCP-configured. Agent guidance was updated so enabled agents lazily initialize project indexes when needed.")
 		} else {
 			result.ManualActions = append(result.ManualActions, "CodeGraph is already available and configured for all detected supported agents. No changes were needed.")
@@ -175,9 +190,30 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	}
 
 	targets := detectedCodeGraphTargets(homeDir)
+	// The target ids come from a compatibility table written against
+	// codeGraphUpstreamVersion. Upstream rejects the whole comma-separated
+	// list when it does not recognise a single id, so passing them to an
+	// older CodeGraph takes down the targets it does support along with the
+	// ones it does not. When the installed CLI is provably older, drop the
+	// ids and let CodeGraph select targets itself instead of guessing which
+	// of ours it understands. A CLI that is not installed yet is exempt: the
+	// install command below fetches @latest, which meets the contract.
+	droppedBlindTargets := false
+	if before.CLI == AvailabilityAvailable && len(targets) > 0 {
+		if installed, ok := codeGraphInstalledVersion(before.CLIPath); ok && codeGraphVersionLess(installed, codeGraphUpstreamVersion) {
+			targets = nil
+			droppedBlindTargets = true
+			result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+				"CodeGraph %s is older than the %s target contract Gentle AI is written against, so agent targets were left to CodeGraph's own detection. Run `npm install -g @colbymchenry/codegraph@latest` (or `pnpm add -g @colbymchenry/codegraph@latest`) and rerun Gentle AI to get explicit target selection.",
+				installed, codeGraphUpstreamVersion))
+		}
+	}
 	commands := make([][]string, 0, 2)
-	if len(targets) > 0 {
+	switch {
+	case len(targets) > 0:
 		commands = append(commands, []string{"codegraph", "install", "--target", strings.Join(targets, ","), "--location", "global", "--yes"})
+	case droppedBlindTargets:
+		commands = append(commands, []string{"codegraph", "install", "--yes"})
 	}
 	if before.CLI != AvailabilityAvailable {
 		var err error
@@ -189,13 +225,20 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 			commands = commands[:1]
 		}
 	}
-	for _, command := range commands {
+	for index, command := range commands {
 		if len(command) == 0 {
 			continue
 		}
 		result.CommandsRun = append(result.CommandsRun, strings.Join(command, " "))
 		if err := runner.Run(command[0], command[1:]...); err != nil {
 			return rollback(fmt.Errorf("run %q: %w", strings.Join(command, " "), err))
+		}
+		if before.CLI != AvailabilityAvailable && index == 0 {
+			afterPackageInstall := DetectStatus(id, homeDir, detector)
+			result.StatusAfter = &afterPackageInstall
+			if afterPackageInstall.CLI != AvailabilityAvailable {
+				return rollback(fmt.Errorf("CodeGraph package installation did not leave a runnable codegraph CLI available"))
+			}
 		}
 	}
 	if _, err := ReconcileOpenCodeCodeGraph(homeDir, runner); err != nil {
@@ -286,14 +329,18 @@ func validateCodeGraphInstallStatus(status Status) error {
 func DetectStatus(id model.CommunityToolID, homeDir string, detector Detector) Status {
 	status := Status{Tool: id, CLI: AvailabilityMissing}
 	def, ok := DefinitionFor(id)
-	if !ok || id != model.CommunityToolCodeGraph {
+	if !ok {
+		status.FollowUps = append(status.FollowUps, fmt.Sprintf("status detection for %q is not implemented", id))
+		return status
+	}
+	if id != model.CommunityToolCodeGraph {
 		status.FollowUps = append(status.FollowUps, fmt.Sprintf("status detection for %q is not implemented", id))
 		return status
 	}
 	if detector == nil {
 		detector = DetectorFunc(exec.LookPath)
 	}
-	if path, err := detector.LookPath(def.CommandName); err == nil && strings.TrimSpace(path) != "" {
+	if path, err := detector.LookPath(def.CommandName); err == nil && strings.TrimSpace(path) != "" && codeGraphCLIUsable(path) {
 		status.CLI = AvailabilityAvailable
 		status.CLIPath = path
 	}
@@ -302,11 +349,43 @@ func DetectStatus(id model.CommunityToolID, homeDir string, detector Detector) S
 	return status
 }
 
+// defaultCodeGraphCLIUsable rejects only the Windows npm launcher namespace
+// exposed to WSL. Admission intentionally does not inspect or execute the
+// detector result: callers may supply a valid injected path that is absent on
+// this machine, and a status read must not run an unbounded subprocess.
+func defaultCodeGraphCLIUsable(path string) bool {
+	if !codeGraphWSL() {
+		return true
+	}
+	return !isWSLWindowsNpmShim(path)
+}
+
+func isWSLWindowsNpmShim(path string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(filepath.Clean(path), "\\", "/"))
+	mountedPath := strings.TrimPrefix(normalized, "/mnt/")
+	drive, _, mounted := strings.Cut(mountedPath, "/")
+	if !mounted || len(drive) != 1 || drive[0] < 'a' || drive[0] > 'z' {
+		return false
+	}
+	return strings.HasSuffix(normalized, "/appdata/roaming/npm/codegraph") ||
+		strings.HasSuffix(normalized, "/appdata/roaming/npm/codegraph.cmd") ||
+		strings.HasSuffix(normalized, "/appdata/roaming/npm/codegraph.ps1")
+}
+
+func defaultCodeGraphWSL() bool {
+	return runtime.GOOS == "linux" && (strings.TrimSpace(os.Getenv("WSL_INTEROP")) != "" || strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")) != "")
+}
+
 func (s Status) CodeGraphReconcileSatisfied() bool {
 	if s.Tool != model.CommunityToolCodeGraph || s.CLI != AvailabilityAvailable {
 		return false
 	}
 	for _, agent := range s.Agents {
+		// Validated Pi capability is reconciled even when activation health
+		// remains unverifiable. Genuine Pi failures still block this shortcut.
+		if agent.Agent == model.AgentPi && agent.Status == AgentStatusPending {
+			continue
+		}
 		if agent.Detected && !agent.Configured {
 			return false
 		}
@@ -322,7 +401,7 @@ func (s Status) DetectedConfiguredMissingCounts() (detected, configured, missing
 		detected++
 		if agent.Configured {
 			configured++
-		} else {
+		} else if agent.Status != AgentStatusPending {
 			missing++
 		}
 	}
@@ -335,7 +414,7 @@ func detectCodeGraphAgents(homeDir string) []AgentStatus {
 		return nil
 	}
 	supported := codeGraphSupportedAgents()
-	installed := agents.DiscoverInstalled(reg, homeDir)
+	installed := agents.DiscoverSelected(reg, homeDir)
 	installedByID := make(map[model.AgentID]string, len(installed))
 	for _, agent := range installed {
 		installedByID[agent.ID] = agent.ConfigDir
@@ -360,16 +439,16 @@ func detectCodeGraphAgents(homeDir string) []AgentStatus {
 		if detected {
 			configured, markerPath, reason := hasCodeGraphWiring(homeDir, adapter)
 			if id == model.AgentPi {
-				configured, reason, state.Children = inspectPiCodeGraph(homeDir, "")
-			}
-			state.Configured = configured
-			state.Path = markerPath
-			state.Reason = reason
-			if configured {
+				state.Status, reason, state.Children = inspectPiCodeGraph(homeDir, "")
+				configured = state.Status == AgentStatusConfigured
+			} else if configured {
 				state.Status = AgentStatusConfigured
 			} else {
 				state.Status = AgentStatusMissing
 			}
+			state.Configured = configured
+			state.Path = markerPath
+			state.Reason = reason
 		}
 		result = append(result, state)
 	}
@@ -409,8 +488,13 @@ func hasCodeGraphWiring(homeDir string, adapter agents.Adapter) (bool, string, s
 	return false, adapter.GlobalConfigDir(homeDir), "detected agent but no CodeGraph MCP or instruction marker was found"
 }
 
-func piCodeGraphStatusPath(homeDir string) string {
+// PiCodeGraphManifestPath returns the effective CodeGraph manifest path for Pi.
+func PiCodeGraphManifestPath(homeDir string) string {
 	return piagent.CodeGraphPaths(homeDir).Manifest
+}
+
+func piCodeGraphStatusPath(homeDir string) string {
+	return PiCodeGraphManifestPath(homeDir)
 }
 
 func hasDetectedCodeGraphToolWiring(homeDir string) bool {
@@ -418,7 +502,7 @@ func hasDetectedCodeGraphToolWiring(homeDir string) bool {
 	if err != nil {
 		return false
 	}
-	for _, installedAgent := range agents.DiscoverInstalled(reg, homeDir) {
+	for _, installedAgent := range agents.DiscoverSelected(reg, homeDir) {
 		adapter, ok := reg.Get(installedAgent.ID)
 		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) {
 			continue
@@ -463,7 +547,9 @@ func CodeGraphCommandsForDetectorAndTargets(detector Detector, targets []string)
 }
 
 func defaultPnpmGlobalBin() (string, error) {
-	output, err := exec.Command("pnpm", "bin", "-g").CombinedOutput()
+	command := exec.Command("pnpm", "bin", "-g")
+	system.EnsureCommandDir(command)
+	output, err := command.CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message == "" {

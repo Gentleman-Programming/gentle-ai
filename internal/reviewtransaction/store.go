@@ -36,6 +36,46 @@ var syncReviewDirectory = func(path string) error {
 	return directory.Close()
 }
 
+// mkdirAllSync creates the directory chain for path, like os.MkdirAll, but
+// synchronizes the parent of every directory it actually creates (#1721): a
+// newly created directory entry is not durable until its parent's own
+// directory data is synced, and a caller that publishes a file beneath a
+// freshly created directory (e.g. the first compact lineage under v2/) needs
+// that entry durable before it reports the publish as complete.
+//
+// Components are created one at a time with os.Mkdir rather than detected via
+// a Stat-before-MkdirAll check: os.Mkdir's own success/EEXIST outcome is race
+// free, where a preceding Stat would leave a TOCTOU window against a
+// concurrent creator.
+func mkdirAllSync(path string, mode os.FileMode) error {
+	path = filepath.Clean(path)
+	parent := filepath.Dir(path)
+	if parent == path {
+		return nil
+	}
+	if err := mkdirAllSync(parent, mode); err != nil {
+		return err
+	}
+	switch err := os.Mkdir(path, mode); {
+	case err == nil:
+		return SyncReviewDirectory(parent)
+	case errors.Is(err, os.ErrExist):
+		// Stat, not Lstat: an existing entry may be a symlink to a directory
+		// (e.g. macOS /var -> /private/var), which must not be rejected as
+		// "not a directory".
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return statErr
+		}
+		if !info.IsDir() {
+			return &os.PathError{Op: "mkdir", Path: path, Err: syscall.ENOTDIR}
+		}
+		return nil
+	default:
+		return err
+	}
+}
+
 type directorySyncError struct {
 	path  string
 	cause error
@@ -46,16 +86,6 @@ func (err *directorySyncError) Error() string {
 }
 
 func (err *directorySyncError) Unwrap() error { return err.cause }
-
-// ImmutablePublicationConflictError requires maintainer action because replay
-// cannot replace a conflicting immutable artifact.
-type ImmutablePublicationConflictError struct{ Cause error }
-
-func (err *ImmutablePublicationConflictError) Error() string {
-	return fmt.Sprintf("immutable review publication conflict: %v", err.Cause)
-}
-
-func (err *ImmutablePublicationConflictError) Unwrap() error { return err.Cause }
 
 // SyncReviewDirectory persists a directory entry when the platform supports it.
 // Windows filesystems may reject directory handles; in that case the file rename
@@ -111,32 +141,6 @@ func AuthoritativeStore(ctx context.Context, repo, lineageID string) (Store, err
 	}
 	_, statErr := os.Stat(filepath.Join(dir, "HEAD"))
 	return Store{Dir: dir, lineageID: lineageID, repo: root, maintenanceLockPath: filepath.Join(filepath.Dir(filepath.Dir(authorityRoot)), "REVIEW-MAINTENANCE.lock"), readOnly: statErr == nil}, nil
-}
-
-// DiscoverAuthoritativeStores returns every canonical lineage rooted in the
-// repository Git common directory. Callers still validate each chain before
-// treating it as review authority.
-func DiscoverAuthoritativeStores(ctx context.Context, repo string) ([]Store, error) {
-	authorityRoot, root, err := authoritativeStoreRoot(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(authorityRoot)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []Store{}, nil
-		}
-		return nil, err
-	}
-	stores := make([]Store, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() || validateLineageID(entry.Name()) != nil {
-			continue
-		}
-		stores = append(stores, Store{Dir: filepath.Join(authorityRoot, entry.Name()), lineageID: entry.Name(), repo: root,
-			maintenanceLockPath: filepath.Join(filepath.Dir(filepath.Dir(authorityRoot)), "REVIEW-MAINTENANCE.lock"), readOnly: true})
-	}
-	return stores, nil
 }
 
 func authoritativeStoreRoot(ctx context.Context, repo string) (string, string, error) {
@@ -200,7 +204,11 @@ func (store Store) append(expectedRevision string, record Record) (string, error
 		}
 		defer maintenance.Release()
 	}
-	if err := os.MkdirAll(filepath.Join(store.Dir, "events"), 0o755); err != nil {
+	// #1721: mkdirAllSync (not os.MkdirAll) so a first review/start on this
+	// lineage syncs the v1/ parent for the newly created lineage directory,
+	// and store.Dir for the newly created events/ directory, before any
+	// event or HEAD naming them is published below.
+	if err := mkdirAllSync(filepath.Join(store.Dir, "events"), 0o755); err != nil {
 		return "", err
 	}
 	lockPath := filepath.Join(store.Dir, "LOCK")
@@ -310,6 +318,13 @@ func (store Store) append(expectedRevision string, record Record) (string, error
 		} else {
 			return "", err
 		}
+	}
+	// #1721: HEAD is about to name this event as durable. Without syncing
+	// events/ first, a crash between the rename above and this point can
+	// leave a durable HEAD pointing at an event entry the directory never
+	// actually recorded.
+	if err := SyncReviewDirectory(filepath.Join(store.Dir, "events")); err != nil {
+		return "", &directorySyncError{path: eventPath, cause: err}
 	}
 	if err := writeAtomic(filepath.Join(store.Dir, "HEAD"), []byte(revision+"\n"), 0o644); err != nil {
 		return "", err
@@ -499,7 +514,7 @@ func validateSuccessor(previous, next Transaction, operation string) error {
 	} else if lensStateChanged || operation == "review/record-lens-result" {
 		return fmt.Errorf("%w: lens state changed outside the native lens result transition", ErrInvalidSuccessor)
 	}
-	freezeTransition := (previous.State == StateReviewing || previous.State == StateJudgesConfirmed) && next.State == StateFindingsFrozen
+	freezeTransition := previous.State == StateReviewing && next.State == StateFindingsFrozen
 	if freezeTransition {
 		expected := previous
 		ledger, err := CanonicalLedger(next.Findings)
@@ -574,10 +589,7 @@ func validateSuccessor(previous, next Transaction, operation string) error {
 	if previous.LedgerHash != "" && (previous.LedgerHash != next.LedgerHash || previous.LedgerFindingsHash != next.LedgerFindingsHash) {
 		return fmt.Errorf("%w: frozen ledger hash changed", ErrInvalidSuccessor)
 	}
-	if previous.JudgeProofHash != "" && (previous.JudgeProofHash != next.JudgeProofHash || previous.JudgeAgreementHash != next.JudgeAgreementHash || !reflect.DeepEqual(previous.JudgeProofs, next.JudgeProofs)) {
-		return fmt.Errorf("%w: Judgment Day proof changed", ErrInvalidSuccessor)
-	}
-	if previous.State != StateReviewing && previous.State != StateJudgesConfirmed && !reflect.DeepEqual(previous.Findings, next.Findings) {
+	if previous.State != StateReviewing && !reflect.DeepEqual(previous.Findings, next.Findings) {
 		return fmt.Errorf("%w: frozen findings changed", ErrInvalidSuccessor)
 	}
 	if !mapIsMonotonic(previous.Classifications, next.Classifications) || !mapIsMonotonic(previous.Outcomes, next.Outcomes) {
@@ -634,9 +646,7 @@ func validatePersistedV1Successor(previous, next Transaction, operation string, 
 		next.OriginalCriteria == nil && next.CorrectionRegression == nil {
 		return validateSuccessor(previous, next, "review/validate-fix-delta")
 	}
-	if operation == "review/freeze-findings" &&
-		(previous.Mode == ModeOrdinary4R || previous.Mode == ModeJudgmentDay) &&
-		(previous.State == StateReviewing || previous.State == StateJudgesConfirmed) &&
+	if operation == "review/freeze-findings" && previous.Mode == ModeOrdinary4R && previous.State == StateReviewing &&
 		next.State == StateFindingsFrozen {
 		return validateHistoricalFreezeFindings(previous, next)
 	}
@@ -706,9 +716,6 @@ func transactionsEqual(left, right Transaction) bool {
 		if len(transaction.FollowUps) == 0 {
 			transaction.FollowUps = nil
 		}
-		if len(transaction.JudgeProofs) == 0 {
-			transaction.JudgeProofs = nil
-		}
 		if len(transaction.SelectedLenses) == 0 {
 			transaction.SelectedLenses = nil
 		}
@@ -750,22 +757,12 @@ func validateSuccessorCounters(previous, next Transaction) error {
 			return fmt.Errorf("%w: lens result transition must consume exactly one execution", ErrInvalidSuccessor)
 		}
 		setLensCounter(&expected, next.LensResults[len(next.LensResults)-1].Lens, 1)
-	case previous.State == StateReviewing && next.State == StateJudgesConfirmed:
-		expected.JudgeExecutions = 2
 	case previous.State == StateEvidenceClassified && next.State != StateEvidenceClassified:
 		expected.RefuterBatches++
 	case previous.State == StateFixRequired && next.State == StateFixing:
-		if isOrdinaryMode(previous.Mode) {
-			expected.FixBatches++
-		} else {
-			expected.FixRounds++
-		}
-	case previous.State == StateFixValidating && (next.State == StateReadyFinalVerification || next.State == StateFixRequired || next.State == StateEscalated):
-		if isOrdinaryMode(previous.Mode) {
-			expected.ScopedFixValidations++
-		} else {
-			expected.ScopedRejudgments++
-		}
+		expected.FixBatches++
+	case previous.State == StateFixValidating && (next.State == StateReadyFinalVerification || next.State == StateEscalated):
+		expected.ScopedFixValidations++
 	case previous.State == StateReadyFinalVerification && next.State == StateFinalVerifying:
 		expected.FinalVerifications++
 	}
@@ -778,6 +775,7 @@ func validateSuccessorCounters(previous, next Transaction) error {
 func snapshotsEqual(previous, next Snapshot) bool {
 	return previous.Kind == next.Kind &&
 		previous.Projection == next.Projection &&
+		previous.GeneratedPathInterpretation == next.GeneratedPathInterpretation &&
 		previous.BaseTree == next.BaseTree &&
 		previous.CandidateTree == next.CandidateTree &&
 		previous.PathsDigest == next.PathsDigest &&
@@ -807,12 +805,10 @@ func validInitialStoreRecord(record Record) bool {
 		transaction.FinalCandidateTree != transaction.InitialReviewTree ||
 		transaction.FixDeltaHash != EmptyFixDeltaHash ||
 		transaction.LedgerHash != "" || transaction.EvidenceHash != "" ||
-		transaction.JudgeProofHash != "" || transaction.JudgeAgreementHash != "" ||
 		transaction.Release != nil || transaction.FailedEvidenceRevision != "" ||
 		len(transaction.Findings) != 0 || len(transaction.Classifications) != 0 ||
 		len(transaction.Outcomes) != 0 || len(transaction.FixFindingIDs) != 0 ||
-		len(transaction.PendingRefuterIDs) != 0 || len(transaction.FixCausedFindings) != 0 ||
-		len(transaction.JudgeProofs) != 0 {
+		len(transaction.PendingRefuterIDs) != 0 || len(transaction.FixCausedFindings) != 0 {
 		return false
 	}
 	switch transaction.Mode {
@@ -820,8 +816,6 @@ func validInitialStoreRecord(record Record) bool {
 		return transaction.Counters == (Counters{FullReviews: 1})
 	case ModeOrdinaryBounded:
 		return transaction.Counters == (Counters{}) && len(transaction.LensResults) == 0
-	case ModeJudgmentDay:
-		return transaction.Counters == (Counters{})
 	default:
 		return false
 	}
@@ -838,13 +832,12 @@ func chainIdentity(revisions []string) string {
 
 func legalStateTransition(previous, next State) bool {
 	allowed := map[State][]State{
-		StateReviewing:              {StateJudgesConfirmed, StateFindingsFrozen, StateEscalated},
-		StateJudgesConfirmed:        {StateFindingsFrozen, StateEscalated},
+		StateReviewing:              {StateFindingsFrozen, StateEscalated},
 		StateFindingsFrozen:         {StateEvidenceClassified, StateFixRequired, StateReadyFinalVerification, StateEscalated},
 		StateEvidenceClassified:     {StateFixRequired, StateReadyFinalVerification, StateEscalated},
 		StateFixRequired:            {StateFixing, StateEscalated},
 		StateFixing:                 {StateFixValidating, StateEscalated},
-		StateFixValidating:          {StateReadyFinalVerification, StateFixRequired, StateEscalated},
+		StateFixValidating:          {StateReadyFinalVerification, StateEscalated},
 		StateReadyFinalVerification: {StateFinalVerifying, StateEscalated},
 		StateFinalVerifying:         {StateApproved, StateEscalated},
 	}
@@ -862,9 +855,6 @@ func countersMonotonic(previous, next Counters) bool {
 		next.FixBatches >= previous.FixBatches &&
 		next.ScopedFixValidations >= previous.ScopedFixValidations &&
 		next.FinalVerifications >= previous.FinalVerifications &&
-		next.FixRounds >= previous.FixRounds &&
-		next.ScopedRejudgments >= previous.ScopedRejudgments &&
-		next.JudgeExecutions >= previous.JudgeExecutions &&
 		next.RiskExecutions >= previous.RiskExecutions &&
 		next.ResilienceExecutions >= previous.ResilienceExecutions &&
 		next.ReadabilityExecutions >= previous.ReadabilityExecutions &&
@@ -919,16 +909,6 @@ func WriteTransactionAtomic(path string, transaction Transaction) error {
 	return writeAtomic(path, append(payload, '\n'), 0o644)
 }
 
-// PublishFileNoReplace atomically publishes source only when destination is absent.
-func PublishFileNoReplace(source, destination string) error {
-	return publishNoReplace(source, destination)
-}
-
-// ReplaceFileAtomic atomically replaces destination with source.
-func ReplaceFileAtomic(source, destination string) error {
-	return replaceFileAtomic(source, destination)
-}
-
 func readRevision(path string) (string, error) {
 	payload, err := os.ReadFile(path)
 	if err != nil {
@@ -945,7 +925,7 @@ func readRevision(path string) (string, error) {
 }
 
 func writeAtomic(path string, payload []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := mkdirAllSync(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	temp, err := os.CreateTemp(filepath.Dir(path), ".atomic-*")
@@ -973,61 +953,6 @@ func writeAtomic(path string, payload []byte, mode os.FileMode) error {
 		return err
 	}
 	if err := SyncReviewDirectory(filepath.Dir(path)); err != nil {
-		return &directorySyncError{path: path, cause: err}
-	}
-	return nil
-}
-
-func publishImmutable(path string, payload []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(dir, ".publish-*")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if err := temp.Chmod(mode); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if _, err := temp.Write(payload); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := publishNoReplace(tempPath, path); err != nil {
-		if !os.IsExist(err) {
-			return err
-		}
-		info, statErr := os.Lstat(path)
-		if statErr != nil {
-			return statErr
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return &ImmutablePublicationConflictError{Cause: errors.New("non-regular existing path")}
-		}
-		existing, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		if !bytes.Equal(existing, payload) {
-			return &ImmutablePublicationConflictError{Cause: errors.New("existing content differs")}
-		}
-		if err := SyncReviewDirectory(dir); err != nil {
-			return &directorySyncError{path: path, cause: err}
-		}
-		return nil
-	}
-	if err := SyncReviewDirectory(dir); err != nil {
 		return &directorySyncError{path: path, cause: err}
 	}
 	return nil

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 )
 
 // ---------------------------------------------------------------------------
@@ -22,12 +22,14 @@ func TestRunInstallThreadsEngramVersionIntoClaudeSlimSelection(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
-	restoreVerifyVersion := verifyEngramVersion
+	restoreVerifyVersionCommand := verifyEngramVersionCommand
+	restoreProbeCommand := probeEngramProtocolFlagCommand
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
-		verifyEngramVersion = restoreVerifyVersion
+		verifyEngramVersionCommand = restoreVerifyVersionCommand
+		probeEngramProtocolFlagCommand = restoreProbeCommand
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
@@ -35,7 +37,15 @@ func TestRunInstallThreadsEngramVersionIntoClaudeSlimSelection(t *testing.T) {
 		return "/usr/local/bin/" + name, nil
 	}
 	runCommand = func(string, ...string) error { return nil }
-	verifyEngramVersion = func() (string, error) { return "engram 1.18.0", nil }
+	var versionCommand, probeCommand string
+	verifyEngramVersionCommand = func(command string) (string, error) {
+		versionCommand = command
+		return "engram 1.18.0", nil
+	}
+	probeEngramProtocolFlagCommand = func(_ context.Context, command string) (string, error) {
+		probeCommand = command
+		return "Usage: engram setup <slug>", nil
+	}
 
 	result, err := RunInstall(
 		[]string{"--agent", "claude-code", "--component", "engram"},
@@ -46,6 +56,10 @@ func TestRunInstallThreadsEngramVersionIntoClaudeSlimSelection(t *testing.T) {
 	}
 	if !result.Verify.Ready {
 		t.Fatalf("verification ready = false")
+	}
+	const wantEngram = "/usr/local/bin/engram"
+	if versionCommand != wantEngram || probeCommand != wantEngram {
+		t.Fatalf("Engram probes used version=%q probe=%q, want selected executable %q", versionCommand, probeCommand, wantEngram)
 	}
 
 	claudeMD, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
@@ -76,7 +90,7 @@ func TestRunInstallBelowFloorVersionKeepsClaudeFullSelection(t *testing.T) {
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = func(name string) (string, error) {
-		return "/usr/local/bin/" + name, nil
+		return name, nil
 	}
 	runCommand = func(string, ...string) error { return nil }
 	verifyEngramVersion = func() (string, error) { return "engram 1.3.9", nil }
@@ -124,7 +138,7 @@ func TestRunInstallForwardsProtocolSlimForClaudeCodeWhenSupported(t *testing.T) 
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = func(name string) (string, error) {
-		return "/usr/local/bin/" + name, nil
+		return name, nil
 	}
 	verifyEngramVersion = func() (string, error) { return "engram 1.18.0", nil }
 	probeEngramProtocolFlag = func(context.Context) (string, error) {
@@ -178,7 +192,7 @@ func TestRunInstallSafestWinsAcrossSharedSlug(t *testing.T) {
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = func(name string) (string, error) {
-		return "/usr/local/bin/" + name, nil
+		return name, nil
 	}
 	verifyEngramVersion = func() (string, error) { return "engram 1.18.0", nil }
 	probeEngramProtocolFlag = func(context.Context) (string, error) {
@@ -198,6 +212,14 @@ func TestRunInstallSafestWinsAcrossSharedSlug(t *testing.T) {
 			return os.WriteFile(settingsPath, []byte("{\"theme\":\"dark\"}\n"), 0o644)
 		}
 		return nil
+	}
+
+	// This test targets protocol-slug forwarding, not agent install behavior,
+	// so simulate Antigravity as already installed (its Detect looks for
+	// ~/.gemini/antigravity) — otherwise gentle-ai correctly refuses to
+	// proceed for an undetected agent.
+	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.gemini/antigravity): %v", err)
 	}
 
 	result, err := RunInstall(
@@ -246,7 +268,7 @@ func TestRunInstallOmitsProtocolFlagWhenProbeFails(t *testing.T) {
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = func(name string) (string, error) {
-		return "/usr/local/bin/" + name, nil
+		return name, nil
 	}
 	verifyEngramVersion = func() (string, error) { return "engram 1.18.0", nil }
 	probeEngramProtocolFlag = func(context.Context) (string, error) {
@@ -309,7 +331,7 @@ func TestRunInstallSkipsProtocolProbeWhenSetupModeOff(t *testing.T) {
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = func(name string) (string, error) {
-		return "/usr/local/bin/" + name, nil
+		return name, nil
 	}
 	runCommand = func(string, ...string) error { return nil }
 	verifyEngramVersion = func() (string, error) { return "engram 1.18.0", nil }
@@ -360,7 +382,7 @@ func TestRunInstallShellsOutEngramVersionOnlyOnce(t *testing.T) {
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = func(name string) (string, error) {
-		return "/usr/local/bin/" + name, nil
+		return name, nil
 	}
 	runCommand = func(string, ...string) error { return nil }
 	verifyEngramVersion = engram.VerifyVersion

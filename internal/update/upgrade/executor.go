@@ -3,9 +3,9 @@
 // isolated from install, pipeline, planner, and config-sync code paths.
 //
 // Import boundary: this package MUST NOT import:
-//   - github.com/gentleman-programming/gentle-ai/v2/internal/pipeline
-//   - github.com/gentleman-programming/gentle-ai/v2/internal/planner
-//   - github.com/gentleman-programming/gentle-ai/v2/internal/cli
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/pipeline
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/planner
+//   - github.com/gentleman-programming/gentle-ai/v4/internal/cli
 package upgrade
 
 import (
@@ -20,17 +20,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 // Package-level vars for testability — same pattern as internal/update/detect.go.
@@ -65,6 +72,11 @@ type ExecuteOptions struct {
 	Progress          io.Writer
 	BackupDiagnostics io.Writer
 	SkipBackup        bool
+}
+
+type executableUpdate struct {
+	result               update.UpdateResult
+	goInstallDestination string
 }
 
 // backupExcludeSubdirs lists subdirectory base names that should be skipped
@@ -124,12 +136,12 @@ var backupExcludeSubdirs = map[string]bool{
 // modify, not general-purpose backups of conversations, sessions, caches,
 // sockets, package installs, or other runtime state.
 //
-// Agent scope: when state.json exists with a non-empty InstalledAgents list,
-// only those agents' config paths are backed up — this is the canonical source
-// of truth established at install time. Filesystem detection is used only as a
-// fallback for fresh installs (no state.json yet). This prevents snapshot bloat
-// from agent config dirs that the user never actually installed via gentle-ai
-// (issue #354: snapshots could reach ~25 GiB from unmanaged config dirs).
+// Agent scope: persisted installation selection is authoritative, including a
+// deliberately configured empty selection. Filesystem detection is used only for
+// missing or incidental pre-install state; unreadable state contributes no agent
+// paths. This prevents snapshot bloat from agent config dirs that the user never
+// actually installed via gentle-ai (issue #354: snapshots could reach ~25 GiB
+// from unmanaged config dirs).
 func configPathsForBackup(homeDir string, diagnostics ...io.Writer) []string {
 	dw := firstWriter(diagnostics...)
 	reg, err := agents.NewDefaultRegistry()
@@ -138,21 +150,22 @@ func configPathsForBackup(homeDir string, diagnostics ...io.Writer) []string {
 		return managedGlobalBackupPaths(homeDir)
 	}
 
-	// Determine the canonical agent set to back up.
-	// Priority: persisted state.json InstalledAgents > filesystem detection.
+	// Determine the canonical agent set to back up from the shared persisted
+	// selection contract. Only legacy or incidental state may widen to filesystem
+	// detection; unreadable state remains intentionally empty.
 	var managedAgentIDs []model.AgentID
-	if s, stateErr := state.Read(homeDir); stateErr == nil && len(s.InstalledAgents) > 0 {
-		managedAgentIDs = make([]model.AgentID, 0, len(s.InstalledAgents))
-		for _, id := range s.InstalledAgents {
-			managedAgentIDs = append(managedAgentIDs, model.AgentID(id))
-		}
-		writeBackupDiagnostic(dw, "backup: using state.json agent list (%d agents) as backup scope", len(managedAgentIDs))
-	} else {
-		// Fallback: filesystem detection (first-time install or missing state.json).
+	scope := agents.ReadSelectionScope(homeDir)
+	switch scope.Mode {
+	case agents.SelectionScopeConfigured:
+		managedAgentIDs = scope.AgentIDs
+		writeBackupDiagnostic(dw, "backup: using configured state.json agent scope (%d agents)", len(managedAgentIDs))
+	case agents.SelectionScopeFilesystemFallback:
 		for _, installed := range agents.DiscoverInstalled(reg, homeDir) {
 			managedAgentIDs = append(managedAgentIDs, installed.ID)
 		}
-		writeBackupDiagnostic(dw, "backup: state.json unavailable, falling back to filesystem detection (%d agents)", len(managedAgentIDs))
+		writeBackupDiagnostic(dw, "backup: state.json does not define agent scope, falling back to filesystem detection (%d agents)", len(managedAgentIDs))
+	case agents.SelectionScopeUnavailable:
+		writeBackupDiagnostic(dw, "backup: state.json unreadable; skipping agent-specific backup paths")
 	}
 
 	paths := make(map[string]struct{})
@@ -207,8 +220,10 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		add(
 			filepath.Join(configDir, "persona.md"),
 			filepath.Join(configDir, "output-style.md"),
-			filepath.Join(configDir, "sdd-orchestrator.md"),
 			filepath.Join(configDir, "strict-tdd-mode.md"),
+			// The routing module carries both the orchestrator and routing
+			// guidance the Jinja router includes; upgrades rewrite it.
+			filepath.Join(configDir, "agent-routing.md"),
 		)
 	}
 
@@ -221,36 +236,119 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	if adapter.SupportsSlashCommands() {
-		for _, command := range sdd.OpenCodeCommands() {
-			add(filepath.Join(adapter.CommandsDir(homeDir), command.Name+".md"))
+		add(presentPaths(legacyassets.SlashCommandPaths(adapter.Agent(), adapter.CommandsDir(homeDir)))...)
+		commands, err := skills.AllSkillCommandPaths(homeDir, adapter)
+		if err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: skipping skill commands for %s: %v", adapter.Agent(), err)
 		}
+		add(commands...)
 	}
 
 	if adapter.SupportsSubAgents() {
 		for _, name := range embeddedFileNames(adapter.EmbeddedSubAgentsDir(), diagnostics) {
 			add(filepath.Join(adapter.SubAgentsDir(homeDir), name))
 		}
+		// The upgraded binary's sync retires native SDD agents (#5157).
+		add(presentPaths(legacyassets.RetiredSDDAgentPaths(adapter.Agent(), adapter.SubAgentsDir(homeDir)))...)
 	}
 
 	if adapter.SupportsSkills() {
 		add(managedSkillBackupPaths(homeDir, adapter, diagnostics)...)
+		// The upgraded binary's sync retires SDD skills (#5157).
+		add(legacyassets.PresentRetiredSDDAssetPaths(adapter.Agent(), legacyassets.SDDAssetDirs{Skills: adapter.SkillsDir(homeDir)})...)
+	}
+
+	// It also retires Codex's SDD profiles and the SDD block of its lowercase
+	// agents.md, and Kimi's SDD module and its legacy include (#5157).
+	runtimeFiles := legacyassets.RetiredSDDRuntimeFiles(adapter.Agent(), homeDir)
+	add(legacyassets.PresentRetiredSDDAssetPaths(adapter.Agent(), runtimeFiles.Dirs)...)
+	for _, prompt := range [][2]string{{runtimeFiles.Dirs.CodexHome, runtimeFiles.Prompt}, {runtimeFiles.Dirs.KimiHome, runtimeFiles.Hub}} {
+		if prompt[1] != "" && legacyassets.RetirablePromptFile(prompt[0], prompt[1]) {
+			add(prompt[1])
+		}
+	}
+
+	// The managed plugin install resolves the config directory through the
+	// adapter and owns the plugin list; the snapshot must match it (#3219).
+	if opencoderuntimeplugins.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+		add(opencoderuntimeplugins.PluginPaths(homeDir, adapter)...)
 	}
 
 	switch adapter.Agent() {
+	case model.AgentAntigravity:
+		// The upgraded binary's sync republishes the staged guidance as agy
+		// rules and retires the sections older releases appended to GEMINI.md.
+		owned, err := antigravityrules.OwnedRulePaths(homeDir)
+		if err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: skipping Antigravity rules: %v", err)
+		}
+		add(owned...)
+		add(presentPaths([]string{antigravityrules.LegacyPromptPath(homeDir)})...)
+	case model.AgentGeminiCLI:
+		// The upgraded binary's sync moves the guidance older releases wrote
+		// into GEMINI.md to the staging file and republishes the modules
+		// GEMINI.md imports.
+		if _, err := geminimodules.OwnedModulePaths(homeDir); err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: Gemini CLI module manifest unreadable: %v", err)
+		}
+		// Owned and to-be-written modules, the manifest, staging and root.
+		add(presentPaths(geminimodules.ManagedPaths(homeDir))...)
 	case model.AgentClaudeCode:
-		add(claude.UserConfigPath(homeDir), filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
+		add(claude.UserConfigPath(homeDir))
+		add(theme.VisualThemePaths(homeDir, adapter)...)
+		// The opt-in global module pilot rewrites the core and may write any
+		// known module name plus its ledger, which records only the modules it
+		// installed. Plan all of these paths, present or not, so a
+		// manual restore of a pre-pilot snapshot brings back the monolithic core
+		// without leaving the pilot behind. That restore deletes whatever exists
+		// at those paths, including module files the user created or edited
+		// after the snapshot; it is not atomic, and snapshots taken before this
+		// list existed stay partial (#5256 S27).
+		modulePaths, err := agentguidance.RoutingPathsWithOptions(homeDir, model.AgentClaudeCode, agentguidance.RoutingOptions{ClaudeGlobalModules: true})
+		if err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: skipping Claude module paths: %v", err)
+		}
+		add(modulePaths...)
 	case model.AgentOpenCode:
+		add(theme.VisualThemePaths(homeDir, adapter)...)
+		// The routing step records default-agent ownership beside the effective
+		// settings path, which honors an absolute OPENCODE_CONFIG_DIR; the
+		// snapshot must resolve it the same way.
+		add(opencodedefault.OwnershipPath(opencode.EffectiveSettingsPath(homeDir, "")))
 		add(
-			filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"),
 			filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 			filepath.Join(homeDir, ".config", "opencode", "tui.json"),
 		)
-		for _, phase := range sdd.SharedPromptPhases() {
-			add(filepath.Join(sdd.SharedPromptDir(homeDir), phase+".md"))
+		// Retirement never enters a prompts directory that is not a real
+		// directory, and removes only prompts that exist.
+		if dir := legacyassets.SharedPromptDir(homeDir); isRealDir(dir) {
+			var prompts []string
+			for _, phase := range legacyassets.SharedPromptPhases() {
+				prompts = append(prompts, filepath.Join(dir, phase+".md"))
+			}
+			add(presentPaths(prompts)...)
 		}
 	}
 
 	return paths
+}
+
+// presentPaths keeps the retired inventory paths that exist. Sync only
+// removes what exists, and a restore deletes every path the snapshot recorded
+// as absent, which would remove a file the user later created there.
+func presentPaths(paths []string) []string {
+	var present []string
+	for _, path := range paths {
+		if _, err := os.Lstat(path); err == nil {
+			present = append(present, path)
+		}
+	}
+	return present
+}
+
+func isRealDir(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir()
 }
 
 func managedGlobalBackupPaths(homeDir string) []string {
@@ -277,15 +375,15 @@ func managedSkillBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		})
 	}
 
-	for _, relPath := range []string{
-		"_shared/persistence-contract.md",
-		"_shared/engram-convention.md",
-		"_shared/openspec-convention.md",
-		"_shared/sdd-phase-common.md",
-		"_shared/sdd-status-contract.md",
-		"_shared/skill-resolver.md",
-	} {
-		paths = append(paths, filepath.Join(skillDir, relPath))
+	// The embedded skills/_shared listing is the single source of truth for the
+	// shared inventory; deriving it here keeps a newly added shared file from
+	// silently missing the upgrade backup.
+	sharedFiles, sharedErr := assets.SharedSkillFileNames()
+	if sharedErr != nil {
+		writeBackupDiagnostic(diagnostics, "backup: skipping embedded path %s: %v", assets.SharedSkillDir, sharedErr)
+	}
+	for _, relPath := range sharedFiles {
+		paths = append(paths, filepath.Join(skillDir, "_shared", filepath.FromSlash(relPath)))
 	}
 
 	return paths
@@ -408,12 +506,13 @@ func writeBackupDiagnostic(w io.Writer, format string, args ...any) {
 //   - Status UpdateAvailable → attempt upgrade; report Succeeded/Failed/Skipped(manual)
 //   - Status DevBuild → report as UpgradeSkipped with ManualHint (dev/source build)
 //   - Status VersionUnknown → report as UpgradeSkipped with ManualHint (manual attention required)
-//   - Status RegisteredNotMaterialized → attempt OpenCode npm dependency installation/update
 //   - Status UpToDate, NotInstalled, CheckFailed → omitted from report
 //   - dryRun=true → no exec; eligible tools reported as UpgradeSkipped
 //
-// The backup snapshot is created before any exec call — this is the architectural
-// guarantee that config is safe even if an upgrade fails mid-way.
+// The backup snapshot is created before any executable upgrade — this is the
+// architectural guarantee that config is safe even if an upgrade fails mid-way.
+// Windows gentle-ai provenance is preflighted first because its manual fallback
+// must remain a true zero-mutation outcome.
 func Execute(ctx context.Context, results []update.UpdateResult, profile system.PlatformProfile, homeDir string, dryRun bool, progress ...io.Writer) UpgradeReport {
 	options := ExecuteOptions{}
 	if len(progress) > 0 && progress[0] != nil {
@@ -425,17 +524,17 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, profile system.PlatformProfile, homeDir string, dryRun bool, options ExecuteOptions) UpgradeReport {
 	// progress writer for real-time status output (optional, defaults to no-op).
 	pw := firstWriter(options.Progress)
-	// Separate tools into executable (UpdateAvailable and OpenCode registered-pending),
+	// Separate tools into executable (UpdateAvailable),
 	// dev-build (DevBuild), and version-unknown tools. Non-actionable but user-visible
 	// states are included in the report as UpgradeSkipped so the upgrade flow never
 	// fails silently.
-	var executable []update.UpdateResult
+	var executable []executableUpdate
 	var devBuilds []update.UpdateResult
 	var versionUnknowns []update.UpdateResult
 	for _, r := range results {
 		switch r.Status {
-		case update.UpdateAvailable, update.RegisteredNotMaterialized:
-			executable = append(executable, r)
+		case update.UpdateAvailable:
+			executable = append(executable, executableUpdate{result: r})
 		case update.DevBuild:
 			devBuilds = append(devBuilds, r)
 		case update.VersionUnknown:
@@ -447,6 +546,11 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	// If nothing is executable, dev-built, or version-unknown, return empty report.
 	if len(executable) == 0 && len(devBuilds) == 0 && len(versionUnknowns) == 0 {
 		return UpgradeReport{DryRun: dryRun}
+	}
+
+	var preflightSkips []ToolUpgradeResult
+	if !dryRun {
+		executable, preflightSkips = preflightGentleAIUpgrades(executable, profile)
 	}
 
 	// Create backup snapshot BEFORE any execution (only when there are executables).
@@ -489,7 +593,7 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	}
 
 	// Build results slice: dev-build skips first (no exec), then executable tools.
-	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds)+len(versionUnknowns))
+	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds)+len(versionUnknowns)+len(preflightSkips))
 
 	// Dev-build tools: always UpgradeSkipped with a source-build hint.
 	for _, r := range devBuilds {
@@ -516,12 +620,15 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 		})
 	}
 
+	toolResults = append(toolResults, preflightSkips...)
+
 	// Executable tools: run upgrade strategy.
-	for _, r := range executable {
+	for _, candidate := range executable {
+		r := candidate.result
 		method := effectiveMethod(r.Tool, profile)
 		msg := fmt.Sprintf("Upgrading %s via %s (%s → %s)", r.Tool.Name, method, r.InstalledVersion, r.LatestVersion)
 		sp := NewSpinner(pw, msg)
-		toolResult := executeOne(ctx, r, profile, dryRun)
+		toolResult := executeOne(ctx, r, profile, dryRun, candidate.goInstallDestination)
 
 		// Check if the upgrade succeeded but requires immediate exit.
 		// This must be handled BEFORE calling sp.Finish() so the spinner can terminate properly.
@@ -559,6 +666,48 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	}
 }
 
+// preflightGentleAIUpgrades removes unsupported source-build and unsafe Windows
+// self-upgrades before backups. A manual fallback must not create or prune a
+// backup because no upgrade will be attempted.
+func preflightGentleAIUpgrades(executable []executableUpdate, profile system.PlatformProfile) ([]executableUpdate, []ToolUpgradeResult) {
+	remaining := make([]executableUpdate, 0, len(executable))
+	skipped := make([]ToolUpgradeResult, 0)
+	for _, candidate := range executable {
+		r := candidate.result
+		if needsSourceBuildManualUpgrade(r, profile) {
+			skipped = append(skipped, ToolUpgradeResult{
+				ToolName: r.Tool.Name, OldVersion: r.InstalledVersion,
+				NewVersion: r.LatestVersion, Method: effectiveMethod(r.Tool, profile),
+				Status: UpgradeSkipped, ManualHint: gentleAISourceBuildUpgradeHint(r),
+			})
+			continue
+		}
+		if profile.OS != "windows" || r.Tool.Name != "gentle-ai" || effectiveMethod(r.Tool, profile) != update.InstallGoInstall {
+			remaining = append(remaining, candidate)
+			continue
+		}
+
+		destination, err := preflightWindowsGentleAIGoInstall(r, profile)
+		if err != nil {
+			if hint, ok := AsManualFallback(err); ok {
+				skipped = append(skipped, ToolUpgradeResult{
+					ToolName:   r.Tool.Name,
+					OldVersion: r.InstalledVersion,
+					NewVersion: r.LatestVersion,
+					Method:     effectiveMethod(r.Tool, profile),
+					Status:     UpgradeSkipped,
+					ManualHint: hint,
+				})
+				continue
+			}
+		}
+
+		candidate.goInstallDestination = destination
+		remaining = append(remaining, candidate)
+	}
+	return remaining, skipped
+}
+
 func detectCommandHint(tool update.ToolInfo) string {
 	if len(tool.DetectCmd) == 0 {
 		return tool.Name
@@ -568,7 +717,7 @@ func detectCommandHint(tool update.ToolInfo) string {
 }
 
 // executeOne runs the upgrade for a single tool.
-func executeOne(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, dryRun bool) ToolUpgradeResult {
+func executeOne(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, dryRun bool, preflightDestination ...string) ToolUpgradeResult {
 	base := ToolUpgradeResult{
 		ToolName:   r.Tool.Name,
 		OldVersion: r.InstalledVersion,
@@ -580,8 +729,7 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		base.Status = UpgradeSkipped
 		return base
 	}
-
-	exitReq, err := runStrategy(ctx, r, profile)
+	outcome, err := runStrategyWithOutcome(ctx, r, profile, preflightDestination...)
 	if err != nil {
 		// Distinguish manual fallback (informational skip) from real failures.
 		if hint, ok := AsManualFallback(err); ok {
@@ -593,29 +741,27 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 			base.Err = err
 		}
 	} else {
+		base.NewVersion = r.LatestVersion
 		base.Status = UpgradeSucceeded
-		base.ExitRequested = exitReq
+		base.ExitRequested = outcome.exitRequested
 	}
 
 	return base
 }
 
 // effectiveMethod resolves the actual upgrade strategy for a tool on a given platform.
-// Priority order: plugin → brew-owned package → gentle-ai self-upgrade policy →
+// Priority order: brew-owned package → gentle-ai self-upgrade policy →
 // go-install → declared method.
 //
-//  1. OpenCode plugins are always handled by their own method — never overridden.
-//  2. Homebrew is used only when Homebrew confirms it owns this specific tool.
-//  3. gentle-ai's own upgrade never falls through to the generic rules below; it
-//     is resolved entirely by gentleAISelfUpgradeMethod, which is what keeps
-//     Linux and macOS on the signed release download.
-//  4. For every other tool: when Go is available on PATH and the tool declares a
+//  1. Homebrew is used only when Homebrew confirms it owns this specific tool.
+//  2. gentle-ai's own upgrade never falls through to the generic rules below; it
+//     is resolved entirely by gentleAISelfUpgradeMethod: configured release
+//     anchors keep Linux/macOS on signed downloads; exact UNSET source builds
+//     may use Go's pinned module installation.
+//  3. For every other tool: when Go is available on PATH and the tool declares a
 //     GoImportPath, go-install is preferred over a direct binary download.
-//  5. Otherwise the tool's declared InstallMethod is used as-is.
+//  4. Otherwise the tool's declared InstallMethod is used as-is.
 func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
-	if tool.InstallMethod == update.InstallOpenCodePlugin {
-		return update.InstallOpenCodePlugin
-	}
 	if profile.PackageManager == "brew" && homebrewPackageInstalled(tool.Name) {
 		return update.InstallBrew
 	}
@@ -631,18 +777,13 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 // gentleAISelfUpgradeMethod resolves how gentle-ai upgrades itself, once
 // Homebrew ownership has already been ruled out.
 //
-// Trust anchors differ by platform, and that is the whole point of this
-// function:
+// Trust anchors differ by build and platform:
 //
-//   - Linux and macOS publish signed release binaries. Those are downloaded over
-//     an authenticated connection and verified with minisign, so they always
-//     return InstallBinary. This function is the ONLY place gentle-ai's method is
-//     decided, which is what makes that guarantee structural rather than
-//     incidental: gentle-ai never reaches the generic
-//     `GoAvailable && GoImportPath != ""` rule, so declaring a GoImportPath for
-//     the Windows path below cannot silently move Linux or macOS off minisign.
-//     Regression guards: TestGentleAIOnLinuxNeverRoutesToGoInstall and
-//     TestGentleAIOnMacOSNeverRoutesToGoInstall.
+//   - Linux/macOS release builds keep InstallBinary and minisign verification.
+//     Only source builds carrying the exact UNSET sentinel may use a pinned
+//     Go install when Go and an import path are available. Empty, malformed,
+//     or placeholder keys still take the binary path and fail authentication;
+//     signature failures never trigger a Go fallback.
 //
 //   - On Windows, an active executable owned by Scoop is upgraded by Scoop. The
 //     ownership check resolves both the executable and Scoop's current package
@@ -665,7 +806,7 @@ func gentleAISelfUpgradeMethod(tool update.ToolInfo, profile system.PlatformProf
 	if profile.OS == "windows" && scoopGentleAIOwned() {
 		return update.InstallScoop
 	}
-	if profile.OS == "windows" && profile.GoAvailable && tool.GoImportPath != "" {
+	if (profile.OS == "windows" || isUnanchoredSourceBuild(profile)) && profile.GoAvailable && tool.GoImportPath != "" {
 		return update.InstallGoInstall
 	}
 	return update.InstallBinary

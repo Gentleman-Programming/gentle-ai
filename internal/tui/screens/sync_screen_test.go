@@ -10,6 +10,14 @@ import (
 
 // TestRenderSync_ConfirmState verifies the default confirm state — no operation
 // running, no result yet — shows sync description and a prompt.
+func TestRenderSyncPreservedAgentActionNotCountedAsChanged(t *testing.T) {
+	path := "/home/example/.cursor/agents/review-risk.md"
+	out := RenderSync(nil, nil, false, true, 0, []string{"Native review agent " + path + " was preserved, not updated; compare and merge manually."})
+	if !strings.Contains(out, path) || !strings.Contains(out, "preserved") || strings.Contains(out, "1 file(s)") {
+		t.Fatalf("preserved agent completion = %s", out)
+	}
+}
+
 func TestRenderSync_ConfirmState(t *testing.T) {
 	out := RenderSync(nil, nil, false /*operationRunning*/, false /*hasSyncRun*/, 0)
 

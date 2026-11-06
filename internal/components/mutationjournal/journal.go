@@ -15,7 +15,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 )
 
 // OwnedFile is the persisted before-image record. It mirrors what an external
@@ -43,7 +43,9 @@ type Journal struct {
 	roots  []string
 }
 
-var writeFileAtomic = filemerge.WriteFileAtomic
+// writeFileAtomic always applies the requested mode: forward writes pass the
+// file's recorded mode and Restore must reinstate it exactly.
+var writeFileAtomic = filemerge.WriteFileAtomicMode
 
 // New constructs a journal that only accepts paths within the given roots.
 // Roots must be absolute or the path-traversal guard will reject every write.
@@ -108,12 +110,20 @@ func (j *Journal) WriteWithMode(path string, data []byte, mode os.FileMode) (Own
 	if previous := j.before[path]; previous.data != nil {
 		effective = previous.mode
 	}
-	if _, err := writeFileAtomic(path, data, effective); err != nil {
+	// The writer reports whether the destination was actually replaced, including
+	// when it also returns an error. Record the change from that report rather
+	// than from "the write returned nil", or a failure raised after the rename
+	// leaves the entry marked unchanged and Restore walks past a mutated file
+	// while reporting a successful rollback (#1676).
+	result, err := writeFileAtomic(path, data, effective)
+	if result.Changed {
+		after := append([]byte(nil), data...)
+		j.before[path].after = &after
+		j.before[path].changed = true
+	}
+	if err != nil {
 		return OwnedFile{}, fmt.Errorf("write %q: %w", path, err)
 	}
-	after := append([]byte(nil), data...)
-	j.before[path].after = &after
-	j.before[path].changed = true
 	return j.OwnedFile(path, string(data), false, false), nil
 }
 

@@ -18,10 +18,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
 )
 
 func TestMain(m *testing.M) {
+	testenv.RunBrewProbeFixture()
 	if os.Getenv("GENTLE_AI_FAKE_GO") == "1" {
 		data := fmt.Sprintf("GONOSUMDB=%s\nGOPRIVATE=%s\nGONOPROXY=%s\n", os.Getenv("GONOSUMDB"), os.Getenv("GOPRIVATE"), os.Getenv("GONOPROXY"))
 		_ = os.WriteFile(os.Getenv("GO_ENV_RECORD"), []byte(data), 0o600)
@@ -1194,8 +1196,8 @@ func TestCanonicalEngramGoInstallPackagePreservesDeclaredModuleCasing(t *testing
 		},
 		{
 			name: "unrelated package remains unchanged",
-			pkg:  "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest",
-			want: "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest",
+			pkg:  "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest",
+			want: "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@latest",
 		},
 	}
 
