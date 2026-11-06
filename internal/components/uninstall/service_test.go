@@ -1489,6 +1489,98 @@ func TestComponentOperationsContext7ClaudeWorkspaceScopePreservesUnmanagedEntry(
 	}
 }
 
+// TestUninstallWorkspaceSnapshotRestoresAcrossRoots covers the restore side of
+// workspace-scoped uninstall (issue #2213): the plan legitimately snapshots
+// workspace files that live outside the home root, so the result carries that
+// root and the restore validates the entries it backed up. The same guard keeps
+// refusing those entries when only the home root is allowed.
+func TestUninstallWorkspaceSnapshotRestoresAcrossRoots(t *testing.T) {
+	homeDir := t.TempDir()
+	// A workspace root unrelated to homeDir, like the CLI fixtures that pass
+	// their own temp directory.
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	managedEntry := `{"command":"npx","args":["-y","--package=@upstash/context7-mcp@2.2.5","--","context7-mcp"]}`
+	workspaceMCPPath := filepath.Join(workspaceDir, ".mcp.json")
+	seed := `{"mcpServers":{"codegraph":{"command":"codegraph"},"context7":` + managedEntry + `}}`
+	if err := os.WriteFile(workspaceMCPPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace mcp.json) error = %v", err)
+	}
+
+	p, err := svc.buildPlan([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentContext7})
+	if err != nil {
+		t.Fatalf("buildPlan() error = %v", err)
+	}
+	if !slices.Contains(p.backupTargets, workspaceMCPPath) {
+		t.Fatalf("plan backup targets missing workspace .mcp.json: %v", p.backupTargets)
+	}
+
+	result, err := svc.executePlan(p, []model.AgentID{model.AgentClaudeCode})
+	if err != nil {
+		t.Fatalf("executePlan() error = %v", err)
+	}
+	uninstalled := readJSONFileForTest(t, workspaceMCPPath)
+	if servers, ok := uninstalled["mcpServers"].(map[string]any); ok {
+		if _, still := servers["context7"]; still {
+			t.Fatalf("uninstall kept the managed workspace mcpServers.context7: %#v", uninstalled)
+		}
+	}
+
+	if want := []string{homeDir, workspaceDir}; !slices.Equal(result.RestoreRoots, want) {
+		t.Fatalf("RestoreRoots = %v, want %v", result.RestoreRoots, want)
+	}
+
+	// The guard is unchanged: a home-only restore still refuses the workspace
+	// entries this plan snapshotted, and it refuses the whole manifest.
+	err = (backup.RestoreService{Roots: []string{homeDir}}).Restore(result.Manifest)
+	if err == nil || !strings.Contains(err.Error(), workspaceDir) || !strings.Contains(err.Error(), "must be an absolute path under an allowed root") {
+		t.Fatalf("home-only restore error = %v, want a refusal naming %q", err, workspaceDir)
+	}
+
+	if err := (backup.RestoreService{Roots: result.RestoreRoots}).Restore(result.Manifest); err != nil {
+		t.Fatalf("restore with the uninstall's own roots: %v", err)
+	}
+	if got := string(mustReadServiceFile(t, workspaceMCPPath)); got != seed {
+		t.Fatalf("restored workspace .mcp.json = %q, want %q", got, seed)
+	}
+}
+
+// TestUninstallRestoreRootsSkipHomeWorkspace pins the workspaceDir == homeDir
+// skip: a home-scope uninstall must not add a second restore root, and it must
+// not claim <home>/.mcp.json as a backup target either.
+func TestUninstallRestoreRootsSkipHomeWorkspace(t *testing.T) {
+	homeDir := t.TempDir()
+
+	svc, err := NewService(homeDir, homeDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	p, err := svc.buildPlan([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentContext7})
+	if err != nil {
+		t.Fatalf("buildPlan() error = %v", err)
+	}
+	result, err := svc.executePlan(p, []model.AgentID{model.AgentClaudeCode})
+	if err != nil {
+		t.Fatalf("executePlan() error = %v", err)
+	}
+
+	if want := []string{homeDir}; !slices.Equal(result.RestoreRoots, want) {
+		t.Fatalf("RestoreRoots = %v, want only the home root %v", result.RestoreRoots, want)
+	}
+	if slices.Contains(p.backupTargets, filepath.Join(homeDir, ".mcp.json")) {
+		t.Fatalf("home-scope plan must not target <home>/.mcp.json: %v", p.backupTargets)
+	}
+	if err := (backup.RestoreService{Roots: result.RestoreRoots}).Restore(result.Manifest); err != nil {
+		t.Fatalf("home-scope restore with the home root: %v", err)
+	}
+}
+
 func TestComponentOperationsContext7ClaudeRemovesSettingsAndManagedLegacyFile(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()

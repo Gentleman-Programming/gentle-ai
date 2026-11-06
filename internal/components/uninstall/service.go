@@ -48,8 +48,17 @@ type Snapshotter interface {
 }
 
 type Result struct {
-	Manifest                         backup.Manifest
-	BackupPath                       string
+	Manifest   backup.Manifest
+	BackupPath string
+	// RestoreRoots lists the directories a restore of Manifest legitimately
+	// spans: the home root, plus the workspace root when this uninstall
+	// actually snapshotted something there. RestoreService refuses manifest
+	// entries outside its Roots, so a home-only fallback rejects the
+	// workspace .mcp.json and settings a workspace-scoped uninstall backs up
+	// (issue #2213). The values come from the plan's own inputs and backup
+	// targets, never from the manifest, so a tampered manifest cannot widen
+	// them.
+	RestoreRoots                     []string
 	ChangedFiles                     []string
 	RemovedFiles                     []string
 	RemovedDirectories               []string
@@ -651,8 +660,9 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 	}
 
 	result := Result{
-		Manifest:   manifest,
-		BackupPath: snapshotDir,
+		Manifest:     manifest,
+		BackupPath:   snapshotDir,
+		RestoreRoots: restoreRootsForPlan(s.homeDir, s.workspaceDir, p.backupTargets),
 	}
 	// A batch has no per-agent transaction, so aborting at the first failure
 	// left later agents untouched, state.json stale, and no record of how far
@@ -804,6 +814,37 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		return result, errors.Join(errs...)
 	}
 	return result, nil
+}
+
+// restoreRootsForPlan returns the caller-known directories a restore of this
+// plan's snapshot may legitimately write under: the home root, plus the
+// workspace root only when a backup target really lives there.
+//
+// The workspace root is added so the workspace files a workspace-scoped
+// uninstall rewrites (<workspace>/.mcp.json and .claude/settings.json, issue
+// #2213) validate on restore, and it is skipped whenever the workspace is
+// unset or is the home directory itself. Everything is derived from the plan's
+// inputs and targets rather than from the manifest, so the restore guard keeps
+// refusing arbitrary paths.
+func restoreRootsForPlan(homeDir, workspaceDir string, backupTargets []string) []string {
+	roots := []string{homeDir}
+	if workspaceDir == "" || filepath.Clean(workspaceDir) == filepath.Clean(homeDir) {
+		return roots
+	}
+	for _, target := range backupTargets {
+		if isPathWithinDir(workspaceDir, target) {
+			return append(roots, workspaceDir)
+		}
+	}
+	return roots
+}
+
+// isPathWithinDir reports lexical containment: path must sit strictly inside
+// dir. It is deliberately lexical, because a backup target records where this
+// plan would write even when the file does not exist yet.
+func isPathWithinDir(dir, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // publishAntigravityRules runs after the staging file lost its removed
