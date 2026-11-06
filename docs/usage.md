@@ -241,6 +241,8 @@ Sync is safe and idempotent — running it twice produces no changes the second 
 
 `sync` refreshes the managed component set for the selected agents. It does not support `--component`; use `--include-permissions` or `--include-theme` for the opt-in components that are excluded from the default sync scope.
 
+For Claude Code, install and sync also add Engram's non-destructive memory tools to `permissions.allow` in `~/.claude/settings.json`, without needing `--include-permissions`. See [Claude Code auto mode](engram.md#claude-code-auto-mode) for the rules, what is preserved, and when the repair is skipped.
+
 After upgrading the binary, `gentle-ai sync --dry-run` previews the selected targets; `gentle-ai sync` refreshes their primary remote-authorization guidance. To select a specific managed client, use e.g. `gentle-ai sync --agent opencode`. This behavioral section is delivered with unconditional routing guidance, without requiring persona or `--include-permissions`. It requires explicit destination, operation, and credential/session authorization before remote work or ambient access discovery/reuse.
 
 This update covers the 15 non-Pi primary instruction carriers only. Executor roles and Pi's package-owned instructions require separate behavioral coverage. Existing automation modes and remembered approvals may suppress runtime prompts. The guidance is not a sandbox or a fresh-human-per-execution guarantee. Shared settings merging and historical profile cleanup (compatibility for existing user configurations) preserve existing permission-rule order.
@@ -365,6 +367,7 @@ Checks performed:
 | Installed asset version | Compares the recorded installation version with the running binary; on a mismatch, recommends `sync` using that binary's absolute path and flags a different copy resolved through `PATH` |
 | OpenCode activation (`opencode:managed_profile`) | With OpenCode background subagents on (POSIX): a new login shell resolves `opencode` to the managed launcher, not to a copy that a later startup file puts first on `PATH`; warns when this cannot be verified |
 | Engram MCP reachability | Confirms the Engram MCP server responds |
+| Engram Claude auto mode (`engram:claude_auto_allow`) | When Claude Code is installed and Engram is a configured component or registered in `~/.claude.json`: `~/.claude/settings.json` allows Engram's memory-write tools. Warns on missing rules (remedy: `sync`), on tools restricted by an existing `ask` or `deny` rule, and on a file that is not valid JSON or has an unexpected `permissions` shape (remedy: edit by hand). See [Claude Code auto mode](engram.md#claude-code-auto-mode) |
 | Disk space | Warns when available space is critically low |
 
 Each check reports **pass**, **warn**, or **fail** with an optional remedy hint. Run `doctor` first when troubleshooting an unexpected install or sync result.
