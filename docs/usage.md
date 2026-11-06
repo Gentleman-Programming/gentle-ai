@@ -413,6 +413,7 @@ gentle-ai -v
 | `--pi-exclude-package`        | Managed Pi package sources to skip during the `pi` install (comma-separated, repeatable), for example `npm:gentle-pi`. Allowed: `npm:gentle-pi`, `npm:pi-web-access`, `npm:pi-btw`; `npm:gentle-engram` cannot be excluded. Requires the `pi` agent. Also settable via `GENTLE_AI_PI_EXCLUDE_PACKAGES`; not saved in state, and an already-installed package is not removed. |
 | `--claude-orchestrator-modules` | Global Claude Code only: install the orchestrator as an always-loaded core plus on-demand modules in `~/.claude/gentle-ai/orchestrator/`. Off by default; rejected with `--scope workspace` or without `claude-code` in the selection. Sync, uninstall and restore limits: [Claude Code orchestrator modules](rollback.md#claude-code-orchestrator-modules-pilot). |
 | `--dry-run`                   | Preview the install plan without applying changes                                                                 |
+| `--force-community-tools`     | Force community tools (currently CodeGraph) to reinstall at `@latest` and re-run the reconcile, even when the installed CLI is current. Nothing is uninstalled first. Requires CodeGraph in the selection. |
 
 ### Isolated installs
 
