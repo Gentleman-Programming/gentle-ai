@@ -18,7 +18,7 @@ const shellInstallHelp = `gentle-ai shell install --target C:\owned\shell --mode
   --inspect                 print physical-selection confirmation without effects
   --confirm SHA256          approve that exact inspected selection
 No flags: existing installer TUI. Owned commands live in TARGET\bin; personal PATH stays unchanged.
-Requires Windows 11 x64, a normal unelevated account and a private local NTFS directory.
+Requires Windows 10 22H2 (build 19045) or Windows 11 x64, a normal unelevated account and a private local NTFS directory.
 Separate only. No Shared, update, force, recovery, Windows Server or ARM64 qualification.
 `
 

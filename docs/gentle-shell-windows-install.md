@@ -1,7 +1,8 @@
 # Gentle Shell from the Windows installer TUI
 
 **Implementation candidate, not yet qualified for Windows users.** This change
-ports the existing Separate installer TUI to Windows 11 x64. Actual Windows
+ports the existing Separate installer TUI to Windows 10 22H2 (build 19045) and
+Windows 11 x64. Actual Windows
 installation, both UI openings and terminal restoration remain unverified.
 Cross-compilation is not a substitute for those checks.
 
@@ -24,7 +25,7 @@ already contains this unreleased installer.
 
 | Boundary | Implementation |
 |---|---|
-| Scope | Windows 11 x64, Separate only; Server and ARM64 refused |
+| Scope | Windows 10 22H2 (build 19045) and Windows 11 x64, Separate only; Server and ARM64 refused |
 | gentle-ai TUI experience | Persona, Background subagents, Strict TDD, Global RDD, CodeGraph and Context7 are staged on Stable and on Main preview; Main preview selects the Main channel; "On my existing Pi" is shown disabled with the Separate-only reason; `selection.json` never retains the profile |
 | Tooling | Private pinned Node 24.18.0 and Go 1.27.1 ZIPs |
 | Composition | Stock Pi 1.0.0 and gentle-pi 4.0.0, complete SHA512 source lock, no implicit lifecycle scripts |
@@ -107,7 +108,7 @@ The old Linux controls and frozen Linux work are unchanged.
 ## Acceptance still required
 
 - [ ] Original exact-head formatting, builds and applicable tests pass.
-- [ ] Credentialless, resource-bounded **actual Windows 11 x64** laboratory is independently established.
+- [ ] Credentialless, resource-bounded **actual Windows 10 22H2 and Windows 11 x64** laboratories are independently established.
 - [ ] A user installs through the existing TUI, not a fake installer or helper.
 - [ ] Both owned bindings open authentic UIs and settle their exits.
 - [ ] A launch after real Go module/build cache use, a model/theme change and a `!` CWD session opens again.
