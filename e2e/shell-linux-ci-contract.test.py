@@ -136,11 +136,14 @@ class LinuxCIContract(unittest.TestCase):
         self.assertEqual([value.value for value in geometry.args[1:]], [80, 72, 0, 0])
         self.assertIn("b'el Gentleman package is active.'", text)
         # The channel contract witnesses registration with either the
-        # historical line or the pinned branded header (recent releases open
-        # with a codemode consent dialog first); the alternative is fixed
-        # bytes, never a dynamic or vacuous pass.
-        self.assertIn("branded = b'\\xe2\\x9c\\xbf Gentle Shell'", text)
-        self.assertIn("require(expected in raw or (not opening_only and branded in raw),", text)
+        # historical line or the pinned branded header searched over the
+        # ANSI-stripped visible stream (recent releases open with a
+        # codemode consent dialog first and position the header glyphs with
+        # cursor moves); both alternatives are fixed bytes, never a dynamic
+        # or vacuous pass.
+        self.assertIn("branded = re.compile(rb'\\xe2\\x9c\\xbf\\s+Gentle\\s+Shell')", text)
+        self.assertIn("require(expected in raw or (not opening_only and branded.search(visible)),", text)
+        self.assertIn("visible = re.sub(rb'\\x1b\\[[0-9;?]*[a-zA-Z]", text)
         # The window covers the first boot's expansive setup on the single-CPU
         # worker (#5904); no success check was lowered, only given time.
         self.assertIn("min(150, remaining())", text)

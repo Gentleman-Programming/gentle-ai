@@ -624,9 +624,11 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     expected = b'type, or / for commands' if opening_only else b'el Gentleman package is active.'
     # The channel contract installs whatever gentle-pi npm's latest resolves:
     # recent releases start with a codemode consent dialog and no longer print
-    # the historical registration line, so the shell's branded header also
-    # witnesses registration across versions.
-    branded = b'\xe2\x9c\xbf Gentle Shell'
+    # the historical registration line. Their branded header is rendered with
+    # cursor positioning between glyphs, so the witness is searched over the
+    # ANSI-stripped visible stream with flexible spacing — fixed bytes, never
+    # a dynamic or vacuous pass.
+    branded = re.compile(rb'\xe2\x9c\xbf\s+Gentle\s+Shell')
     confirmed = False
     stopped = False
     observed_cwd = ''
@@ -721,7 +723,8 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     os.write(master, b'finish\n')
                     break
         if installer is None:
-            require(expected in raw or (not opening_only and branded in raw), 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')
+            visible = re.sub(rb'\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-B]|\x1b[=>]', b'', bytes(raw))
+            require(expected in raw or (not opening_only and branded.search(visible)), 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')
             if opening_only:
                 require(stopped and b'GUEST-STATUS:0' in raw, 'Gentle opening did not settle successfully')
             require(not installer_seen, 'ordinary launch opened installer')
