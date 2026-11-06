@@ -6,21 +6,25 @@ import (
 	"strings"
 )
 
-const findingIDPrefixScratchKey = "finding-id-prefix:"
+const (
+	findingIDPrefixScratchKey = "finding-id-prefix:"
+	findingIDPrefixLineage    = "finding-id-prefix-discovery"
+)
 
 func findingIDPrefixJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j78-lens-finding-id-prefix-discovery",
-			Title:  "Reviewer discovers lens finding-ID prefixes before native admission",
-			Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/1844",
+			Review: reviewOptedIn,
+			Title:  "#3587: an exact active-lineage reviewer discovers lens finding-ID prefixes before native admission",
+			Source: "issue #1844 under #3587: exact active-lineage STATUS binds every discovered finding-ID prefix before native admission",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage high-risk code", Fixture: stageAuthCode},
-				{Name: "review start discloses canonical prefixes", Requires: startCapability,
-					Args: productArgs("review", "start"), After: rememberFindingIDPrefixes},
-				{Name: "capture explicit IDs from disclosed prefixes", Requires: captureResultCapability,
-					Composite: captureDisclosedFindingIDPrefixes},
+				{Name: "review start with an exact active lineage discloses canonical prefixes", Requires: startNamedCapability,
+					Args: productArgs("review", "start", "--lineage", findingIDPrefixLineage), After: rememberFindingIDPrefixes},
+				{Name: "capture explicit IDs from the exact active-lineage STATUS prefixes", Requires: captureResultCapability,
+					Composite: func(r *journeyRun) error { return captureDisclosedFindingIDPrefixes(r, findingIDPrefixLineage) }},
 			},
 		},
 	}
@@ -32,6 +36,9 @@ func rememberFindingIDPrefixes(sandbox *Sandbox, observation Observation) error 
 	}
 	if err := rememberLineage(sandbox, observation); err != nil {
 		return err
+	}
+	if sandbox.Lineage != findingIDPrefixLineage {
+		return fmt.Errorf("review start lineage = %q, want exact active lineage %q", sandbox.Lineage, findingIDPrefixLineage)
 	}
 	var start struct {
 		LensBindings []struct {
@@ -63,13 +70,13 @@ func rememberFindingIDPrefixes(sandbox *Sandbox, observation Observation) error 
 	return nil
 }
 
-func captureDisclosedFindingIDPrefixes(r *journeyRun) error {
+func captureDisclosedFindingIDPrefixes(r *journeyRun, lineage string) error {
 	for round := 0; round < 4; round++ {
-		envelope, err := readStatus(r)
+		envelope, err := readAtomicReviewStatus(r, lineage)
 		if err != nil {
 			return err
 		}
-		if envelope.NextTransition.Kind != "collect" || len(envelope.NextTransition.Collect.Inputs) == 0 ||
+		if envelope.Authority.LineageID != lineage || envelope.NextTransition.Kind != "collect" || len(envelope.NextTransition.Collect.Inputs) == 0 ||
 			envelope.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
 			return fmt.Errorf("capture round %d did not publish a reviewer-result collection", round+1)
 		}
@@ -113,11 +120,25 @@ func captureDisclosedFindingIDPrefixes(r *journeyRun) error {
 			return fmt.Errorf("capture mapped ID for %q exited %d: %s", lens, observation.ExitCode, firstLine(observation.Stderr))
 		}
 		var captured struct {
+			Schema            string `json:"schema"`
+			Operation         string `json:"operation"`
+			LineageID         string `json:"lineage_id"`
+			State             string `json:"state"`
 			AdmissionDecision string `json:"admission_decision"`
 		}
-		if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &captured); err != nil || captured.AdmissionDecision != "completed" {
-			return fmt.Errorf("capture mapped ID for %q = %q, %v; want completed native admission", lens, observation.Stdout, err)
+		if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &captured); err != nil {
+			return fmt.Errorf("decode mapped-ID capture for %q: %w", lens, err)
+		}
+		if captured.Schema == "gentle-ai.review-last-event-closure/v1" {
+			if round != 3 || captured.Operation != "review/capture-result" ||
+				captured.LineageID != lineage || captured.State != "approved" {
+				return fmt.Errorf("terminal mapped-ID acknowledgement capture for %q = %+v", lens, captured)
+			}
+			return requireAtomicLineageAcknowledged(r, lineage)
+		}
+		if captured.AdmissionDecision != "completed" {
+			return fmt.Errorf("capture mapped ID for %q = %q; want an admitted result or terminal closure", lens, observation.Stdout)
 		}
 	}
-	return nil
+	return fmt.Errorf("mapped finding-ID captures never produced terminal last-event closure")
 }

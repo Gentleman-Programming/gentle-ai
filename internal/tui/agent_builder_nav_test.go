@@ -6,9 +6,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agentbuilder"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // ─── Helper: set up a model on the agent builder engine screen ───────────────
@@ -43,16 +43,16 @@ func TestAgentBuilder_WelcomeCreateAgentEnter_NavigatesToEngine(t *testing.T) {
 	}
 }
 
-// ─── T-28.2: Esc from ScreenAgentBuilderEngine → back to Welcome ─────────────
+// ─── T-28.2: Esc from ScreenAgentBuilderEngine → back to Custom Agents ─────
 
-func TestAgentBuilder_EscFromEngine_ReturnsToWelcome(t *testing.T) {
+func TestAgentBuilder_EscFromEngine_ReturnsToCustomAgents(t *testing.T) {
 	m := modelOnAgentBuilderEngine(t)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenWelcome {
-		t.Fatalf("screen = %v, want ScreenWelcome", state.Screen)
+	if state.Screen != ScreenCustomAgents {
+		t.Fatalf("screen = %v, want ScreenCustomAgents", state.Screen)
 	}
 }
 
@@ -92,9 +92,9 @@ func TestAgentBuilder_EnterOnPromptEmpty_StaysOnPrompt(t *testing.T) {
 	}
 }
 
-// ─── T-28.5: Tab on prompt with non-empty textarea → navigates to SDD ────────
+// ─── T-28.5: A filled prompt starts generic generation directly ─────────────
 
-func TestAgentBuilder_TabOnPromptNonEmpty_NavigatesToSDD(t *testing.T) {
+func TestAgentBuilder_TabOnPromptNonEmpty_StartsGeneration(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgentBuilderPrompt
 
@@ -103,77 +103,22 @@ func TestAgentBuilder_TabOnPromptNonEmpty_NavigatesToSDD(t *testing.T) {
 	ta.SetValue("create an a11y reviewer")
 	m.AgentBuilder.Textarea = ta
 
-	// Tab navigates from prompt to SDD when textarea is non-empty.
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	state := updated.(Model)
 
-	if state.Screen != ScreenAgentBuilderSDD {
-		t.Fatalf("screen = %v, want ScreenAgentBuilderSDD", state.Screen)
+	if state.Screen != ScreenAgentBuilderGenerating || !state.AgentBuilder.Generating {
+		t.Fatalf("screen/generating = %v/%v, want generating/true", state.Screen, state.AgentBuilder.Generating)
+	}
+	back, _ := state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := back.(Model).Screen; got != ScreenAgentBuilderPrompt {
+		t.Fatalf("back screen = %v, want prompt", got)
 	}
 }
 
-// ─── T-28.6: Enter on SDD "Standalone" → navigates to ScreenAgentBuilderGenerating
-
-func TestAgentBuilder_StandaloneMode_NavigatesToGenerating(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenAgentBuilderSDD
-	m.AgentBuilder.SelectedEngine = model.AgentClaudeCode
-	ta := textarea.New()
-	ta.SetValue("build a linter")
-	m.AgentBuilder.Textarea = ta
-	m.Cursor = 0 // "Standalone — no SDD integration"
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenAgentBuilderGenerating {
-		t.Fatalf("screen = %v, want ScreenAgentBuilderGenerating", state.Screen)
-	}
-	if !state.AgentBuilder.Generating {
-		t.Errorf("AgentBuilder.Generating should be true")
-	}
-}
-
-// ─── T-28.7: Enter on SDD "New SDD Phase" → navigates to ScreenAgentBuilderSDDPhase
-
-func TestAgentBuilder_NewPhaseMode_NavigatesToSDDPhase(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenAgentBuilderSDD
-	m.Cursor = 1 // "New SDD Phase"
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	state := updated.(Model)
-
-	if state.Screen != ScreenAgentBuilderSDDPhase {
-		t.Fatalf("screen = %v, want ScreenAgentBuilderSDDPhase", state.Screen)
-	}
-}
-
-// ─── T-28.8: Esc from ScreenAgentBuilderSDD → goes to ScreenAgentBuilderPrompt
-
-func TestAgentBuilder_EscFromSDD_ReturnsToPrompt(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenAgentBuilderSDD
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	state := updated.(Model)
-
-	if state.Screen != ScreenAgentBuilderPrompt {
-		t.Fatalf("screen = %v, want ScreenAgentBuilderPrompt", state.Screen)
-	}
-}
-
-// ─── T-28.9: Esc from ScreenAgentBuilderSDDPhase → goes to ScreenAgentBuilderSDD
-
-func TestAgentBuilder_EscFromSDDPhase_ReturnsToSDD(t *testing.T) {
-	m := NewModel(system.DetectionResult{}, "dev")
-	m.Screen = ScreenAgentBuilderSDDPhase
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	state := updated.(Model)
-
-	if state.Screen != ScreenAgentBuilderSDD {
-		t.Fatalf("screen = %v, want ScreenAgentBuilderSDD", state.Screen)
+func TestAgentBuilder_GeneratingBackRouteReturnsToPrompt(t *testing.T) {
+	previous, ok := PreviousScreen(ScreenAgentBuilderGenerating)
+	if !ok || previous != ScreenAgentBuilderPrompt {
+		t.Fatalf("previous/ok = %v/%v, want prompt/true", previous, ok)
 	}
 }
 
@@ -245,31 +190,31 @@ func TestAgentBuilder_InstallDoneMsg_MovesToComplete(t *testing.T) {
 	}
 }
 
-// ─── T-28.13: Enter on Complete → back to Welcome ────────────────────────────
+// ─── T-28.13: Enter on Complete → back to Custom Agents ────────────────────
 
-func TestAgentBuilder_EnterOnComplete_ReturnsToWelcome(t *testing.T) {
+func TestAgentBuilder_EnterOnComplete_ReturnsToCustomAgents(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgentBuilderComplete
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenWelcome {
-		t.Fatalf("screen = %v, want ScreenWelcome", state.Screen)
+	if state.Screen != ScreenCustomAgents {
+		t.Fatalf("screen = %v, want ScreenCustomAgents", state.Screen)
 	}
 }
 
-// ─── T-28.14: Esc from Complete → back to Welcome ────────────────────────────
+// ─── T-28.14: Esc from Complete → back to Custom Agents ────────────────────
 
-func TestAgentBuilder_EscFromComplete_ReturnsToWelcome(t *testing.T) {
+func TestAgentBuilder_EscFromComplete_ReturnsToCustomAgents(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgentBuilderComplete
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenWelcome {
-		t.Fatalf("screen = %v, want ScreenWelcome", state.Screen)
+	if state.Screen != ScreenCustomAgents {
+		t.Fatalf("screen = %v, want ScreenCustomAgents", state.Screen)
 	}
 }
 

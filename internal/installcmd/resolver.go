@@ -5,18 +5,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/versions"
 )
 
 // cmdLookPath, osStat, osGetenv, and cmdGoVersion are package-level vars for testability.
 var cmdLookPath = exec.LookPath
 var osStat = os.Stat
 var osGetenv = os.Getenv
+
+// cmdBrewHelpTrust probes capability without changing Homebrew's trust state.
+var cmdBrewHelpTrust = func(brew string) error {
+	return exec.Command(brew, "help", "trust").Run()
+}
+
 var cmdGoVersion = func() ([]byte, error) {
 	return exec.Command("go", "version").Output()
 }
@@ -149,12 +156,16 @@ func validatePiInstallPreflight() error {
 func validateNpmInstallPreflight(profile system.PlatformProfile) error {
 	if _, err := cmdLookPath("npm"); err != nil {
 		hint := system.InstallHintForDep("node", profile)
-		return fmt.Errorf(
+		msg := fmt.Sprintf(
 			"Node.js / npm is required but `npm` was not found in PATH.\n"+
 				"Install Node.js (npm is included) and retry:\n"+
 				"  %s",
 			hint,
 		)
+		if profile.PackageManager == "rpm-ostree" {
+			msg += "\nIf a pending deployment prevents --apply-live, stage without it and reboot:\n  rpm-ostree install -y nodejs npm && systemctl reboot"
+		}
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
 }
@@ -165,12 +176,16 @@ func validateKimiInstallPreflight(profile system.PlatformProfile) error {
 	}
 
 	if _, err := cmdLookPath("uv"); err != nil {
-		return fmt.Errorf(
+		msg := fmt.Sprintf(
 			"Kimi requires Astral uv, but `uv` was not found in PATH.\n"+
 				"Install uv and retry:\n"+
 				"  %s",
 			uvInstallHint(profile),
 		)
+		if profile.PackageManager == "rpm-ostree" {
+			msg += "\nIf a pending deployment prevents --apply-live, stage without it and reboot:\n  rpm-ostree install -y uv && systemctl reboot"
+		}
+		return fmt.Errorf("%s", msg)
 	}
 
 	return nil
@@ -186,6 +201,8 @@ func uvInstallHint(profile system.PlatformProfile) string {
 		return "sudo pacman -S --noconfirm uv"
 	case "dnf":
 		return "sudo dnf install -y uv"
+	case "rpm-ostree":
+		return "rpm-ostree install -y --apply-live uv (or see https://docs.astral.sh/uv/getting-started/installation/)"
 	case "winget":
 		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
 	default:
@@ -218,6 +235,8 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 		return CommandSequence{{"sudo", "pacman", "-S", "--noconfirm", dependency}}, nil
 	case "dnf":
 		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
+	case "rpm-ostree":
+		return CommandSequence{{"rpm-ostree", "install", "-y", "--apply-live", dependency}}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
 	default:
@@ -230,31 +249,20 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 	}
 }
 
-// resolveOpenCodeInstall returns the display-only install command sequence
-// gentle-ai shows for OpenCode per platform — never executed by gentle-ai.
-// - darwin: brew install anomalyco/tap/opencode (official OpenCode tap)
-// - linux: npm install -g opencode-ai (official npm package)
-// See https://opencode.ai/docs for official install methods.
-//
-// This deliberately advises "latest" rather than versions.OpenCode: that
-// constant pins the exact OpenCode build the organic-runtime E2E installs
-// and CI asserts against (TestOrganicRuntimeE2EUsesInstalledOpenCodePin in
-// internal/assets/formatter_ordering_test.go, and organic_runtime_test.go's
-// pinnedOpenCodeVersion) — a real, separate owner that must keep its exact
-// pin. This display string has no such owner, so it is decoupled from that
-// constant for the same reason the other five install commands are: a human
-// reads and runs it, and an old hardcoded version goes stale the moment a
-// newer OpenCode ships.
+// resolveOpenCodeInstall is display-only advice for new V2 installations.
+// Released @opencode/cli needs its postinstall binary setup: never add
+// --ignore-scripts. Existing V1 installations are not upgraded by this advice.
+// Source: https://opencode.ai/v2/docs/migrate-v1/
 func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, error) {
-	const pkg = "opencode-ai@latest"
+	const pkg = "@opencode/cli@latest"
 	switch profile.PackageManager {
 	case "brew":
 		return CommandSequence{
-			{"brew", "install", "anomalyco/tap/opencode"},
+			{"npm", "install", "-g", pkg},
 		}, nil
 	case "winget":
 		// On Windows, npm global installs do not require sudo.
-		return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+		return CommandSequence{{"npm", "install", "-g", pkg}}, nil
 	default:
 		// Any package manager the system probe accepted is enough here: the
 		// install runs through npm, never through the manager itself, so
@@ -263,9 +271,9 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 		// (empty PackageManager) on the unsupported arm.
 		if profile.OS == "linux" && profile.PackageManager != "" {
 			if profile.NpmWritable {
-				return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+				return CommandSequence{{"npm", "install", "-g", pkg}}, nil
 			}
-			return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+			return CommandSequence{{"sudo", "npm", "install", "-g", pkg}}, nil
 		}
 		return nil, fmt.Errorf(
 			"unsupported platform for opencode: os=%q distro=%q pm=%q",
@@ -275,15 +283,12 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 }
 
 // resolveGGAInstall returns the correct install command sequence for GGA per platform.
-// - darwin: brew tap + brew install (via Gentleman-Programming/homebrew-tap)
+// - Homebrew: tap + scoped formula trust (when supported) + reinstall
 // - linux: git clone + install.sh (GGA is a pure Bash project, NOT a Go module)
 func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) {
 	switch profile.PackageManager {
 	case "brew":
-		return CommandSequence{
-			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
-			{"brew", "reinstall", "gga"},
-		}, nil
+		return resolveHomebrewComponentInstall("gga", "reinstall"), nil
 	case "winget":
 		// On Windows, use Git Bash explicitly to avoid bare "bash" resolving to
 		// C:\Windows\System32\bash.exe (WSL), which cannot run the script.
@@ -318,6 +323,32 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			profile.OS, profile.LinuxDistro, profile.PackageManager,
 		)
 	}
+}
+
+// resolveHomebrewExecutable mirrors the CLI runner fallback so the capability
+// probe can find Homebrew even when the inherited PATH omits its standard prefix.
+func resolveHomebrewExecutable() string {
+	if path, err := cmdLookPath("brew"); err == nil {
+		return path
+	}
+	for _, binDir := range []string{"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"} {
+		path := filepath.Join(binDir, "brew")
+		info, err := osStat(path)
+		if err == nil && info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0) {
+			return path
+		}
+	}
+	return "brew"
+}
+
+// resolveHomebrewComponentInstall trusts only the selected formula, never the
+// whole tap. Older Homebrew versions without `trust` keep their existing flow.
+func resolveHomebrewComponentInstall(formula, action string) CommandSequence {
+	commands := CommandSequence{{"brew", "tap", "Gentleman-Programming/homebrew-tap"}}
+	if cmdBrewHelpTrust(resolveHomebrewExecutable()) == nil {
+		commands = append(commands, []string{"brew", "trust", "--formula", "gentleman-programming/tap/" + formula})
+	}
+	return append(commands, []string{"brew", action, formula})
 }
 
 func bashScriptPath(profile system.PlatformProfile, path string) string {
@@ -420,7 +451,7 @@ func validateGoForModuleInstall(profile system.PlatformProfile) error {
 }
 
 // resolveEngramInstall returns the correct install command sequence for Engram per platform.
-// - darwin (brew): brew tap + brew install (via Gentleman-Programming/homebrew-tap)
+// - Homebrew: tap + scoped formula trust (when supported) + install
 // - linux/windows: returns an error — callers must use engram.DownloadLatestBinary() instead.
 //
 // The go install method has been removed because it required Go 1.24+ which most
@@ -430,10 +461,7 @@ func resolveEngramInstall(profile system.PlatformProfile) (CommandSequence, erro
 	switch profile.PackageManager {
 	case "brew":
 		// macOS (or Linux with Homebrew): brew manages Go transitively — no preflight needed.
-		return CommandSequence{
-			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
-			{"brew", "install", "engram"},
-		}, nil
+		return resolveHomebrewComponentInstall("engram", "install"), nil
 	default:
 		return nil, fmt.Errorf(
 			"engram on %q/%q uses direct binary download — use engram.DownloadLatestBinary() instead of CommandSequence",

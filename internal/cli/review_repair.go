@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 const ReviewIntegrationRepairSchema = "gentle-ai.review-integration.repair/v1"
@@ -68,12 +68,39 @@ type ReviewRepairDispositionExecution struct {
 	AuthorizationSHA256        string `json:"authorization_sha256"`
 }
 
+// reviewRepairTruncatedContinuation is issue #3409's whole fix: what a
+// `truncated` preflight leaves the maintainer holding.
+//
+// The bound itself is honest and stays. It produces a typed `truncated`
+// status rather than a silently partial classification, which is the right
+// failure direction: a partial answer presented as complete is worse than a
+// refusal. What was wrong is that the refusal terminated. A store crosses the
+// assessment's bound by ordinary use, because lineages accumulate and nothing
+// reaps them (retention is #1656, deliberately out of scope here), and from
+// that point `review repair --preflight` classified nothing and named nothing
+// -- the documented repair route simply closed, precisely on the stores most
+// likely to need it.
+//
+// `review inspect-authority` is the way forward that already exists and is
+// already the command this codebase names for every shape of authority damage
+// (see compactBlockedLineageError and reviewAuthorityCorruptionDetail). It
+// reads through scanCompactAuthority, carries no assessment bound at all, and
+// reports a per-entry diagnosis plus each entry's own sanctioned exits -- so
+// it classifies exactly the large store this assessment refused to walk.
+// Naming it converts a dead end into a route without weakening the bound,
+// widening any authority, or presenting one byte of partial classification as
+// though it were complete.
+const reviewRepairTruncatedContinuation = "this authority store exceeds the bounded repair assessment, so nothing was classified here; classify every entry with `gentle-ai review inspect-authority`"
+
 type ReviewRepairResult struct {
-	Schema                    string                                                `json:"schema"`
-	Contract                  string                                                `json:"contract"`
-	Operation                 string                                                `json:"operation"`
-	Mode                      ReviewRepairMode                                      `json:"mode"`
-	Assessment                reviewtransaction.AuthorityRepairAssessment           `json:"assessment"`
+	Schema     string                                      `json:"schema"`
+	Contract   string                                      `json:"contract"`
+	Operation  string                                      `json:"operation"`
+	Mode       ReviewRepairMode                            `json:"mode"`
+	Assessment reviewtransaction.AuthorityRepairAssessment `json:"assessment"`
+	// Continuation is populated only for a truncated preflight, and is then
+	// exactly reviewRepairTruncatedContinuation.
+	Continuation              string                                                `json:"continuation,omitempty"`
 	ProviderInputs            *ReviewRepairProviderInputs                           `json:"provider_inputs,omitempty"`
 	RequiredInputs            []string                                              `json:"required_inputs"`
 	Execution                 *reviewtransaction.ClassifiedAuthorityRepairExecution `json:"execution,omitempty"`
@@ -91,6 +118,18 @@ func (result ReviewRepairResult) Validate() error {
 	}
 	if err := result.Assessment.Validate(); err != nil {
 		return fmt.Errorf("review repair assessment: %w", err)
+	}
+	// issue #3409: a truncated preflight carries the continuation and every
+	// other result carries none, so no surface can quietly lose the way
+	// forward again, and none can attach it to a classification that
+	// actually completed.
+	wantContinuation := ""
+	if result.Mode == ReviewRepairModePreflight && result.Assessment.Status == reviewtransaction.AuthorityRepairTruncated {
+		wantContinuation = reviewRepairTruncatedContinuation
+	}
+	if result.Continuation != wantContinuation {
+		// refusal:by-design world-action: the continuation is attached by newReviewRepairPreflightResult from the assessment status this same result carries; a mismatch is a product defect to fix in code, not a value any operator supplies
+		return errors.New("review repair result continuation does not match its assessment status")
 	}
 	switch result.Mode {
 	case ReviewRepairModePreflight:
@@ -113,12 +152,25 @@ func (result ReviewRepairResult) Validate() error {
 			for index, selector := range selectors {
 				lineages := [2]string{selector.PredecessorLineageID, selector.SuccessorLineageID}
 				expected := [2]string{selector.PredecessorExpectedRevision, selector.SuccessorExpectedRevision}
-				if lineages[0] == lineages[1] || !validReviewIntegrationLineage(lineages[0]) || !validReviewIntegrationLineage(lineages[1]) ||
-					!validReviewCapabilitySHA256(expected[0]) || !validReviewCapabilitySHA256(expected[1]) || expected[0] != strings.ToLower(expected[0]) || expected[1] != strings.ToLower(expected[1]) ||
-					index > 0 && (lineages[0] < previous[0] || lineages[0] == previous[0] && lineages[1] <= previous[1]) {
+				if lineages[0] == "" && expected[0] == "" {
+					// Historical selector (#2995): successor-only, binding the
+					// entry's raw-byte digest; there is no predecessor side.
+					if !validReviewIntegrationLineage(lineages[1]) || !validReviewCapabilitySHA256(expected[1]) || expected[1] != strings.ToLower(expected[1]) {
+						return errInvalidReviewRepairDispositionSelectors
+					}
+				} else {
+					if lineages[0] == lineages[1] || !validReviewIntegrationLineage(lineages[0]) || !validReviewIntegrationLineage(lineages[1]) ||
+						!validReviewCapabilitySHA256(expected[0]) || !validReviewCapabilitySHA256(expected[1]) || expected[0] != strings.ToLower(expected[0]) || expected[1] != strings.ToLower(expected[1]) {
+						return errInvalidReviewRepairDispositionSelectors
+					}
+				}
+				if index > 0 && (lineages[0] < previous[0] || lineages[0] == previous[0] && lineages[1] <= previous[1]) {
 					return errInvalidReviewRepairDispositionSelectors
 				}
 				for offset, lineage := range lineages {
+					if lineage == "" {
+						continue
+					}
 					if revision, found := revisions[lineage]; found && revision != expected[offset] {
 						return errInvalidReviewRepairDispositionSelectors
 					}
@@ -205,7 +257,7 @@ func (err *reviewRepairOperationError) Error() string {
 func (err *reviewRepairOperationError) Unwrap() error { return err.cause }
 
 func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When multiple content-mismatched leaves exist, --preflight enumerates exact predecessor/successor selectors; re-run it with one selector before executing its plan.")
+	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When content-mismatched leaves, historical entries, or isolated canonical rejected-validator terminals require selection, --preflight enumerates exact selectors; re-run it with one selector before executing its plan. Rejected-validator disposition preserves the verdict and consumed correction; it releases active authority without approval or an automatic review restart.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", ReviewIntegrationContractV1, "review integration contract")
 	preflight := flags.Bool("preflight", false, "perform deterministic read-only classification without authority mutation")
@@ -223,8 +275,8 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	dispositionAuthorization := flags.String("authorization", "", "exact maintainer authorization binding for an eligible leaf authority disposition plan; never emitted in public output")
 	predecessorLineage := flags.String("predecessor-lineage", "", "exact predecessor lineage for a selected content-mismatched edge")
 	predecessorRevision := flags.String("predecessor-revision", "", "exact predecessor revision for a selected content-mismatched edge")
-	successorLineage := flags.String("successor-lineage", "", "exact successor lineage for a selected content-mismatched edge")
-	successorRevision := flags.String("successor-revision", "", "exact successor revision for a selected content-mismatched edge")
+	successorLineage := flags.String("successor-lineage", "", "exact successor or standalone authority lineage from a preflight selector")
+	successorRevision := flags.String("successor-revision", "", "exact authority revision from the selected preflight entry")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -242,8 +294,20 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	}
 	selectorValues := []string{*predecessorLineage, *predecessorRevision, *successorLineage, *successorRevision}
 	selectorPresent := repairExecutionInputPresent(selectorValues...)
-	if selectorPresent && (strings.TrimSpace(*predecessorLineage) == "" || strings.TrimSpace(*predecessorRevision) == "" || strings.TrimSpace(*successorLineage) == "" || strings.TrimSpace(*successorRevision) == "") {
-		return reviewPreflightError(errors.New("review repair exact selector requires --predecessor-lineage --predecessor-revision --successor-lineage --successor-revision; run `gentle-ai review repair --preflight` to obtain one"))
+	if selectorPresent {
+		switch {
+		case *predecessorLineage != "" || *predecessorRevision != "":
+			// Edge selector (#1892/#2014): all four exact fields.
+			if strings.TrimSpace(*predecessorLineage) == "" || strings.TrimSpace(*predecessorRevision) == "" || strings.TrimSpace(*successorLineage) == "" || strings.TrimSpace(*successorRevision) == "" {
+				return reviewPreflightError(errors.New("review repair exact selector requires --predecessor-lineage --predecessor-revision --successor-lineage --successor-revision; run `gentle-ai review repair --preflight` to obtain one"))
+			}
+		default:
+			// Historical selector (#2995): a historical authority entry names no
+			// predecessor revision, so its selector is successor-only.
+			if strings.TrimSpace(*successorLineage) == "" || strings.TrimSpace(*successorRevision) == "" {
+				return reviewPreflightError(errors.New("review repair historical selector requires --successor-lineage --successor-revision; run `gentle-ai review repair --preflight` to obtain one"))
+			}
+		}
 	}
 	selector := reviewtransaction.AuthorityDispositionSelector{
 		PredecessorLineageID: *predecessorLineage, PredecessorExpectedRevision: *predecessorRevision,
@@ -306,6 +370,12 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 			return reviewPreflightError(planErr)
 		} else if selectors, selectorsErr := reviewtransaction.ListAuthorityDispositionSelectorsAtRepo(ctx, root); selectorsErr == nil && len(selectors) > 1 {
 			result.DispositionSelectors = selectors
+		} else if len(selectors) == 1 {
+			// A lone selector is published only for an eligible rejected-validator
+			// terminal, never for one historical entry beside other diagnostics.
+			if single, err := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", "", selectors[0]); err == nil && single.AnomalyClass == reviewtransaction.RejectedValidatorDispositionClass {
+				result.DispositionSelectors = selectors
+			}
 		}
 		if err := result.Validate(); err != nil {
 			return fmt.Errorf("validate review repair preflight: %w", err)
@@ -443,6 +513,15 @@ func newReviewRepairPreflightResult(assessment reviewtransaction.AuthorityRepair
 	}
 	if len(contracts) > 0 && contracts[0] == ReviewIntegrationContractV2 {
 		result.Schema, result.Contract = ReviewIntegrationRepairSchemaV2, ReviewIntegrationContractV2
+	}
+	// issue #3409: a truncated assessment classified nothing, so it must not
+	// be the end of the road. It names the unbounded per-entry diagnosis
+	// instead. No candidate, no provider inputs and no required inputs are
+	// derived here: the bound still fails closed and still publishes no
+	// partial classification.
+	if assessment.Status == reviewtransaction.AuthorityRepairTruncated {
+		result.Continuation = reviewRepairTruncatedContinuation
+		return result
 	}
 	if assessment.Status != reviewtransaction.AuthorityRepairEligible || assessment.Candidate == nil {
 		return result

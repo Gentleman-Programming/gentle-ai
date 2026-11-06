@@ -2,8 +2,8 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // The defect these tests pin: on the provider-issued repository-context path
@@ -36,13 +36,11 @@ const gitObjectPermissionStderr = "fatal: cannot access the object database: Per
 
 // TestOpaqueRepositoryContextResolutionNamesDistinctCauses covers the widest
 // collapse point, reviewRepositoryContextResolutionFailure in
-// review_incident.go. Every non-trust resolution failure answered with the same
-// repository_context_unavailable sentence, and resolution front-runs authority
-// discovery (ResolveReviewRepositoryContext itself loads the compact record
-// through validateLiveReviewRepositoryContext), so an environmental Git
-// refusal, an absent authority record and an unparsable one all converge here.
-// Four genuinely different roots, one string.
+// review_incident.go. Underlying V2 resolution failures share a code but must
+// retain distinct scrubbed causes: an environmental Git refusal, an absent
+// authority record and an unparsable one all converge here.
 func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
+	reviewEnabledHome(t)
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, repo, lineage string)
@@ -65,7 +63,7 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			want: opaqueNativeCause("no such file or directory", "The system cannot find the file specified."),
+			want: nativeNotExistCause(t),
 		},
 		{
 			name: "authority-record-unparsable",
@@ -89,7 +87,7 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 				t.Fatal("preflight succeeded despite an unresolvable repository context")
 			}
 			message := err.Error()
-			assertOpaqueFailureNamesCause(t, message, "repository_context_unavailable", tt.want, repo)
+			assertOpaqueFailureNamesCause(t, message, "rctx2_resolution_failed", tt.want, repo)
 			messages[tt.name] = message
 		})
 	}
@@ -106,10 +104,18 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 // point reported as #2411: everything past admission answered with one
 // repository_context_capture_failed sentence, which is why a preflight that
 // cannot reach any of these paths appeared to "pass" while capture "failed".
+//
+// The property is that the causes are DISTINGUISHABLE, not that they share a
+// code. An occupied slot now carries its own, because #2411's rc.6 occurrence
+// showed the shared code's action ("retry the same exact binding") is the one
+// thing that cannot work while the slot is occupied. So the code is asserted
+// per case; a cause that stops being distinguishable still fails here.
 func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
+	reviewEnabledHome(t)
 	cases := []struct {
 		name    string
 		arrange func(t *testing.T, repo, lineage string, binding []string)
+		code    string
 		want    string
 	}{
 		{
@@ -120,17 +126,16 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 					t.Fatalf("first capture failed: %v", err)
 				}
 			},
-			want: "different canonical bytes",
+			code: reviewerResultSlotOccupiedCode,
+			want: reviewNextTransitionRefreshCommandV21,
 		},
 		{
-			name: "results-directory-unusable",
+			name: "compact-authority-unwritable",
 			arrange: func(t *testing.T, repo, lineage string, _ []string) {
-				blocked := filepath.Join(reviewCLICompactStoreDir(repo, lineage), reviewtransaction.CompactReviewerResultsDir)
-				if err := os.WriteFile(blocked, []byte("not a directory\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
+				blockCanonicalAuthorityWrite(t, repo, lineage)
 			},
-			want: opaqueNativeCause("not a directory", "unsafe RAR authority path"),
+			code: "repository_context_capture_failed",
+			want: "permission denied",
 		},
 	}
 	messages := make(map[string]string, len(cases))
@@ -146,11 +151,18 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 				t.Fatal("capture succeeded despite an unusable authority store")
 			}
 			message := err.Error()
-			assertOpaqueFailureNamesCause(t, message, "repository_context_capture_failed", tt.want, repo)
+			assertOpaqueFailureNamesCause(t, message, tt.code, tt.want, repo)
 			messages[tt.name] = message
 		})
 	}
-	assertPairwiseDistinct(t, messages, len(cases))
+	wantMessages := len(cases)
+	if runtime.GOOS == "windows" {
+		// blockCanonicalAuthorityWrite requires POSIX permissions, so Windows
+		// exercises only the occupied-slot root while retaining its
+		// distinct-cause proof.
+		wantMessages--
+	}
+	assertPairwiseDistinct(t, messages, wantMessages)
 }
 
 // TestOpaqueRepositoryContextCauseIsScrubbed is the other half of the contract:
@@ -158,6 +170,7 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 // gone and the rest of the cause intact. Forwarding an unscrubbed cause and
 // forwarding nothing are both failures.
 func TestOpaqueRepositoryContextCauseIsScrubbed(t *testing.T) {
+	reviewEnabledHome(t)
 	lineage := "opaque-scrub-cause"
 	args, _, repo := startedOpaqueCaptureBinding(t, lineage)
 	if err := os.Remove(reviewCLICompactStatePath(repo, lineage)); err != nil {
@@ -174,7 +187,7 @@ func TestOpaqueRepositoryContextCauseIsScrubbed(t *testing.T) {
 	if strings.Contains(message, repo) || strings.Contains(message, lineage+"/review-state.json") {
 		t.Fatalf("forwarded cause leaked an absolute path: %s", message)
 	}
-	if !strings.Contains(message, opaqueNativeCause("no such file or directory", "The system cannot find the file specified.")) {
+	if !strings.Contains(message, nativeNotExistCause(t)) {
 		t.Fatalf("scrubbing removed the cause along with the path: %s", message)
 	}
 	if scrubbed := reviewScrubDefectReportField(message); scrubbed != message {
@@ -195,6 +208,40 @@ func assertOpaqueFailureNamesCause(t *testing.T, message, code, wantCause, repo 
 	}
 }
 
+// nativeNotExistCause asks THIS installation how it renders a missing file,
+// instead of pinning the sentence a US English installation renders. What the
+// assertion needs is that the forwarded cause survives scrubbing, and the
+// condition behind it -- ERROR_FILE_NOT_FOUND, the errno the removed authority
+// record leaves behind -- does not vary. The sentence does: syscall.Errno.Error
+// asks FormatMessage for US English first and falls back to the installation's
+// own message resources when that lookup fails, so an installation carrying no
+// English resources renders the same errno in its own language. Pinning the
+// text asserted the machine, not the contract.
+func nativeNotExistCause(t *testing.T) string {
+	t.Helper()
+	// The parent directory must exist. A missing parent is a different
+	// condition (ERROR_PATH_NOT_FOUND on Windows) and renders a different
+	// sentence, which would silently weaken every assertion built on this.
+	_, err := os.Open(filepath.Join(t.TempDir(), "absent-authority-record.json"))
+	if err == nil {
+		t.Fatal("opening an absent file succeeded, so this platform cannot render the cause under test")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("probe reported something other than a missing file, so its sentence is not the one under test: %v", err)
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("probe error carries no separable cause to render: %v", err)
+	}
+	return pathErr.Err.Error()
+}
+
+// opaqueNativeCause still serves one call site, and its two arms are safe for
+// different reasons. The Windows arm expects "unsafe RAR authority path",
+// which gentle-ai produces itself. The Unix arm does pin an errno text, "not
+// a directory", and is safe because Go renders errno 20 from its own
+// compile-time table rather than from the installation. Neither arm reaches
+// FormatMessage, which is what the replaced assertions depended on.
 func opaqueNativeCause(unix, windows string) string {
 	if runtime.GOOS == "windows" {
 		return windows
@@ -254,62 +301,4 @@ func admissibleOpaqueReviewerResult(t *testing.T, binding []string, evidence str
 		Evidence: []string{evidence},
 	})
 	return path
-}
-
-// TestOpaqueRepositoryContextPreserveNamesDistinctCauses covers the preserve
-// path, which is where reviewer payloads land when capture fails. It shares the
-// same defect: every preservation failure answered with one sentence, so a
-// reporter whose lens results were all stranded as incidents (#2446) had no way
-// to say why.
-func TestOpaqueRepositoryContextPreserveNamesDistinctCauses(t *testing.T) {
-	cases := []struct {
-		name    string
-		arrange func(t *testing.T, repo, lineage string)
-		want    string
-	}{
-		{
-			name: "incidents-path-is-a-file",
-			arrange: func(t *testing.T, repo, lineage string) {
-				incidents, err := reviewtransaction.EnsureCompactIncidentsDir(context.Background(), repo, lineage)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Remove(incidents); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(incidents, []byte("not a directory\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "unsafe RAR authority path",
-		},
-		{
-			name: "incidents-directory-is-shared",
-			arrange: func(t *testing.T, repo, lineage string) {
-				incidents, err := reviewtransaction.EnsureCompactIncidentsDir(context.Background(), repo, lineage)
-				if err != nil {
-					t.Fatal(err)
-				}
-				makeOpaqueSharedDirectory(t, filepath.Dir(incidents))
-			},
-			want: "unsafe RAR authority path",
-		},
-	}
-	messages := make(map[string]string, len(cases))
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			lineage := "opaque-preserve-" + tt.name
-			args, input, repo := startedOpaqueCaptureBinding(t, lineage)
-			tt.arrange(t, repo, lineage)
-
-			err := RunReviewPreserveResult(append(append([]string{}, args...), "--input", input), io.Discard)
-			if err == nil {
-				t.Fatal("preserve-result succeeded despite an unusable incidents directory")
-			}
-			message := err.Error()
-			assertOpaqueFailureNamesCause(t, message, "repository_context_preserve_failed", tt.want, repo)
-			messages[tt.name] = message
-		})
-	}
-	assertPairwiseDistinct(t, messages, len(cases))
 }

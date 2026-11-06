@@ -85,7 +85,7 @@ func RecoveryRows() []Row {
 	rows = append(rows, agentGuidanceRows()...)
 	rows = append(rows, routingWiringRows()...)
 	rows = append(rows, reviewAuthorityRows()...)
-	rows = append(rows, sddLifecycleRows()...)
+	rows = append(rows, retiredSDDRows()...)
 	rows = append(rows, transplantSourceRows()...)
 	rows = append(rows, alreadyImplementedDeletionRows()...)
 	rows = append(rows, retiredPackageRows()...)
@@ -182,7 +182,7 @@ func routingWiringRows() []Row {
 			Path:        "internal/cli/run.go",
 			Disposition: DispositionKeep,
 			Context:     ContextHCR,
-			Invariant:   "the install plan schedules routing injection for every agent outside the SDD component",
+			Invariant:   "the install plan schedules routing injection for every configured agent",
 			Proof:       []string{"internal/cli/run_component_paths_test.go"},
 			Contributor: recoveryContributor,
 			Publication: published(),
@@ -496,45 +496,49 @@ func reviewAuthorityRows() []Row {
 	}
 }
 
-// sddLifecycleRows covers the SDD component and status surfaces: what survives
-// the removal of the remote control plane, and what dies with it.
-func sddLifecycleRows() []Row {
+// retiredSDDRows records removed SDD ownership while preserving independently
+// installed review, Judgment Day, and organic routing evidence.
+func retiredSDDRows() []Row {
 	return []Row{
 		{
-			Path:        "internal/components/sdd/inject.go",
-			Disposition: DispositionKeep,
-			Context:     ContextSDD,
-			Invariant:   "SDD injection carries optional SDD assets alone once routing coupling is removed",
-			Proof:       []string{"internal/components/sdd/inject_test.go"},
-			Contributor: recoveryContributor,
-			Publication: published(),
+			Path:             "internal/components/sdd/inject.go",
+			Disposition:      DispositionDelete,
+			Context:          ContextRAR,
+			Invariant:        "native review and Judgment Day agents retain their installed roles independently of SDD",
+			Contributor:      recoveryContributor,
+			Publication:      published(),
+			DestinationPath:  "internal/components/reviewassets/install.go",
+			DestinationProof: []string{"internal/components/reviewassets/install_test.go"},
 		},
 		{
-			Path:        "internal/components/sdd/boundedreview.go",
-			Disposition: DispositionKeep,
-			Context:     ContextSDD,
-			Invariant:   "the bounded review contract is delivered to agents without remote work vocabulary",
-			Proof:       []string{"internal/components/sdd/bounded_review_contract_test.go"},
-			Contributor: recoveryContributor,
-			Publication: published(),
+			Path:             "internal/components/sdd/boundedreview.go",
+			Disposition:      DispositionDelete,
+			Context:          ContextRAR,
+			Invariant:        "runtime review contracts remain owned outside the SDD injector",
+			Contributor:      recoveryContributor,
+			Publication:      published(),
+			DestinationPath:  "internal/components/reviewassets/contract.go",
+			DestinationProof: []string{"internal/components/reviewassets/reviewassets_test.go", "internal/providercontractbundle/review_execution_contract_test.go"},
 		},
 		{
-			Path:        "internal/components/sdd/inject_test.go",
-			Disposition: DispositionKeep,
-			Context:     ContextSDD,
-			Invariant:   "the injected SDD surface is asserted section by section, so a removed step cannot pass silently",
-			Proof:       []string{"internal/components/sdd/inject_test.go"},
-			Contributor: recoveryContributor,
-			Publication: published(),
+			Path:             "internal/components/sdd/inject_test.go",
+			Disposition:      DispositionDelete,
+			Context:          ContextRAR,
+			Invariant:        "retained native agent installation has exact role parity and converges on reinstall",
+			Contributor:      recoveryContributor,
+			Publication:      published(),
+			DestinationPath:  "internal/components/reviewassets/install_test.go",
+			DestinationProof: []string{"internal/components/reviewassets/install_test.go"},
 		},
 		{
-			Path:        "internal/components/sdd/bounded_review_contract_test.go",
-			Disposition: DispositionKeep,
-			Context:     ContextSDD,
-			Invariant:   "the bounded review contract text is asserted rather than trusted",
-			Proof:       []string{"internal/components/sdd/bounded_review_contract_test.go"},
-			Contributor: recoveryContributor,
-			Publication: published(),
+			Path:             "internal/components/sdd/bounded_review_contract_test.go",
+			Disposition:      DispositionDelete,
+			Context:          ContextRAR,
+			Invariant:        "per-runtime review contracts retain their identity and reject unsupported runtimes",
+			Contributor:      recoveryContributor,
+			Publication:      published(),
+			DestinationPath:  "internal/components/reviewassets/reviewassets_test.go",
+			DestinationProof: []string{"internal/components/reviewassets/reviewassets_test.go"},
 		},
 		// The trigger-rules injector is published, so it is removed in systemic
 		// order rather than early. Its retained obligation — that organic routing
@@ -561,31 +565,28 @@ func sddLifecycleRows() []Row {
 			DestinationProof: []string{"internal/components/agentguidance/routing_test.go"},
 		},
 		{
-			Path:        "internal/sddstatus/runtime_ledger.go",
-			Disposition: DispositionKeep,
-			Context:     ContextSDD,
-			Invariant:   "attempt authority survives the removal of the WorkRun binding branches",
-			Proof:       []string{"internal/sddstatus/runtime_ledger_test.go"},
-			Contributor: recoveryContributor,
-			Publication: unreleased(),
+			Path:                "internal/sddstatus/runtime_ledger.go",
+			Disposition:         DispositionDelete,
+			Context:             ContextSDD,
+			Contributor:         recoveryContributor,
+			Publication:         unreleased(),
+			NoRetainedInvariant: true,
 		},
 		{
-			Path:        "internal/sddstatus/runtime_ledger_test.go",
-			Disposition: DispositionKeep,
-			Context:     ContextSDD,
-			Invariant:   "attempt transitions stay asserted after the reservation branches are gone",
-			Proof:       []string{"internal/sddstatus/runtime_ledger_test.go"},
-			Contributor: recoveryContributor,
-			Publication: unreleased(),
+			Path:                "internal/sddstatus/runtime_ledger_test.go",
+			Disposition:         DispositionDelete,
+			Context:             ContextSDD,
+			Contributor:         recoveryContributor,
+			Publication:         unreleased(),
+			NoRetainedInvariant: true,
 		},
 		{
-			Path:        "internal/cli/sdd_attempt.go",
-			Disposition: DispositionKeep,
-			Context:     ContextSDD,
-			Invariant:   "the SDD attempt command keeps its own authority and never depends on a WorkRun",
-			Proof:       []string{"internal/cli/sdd_attempt_test.go"},
-			Contributor: recoveryContributor,
-			Publication: unreleased(),
+			Path:                "internal/cli/sdd_attempt.go",
+			Disposition:         DispositionDelete,
+			Context:             ContextSDD,
+			Contributor:         recoveryContributor,
+			Publication:         unreleased(),
+			NoRetainedInvariant: true,
 		},
 		// The WorkRun binding exists only to reserve a run against the retired
 		// control plane. Nothing outside that plane consumes it, so it retains no
@@ -1059,7 +1060,7 @@ func regenerationRows() []Row {
 			Path:        "e2e/organicruntime/organic_runtime_test.go",
 			Disposition: DispositionRewrite,
 			Context:     ContextRAR,
-			Invariant:   "real configured-agent journeys cover direct, delegated, optional-SDD, every review tier, one bounded correction, and flexible delivery",
+			Invariant:   "real configured-agent journeys cover direct and delegated routing, every review tier, one bounded correction, and flexible delivery",
 			Proof:       []string{"e2e/organicruntime/organic_runtime_test.go"},
 			Contributor: recoveryContributor,
 			Publication: unpublished(),
@@ -1078,7 +1079,7 @@ func regenerationRows() []Row {
 			Disposition: DispositionKeep,
 			Context:     ContextACI,
 			Invariant:   "the embedded key skills/_shared/review-ledger-contract.md is unchanged so existing installs still resolve it",
-			Proof:       []string{"internal/components/sdd/review_ledger_contract_test.go"},
+			Proof:       []string{"internal/assets/shared_skill_files_test.go", "internal/cli/review_next_transition_docs_test.go"},
 			Contributor: recoveryContributor,
 			Publication: published(),
 		},
@@ -1111,22 +1112,23 @@ func regenerationRows() []Row {
 		},
 	}
 
-	// Every adapter receives the same regenerated orchestrator prompt, and the
-	// same test asserts all of them, so the rows are generated from the adapter
-	// list rather than repeated twelve times.
+	// Every adapter receives the renamed orchestrator prompt. These new path
+	// names were absent from the captured refs; the former SDD filenames were
+	// published, but their publication evidence cannot be assigned to a rename.
+	// The same test asserts all adapters.
 	adapters := []string{
 		"antigravity", "claude", "codex", "cursor", "gemini", "generic",
 		"hermes", "kimi", "kiro", "opencode", "qwen", "windsurf",
 	}
 	for _, adapter := range adapters {
 		rows = append(rows, Row{
-			Path:        "internal/assets/" + adapter + "/sdd-orchestrator.md",
+			Path:        "internal/assets/" + adapter + "/orchestrator.md",
 			Disposition: DispositionRegenerate,
 			Context:     ContextACI,
 			Invariant:   "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
 			Proof:       []string{"internal/assets/assets_test.go"},
 			Contributor: recoveryContributor,
-			Publication: published(),
+			Publication: unpublished(),
 		})
 	}
 	return rows

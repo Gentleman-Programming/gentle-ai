@@ -104,6 +104,30 @@ func TestPrintedCommandArguments(t *testing.T) {
 	}
 }
 
+func TestAnchoredContinuationArgumentsRejectsLineBreaks(t *testing.T) {
+	const binary = "/tmp/gentle-ai"
+	for _, testCase := range []struct {
+		name    string
+		command string
+	}{
+		{
+			name:    "line feed between tokens",
+			command: binary + " sync\n--agent opencode",
+		},
+		{
+			name:    "carriage return between tokens",
+			command: binary + " sync\r--agent opencode",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := anchoredContinuationArguments(testCase.command, binary)
+			if err == nil || !strings.Contains(err.Error(), "multiline continuation") {
+				t.Fatalf("anchoredContinuationArguments(%q, %q) error = %v, want multiline-continuation refusal", testCase.command, binary, err)
+			}
+		})
+	}
+}
+
 // TestRunPrintedTransitionRefusesATransitionWithNothingToRun is the corpus-side
 // half of the same defect. A journey that re-derives the verb from the
 // operation name assembles the command the product owed the reader, and then

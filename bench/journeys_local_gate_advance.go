@@ -22,6 +22,7 @@ func localGateBaseAdvanceJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     approvedBaseDiffLocalMergeJourneyID,
+			Review: reviewOptedIn,
 			Title:  "An approved base-diff receipt survives a disjoint local parent merge",
 			Source: "issue #2388: explicit base-ref preserves the approved B0-to-C0 receipt when a disjoint B0-to-B1 parent advance is merged into C0",
 			Steps: []Step{

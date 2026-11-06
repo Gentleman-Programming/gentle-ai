@@ -18,13 +18,6 @@
 // 1).
 package reviewtransaction
 
-import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-)
-
 // CandidateIdentity is the canonical shadow candidate identity computed from
 // any of the four Wave 1 selector variants (workspace, staged,
 // committed-range, workspace-overlay). It contains exactly the five fields
@@ -46,37 +39,4 @@ type CandidateIdentity struct {
 	// resolved candidate. It is "unknown" — never fabricated — whenever the
 	// caller has no live policy hash to supply.
 	PolicyHash string
-}
-
-// shadowChangedPathsModesDigest hashes the changed paths together with their
-// Git file modes (old and new). digestPaths (snapshot.go) already covers the
-// paths-only digest that Snapshot.PathsDigest carries; this digest records
-// modes too, so a mode-only drift between two otherwise-identical
-// resolutions is a measurable divergence class instead of silently
-// collapsing into the paths-only digest.
-func shadowChangedPathsModesDigest(ctx context.Context, repo string, paths []string, baseTree, candidateTree string) (string, error) {
-	raw, err := runGitIsolated(ctx, repo, nil, nil,
-		"diff", "--raw", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none",
-		baseTree, candidateTree, "--",
-	)
-	if err != nil {
-		return "", err
-	}
-	modesByPath, err := parseRawDiffModes(raw)
-	if err != nil {
-		return "", err
-	}
-	hash := sha256.New()
-	hash.Write([]byte("gentle-ai.paths-modes/v1\x00"))
-	for _, path := range paths {
-		modes, ok := modesByPath[path]
-		if !ok {
-			return "", fmt.Errorf("candidate identity: path %q missing from raw tree diff", path) // refusal:by-design world-action: a Git raw-diff parsing data-consistency invariant; FreezeCandidateIdentity's own caller (ReviewCore.start) surfaces this as a real start refusal — there is no operator command that repairs a raw-diff parsing mismatch, only re-deriving the snapshot from a consistent tree pair
-		}
-		writeLengthPrefixed(hash, []byte(path))
-		writeLengthPrefixed(hash, []byte(modes.status))
-		writeLengthPrefixed(hash, []byte(modes.oldMode))
-		writeLengthPrefixed(hash, []byte(modes.newMode))
-	}
-	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }

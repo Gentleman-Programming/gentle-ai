@@ -1,5 +1,8 @@
 # GGA PowerShell Shim — Windows Support
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ## What This Is
 
 When `gentle-ai` installs GGA on Windows, it now installs a `gga.ps1` wrapper
@@ -64,9 +67,9 @@ The original spec described surfacing a "Git Bash not found" error **during
 shim detects Git Bash when the user first runs `gga`. The spec scenario is now
 inaccurate and should be updated to reflect the runtime detection model.
 
-**Recommended fix**: update `openspec/changes/gga-powershell-support/specs/gga/spec.md`
-to rename the scenario from "install-time" to "runtime detection", and add an
-integration test that exercises the not-found code path at PS runtime.
+**Recommended fix**: treat runtime detection as the contract (the original
+spec change is no longer in this repository), and add an integration test
+that exercises the not-found code path at PS runtime.
 
 ### Iteration 3 — Non-Windows guard test coverage (W-03)
 

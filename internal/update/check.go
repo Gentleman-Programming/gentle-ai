@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 var updateChannelEnv = os.Getenv
@@ -60,7 +60,7 @@ func CheckFiltered(ctx context.Context, currentVersion string, profile system.Pl
 func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion string, profile system.PlatformProfile) UpdateResult {
 	result := UpdateResult{Tool: tool}
 	homebrewOwnership := HomebrewNone
-	if profile.PackageManager == "brew" && strings.TrimSpace(tool.NpmPackage) == "" {
+	if profile.PackageManager == "brew" {
 		var err error
 		homebrewOwnership, err = homebrewOwnershipDetector(tool.Name)
 		if err != nil {
@@ -80,7 +80,6 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	// Run local detection and remote fetch concurrently.
 	var wg sync.WaitGroup
 	var localVersion string
-	var pluginRegistered bool
 	var release githubRelease
 	var mainCommit githubCommit
 	var fetchErr error
@@ -89,10 +88,6 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 
 	go func() {
 		defer wg.Done()
-		if strings.TrimSpace(tool.NpmPackage) != "" {
-			localVersion, pluginRegistered = detectOpenCodePluginPackage(tool.NpmPackage)
-			return
-		}
 		localVersion = detectInstalledVersion(ctx, tool, currentBuildVersion)
 	}()
 
@@ -114,10 +109,28 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	if fetchErr != nil {
 		result.Err = fetchErr
 		result.Status = CheckFailed
+		if betaMainHead {
+			result.UpdateHint = "Beta target metadata is unavailable; rerun the update check."
+		}
 		return result
 	}
 
 	if betaMainHead {
+		if !validBetaCommit(mainCommit.SHA) {
+			result.Status = CheckFailed
+			result.UpdateHint = "Beta target metadata is unavailable; rerun the update check."
+			result.Err = fmt.Errorf("invalid beta main commit SHA")
+			return result
+		}
+		module, err := fetchBetaModulePath(ctx, tool.Owner, tool.Repo, mainCommit.SHA)
+		if err != nil {
+			result.Status = CheckFailed
+			result.UpdateHint = "Beta target metadata is unavailable; rerun the update check."
+			result.Err = err
+			return result
+		}
+		result.BetaCommit = strings.ToLower(mainCommit.SHA)
+		result.BetaModulePath = module
 		return applyBetaMainHeadStatus(result, localVersion, mainCommit)
 	}
 
@@ -126,15 +139,6 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 
 	// Determine status based on local version.
 	if localVersion == "" {
-		if strings.TrimSpace(tool.NpmPackage) != "" {
-			if pluginRegistered {
-				result.Status = RegisteredNotMaterialized
-				result.UpdateHint = openCodeRegisteredNotMaterializedHint(tool)
-				return result
-			}
-			result.Status = NotInstalled
-			return result
-		}
 		if tool.DetectCmd == nil {
 			// gentle-ai with no build version (shouldn't happen, but handle gracefully).
 			result.Status = VersionUnknown
@@ -194,11 +198,9 @@ func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit gi
 
 	result.LatestVersion = "main@" + shortRemote
 	result.ReleaseURL = strings.TrimSpace(commit.HTMLURL)
-	// Derive the instruction from the advertised target: the only installer
-	// that delivers main@<sha> is `go install ...@main`. The per-OS stable
-	// hint would silently replace this beta build with the latest stable
-	// release (issue #2323).
-	result.UpdateHint = GentleAISourceInstallCommand(result.LatestVersion)
+	// Compose the fallback from the verified module and full checked commit.
+	// A stable-channel hint or mutable @main would not deliver this target.
+	result.UpdateHint = BetaSourceInstallCommand(result.BetaModulePath, result.BetaCommit)
 
 	if strings.TrimSpace(localVersion) == "" {
 		result.Status = VersionUnknown

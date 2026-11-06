@@ -3,6 +3,7 @@ package assets
 import (
 	"io/fs"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +51,34 @@ func TestSharedSkillFileNamesMatchesEmbeddedListing(t *testing.T) {
 	}
 }
 
+func TestSharedSupportDirectoryIsDocumentedButNotInvokable(t *testing.T) {
+	names, err := SharedSkillFileNames()
+	if err != nil {
+		t.Fatalf("SharedSkillFileNames() error = %v", err)
+	}
+
+	foundReadme := false
+	for _, name := range names {
+		if name == "SKILL.md" {
+			t.Fatal("shared support directory must not embed an invokable SKILL.md")
+		}
+		if name == "README.md" {
+			foundReadme = true
+		}
+	}
+	if !foundReadme {
+		t.Fatal("shared support directory must embed README.md")
+	}
+
+	readme := MustRead(SharedSkillDir + "/README.md")
+	if strings.HasPrefix(readme, "---") {
+		t.Fatal("shared README.md must not contain skill frontmatter")
+	}
+	if !strings.Contains(readme, "not an invokable skill") {
+		t.Fatal("shared README.md must explain that the directory is support-only")
+	}
+}
+
 // TestSharedSkillFileNamesIsSortedAndReadable pins deterministic ordering and
 // that every reported name resolves as an embedded asset, so derived path
 // lists stay stable and every entry is deployable.
@@ -74,5 +103,19 @@ func TestSharedSkillFileNamesIsSortedAndReadable(t *testing.T) {
 		if len(content) == 0 {
 			t.Errorf("SharedSkillFileNames() reported %q but the embedded asset is empty", name)
 		}
+	}
+}
+
+// Issue #2941: the shared review ledger contract prescribed
+// `--result-artifact-file` / `--result-artifact` for capture-result, flags the
+// CLI never accepts. The capture verbs take `--input <path|->` only, and
+// claude-code and codex capture in process with `--agent`.
+func TestSharedReviewLedgerContractNamesTheRealCaptureInputFlag(t *testing.T) {
+	contract := MustRead("skills/_shared/review-ledger-contract.md")
+	if strings.Contains(contract, "--result-artifact") {
+		t.Fatalf("shared review ledger contract still prescribes a --result-artifact flag the CLI does not accept")
+	}
+	if !strings.Contains(contract, "--input") {
+		t.Fatalf("shared review ledger contract never names the --input capture flag")
 	}
 }

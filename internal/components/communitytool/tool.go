@@ -9,11 +9,11 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
-	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
+	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type Availability string
@@ -29,6 +29,7 @@ const (
 	AgentStatusUnavailable AgentStatusKind = "unavailable"
 	AgentStatusConfigured  AgentStatusKind = "configured"
 	AgentStatusMissing     AgentStatusKind = "missing"
+	AgentStatusPending     AgentStatusKind = "pending"
 )
 
 type Definition struct {
@@ -171,7 +172,16 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		if err := validateCodeGraphInstallStatus(after); err != nil {
 			return rollback(err)
 		}
-		if openCodeResult.Changed || guidanceResult.Changed {
+		piPending := false
+		for _, agent := range after.Agents {
+			if agent.Agent == model.AgentPi && agent.Status == AgentStatusPending {
+				piPending = true
+				break
+			}
+		}
+		if piPending {
+			result.ManualActions = append(result.ManualActions, "CodeGraph configuration is reconciled for all detected supported agents. Pi activation health remains pending.")
+		} else if openCodeResult.Changed || guidanceResult.Changed {
 			result.ManualActions = append(result.ManualActions, "CodeGraph is already available and MCP-configured. Agent guidance was updated so enabled agents lazily initialize project indexes when needed.")
 		} else {
 			result.ManualActions = append(result.ManualActions, "CodeGraph is already available and configured for all detected supported agents. No changes were needed.")
@@ -319,7 +329,11 @@ func validateCodeGraphInstallStatus(status Status) error {
 func DetectStatus(id model.CommunityToolID, homeDir string, detector Detector) Status {
 	status := Status{Tool: id, CLI: AvailabilityMissing}
 	def, ok := DefinitionFor(id)
-	if !ok || id != model.CommunityToolCodeGraph {
+	if !ok {
+		status.FollowUps = append(status.FollowUps, fmt.Sprintf("status detection for %q is not implemented", id))
+		return status
+	}
+	if id != model.CommunityToolCodeGraph {
 		status.FollowUps = append(status.FollowUps, fmt.Sprintf("status detection for %q is not implemented", id))
 		return status
 	}
@@ -367,6 +381,11 @@ func (s Status) CodeGraphReconcileSatisfied() bool {
 		return false
 	}
 	for _, agent := range s.Agents {
+		// Validated Pi capability is reconciled even when activation health
+		// remains unverifiable. Genuine Pi failures still block this shortcut.
+		if agent.Agent == model.AgentPi && agent.Status == AgentStatusPending {
+			continue
+		}
 		if agent.Detected && !agent.Configured {
 			return false
 		}
@@ -382,7 +401,7 @@ func (s Status) DetectedConfiguredMissingCounts() (detected, configured, missing
 		detected++
 		if agent.Configured {
 			configured++
-		} else {
+		} else if agent.Status != AgentStatusPending {
 			missing++
 		}
 	}
@@ -395,7 +414,7 @@ func detectCodeGraphAgents(homeDir string) []AgentStatus {
 		return nil
 	}
 	supported := codeGraphSupportedAgents()
-	installed := agents.DiscoverInstalled(reg, homeDir)
+	installed := agents.DiscoverSelected(reg, homeDir)
 	installedByID := make(map[model.AgentID]string, len(installed))
 	for _, agent := range installed {
 		installedByID[agent.ID] = agent.ConfigDir
@@ -420,16 +439,16 @@ func detectCodeGraphAgents(homeDir string) []AgentStatus {
 		if detected {
 			configured, markerPath, reason := hasCodeGraphWiring(homeDir, adapter)
 			if id == model.AgentPi {
-				configured, reason, state.Children = inspectPiCodeGraph(homeDir, "")
-			}
-			state.Configured = configured
-			state.Path = markerPath
-			state.Reason = reason
-			if configured {
+				state.Status, reason, state.Children = inspectPiCodeGraph(homeDir, "")
+				configured = state.Status == AgentStatusConfigured
+			} else if configured {
 				state.Status = AgentStatusConfigured
 			} else {
 				state.Status = AgentStatusMissing
 			}
+			state.Configured = configured
+			state.Path = markerPath
+			state.Reason = reason
 		}
 		result = append(result, state)
 	}
@@ -469,8 +488,13 @@ func hasCodeGraphWiring(homeDir string, adapter agents.Adapter) (bool, string, s
 	return false, adapter.GlobalConfigDir(homeDir), "detected agent but no CodeGraph MCP or instruction marker was found"
 }
 
-func piCodeGraphStatusPath(homeDir string) string {
+// PiCodeGraphManifestPath returns the effective CodeGraph manifest path for Pi.
+func PiCodeGraphManifestPath(homeDir string) string {
 	return piagent.CodeGraphPaths(homeDir).Manifest
+}
+
+func piCodeGraphStatusPath(homeDir string) string {
+	return PiCodeGraphManifestPath(homeDir)
 }
 
 func hasDetectedCodeGraphToolWiring(homeDir string) bool {
@@ -478,7 +502,7 @@ func hasDetectedCodeGraphToolWiring(homeDir string) bool {
 	if err != nil {
 		return false
 	}
-	for _, installedAgent := range agents.DiscoverInstalled(reg, homeDir) {
+	for _, installedAgent := range agents.DiscoverSelected(reg, homeDir) {
 		adapter, ok := reg.Get(installedAgent.ID)
 		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) {
 			continue

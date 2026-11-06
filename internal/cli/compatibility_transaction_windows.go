@@ -16,11 +16,10 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 	"golang.org/x/sys/windows"
 )
 
@@ -130,7 +129,7 @@ func (t *windowsCompatibilityRefreshTransaction) Run() (runErr error) {
 	if slicesContainsComponent(t.components, model.ComponentSkills) {
 		skillIDs := selectedSkillIDs(t.selection)
 		if len(skillIDs) > 0 {
-			result, err := skills.InjectDirectoryWithWriter(t.writer.root, skillIDs, t.writer.Write)
+			result, err := skills.InjectDirectoryWithWriter(t.writer.root, skillIDs, t.writer.Write, t.writer.Remove)
 			if err != nil {
 				return fmt.Errorf("refresh compatibility skills: %w", err)
 			}
@@ -140,15 +139,6 @@ func (t *windowsCompatibilityRefreshTransaction) Run() (runErr error) {
 		}
 	}
 
-	if slicesContainsComponent(t.components, model.ComponentSDD) {
-		result, err := sdd.InjectSkillDirectoryWithWriter(t.writer.root, "", t.writer.Write)
-		if err != nil {
-			return fmt.Errorf("refresh compatibility SDD skills: %w", err)
-		}
-		if result.Changed {
-			t.changed = append(t.changed, result.Files...)
-		}
-	}
 	notifyWindowsCompatibilityTransaction(compatibilityAfterPublish)
 	return nil
 }
@@ -163,7 +153,7 @@ func (t *windowsCompatibilityRefreshTransaction) Rollback() error {
 	for _, path := range paths {
 		snapshot := t.snapshots[path]
 		if !snapshot.existed {
-			if err := t.writer.Remove(path); err != nil {
+			if _, err := t.writer.Remove(path); err != nil {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("remove compatibility rollback destination %q: %w", path, err))
 			}
 			continue
@@ -320,15 +310,18 @@ func (w *windowsCompatibilityDirectoryWriter) Write(path string, content []byte,
 	return result, nil
 }
 
-func (w *windowsCompatibilityDirectoryWriter) Remove(path string) error {
+func (w *windowsCompatibilityDirectoryWriter) Remove(path string) (bool, error) {
 	parts, err := windowsCompatibilityPathParts(w.root, path)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	parentFD, exists, err := w.openExistingParent(parts[:len(parts)-1])
-	if err != nil || !exists {
-		return err
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
 	}
 	if parentFD != w.rootFD {
 		defer windows.CloseHandle(parentFD)
@@ -336,19 +329,19 @@ func (w *windowsCompatibilityDirectoryWriter) Remove(path string) error {
 
 	handle, err := openWindowsCompatibilityFileAt(parentFD, parts[len(parts)-1], windows.FILE_GENERIC_READ|windows.DELETE, windows.FILE_OPEN)
 	if windowsCompatibilityNotExist(err) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("open physical compatibility destination %q for removal: %w", path, err)
+		return false, fmt.Errorf("open physical compatibility destination %q for removal: %w", path, err)
 	}
 	defer windows.CloseHandle(handle)
 
 	deleteFile := byte(1)
 	var status windows.IO_STATUS_BLOCK
 	if err := windows.NtSetInformationFile(handle, &status, &deleteFile, 1, windows.FileDispositionInformation); err != nil {
-		return fmt.Errorf("remove compatibility destination %q: %w", path, err)
+		return false, fmt.Errorf("remove compatibility destination %q: %w", path, err)
 	}
-	return nil
+	return true, nil
 }
 
 func (w *windowsCompatibilityDirectoryWriter) openParent(parts []string) (windows.Handle, error) {

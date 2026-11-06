@@ -99,9 +99,7 @@ func TestCompactFloorTwoBudgetPreservesLegacyHistoricalStateValidation(t *testin
 				GenesisPaths:    []string{"tracked.txt"}, PolicyHash: hash("b"),
 				RiskLevel: RiskHigh, SelectedLenses: supportedLenses,
 				OriginalChangedLines: tt.originalLines, CorrectionBudget: tt.legacyBudget,
-				LensResults: []LensResult{}, Findings: []Finding{},
-				Classifications: map[string]FindingEvidence{}, Outcomes: map[string]EvidenceOutcome{},
-				FixFindingIDs: []string{}, FollowUps: []FollowUp{}, FixDeltaHash: EmptyFixDeltaHash,
+				AdmittedRoleResults: []CompactAdmittedRoleResult{}, FixFindingIDs: []string{}, FixDeltaHash: EmptyFixDeltaHash,
 			}
 			err := state.Validate()
 			if tt.wantValidation && err != nil {
@@ -125,9 +123,7 @@ func TestCompactFloorTwoBudgetRejectsUnknownPolicy(t *testing.T) {
 		RiskLevel: RiskHigh, SelectedLenses: supportedLenses,
 		OriginalChangedLines: 4, CorrectionBudget: 2,
 		CorrectionBudgetPolicy: "floor_three",
-		LensResults:            []LensResult{}, Findings: []Finding{},
-		Classifications: map[string]FindingEvidence{}, Outcomes: map[string]EvidenceOutcome{},
-		FixFindingIDs: []string{}, FollowUps: []FollowUp{}, FixDeltaHash: EmptyFixDeltaHash,
+		AdmittedRoleResults:    []CompactAdmittedRoleResult{}, FixFindingIDs: []string{}, FixDeltaHash: EmptyFixDeltaHash,
 	}
 	if err := state.Validate(); err == nil || !strings.Contains(err.Error(), "policy") {
 		t.Fatalf("unknown policy validation error = %v, want a policy error", err)
@@ -152,8 +148,7 @@ func TestCompactSuccessorRejectsBudgetPolicyDriftWhenNumericBudgetCoincides(t *t
 		InitialSnapshot: snapshot, CurrentSnapshot: snapshot, GenesisPaths: append([]string{}, snapshot.Paths...),
 		PolicyHash: hash("policy-immutable"), RiskLevel: RiskHigh, SelectedLenses: supportedLenses,
 		OriginalChangedLines: 4, CorrectionBudget: compactBudget, CorrectionBudgetPolicy: CorrectionBudgetPolicyFloorTwo,
-		LensResults: []LensResult{}, Findings: []Finding{}, Classifications: map[string]FindingEvidence{},
-		Outcomes: map[string]EvidenceOutcome{}, FixFindingIDs: []string{}, FollowUps: []FollowUp{}, FixDeltaHash: EmptyFixDeltaHash,
+		AdmittedRoleResults: []CompactAdmittedRoleResult{}, FixFindingIDs: []string{}, FixDeltaHash: EmptyFixDeltaHash,
 	}
 	for _, policy := range []string{"", "floor_three"} {
 		next := previous

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // ─── ParseUninstallOpenCodePluginFlags ──────────────────────────────────────

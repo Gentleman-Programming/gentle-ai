@@ -1,5 +1,8 @@
 # Release Checklist v0.1.0
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 ## Scope freeze
 
 - [ ] Confirm MVP scope remains macOS + Claude Code + OpenCode only.
@@ -16,7 +19,7 @@
 - [ ] Dry-run install on macOS.
 - [ ] Real install on macOS test account.
 - [ ] Validate key output paths for Claude Code and OpenCode.
-- [ ] Validate Engram health endpoint is reachable when selected.
+- [ ] Validate Engram™ health endpoint is reachable when selected.
 
 ## Documentation
 

@@ -75,6 +75,10 @@ func TestCommandRunSelection(t *testing.T) {
 	journeys := func() []Journey {
 		return []Journey{{
 			ID: "known",
+			// This journey drives a stub binary through the command
+			// boundary, not the review lifecycle, so the runner must leave
+			// the kill switch alone.
+			Review: reviewUntouched,
 			Steps: []Step{{
 				Name: "invoke test binary",
 				Fixture: func(sandbox *Sandbox) error {

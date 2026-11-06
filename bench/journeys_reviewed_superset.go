@@ -314,6 +314,7 @@ func reviewedSupersetJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     reviewedSupersetJourneyID,
+			Review: reviewOptedIn,
 			Title:  "Approved full receipt: pre-push allows the unpublished reviewed subset",
 			Source: "#2127 ratified content-addressed authorization: an outgoing subset of the exact approved candidate remains authorized",
 			Steps: []Step{
@@ -327,6 +328,7 @@ func reviewedSupersetJourneys() []Journey {
 		},
 		{
 			ID:     reviewedSupersetMovingBaseJourneyID,
+			Review: reviewOptedIn,
 			Title:  "Approved feature receipt: pre-PR binds the merge-base after advertised main advances",
 			Source: "#2127 R2 ratified content proof: an advertised ref is a publication boundary, while the unique merge-base binds candidate comparison",
 			Steps: []Step{

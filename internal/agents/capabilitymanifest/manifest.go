@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 type SchemaVersion string
@@ -80,19 +80,32 @@ type ImplementationRoutingFacts struct {
 }
 
 type DirectInlineFacts struct {
-	MinUnderstandingFiles                    uint8 `json:"minUnderstandingFiles"`
-	MaxUnderstandingFiles                    uint8 `json:"maxUnderstandingFiles"`
-	MaxMechanicalWriteFiles                  uint8 `json:"maxMechanicalWriteFiles"`
-	MechanicalWriteMustBeAlreadyUnderstood   bool  `json:"mechanicalWriteMustBeAlreadyUnderstood"`
-	MechanicalWriteMustNotRequireResearch    bool  `json:"mechanicalWriteMustNotRequireResearch"`
-	MechanicalWriteMustNotHaveOpenDesignWork bool  `json:"mechanicalWriteMustNotHaveOpenDesignWork"`
+	// Deprecated: file counts no longer route exploration. Canonical values are
+	// zero and omitted from JSON; nonzero legacy facts fail validation.
+	MinUnderstandingFiles                    uint8  `json:"minUnderstandingFiles,omitempty"`
+	MaxUnderstandingFiles                    uint8  `json:"maxUnderstandingFiles,omitempty"`
+	MaxEvidenceBatches                       uint8  `json:"maxEvidenceBatches"`
+	MaxEvidenceCalls                         uint8  `json:"maxEvidenceCalls"`
+	ApproxEvidenceTokens                     uint32 `json:"approxEvidenceTokens"`
+	EvidenceMustUseBoundedRanges             bool   `json:"evidenceMustUseBoundedRanges"`
+	MaxMechanicalWriteFiles                  uint8  `json:"maxMechanicalWriteFiles"`
+	MechanicalWriteMustBeAlreadyUnderstood   bool   `json:"mechanicalWriteMustBeAlreadyUnderstood"`
+	MechanicalWriteMustNotRequireResearch    bool   `json:"mechanicalWriteMustNotRequireResearch"`
+	MechanicalWriteMustNotHaveOpenDesignWork bool   `json:"mechanicalWriteMustNotHaveOpenDesignWork"`
 }
 
 type DelegatedDirectFacts struct {
-	MappingMinUnderstandingFiles  uint8 `json:"mappingMinUnderstandingFiles"`
-	WriterMinNonTrivialFiles      uint8 `json:"writerMinNonTrivialFiles"`
-	DelegateWhenReadPreparesWrite bool  `json:"delegateWhenReadPreparesWrite"`
-	DelegateWhenBroadResearch     bool  `json:"delegateWhenBroadResearch"`
+	// Deprecated: retained for source compatibility only; canonical zero.
+	MappingMinUnderstandingFiles   uint8  `json:"mappingMinUnderstandingFiles,omitempty"`
+	ApproxSequentialLookupLimit    uint8  `json:"approxSequentialLookupLimit"`
+	DelegateWhenLongSessionMapping bool   `json:"delegateWhenLongSessionMapping"`
+	ApproxHandoffTokens            uint32 `json:"approxHandoffTokens"`
+	MaxParentSpotChecks            uint8  `json:"maxParentSpotChecks"`
+	ApproxParentContextTokens      uint32 `json:"approxParentContextTokens"`
+	ContextBackstopIsAdvisory      bool   `json:"contextBackstopIsAdvisory"`
+	WriterMinNonTrivialFiles       uint8  `json:"writerMinNonTrivialFiles"`
+	DelegateWhenReadPreparesWrite  bool   `json:"delegateWhenReadPreparesWrite"`
+	DelegateWhenBroadResearch      bool   `json:"delegateWhenBroadResearch"`
 }
 
 type SDDProposalFacts struct {
@@ -141,38 +154,39 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 	}, nil
 }
 
-// reviewTransportExposureByAgent is the adapter's own self-declared
-// capability to carry the review protocol at all (design.md decision 5's
-// Wave-0 trace citation: "Pi declares only AutoInstall|SystemPrompt|MCP
-// today (no FileSubAgents, no Skills), so its lens transport is genuinely
-// unavailable"). Every other in-repo adapter advertises it; a map miss
-// (an agent with no entry) defaults to the Go zero value of
-// ContractExposure (""), which Advertises treats as not advertised —
-// the same fail-closed default the map's absence of a Pi override would
-// otherwise silently paper over.
+// reviewTransportExposureByAgent is the closed set of runtimes that can
+// carry the review protocol. Every supported agent is explicitly dormant
+// first, then only the four runtimes with the required native transport and
+// immutable reviewer boundary advertise receipt-driven review. A map miss
+// (an unknown agent) remains fail-closed.
 var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
 	for agent := range featureClaimsByAgent {
-		exposure[agent] = ContractExposureAdvertised
+		exposure[agent] = ContractExposureDormant
 	}
-	exposure[model.AgentPi] = ContractExposureDormant
+	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
+	exposure[model.AgentOpenCode] = ContractExposureAdvertised
+	exposure[model.AgentCodex] = ContractExposureAdvertised
+	exposure[model.AgentPi] = ContractExposureAdvertised
 	return exposure
 }()
 
 // immutableReviewExecutorExposureByAgent declares only providers with an
 // enforceable fresh-reviewer boundary. Claude launches a generated subagent
 // with no live tools and receives only the native prompt-carried evidence;
-// OpenCode replaces the task prompt through its provider plugin from an
+// OpenCode relays one host Task through a Go-native transport process, which
+// materializes the bound prompt and captures matching raw output from an
 // ordinary already-running session -- no restart, child process, special
 // user-visible session, or `OPENCODE_DISABLE_*` variable (rdd-advisory-
-// transport SKILL.md). Codex's boundary is the shared advisory transport's
-// CodexAdapter
-// (internal/advisoryreview): a brand-new `codex exec` process, launched in an
-// empty scratch directory the adapter creates and deletes itself, receiving
-// only the canonical provider-rendered prompt -- proven organically by
-// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and its fail-closed
-// companions in e2e/organicruntime. Kilo and every other runtime remain
-// explicitly dormant until they own an equivalent native boundary.
+// transport SKILL.md). Capability advertisement records the provider contract
+// that can reach Go-owned admission; organic runtime proof is recorded by the
+// provider's own execution tests. Pi advertises through gentle-pi's host
+// relay: the launcher reads the negotiated collection input, spawns a
+// brand-new print-mode pi subprocess in an empty scratch directory with
+// every discovery surface disabled, forwards the Go-issued opaque prompt
+// untouched, and returns raw final bytes (gentle-pi#311, gentle-ai#3249).
+// Kilo and every other runtime remain explicitly dormant until they own an
+// equivalent native boundary.
 var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractExposure {
 	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
 	for agent := range featureClaimsByAgent {
@@ -181,6 +195,7 @@ var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractEx
 	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
 	exposure[model.AgentOpenCode] = ContractExposureAdvertised
 	exposure[model.AgentCodex] = ContractExposureAdvertised
+	exposure[model.AgentPi] = ContractExposureAdvertised
 	return exposure
 }()
 
@@ -199,18 +214,25 @@ func MustForAgent(agent model.AgentID) AgentCapabilityManifest {
 func CanonicalImplementationRouting() ImplementationRoutingFacts {
 	return ImplementationRoutingFacts{
 		DirectInline: DirectInlineFacts{
-			MinUnderstandingFiles:                    1,
-			MaxUnderstandingFiles:                    3,
+			MaxEvidenceBatches:                       1,
+			MaxEvidenceCalls:                         3,
+			ApproxEvidenceTokens:                     10000,
+			EvidenceMustUseBoundedRanges:             true,
 			MaxMechanicalWriteFiles:                  1,
 			MechanicalWriteMustBeAlreadyUnderstood:   true,
 			MechanicalWriteMustNotRequireResearch:    true,
 			MechanicalWriteMustNotHaveOpenDesignWork: true,
 		},
 		DelegatedDirect: DelegatedDirectFacts{
-			MappingMinUnderstandingFiles:  4,
-			WriterMinNonTrivialFiles:      2,
-			DelegateWhenReadPreparesWrite: true,
-			DelegateWhenBroadResearch:     true,
+			ApproxSequentialLookupLimit:    5,
+			DelegateWhenLongSessionMapping: true,
+			ApproxHandoffTokens:            2000,
+			MaxParentSpotChecks:            1,
+			ApproxParentContextTokens:      150000,
+			ContextBackstopIsAdvisory:      true,
+			WriterMinNonTrivialFiles:       2,
+			DelegateWhenReadPreparesWrite:  true,
+			DelegateWhenBroadResearch:      true,
 		},
 		SDD: SDDProposalFacts{
 			ProposeWhenSubstantialOrAmbiguous:     true,
@@ -287,8 +309,12 @@ func digest(domain string, payload []byte) string {
 
 var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 	model.AgentAntigravity: {
-		Skills: true, SystemPrompt: true, MCP: true,
+		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
+	// Conductor inherits Claude Code configuration and is managed through Claude
+	// Code's own adapter surface, so Gentle AI claims no write capabilities for
+	// it: no skills, MCP, system prompt, or other managed file writes.
+	model.AgentConductor: {},
 	model.AgentClaudeCode: {
 		OutputStyles: true, SlashCommands: true,
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
@@ -300,6 +326,9 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentGeminiCLI: {
+		Skills: true, SystemPrompt: true, MCP: true,
+	},
+	model.AgentGitHubCopilotCLI: {
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentHermes: {
@@ -321,7 +350,7 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentPi: {
-		SystemPrompt: true, MCP: true,
+		SystemPrompt: false, MCP: true,
 	},
 	model.AgentQwenCode: {
 		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,

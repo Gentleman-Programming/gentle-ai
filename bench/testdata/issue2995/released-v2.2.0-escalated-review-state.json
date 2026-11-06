@@ -1,0 +1,69 @@
+{
+  "schema": "gentle-ai.review-state-record/v2",
+  "revision": "sha256:70ca8946a21ae651926e2a91cf2431e52973d5050ebd96644f4c4b2efa79c719",
+  "state": {
+    "schema": "gentle-ai.review-state/v2",
+    "lineage_id": "review-a3118da0f4a4c425",
+    "generation": 1,
+    "state": "escalated",
+    "initial_snapshot": {
+      "kind": "base-diff",
+      "base_tree": "d2b2f94df408acd9ee162fb843920190fd602446",
+      "candidate_tree": "679310a117538f522d2730455ac1a4c2fb3db8ec",
+      "paths_digest": "sha256:4d916b1a185d946866be1c2f945425ea650ea045dec13bb0ec972744f0f9bd61",
+      "intended_untracked": [],
+      "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
+      "paths": [
+        "file.txt"
+      ],
+      "identity": "sha256:a3118da0f4a4c42536eb5760a51d84f199301e2eb14c6f9c3b0fd81f1f392c1a"
+    },
+    "current_snapshot": {
+      "kind": "base-diff",
+      "base_tree": "d2b2f94df408acd9ee162fb843920190fd602446",
+      "candidate_tree": "679310a117538f522d2730455ac1a4c2fb3db8ec",
+      "paths_digest": "sha256:4d916b1a185d946866be1c2f945425ea650ea045dec13bb0ec972744f0f9bd61",
+      "intended_untracked": [],
+      "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
+      "paths": [
+        "file.txt"
+      ],
+      "identity": "sha256:a3118da0f4a4c42536eb5760a51d84f199301e2eb14c6f9c3b0fd81f1f392c1a"
+    },
+    "genesis_paths": [
+      "file.txt"
+    ],
+    "policy_hash": "sha256:34fb63d7f29f8613cd4431382b1057398a4816f8a4c20fc34677fffc80a184f6",
+    "risk_level": "medium",
+    "selected_lenses": [
+      "review-reliability"
+    ],
+    "original_changed_lines": 1,
+    "correction_budget": 1,
+    "lens_results": [],
+    "findings": [],
+    "classifications": {},
+    "outcomes": {},
+    "fix_finding_ids": [],
+    "follow_ups": [],
+    "fix_delta_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "result_dispositions": [
+      {
+        "lens": "review-reliability",
+        "selected_order": 0,
+        "target_identity": "sha256:a3118da0f4a4c42536eb5760a51d84f199301e2eb14c6f9c3b0fd81f1f392c1a",
+        "artifact_digest": "sha256:b540b3af7c2a943e941700d460cd459025ede416c524e5abe171c48186733487",
+        "class": "wrong_target",
+        "payload_decodable": true,
+        "diagnostic": "preserved output cites docs/absent.md which is not in the frozen candidate path manifest",
+        "absent_paths": [
+          "docs/absent.md"
+        ],
+        "reason": "reviewer inspected a path absent from the frozen candidate; result cannot describe this candidate",
+        "actor": "repro-script",
+        "disposed_at": "2026-09-22T15:27:33.112129428Z",
+        "maintainer_authorization": "gentle-ai.review-result-disposition-authorization/v1\nrepository=/tmp/ga2995/repro\nlineage=review-a3118da0f4a4c425\nrevision=sha256:c0b93e63e38bb8be1bb6dd59b1040484407e0970fd8a5d402d4479a4d6734c0a\ntarget_identity=sha256:a3118da0f4a4c42536eb5760a51d84f199301e2eb14c6f9c3b0fd81f1f392c1a\nlens=review-reliability\norder=0\nartifact_digest=sha256:b540b3af7c2a943e941700d460cd459025ede416c524e5abe171c48186733487\nclass=wrong_target\nactor=repro-script\nreason=reviewer inspected a path absent from the frozen candidate; result cannot describe this candidate"
+      }
+    ]
+  }
+}

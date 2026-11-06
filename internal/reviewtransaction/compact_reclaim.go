@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pathquote"
 )
 
 const CompactReclaimRecordSchema = "gentle-ai.review-reclaim-record/v1"
@@ -109,13 +109,14 @@ type CompactReclaimRecord struct {
 }
 
 // compactAuthoritativeArtifact reports whether a store-entry name carries
-// review authority: state, receipt, finalize journal, captured reviewer
-// results, or interrupted atomic-write payloads that may hold any of them.
-// It must cover every file the compact store writes under a lineage
-// directory; the shared names live beside CompactStore in compact_store.go.
+// review authority: state, receipt, finalize journal, or interrupted
+// atomic-write payloads that may hold any of them. Canonical reviewer results
+// live inside review-state.json, not in a sibling directory. It must cover every
+// file the compact store writes under a lineage directory; the shared names live
+// beside CompactStore in compact_store.go.
 func compactAuthoritativeArtifact(name string) bool {
 	switch name {
-	case compactStateFileName, compactReceiptFileName, compactFinalizeJournalFileName, CompactReviewerResultsDir:
+	case compactStateFileName, compactReceiptFileName, compactFinalizeJournalFileName:
 		return true
 	}
 	return strings.HasPrefix(name, ".atomic-")

@@ -2,17 +2,19 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
@@ -20,14 +22,6 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 		"read-only recovery": func(t *testing.T, home, repo string) (bool, error) {
 			staleManagedReviewerAssets(t, home)
 			return false, errors.Join(RunReview([]string{"status", "--cwd", repo}, &bytes.Buffer{}), RunReview([]string{"capabilities"}, &bytes.Buffer{}), RunReview([]string{"start", "--help"}, &bytes.Buffer{}), RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &bytes.Buffer{}))
-		},
-		"capture evidence repository context": func(t *testing.T, home, repo string) (bool, error) {
-			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
-			started := runNegotiatedReviewStart(t, repo, "provenance-capture")
-			input := filepath.Join(t.TempDir(), "evidence.txt")
-			requireManagedAssetProvenanceNoError(t, os.WriteFile(input, []byte("passed\n"), 0o600))
-			staleManagedReviewerAssets(t, home)
-			return true, RunReviewCaptureEvidence([]string{"--repository-context", started.RepositoryContext.Handle, "--lineage", started.LineageID, "--target", started.RepositoryContext.TargetIdentity, "--expected-revision", started.RepositoryContext.Revision, "--outcome", "passed", "--input", input}, &bytes.Buffer{})
 		},
 		"abandon": func(t *testing.T, home, repo string) (bool, error) {
 			staleManagedReviewerAssets(t, home)
@@ -37,14 +31,9 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 			staleManagedReviewerAssets(t, home)
 			return true, RunReviewBundleImport([]string{"--cwd", repo, "--bundle", filepath.Join(t.TempDir(), "bundle.json")}, &bytes.Buffer{})
 		},
-		"receipt-backed delivery": func(t *testing.T, home, repo string) (bool, error) {
-			approveDiscoveryMarkdown(t, repo, "provenance-delivery", "docs/review.md", "reviewed\n")
-			staleManagedReviewerAssets(t, home)
-			return true, RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &bytes.Buffer{})
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			home, repo := reviewModeHome(t), initReviewCLIRepo(t)
+			home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 			refuse, err := run(t, home, repo)
 			if refuse && (err == nil || !bytes.Contains([]byte(err.Error()), []byte(managedAssetProvenanceRefusal))) {
 				t.Fatalf("authority bypass error = %v, want %q", err, managedAssetProvenanceRefusal)
@@ -56,9 +45,9 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 	}
 	home := t.TempDir()
 	requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetDigest: "sha256:previous-writer"}))
-	decoy := filepath.Join(home, ".config", "opencode", "plugins", "review-result-artifacts.ts")
+	decoy := filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts")
 	requireManagedAssetProvenanceNoError(t, os.MkdirAll(filepath.Dir(decoy), 0o755))
-	requireManagedAssetProvenanceNoError(t, os.WriteFile(decoy, []byte(assets.MustRead("opencode/plugins/review-result-artifacts.ts")), 0o644))
+	requireManagedAssetProvenanceNoError(t, os.WriteFile(decoy, []byte(assets.MustRead("opencode/plugins/opencode-review-transport.ts")), 0o644))
 	requireManagedAssetProvenanceNoError(t, os.WriteFile(filepath.Join(home, ".config", "opencode", "opencode.json"), []byte("{\n"), 0o644))
 	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentGGA, model.ComponentSDD}, SDDMode: model.SDDModeSingle})
 	if err == nil || len(result.Execution.Apply.Steps) < 3 || result.Execution.Apply.Steps[1].Status != "succeeded" {
@@ -68,40 +57,6 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 	if _, err := os.Stat(decoy); err != nil || readErr != nil || persisted.ManagedAssetDigest != "sha256:previous-writer" {
 		t.Fatalf("decoy plugin bypassed provenance: stat=%v state=%#v read=%v", err, persisted, readErr)
 	}
-}
-func TestManagedReviewerAssetProvenanceReceiptOrdering(t *testing.T) {
-	t.Run("corrupt compact receipt", func(t *testing.T) {
-		home, repo := reviewModeHome(t), initReviewCLIRepo(t)
-		_, store := approveDiscoveryMarkdown(t, repo, "provenance-corrupt", "docs/review.md", "reviewed\n")
-		requireManagedAssetProvenanceNoError(t, os.WriteFile(store.ReceiptPath(), []byte("{"), 0o644))
-		staleManagedReviewerAssets(t, home)
-		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &bytes.Buffer{}), "complete review authority inventory is unavailable or corrupted")
-	})
-	t.Run("escalated compact receipt", func(t *testing.T) {
-		home := reviewModeHome(t)
-		repo, _, record := escalatedCurrentChangesRecoveryFixture(t, "provenance-escalated")
-		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, record.State.LineageID)
-		requireManagedAssetProvenanceNoError(t, err)
-		receipt, err := record.State.Receipt()
-		requireManagedAssetProvenanceNoError(t, err)
-		requireManagedAssetProvenanceNoError(t, reviewtransaction.WriteCompactReceiptAtomic(store.ReceiptPath(), receipt))
-		runReviewCLIGit(t, repo, "add", "tracked.txt")
-		staleManagedReviewerAssets(t, home)
-		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &bytes.Buffer{}), "compact review authority is escalated (budget_exceeded)")
-	})
-	t.Run("valid legacy receipt", func(t *testing.T) {
-		home := reviewModeHome(t)
-		fixture := newLegacyCLIFixture(t, "provenance-legacy")
-		runReviewCLIGit(t, fixture.repo, "add", "tracked.txt")
-		staleManagedReviewerAssets(t, home)
-		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", fixture.repo, "--lineage", fixture.lineage, "--gate", "pre-commit"}, &bytes.Buffer{}), managedAssetProvenanceRefusal)
-	})
-	t.Run("in-flight compact receipt", func(t *testing.T) {
-		home, repo := reviewModeHome(t), initReviewCLIRepo(t)
-		startNewLineageForFinalizeTest(t, repo, "provenance-inflight")
-		staleManagedReviewerAssets(t, home)
-		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", "provenance-inflight", "--gate", "pre-commit"}, &bytes.Buffer{}), reviewFacadeReceiptNotAvailableReason("provenance-inflight"))
-	})
 }
 
 // TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew pins the two
@@ -142,8 +97,59 @@ func TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew(t *testing.T) {
 	})
 }
 
+// TestPlainReviewVerbsRenderManagedAssetsContinuation pins the plain CLI
+// boundary of the verbs with no negotiated failure envelope (bundle import,
+// abandon): the refusal text itself must carry the executable-anchored sync
+// command while keeping both digests and the typed preflight refusal.
+func TestPlainReviewVerbsRenderManagedAssetsContinuation(t *testing.T) {
+	for name, run := range map[string]func(string, *bytes.Buffer) error{
+		"bundle import": func(repo string, output *bytes.Buffer) error {
+			return RunReviewBundleImport([]string{"--cwd", repo, "--bundle", filepath.Join(t.TempDir(), "bundle.json")}, output)
+		},
+		"abandon": func(repo string, output *bytes.Buffer) error {
+			return RunReviewAbandon([]string{"--cwd", repo, "--lineage", "lineage", "--expected-revision", "revision", "--reason", "reason", "--actor", "actor", "--maintainer-authorization", "authorization"}, output)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+			staleManagedReviewerAssets(t, home)
+
+			var output bytes.Buffer
+			err := run(repo, &output)
+			if err == nil {
+				t.Fatalf("stale managed assets %s succeeded: %s", name, output.String())
+			}
+			command := managedAssetsContinuation("", nil).Command
+			for _, want := range []string{managedAssetProvenanceRefusal, "recorded digest sha256:stale", "this binary embeds ", "continue with: " + command} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("%s refusal = %q, want it to contain %q", name, err.Error(), want)
+				}
+			}
+			var preflight *reviewIntegrationPreflightError
+			if !errors.As(err, &preflight) || preflight.continuation == nil || preflight.continuation.Command != command {
+				t.Fatalf("%s refusal lost the typed continuation: %#v", name, err)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("refused %s wrote output: %s", name, output.String())
+			}
+		})
+	}
+}
+
+// TestPlainReviewContinuationLeavesOtherErrorsUnchanged pins that only a typed
+// refusal carrying a continuation gains the rendered command.
+func TestPlainReviewContinuationLeavesOtherErrorsUnchanged(t *testing.T) {
+	plain := errors.New("plain failure")
+	typed := reviewPreflightRefusal(reviewPreflightManagedAssetsReason, errors.New("typed without continuation"))
+	for _, err := range []error{nil, plain, typed} {
+		if got := withPlainReviewContinuation(err); got != err {
+			t.Fatalf("withPlainReviewContinuation(%v) = %v, want the same error", err, got)
+		}
+	}
+}
+
 func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *testing.T) {
-	home, repo := reviewModeHome(t), initReviewCLIRepo(t)
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/stale-assets.md", "# Candidate\n", 0o644)
 	staleManagedReviewerAssets(t, home)
 
@@ -160,20 +166,232 @@ func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *tes
 		failure.NextAction != "stop" {
 		t.Fatalf("stale managed assets failure = %#v", failure)
 	}
-	if failure.Cause != managedAssetProvenanceRefusal {
-		t.Fatalf("stale managed assets cause = %q, want %q", failure.Cause, managedAssetProvenanceRefusal)
+	embedded, digestErr := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, digestErr)
+	if want := managedAssetProvenanceRefusal + " (recorded digest sha256:stale, this binary embeds " + embedded + ")"; failure.Cause != want {
+		t.Fatalf("stale managed assets cause = %q, want %q", failure.Cause, want)
+	}
+	// #3299, #4170: the failure names the exact candidate-preserving sync
+	// continuation instead of leaving the caller to guess "run sync" from the
+	// cause prose. #4434: the command is anchored to the invoking executable,
+	// so it cannot resolve to a different `gentle-ai` through PATH.
+	if failure.Continuation == nil || failure.Continuation.Operation != "sync" ||
+		failure.Continuation.Command != managedAssetsTestContinuationCommand(t, "opencode") || failure.Continuation.Agent != "opencode" ||
+		len(failure.Continuation.StaleAssets) != 1 || failure.Continuation.StaleAssets[0] != "sha256:stale" {
+		t.Fatalf("stale managed assets continuation = %#v", failure.Continuation)
 	}
 	if err := failure.Validate(); err != nil {
 		t.Fatalf("stale managed assets failure does not satisfy its published contract: %v", err)
 	}
+	malformedFailure := failure
+	malformedContinuation := *failure.Continuation
+	malformedContinuation.Command = "'/tmp/gentle\nai' sync --agent opencode"
+	malformedFailure.Continuation = &malformedContinuation
+	if err := malformedFailure.Validate(); err == nil {
+		t.Fatal("FAILURE accepted a multiline managed-assets continuation command")
+	}
+}
+
+// TestCaptureResultClassifiesStaleManagedAssetsAsTypedRefusal is the #4379
+// regression. The capture-time gate refused with an untyped error, so the
+// collect capture fell through to operation_outcome_unknown (mutation outcome
+// unknown, retry unsafe) and never named the sync that clears it. It must
+// publish the same not-started managed_assets_outdated refusal START does,
+// with the executable-anchored continuation, and leave authority untouched.
+func TestCaptureResultClassifiesStaleManagedAssetsAsTypedRefusal(t *testing.T) {
+	home := reviewEnabledHome(t)
+	repo, started, _, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	input := filepath.Join(t.TempDir(), "result.json")
+	requireManagedAssetProvenanceNoError(t, os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, lens, 0), 0o600))
+	store, before, err := discoverCompactFacadeReview(t.Context(), repo, started.LineageID, false)
+	requireManagedAssetProvenanceNoError(t, err)
+	staleManagedReviewerAssets(t, home)
+
+	var output bytes.Buffer
+	err = RunReview([]string{
+		"capture-result", "--cwd", repo, "--lineage", started.LineageID,
+		"--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", "0", "--input", input,
+	}, &output)
+	failure := decodeCaptureRefusalEnvelope(t, err, output.Bytes())
+	if failure.Operation != "review.capture-result" || failure.Phase != "preflight" ||
+		failure.Code != "managed_assets_outdated" || failure.MutationOutcome != ReviewMutationNotStarted ||
+		failure.NextAction != "stop" || failure.LineageID != started.LineageID {
+		t.Fatalf("stale managed assets capture envelope = %#v", failure)
+	}
+	if !strings.HasPrefix(failure.Cause, managedAssetProvenanceRefusal) {
+		t.Fatalf("stale managed assets cause = %q, want prefix %q", failure.Cause, managedAssetProvenanceRefusal)
+	}
+	executable, err := os.Executable()
+	requireManagedAssetProvenanceNoError(t, err)
+	if continuation := failure.Continuation; continuation == nil || continuation.Operation != "sync" ||
+		continuation.Command != managedAssetsExecutableToken(executable)+" sync" || continuation.Agent != "" ||
+		!reflect.DeepEqual(continuation.StaleAssets, []string{"sha256:stale"}) {
+		t.Fatalf("stale managed assets capture continuation = %#v", failure.Continuation)
+	}
+	validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, "v2", "failure.schema.json"), output.Bytes())
+	assertOpenCodeRelayAuthorityUnchanged(t, repo, started.LineageID, store, before)
+}
+
+// TestManagedAssetsGateRefusalIsTypedForEveryCaller pins the shared gate
+// itself: whichever verb reaches it, the refusal classifies as the not-started
+// managed_assets_outdated preflight with its sync continuation, never as the
+// operation_outcome_unknown default.
+func TestManagedAssetsGateRefusalIsTypedForEveryCaller(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	staleManagedReviewerAssets(t, home)
+	err := authorizeManagedReviewerAssets()
+	var preflight *reviewIntegrationPreflightError
+	if !errors.As(err, &preflight) {
+		t.Fatalf("managed-asset gate error = %T %v, want a typed preflight refusal", err, err)
+	}
+	// #4379 suggested fix: the refusal names both digests, so a sync run by
+	// a different binary than the one refusing is diagnosable at a glance.
+	embedded, digestErr := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, digestErr)
+	want := managedAssetProvenanceRefusal + " (recorded digest sha256:stale, this binary embeds " + embedded + ")"
+	if err.Error() != want {
+		t.Fatalf("managed-asset gate text = %q, want %q", err.Error(), want)
+	}
+	failure := newReviewIntegrationFailure("review.repair", []string{"--contract", ReviewIntegrationContractV2}, err)
+	if failure.Code != "managed_assets_outdated" || failure.Phase != "preflight" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.Continuation == nil {
+		t.Fatalf("managed-asset gate failure = %#v", failure)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("managed-asset gate failure does not satisfy its contract: %v", err)
+	}
+}
+
+// TestManagedAssetsRefusalHonorsV1FailureSchema pins the contract split: the
+// published v1 failure schema forbids `continuation`, so a managed_assets_outdated
+// refusal negotiated under v1 publishes the typed code alone, while v2 keeps
+// the continuation it requires. Before this, START under v1 emitted an
+// envelope its own published schema rejects, and the shared mutation gate
+// would have extended that to negotiated repair.
+func TestManagedAssetsRefusalHonorsV1FailureSchema(t *testing.T) {
+	v1Schema := compileWholePublishedReviewSchema(t, "v1", "failure.schema.json")
+	t.Run("start", func(t *testing.T) {
+		home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+		writeReviewStartCandidate(t, repo, "docs/stale-assets.md", "# Candidate\n", 0o644)
+		staleManagedReviewerAssets(t, home)
+		var output bytes.Buffer
+		err := RunReview(boundNegotiatedStartArgs(t, []string{
+			"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--agent", "opencode", "--consent", "granted",
+		}), &output)
+		if err == nil {
+			t.Fatalf("stale managed assets START succeeded: %s", output.String())
+		}
+		failure := decodeReviewIntegrationFailure(t, output.Bytes())
+		if failure.Contract != ReviewIntegrationContractV1 || failure.Code != "managed_assets_outdated" ||
+			failure.MutationOutcome != ReviewMutationNotStarted || failure.Continuation != nil {
+			t.Fatalf("v1 stale managed assets failure = %#v", failure)
+		}
+		validatePublishedReviewSchema(t, v1Schema, output.Bytes())
+		requireManagedAssetProvenanceNoError(t, failure.Validate())
+	})
+	t.Run("repair gate", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		staleManagedReviewerAssets(t, home)
+		for _, contract := range []string{ReviewIntegrationContractV1, ReviewIntegrationContractV2} {
+			failure := newReviewIntegrationFailure("review.repair", []string{"--contract", contract}, authorizeManagedReviewerAssets())
+			if failure.Code != "managed_assets_outdated" || (failure.Continuation != nil) != (contract == ReviewIntegrationContractV2) {
+				t.Fatalf("%s repair gate failure = %#v", contract, failure)
+			}
+			requireManagedAssetProvenanceNoError(t, failure.Validate())
+			if contract == ReviewIntegrationContractV1 {
+				var output bytes.Buffer
+				requireManagedAssetProvenanceNoError(t, emitReviewIntegrationFailure(&output, failure))
+				validatePublishedReviewSchema(t, v1Schema, output.Bytes())
+			}
+		}
+	})
+	t.Run("validate rejects a v1 continuation", func(t *testing.T) {
+		failure := newReviewIntegrationPreflightFailure("review.start", "managed_assets_outdated", reviewPreflightManagedAssetsReason.Message)
+		failure.NextAction = reviewPreflightManagedAssetsReason.NextAction
+		failure.Continuation = managedAssetsContinuation("", []string{"sha256:stale"})
+		if err := failure.Validate(); err == nil {
+			t.Fatal("Validate accepted a continuation under the v1 failure contract")
+		}
+	})
+}
+
+// TestManagedAssetsNarrationMatchesTheAgentlessContinuation keeps the human
+// statement for managed_assets_outdated consistent with the continuations the
+// refusal actually carries (#4379 review): mutation verbs carry an agentless
+// `sync`, STATUS and START bind the runtime agent, and the refusal names both
+// asset versions so a sync run by a different binary is diagnosable.
+func TestManagedAssetsNarrationMatchesTheAgentlessContinuation(t *testing.T) {
+	statement := reviewStopReasonNarration["managed_assets_outdated"]
+	for _, want := range []string{
+		"`gentle-ai sync`",
+		"`gentle-ai sync --agent " + reviewUndeclaredRuntimeIdentitySlot + "`",
+		"the one the last sync recorded and the one this binary carries",
+		"still differ after a sync that completed successfully (a failed or partial sync",
+	} {
+		if !strings.Contains(statement, want) {
+			t.Errorf("managed_assets_outdated narration lacks %q: %q", want, statement)
+		}
+	}
+	if strings.HasPrefix(statement, "Run `gentle-ai sync --agent") || strings.Contains(statement, "stops before it starts") {
+		t.Errorf("managed_assets_outdated narration still reads as a START-only refusal: %q", statement)
+	}
+}
+
+// TestCollectCaptureManagedAssetsRefusalPublishesOnlyUnderV2 pins the
+// ordering the classifier relies on (#4379 review): capture verbs carry no
+// --contract flag, so newReviewIntegrationFailure classifies them under v1
+// yet attaches the continuation, an intermediate envelope Validate rejects.
+// Only the collect dispatcher's v2 identity, applied after classification and
+// before emission, makes it publishable. The published-schema shape of the
+// emitted envelope is pinned end to end by
+// TestCaptureResultClassifiesStaleManagedAssetsAsTypedRefusal.
+func TestCollectCaptureManagedAssetsRefusalPublishesOnlyUnderV2(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	staleManagedReviewerAssets(t, home)
+	captures := 0
+	for _, metadata := range reviewIntegrationOperationRegistry {
+		if !metadata.CollectCapture {
+			continue
+		}
+		captures++
+		t.Run(metadata.Command, func(t *testing.T) {
+			classified := newReviewIntegrationFailure(metadata.Operation, nil, authorizeManagedReviewerAssets())
+			if classified.Contract != ReviewIntegrationContractV1 || classified.Code != "managed_assets_outdated" || classified.Continuation == nil {
+				t.Fatalf("classified collect capture failure = %#v, want the v1 intermediate carrying the continuation", classified)
+			}
+			if err := classified.Validate(); err == nil {
+				t.Fatal("Validate accepted the pre-upgrade collect capture envelope; the dispatcher order is no longer load-bearing")
+			}
+			published := reviewCollectCaptureFailureIdentity(classified)
+			if published.Contract != ReviewIntegrationContractV2 || published.Schema != ReviewIntegrationFailureSchemaV2 ||
+				!reflect.DeepEqual(published.Continuation, classified.Continuation) {
+				t.Fatalf("published collect capture failure = %#v", published)
+			}
+			var output bytes.Buffer
+			requireManagedAssetProvenanceNoError(t, emitReviewIntegrationFailure(&output, published))
+			if decoded := decodeReviewIntegrationFailure(t, output.Bytes()); decoded.Contract != ReviewIntegrationContractV2 || decoded.Continuation == nil {
+				t.Fatalf("emitted collect capture failure = %#v", decoded)
+			}
+		})
+	}
+	if captures == 0 {
+		t.Fatal("no CollectCapture rows in reviewIntegrationOperationRegistry; the extraction is stale")
+	}
 }
 
 func TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts(t *testing.T) {
-	home, repo := reviewModeHome(t), initReviewCLIRepo(t)
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/current-assets.md", "# Candidate\n", 0o644)
 	digest, err := managedAssetDigest()
 	requireManagedAssetProvenanceNoError(t, err)
-	requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetDigest: digest}))
+	recordManagedAssetDigest(t, home, digest)
 
 	var output bytes.Buffer
 	err = RunReview(boundNegotiatedStartArgs(t, []string{
@@ -185,6 +403,465 @@ func TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts(t *testing.T) 
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
 	if err := started.Validate(); err != nil || started.LineageID == "" {
 		t.Fatalf("current managed assets START = %#v, validate = %v", started, err)
+	}
+}
+
+// TestNegotiatedStatusReportsManagedAssetsOutdatedBeforeOfferingStart is the
+// RED-first proof for #3299/#4170: selectorless STATUS must classify a stale
+// managed-asset digest and name the exact sync continuation BEFORE it ever
+// offers a START that preflight would refuse anyway. Executing the returned
+// START used to be the only way to discover the skew, and its failure named
+// no continuation the caller could run instead of guessing "run sync" from
+// prose.
+func TestNegotiatedStatusReportsManagedAssetsOutdatedBeforeOfferingStart(t *testing.T) {
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/status-stale-assets.md", "# Candidate\n", 0o644)
+	staleManagedReviewerAssets(t, home)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("stale managed assets STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "managed_assets_outdated" ||
+		status.NextTransition.Execute != nil {
+		t.Fatalf("stale managed assets STATUS transition = %#v", status.NextTransition)
+	}
+	continuation := status.NextTransition.Continuation
+	if continuation == nil || continuation.Operation != "sync" || continuation.Command != managedAssetsTestContinuationCommand(t, "opencode") ||
+		continuation.Agent != "opencode" || len(continuation.StaleAssets) != 1 || continuation.StaleAssets[0] != "sha256:stale" {
+		t.Fatalf("stale managed assets STATUS continuation = %#v", continuation)
+	}
+	statusV9Schema := compileWholeNativeStatusSchema(t, "status-v9.schema.json")
+	validatePublishedReviewSchema(t, statusV9Schema, output.Bytes())
+
+	// Once the recorded digest converges with this binary's, the very same
+	// candidate must be offered again: the skew was the only thing blocking
+	// it, and nothing about the candidate itself changed.
+	digest, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+	recordManagedAssetDigest(t, home, digest)
+
+	var convergedOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &convergedOutput); err != nil {
+		t.Fatalf("converged managed assets STATUS: %v\n%s", err, convergedOutput.String())
+	}
+	var converged ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, convergedOutput.Bytes(), &converged)
+	if converged.NextTransition == nil || converged.NextTransition.Kind != reviewNextTransitionExecute ||
+		converged.NextTransition.ReasonCode != "fresh_target_ready" || converged.NextTransition.Execute == nil ||
+		converged.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("converged managed assets STATUS transition = %#v", converged.NextTransition)
+	}
+}
+
+// Bound STATUS must suspend capture offers without changing their authority,
+// then resume the exact same slot after the advertised sync converges.
+func TestNegotiatedBoundStatusResumesSameCaptureAfterManagedAssetsConverge(t *testing.T) {
+	for _, phase := range []string{"reviewer", "targeted-validator"} {
+		t.Run(phase, func(t *testing.T) {
+			home := reviewEnabledHome(t)
+			var repo, lineage string
+			if phase == "reviewer" {
+				candidate, _, _, record := newArtifactReview(t, false)
+				repo, lineage = candidate, record.State.LineageID
+			} else {
+				repo, lineage, _ = providerCorrectionReadyWithoutVerificationEvidence(t)
+			}
+			store, before, err := discoverCompactFacadeReview(t.Context(), repo, lineage, false)
+			requireManagedAssetProvenanceNoError(t, err)
+			status := func() ReviewTargetStatusResult {
+				t.Helper()
+				var output bytes.Buffer
+				err := RunReview([]string{"status", "--cwd", repo, "--lineage", lineage,
+					"--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition"}, &output)
+				requireManagedAssetProvenanceNoError(t, err)
+				var result ReviewTargetStatusResult
+				decodeStrictReviewJSON(t, output.Bytes(), &result)
+				requireManagedAssetProvenanceNoError(t, result.Validate())
+				validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), output.Bytes())
+				return result
+			}
+			initial := status()
+			if initial.NextTransition == nil || initial.NextTransition.Collect == nil ||
+				len(initial.NextTransition.Collect.Inputs) == 0 {
+				t.Fatalf("initial STATUS did not offer a capture: %#v", initial.NextTransition)
+			}
+			capture := initial.NextTransition.Collect.Inputs[0]
+			if capture.ProviderTask == nil && capture.ArtifactSubject == nil {
+				t.Fatalf("initial STATUS did not offer a provider-bound capture: %#v", initial.NextTransition)
+			}
+			staleManagedReviewerAssets(t, home)
+			stale := status()
+			transition := stale.NextTransition
+			if transition == nil || transition.Kind != reviewNextTransitionStop || transition.ReasonCode != "managed_assets_outdated" ||
+				transition.Execute != nil || transition.Collect != nil || transition.CorrectionRequest != nil || transition.UnachievableLensSlots != nil {
+				t.Fatalf("stale bound STATUS must offer only stop/managed_assets_outdated: %#v", transition)
+			}
+			continuation := transition.Continuation
+			if continuation == nil || continuation.Operation != "sync" || continuation.Agent != "opencode" ||
+				continuation.Command != managedAssetsTestContinuationCommand(t, "opencode") ||
+				!reflect.DeepEqual(continuation.StaleAssets, []string{"sha256:stale"}) {
+				t.Fatalf("stale bound STATUS continuation = %#v", continuation)
+			}
+			if !reflect.DeepEqual(initial.Authority, stale.Authority) || initial.TargetIdentity != stale.TargetIdentity {
+				t.Fatal("stale STATUS changed authority or target")
+			}
+			assertOpenCodeRelayAuthorityUnchanged(t, repo, lineage, store, before)
+
+			// Execute only the advertised continuation against the test-managed home.
+			argv := splitContinuationCommand(continuation.Command)
+			run := exec.Command(argv[0], argv[1:]...)
+			run.Env = append(os.Environ(), "GENTLE_AI_TEST_CLI_STANDIN=1")
+			if output, err := run.CombinedOutput(); err != nil {
+				t.Fatalf("advertised sync failed: %v\n%s", err, output)
+			}
+			converged := status()
+			if !reflect.DeepEqual(initial.NextTransition, converged.NextTransition) ||
+				!reflect.DeepEqual(initial.Authority, converged.Authority) || initial.TargetIdentity != converged.TargetIdentity {
+				t.Fatal("converged STATUS did not resume the identical authority and capture slot")
+			}
+			assertOpenCodeRelayAuthorityUnchanged(t, repo, lineage, store, before)
+		})
+	}
+}
+
+// TestManagedAssetsStopTransitionCarriesExactlyOneSignal is the RED-first
+// proof for the inconclusive review finding on #3299/#4170: the negotiated
+// STATUS envelope must carry exactly one signal for a stale managed-asset
+// digest -- the typed `stop`/`managed_assets_outdated` transition with its
+// sync continuation -- and Validate() must refuse either way this could
+// drift: the continuation missing from the stop that requires it, or the
+// continuation attached to a transition it does not belong to (a producer
+// bug that would let a caller read two disagreeing exits from one envelope).
+func TestManagedAssetsStopTransitionCarriesExactlyOneSignal(t *testing.T) {
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/dual-signal.md", "# Candidate\n", 0o644)
+	staleManagedReviewerAssets(t, home)
+
+	var staleOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &staleOutput); err != nil {
+		t.Fatalf("stale managed assets STATUS: %v\n%s", err, staleOutput.String())
+	}
+	var stale ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, staleOutput.Bytes(), &stale)
+	if stale.NextTransition == nil || stale.NextTransition.Kind != reviewNextTransitionStop ||
+		stale.NextTransition.ReasonCode != "managed_assets_outdated" || stale.NextTransition.Continuation == nil {
+		t.Fatalf("baseline stale managed assets STATUS = %#v", stale.NextTransition)
+	}
+	if err := stale.Validate(); err != nil {
+		t.Fatalf("baseline stale managed assets STATUS should validate: %v", err)
+	}
+	malformedStatus := stale
+	malformedTransition := *stale.NextTransition
+	malformedContinuation := *stale.NextTransition.Continuation
+	malformedContinuation.Command = "'/tmp/gentle\rai' sync --agent opencode"
+	malformedTransition.Continuation = &malformedContinuation
+	malformedStatus.NextTransition = &malformedTransition
+	if err := malformedStatus.Validate(); err == nil {
+		t.Fatal("STATUS accepted a multiline managed-assets continuation command")
+	}
+
+	// A managed_assets_outdated stop without its continuation names no way
+	// out at all: the caller cannot resolve it and cannot tell it apart from
+	// a producer defect.
+	missingContinuation := stale
+	strippedTransition := *stale.NextTransition
+	strippedTransition.Continuation = nil
+	missingContinuation.NextTransition = &strippedTransition
+	if err := missingContinuation.Validate(); err == nil {
+		t.Fatal("STATUS accepted a managed_assets_outdated stop with no sync continuation")
+	}
+
+	digest, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+	recordManagedAssetDigest(t, home, digest)
+	var convergedOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &convergedOutput); err != nil {
+		t.Fatalf("converged managed assets STATUS: %v\n%s", err, convergedOutput.String())
+	}
+	var converged ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, convergedOutput.Bytes(), &converged)
+	if converged.NextTransition == nil || converged.NextTransition.Kind != reviewNextTransitionExecute {
+		t.Fatalf("converged managed assets STATUS = %#v", converged.NextTransition)
+	}
+
+	// A continuation on an executable START is a second, disagreeing signal:
+	// nothing about a fresh_target_ready execute names a sync problem, so a
+	// caller reading both would not know which one to trust.
+	executeWithContinuation := converged
+	bogusTransition := *converged.NextTransition
+	bogusTransition.Continuation = &ReviewStopContinuation{Operation: "sync", Command: "gentle-ai sync --agent opencode", Agent: "opencode"}
+	executeWithContinuation.NextTransition = &bogusTransition
+	if err := executeWithContinuation.Validate(); err == nil {
+		t.Fatal("STATUS accepted a sync continuation attached to an executable START transition")
+	}
+}
+
+// TestManagedAssetsContinuationUsesInvokingExecutable is the RED-first proof
+// for #4434: a STATUS or START refusal produced by one Gentle AI binary must
+// offer a continuation that runs THAT binary, not whatever `gentle-ai` happens
+// to resolve to on PATH. The continuation used to hard-code the unqualified
+// executable name while describing itself as the exact runnable recovery, so
+// with a different global binary first on PATH the offered sync wrote that
+// binary's digest and the refusing binary never converged: repeating the exact
+// advertised continuation could not clear its own refusal.
+func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
+	invoking, err := os.Executable()
+	if err != nil {
+		t.Skipf("invoking executable unresolvable: %v", err)
+	}
+	// The expectation renders the executable token independently of the
+	// production helper -- a byte-scan allowlist instead of the shared regex,
+	// with the same platform dispatch -- so the two cannot agree by
+	// construction. A Windows path of backslashes is quoted here exactly as
+	// production quotes it, because backslash is outside the safe bare class
+	// on every platform.
+	quoted := func(path string) string {
+		bare := path != ""
+		for i := 0; i < len(path); i++ {
+			c := path[i]
+			switch {
+			case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			case c == '/' || c == '.' || c == '_' || c == '+' || c == '=' || c == '@' || c == ':' || c == ',' || c == '-':
+			default:
+				bare = false
+			}
+		}
+		if bare {
+			return path
+		}
+		if runtime.GOOS == "windows" {
+			return "\"" + strings.ReplaceAll(path, "\"", "\\\"") + "\""
+		}
+		return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+	}
+
+	// Unit: the rendered command is rooted at whichever executable resolution
+	// reports, using one exact platform-specific encoding: POSIX paths quote
+	// with single quotes (no POSIX shell expands anything inside them, so $ and
+	// backticks survive literally), Windows paths quote with double quotes
+	// (cmd.exe command syntax), a path over the safe bare class stays bare, and
+	// an unresolvable executable keeps the historical bare `gentle-ai` form
+	// instead of guessing a path it cannot prove.
+	for name, tc := range map[string]struct {
+		executable func() (string, error)
+		goos       string
+		want       string
+	}{
+		"windows path with spaces uses double quotes": {
+			executable: func() (string, error) { return `C:\Program Files\gentle-ai\gentle-ai.exe`, nil },
+			goos:       "windows",
+			want:       `"C:\Program Files\gentle-ai\gentle-ai.exe" sync --agent opencode`,
+		},
+		"posix path with shell expansion uses single quotes": {
+			executable: func() (string, error) { return `/opt/$HOME/gentle-ai`, nil },
+			goos:       "linux",
+			want:       `'/opt/$HOME/gentle-ai' sync --agent opencode`,
+		},
+		"posix path with an embedded single quote escapes it": {
+			executable: func() (string, error) { return `/opt/o'brien/gentle-ai`, nil },
+			goos:       "linux",
+			want:       `'/opt/o'\''brien/gentle-ai' sync --agent opencode`,
+		},
+		"posix path over the safe bare class stays bare": {
+			executable: func() (string, error) { return `/opt/gentle-ai/bin/gentle-ai`, nil },
+			goos:       "linux",
+			want:       `/opt/gentle-ai/bin/gentle-ai sync --agent opencode`,
+		},
+		"unresolvable executable keeps the bare fallback": {
+			executable: func() (string, error) { return "", errors.New("unresolvable") },
+			goos:       "linux",
+			want:       `gentle-ai sync --agent opencode`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			previousPath := reviewManagedAssetsExecutablePath
+			previousGOOS := reviewManagedAssetsGOOS
+			previousArgs := append([]string(nil), os.Args...)
+			reviewManagedAssetsExecutablePath = tc.executable
+			reviewManagedAssetsGOOS = tc.goos
+			t.Cleanup(func() {
+				reviewManagedAssetsExecutablePath = previousPath
+				reviewManagedAssetsGOOS = previousGOOS
+				os.Args = previousArgs
+			})
+			// Keep these renderer cases focused on os.Executable. A relative
+			// argv[0] remains only the final compatibility fallback.
+			os.Args = append([]string{"gentle-ai"}, os.Args[1:]...)
+			continuation := managedAssetsContinuation("opencode", []string{"sha256:stale"})
+			if continuation.Command != tc.want {
+				t.Fatalf("continuation command = %q, want %q", continuation.Command, tc.want)
+			}
+			if !validManagedAssetsContinuationCommand(continuation.Command) {
+				t.Fatalf("continuation command %q does not satisfy the published pattern", continuation.Command)
+			}
+		})
+	}
+
+	// The published contract itself must refuse a shell-significant bare
+	// executable token: `/opt/$HOME/gentle-ai sync` unquoted is exactly the
+	// shape a POSIX shell would expand into the wrong binary.
+	if validManagedAssetsContinuationCommand(`/opt/$HOME/gentle-ai sync --agent pi`) {
+		t.Fatal("published pattern accepted a shell-significant bare executable token")
+	}
+
+	// Round-trip identity: rendering a path with the production token
+	// renderer and decoding it back with the splitter must return the
+	// original path, for every quoting form the renderer can emit --
+	// including the POSIX splice for an embedded apostrophe, whose \'
+	// sequence must decode to a literal apostrophe in argv.
+	for name, tc := range map[string]struct {
+		path string
+		goos string
+	}{
+		"posix safe path":                {`/opt/gentle-ai/bin/gentle-ai`, "linux"},
+		"posix path with expansion":      {`/opt/$HOME/gentle-ai`, "linux"},
+		"posix path with apostrophe":     {`/opt/o'brien/gentle-ai`, "linux"},
+		"posix path with backslashes":    {`/opt/we ird\x\gentle-ai`, "linux"},
+		"windows path with spaces":       {`C:\Program Files\gentle-ai\gentle-ai.exe`, "windows"},
+		"quoted UNC path with spaces":    {`\\server\gentle tools\gentle-ai.exe`, "windows"},
+		"quoted UNC path without spaces": {`\\server\share\gentle-ai.exe`, "windows"},
+	} {
+		t.Run("round-trip "+name, func(t *testing.T) {
+			previousGOOS := reviewManagedAssetsGOOS
+			reviewManagedAssetsGOOS = tc.goos
+			t.Cleanup(func() { reviewManagedAssetsGOOS = previousGOOS })
+			rendered := managedAssetsExecutableToken(tc.path)
+			argv := splitContinuationCommand(rendered + " sync --agent opencode")
+			if len(argv) != 4 || argv[0] != tc.path || argv[1] != "sync" || argv[2] != "--agent" || argv[3] != "opencode" {
+				t.Fatalf("round-trip of %q rendered %q split to argv %q, want the original path plus the sync dispatch", tc.path, rendered, argv)
+			}
+		})
+	}
+
+	// End to end: a stale-assets STATUS stop produced by THIS (test) binary
+	// names THIS binary's own path in its continuation, so running the exact
+	// advertised command cannot reach a different `gentle-ai` through PATH.
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/invoking-executable.md", "# Candidate\n", 0o644)
+	staleManagedReviewerAssets(t, home)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("stale managed assets STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.NextTransition == nil || status.NextTransition.Continuation == nil {
+		t.Fatalf("stale managed assets STATUS transition = %#v", status.NextTransition)
+	}
+	if want := quoted(invoking) + " sync --agent opencode"; status.NextTransition.Continuation.Command != want {
+		t.Fatalf("STATUS continuation command = %q, want %q (rooted at the invoking executable %q)",
+			status.NextTransition.Continuation.Command, want, invoking)
+	}
+	// The executable-anchored command must still satisfy the published
+	// continuation contract, not just this test's expectation.
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), output.Bytes())
+
+	// Convergence (#4434's invariant, not just the rendered shape): execute the
+	// emitted continuation command exactly as printed -- through executable
+	// startup, CLI dispatch, and flag parsing. This test binary IS the anchored
+	// executable, and TestMain routes its CLI arguments to the real sync
+	// dispatch under the stand-in guard, so the command line the refusal
+	// advertised is the command line that runs, against the same captured home.
+	argv := splitContinuationCommand(status.NextTransition.Continuation.Command)
+	if len(argv) != 4 || argv[0] != invoking || argv[1] != "sync" || argv[2] != "--agent" || argv[3] != "opencode" {
+		t.Fatalf("continuation command %q split to argv %q, want the invoking executable %q plus the sync dispatch", status.NextTransition.Continuation.Command, argv, invoking)
+	}
+	var run *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// The quoted Windows form is cmd.exe command syntax; PowerShell
+		// requires the call operator for a leading quoted token, so no
+		// in-process shell here can prove that platform's paste-and-run
+		// contract. The argv dispatch still exercises executable startup,
+		// CLI dispatch, and flag parsing.
+		run = exec.Command(argv[0], argv[1:]...)
+	} else {
+		// POSIX: run the printed line through a real shell exactly as an
+		// operator would paste it, proving the quoting survives expansion
+		// rather than merely decoding it ourselves.
+		run = exec.Command("sh", "-c", status.NextTransition.Continuation.Command)
+	}
+	run.Env = append(os.Environ(), "GENTLE_AI_TEST_CLI_STANDIN=1")
+	if out, err := run.CombinedOutput(); err != nil {
+		t.Fatalf("executing the advertised continuation %q failed: %v\n%s", status.NextTransition.Continuation.Command, err, out)
+	}
+	var convergedOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
+	}, &convergedOutput); err != nil {
+		t.Fatalf("post-continuation STATUS: %v\n%s", err, convergedOutput.String())
+	}
+	var converged ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, convergedOutput.Bytes(), &converged)
+	if converged.NextTransition == nil || converged.NextTransition.Kind != reviewNextTransitionExecute ||
+		converged.NextTransition.ReasonCode != "fresh_target_ready" {
+		t.Fatalf("post-continuation STATUS transition = %#v, want execute/fresh_target_ready", converged.NextTransition)
+	}
+}
+
+func TestManagedAssetsContinuationRejectsUnsafeExecutableIdentities(t *testing.T) {
+	absoluteArgvZero := filepath.Join(t.TempDir(), "gentle-ai")
+	for _, test := range []struct {
+		name       string
+		executable string
+		resolveErr error
+		argvZero   string
+		want       string
+	}{
+		{
+			name:       "resolver failure accepts absolute argv zero",
+			resolveErr: errors.New("executable unavailable"),
+			argvZero:   absoluteArgvZero,
+			want:       managedAssetsExecutableToken(absoluteArgvZero) + " sync --agent opencode",
+		},
+		{
+			name:       "multiline resolver falls through to absolute argv zero",
+			executable: filepath.Join(t.TempDir(), "gentle\nai"),
+			argvZero:   absoluteArgvZero,
+			want:       managedAssetsExecutableToken(absoluteArgvZero) + " sync --agent opencode",
+		},
+		{
+			name:       "multiline argv zero falls through to canonical fallback",
+			resolveErr: errors.New("executable unavailable"),
+			argvZero:   filepath.Join(t.TempDir(), "gentle\rai"),
+			want:       "gentle-ai sync --agent opencode",
+		},
+		{
+			name:       "relative argv zero falls through to canonical fallback",
+			resolveErr: errors.New("executable unavailable"),
+			argvZero:   "gentle-ai",
+			want:       "gentle-ai sync --agent opencode",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			previousPath := reviewManagedAssetsExecutablePath
+			previousArgs := append([]string(nil), os.Args...)
+			reviewManagedAssetsExecutablePath = func() (string, error) { return test.executable, test.resolveErr }
+			os.Args = append([]string{test.argvZero}, os.Args[1:]...)
+			t.Cleanup(func() {
+				reviewManagedAssetsExecutablePath = previousPath
+				os.Args = previousArgs
+			})
+
+			continuation := managedAssetsContinuation("opencode", nil)
+			if strings.ContainsAny(continuation.Command, "\r\n") || continuation.Command != test.want {
+				t.Fatalf("continuation command = %q, want %q", continuation.Command, test.want)
+			}
+		})
 	}
 }
 
@@ -217,8 +894,104 @@ func TestManagedAssetDigestIsStableAndAssetBound(t *testing.T) {
 	}
 }
 
+// managedAssetsTestContinuationCommand renders the executable-anchored sync
+// command the stale-managed-assets envelope tests expect: the invoking (test)
+// binary plus the runtime agent, mirroring what managedAssetsContinuation must
+// anchor to (#4434). The quoting cases themselves are owned by
+// TestManagedAssetsContinuationUsesInvokingExecutable.
+func managedAssetsTestContinuationCommand(t *testing.T, agent string) string {
+	t.Helper()
+	executable, err := os.Executable()
+	requireManagedAssetProvenanceNoError(t, err)
+	return managedAssetsExecutableToken(executable) + " sync --agent " + agent
+}
+
+// splitContinuationCommand splits one rendered continuation command into its
+// argv, honoring both quoting forms the renderer may emit (POSIX single quotes
+// and Windows double quotes) by unquoting, not by shelling out. It is written
+// independently of the production renderer so the regression's execution path
+// cannot agree with it by construction.
+func splitContinuationCommand(command string) []string {
+	var argv []string
+	var token strings.Builder
+	var open byte
+	flush := func() {
+		if token.Len() > 0 {
+			argv = append(argv, token.String())
+			token.Reset()
+		}
+	}
+	for index := 0; index < len(command); index++ {
+		c := command[index]
+		switch {
+		case open == '"':
+			// Inside double quotes only a backslash-quote sequence is an
+			// escape (the Windows form the renderer emits for an embedded
+			// quote); every other backslash stays literal so Windows path
+			// separators and doubled leading UNC backslashes survive intact.
+			if c == '\\' && index+1 < len(command) && command[index+1] == '"' {
+				index++
+				token.WriteByte(command[index])
+			} else if c == open {
+				open = 0
+			} else {
+				token.WriteByte(c)
+			}
+		case open == '\'':
+			// Everything is literal inside POSIX single quotes.
+			if c == open {
+				open = 0
+			} else {
+				token.WriteByte(c)
+			}
+		case c == '\\':
+			// Outside any quote only a backslash-quote sequence is an
+			// escape -- the splice the renderer emits between single-quoted
+			// spans for an embedded apostrophe. A backslash before any other
+			// character stays literal, so a path separator or a UNC lead
+			// outside quotes is preserved rather than consumed.
+			if index+1 < len(command) && (command[index+1] == '\'' || command[index+1] == '"') {
+				index++
+				token.WriteByte(command[index])
+			} else {
+				token.WriteByte(c)
+			}
+		case c == '\'' || c == '"':
+			open = c
+		case c == ' ' || c == '\t':
+			flush()
+		default:
+			token.WriteByte(c)
+		}
+	}
+
+	flush()
+	return argv
+}
+
+// staleManagedReviewerAssets records an asset digest that disagrees with this
+// binary's, which is the only skew the provenance guard refuses on.
+//
+// It reads the existing user state and rewrites only that one field. A blind
+// state.Write would also erase the fixture's explicit global "on", silently
+// replacing its declared precondition with the unset ON default.
 func staleManagedReviewerAssets(t *testing.T, home string) {
-	requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetDigest: "sha256:stale"}))
+	t.Helper()
+	recordManagedAssetDigest(t, home, "sha256:stale")
+}
+
+// recordManagedAssetDigest rewrites only the recorded managed-asset digest,
+// preserving every other opinion already persisted in the user's state.
+func recordManagedAssetDigest(t *testing.T, home, digest string) {
+	t.Helper()
+	// A home with nothing persisted yet is an ordinary starting point here, so
+	// an absent state file seeds an empty one rather than failing the fixture.
+	persisted, err := state.Read(home)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	persisted.ManagedAssetDigest = digest
+	requireManagedAssetProvenanceNoError(t, state.Write(home, persisted))
 }
 func requireManagedAssetProvenanceNoError(t *testing.T, err error) {
 	t.Helper()

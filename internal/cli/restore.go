@@ -8,7 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 // RestoreFunc is the function signature for restoring a backup from its manifest.
@@ -18,67 +19,92 @@ type RestoreFunc func(manifest backup.Manifest) error
 // RunRestore is the top-level entry point for `gentle-ai restore [args]`.
 // It reads backups from the real home directory and uses the default restore function.
 func RunRestore(args []string, stdout io.Writer) error {
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
 	restorer := defaultRestorer()
-	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, homeDir)
+	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, osUserHomeDir)
 }
 
 // RunRestoreWithFn is the testable variant of RunRestore. It uses the provided
 // RestoreFunc and reads backups from the HOME environment variable (set by tests).
 func RunRestoreWithFn(args []string, restorer RestoreFunc, stdout io.Writer) error {
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, homeDir)
+	return runRestoreWithHomeDir(args, restorer, stdout, os.Stdin, osUserHomeDir)
 }
 
 // RunRestoreWithFnAndInput is the fully injectable variant used in tests that
 // need to simulate stdin input (e.g. testing confirmation prompts).
 func RunRestoreWithFnAndInput(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader) error {
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	return runRestoreWithHomeDir(args, restorer, stdout, stdin, homeDir)
+	return runRestoreWithHomeDir(args, restorer, stdout, stdin, osUserHomeDir)
 }
 
-// runRestoreWithHomeDir is the internal implementation.
-func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader, homeDir string) error {
-	// Pre-scan for --yes/-y and --list flags before standard flag parsing,
-	// because positional arguments (e.g. `restore backup-001 --yes`) appear
-	// before flags in the args slice and flag.FlagSet stops parsing at the
-	// first non-flag argument.
+// newRestoreFlagSet binds parsed flags to the values that drive restore.
+// The custom Usage adds the positional backup-selection syntax the flag package
+// cannot derive; PrintDefaults keeps descriptions derived from registrations.
+func newRestoreFlagSet(list, yes *bool) *flag.FlagSet {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	// Descriptions are what the derived usage shows the operator,
+	// so they are the documentation rather than a placeholder.
+	fs.BoolVar(list, "list", false, "list available backups without restoring (--list=false disables listing)")
+	fs.BoolVar(yes, "yes", false, "skip confirmation prompt (--yes=false requires confirmation)")
+	fs.Usage = func() {
+		// Keep the "Usage of " prefix: derivedUsageText strips everything
+		// before it, so the flag package's duplicated error line is not
+		// reported twice alongside the custom block.
+		fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
+		fmt.Fprintln(fs.Output(), "  gentle-ai restore [--list | latest | <id>] [--yes]")
+		fmt.Fprintln(fs.Output(), "  -- ends flag parsing; at most one backup target is accepted")
+		fmt.Fprintln(fs.Output(), "  CODEX_HOME may authorize its existing directory for CLI restore, not its parent")
+		fs.PrintDefaults()
+	}
+	return fs
+}
+
+// runRestoreWithHomeDir is the internal implementation. The home directory is
+// resolved lazily via resolveHome, after the argument pre-scan: an explicit
+// help request or an unknown flag must be answered before any attempt to
+// resolve the home directory, so `restore --help` works even on hosts where
+// the home directory cannot be resolved.
+func runRestoreWithHomeDir(args []string, restorer RestoreFunc, stdout io.Writer, stdin io.Reader, resolveHome func() (string, error)) error {
 	list := false
 	yes := false
+	fs := newRestoreFlagSet(&list, &yes)
 	var positional []string
+	flagsEnded := false
 
 	for _, a := range args {
-		switch a {
-		case "--list", "-list":
-			list = true
-		case "--yes", "-yes", "-y":
-			yes = true
-		default:
-			if strings.HasPrefix(a, "-") {
-				// Unknown flag — surface error via flag.FlagSet for consistent messages.
-				fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-				fs.SetOutput(ioDiscard{})
-				_ = fs.Bool("list", false, "")
-				_ = fs.Bool("yes", false, "")
-				if err := fs.Parse(args); err != nil {
-					return fmt.Errorf("parse restore flags: %w", err)
-				}
+		if flagsEnded {
+			positional = append(positional, a)
+			continue
+		}
+		if a == "--" {
+			flagsEnded = true
+			continue
+		}
+		if !strings.HasPrefix(a, "-") {
+			positional = append(positional, a)
+			continue
+		}
+		// Keep the existing short alias without a duplicate help entry.
+		if a == "-y" {
+			a = "--yes"
+		}
+		// Parse each flag against the same bound values, so flags after a
+		// positional still work and explicit boolean values are not discarded.
+		if err := parseCommandFlags(fs, []string{a}); err != nil {
+			if writeHelpRequest(err, stdout) == nil {
 				return nil
 			}
-			positional = append(positional, a)
+			return fmt.Errorf("parse restore flags: %w", err)
 		}
+	}
+
+	// Reject surplus targets before listing, prompting, or restoring anything.
+	if len(positional) > 1 {
+		return fmt.Errorf("usage: gentle-ai restore [--list | latest | <id>] [--yes]")
+	}
+
+	// Resolve the home directory only once the request is known to need it.
+	homeDir, err := resolveHome()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
 	// Load backups from the real backup directory.
@@ -221,14 +247,16 @@ func listBackupsFromDir(homeDir string) []backup.Manifest {
 	return manifests
 }
 
-// backupRootDir returns the path to the backup directory under homeDir.
+// backupRootDir returns the path to the backup directory under homeDir, or
+// under GENTLE_AI_HOME when set.
 func backupRootDir(homeDir string) string {
+	if os.Getenv(state.HomeEnv) != "" {
+		return state.BackupsDir(homeDir)
+	}
 	return homeDir + "/.gentle-ai/backups"
 }
 
-// defaultRestorer returns the standard backup.RestoreService.Restore function.
+// defaultRestorer authorizes the current validated Codex root for managed backups.
 func defaultRestorer() RestoreFunc {
-	return func(m backup.Manifest) error {
-		return backup.RestoreService{}.Restore(m)
-	}
+	return RestoreManagedBackup
 }

@@ -120,9 +120,12 @@ func TestOrdinaryBoundedLensStateRoundTripsAndLegacyJSONRemainsAdditive(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := ParseTransaction(payload)
-	if err != nil {
-		t.Fatalf("ParseTransaction() error = %v", err)
+	var parsed Transaction
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal(Transaction) error = %v", err)
+	}
+	if err := parsed.validate(); err != nil {
+		t.Fatalf("Transaction.validate() error = %v", err)
 	}
 	if len(parsed.SelectedLenses) != 1 || len(parsed.LensResults) != 1 || parsed.Counters.ReliabilityExecutions != 1 || parsed.OriginalChangedLines == nil || *parsed.OriginalChangedLines != 2 || parsed.CorrectionBudget == nil || *parsed.CorrectionBudget != 1 {
 		t.Fatalf("round-tripped bounded state = %#v", parsed)
@@ -142,7 +145,7 @@ func TestOrdinaryBoundedLensStateRoundTripsAndLegacyJSONRemainsAdditive(t *testi
 	if legacy.Counters.FullReviews != 1 {
 		t.Fatalf("legacy FullReviews = %d, want 1", legacy.Counters.FullReviews)
 	}
-	legacyRevision, err := (Store{Dir: t.TempDir()}).Append("", Record{Operation: "review/start", Transaction: *legacy})
+	legacyRevision, err := (Store{Dir: canonicalTempDir(t)}).Append("", Record{Operation: "review/start", Transaction: *legacy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +156,7 @@ func TestOrdinaryBoundedLensStateRoundTripsAndLegacyJSONRemainsAdditive(t *testi
 }
 
 func TestStoreValidatesContentAddressedLensResultSuccessorsAndReplay(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx, err := NewTransaction(boundedStart(t, []string{"review-reliability"}))
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +235,7 @@ func TestStoreValidatesContentAddressedLensResultSuccessorsAndReplay(t *testing.
 	if _, err := store.Append(genesis, Record{Operation: "review/freeze-findings", Transaction: forged}); !errors.Is(err, ErrInvalidSuccessor) {
 		t.Fatalf("Append(forged stale result) error = %v, want ErrInvalidSuccessor", err)
 	}
-	otherStore := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	otherStore := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	fresh, err := NewTransaction(boundedStart(t, []string{"review-reliability"}))
 	if err != nil {
 		t.Fatal(err)
@@ -287,8 +290,12 @@ func TestOrdinaryBoundedDerivesLensIdentityFromStructuredContent(t *testing.T) {
 	}
 	forged.LensResults[0].Evidence[0] = "tampered evidence"
 	forgedPayload, _ := json.Marshal(forged)
-	if _, err := ParseTransaction(forgedPayload); err == nil {
-		t.Fatal("ParseTransaction() accepted content that no longer matches its canonical lens result hash")
+	var parsed Transaction
+	if err := json.Unmarshal(forgedPayload, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal(forged transaction) error = %v", err)
+	}
+	if err := parsed.validate(); err == nil {
+		t.Fatal("Transaction.validate() accepted content that no longer matches its canonical lens result hash")
 	}
 }
 
@@ -362,7 +369,7 @@ func TestCanonicalLensResultAcceptsTechnicalPunctuationAndRejectsExactSentinels(
 }
 
 func TestStoreRejectsForgedIncompleteLensFreezeBeforeAppend(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx, err := NewTransaction(boundedStart(t, []string{LensReliability}))
 	if err != nil {
 		t.Fatal(err)
@@ -386,7 +393,7 @@ func TestStoreRejectsForgedIncompleteLensFreezeBeforeAppend(t *testing.T) {
 }
 
 func TestStoreRequiresExactNativeFreezeOperation(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	tx, err := NewTransaction(boundedStart(t, []string{LensReliability}))
 	if err != nil {
 		t.Fatal(err)

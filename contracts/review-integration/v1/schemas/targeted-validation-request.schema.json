@@ -11,6 +11,9 @@
     "expected_revision",
     "target_identity",
     "fix_finding_ids",
+    "policy_content",
+    "fix_findings",
+    "fix_classifications",
     "projection",
     "correction_candidate_tree",
     "correction_target_identity",
@@ -28,6 +31,42 @@
       "minItems": 1,
       "uniqueItems": true,
       "items": {"type": "string", "minLength": 1}
+    },
+    "policy_content": {"type": "string"},
+    "fix_findings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "lens": {"type": "string"},
+          "location": {"type": "string"},
+          "severity": {"type": "string"},
+          "claim": {"type": "string"},
+          "proof_refs": {"type": "array", "items": {"type": "string"}},
+          "evidence_class": {"type": "string"},
+          "causal_disposition": {"type": "string"}
+        }
+      }
+    },
+    "fix_classifications": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["finding_id", "class", "causal_disposition", "proof"],
+        "properties": {
+          "finding_id": {"type": "string", "minLength": 1},
+          "severity": {"type": "string"},
+          "class": {"enum": ["deterministic", "inferential", "insufficient"]},
+          "causal_disposition": {"enum": ["introduced", "behavior-activated", "worsened", "pre-existing", "base-only", "unknown"]},
+          "proof": {"type": "string", "minLength": 1}
+        }
+      }
     },
     "projection": {"enum": ["workspace", "staged"]},
     "correction_candidate_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},

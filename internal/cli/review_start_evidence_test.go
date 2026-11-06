@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
 // TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases proves the
@@ -36,8 +36,8 @@ func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 	if !reflect.DeepEqual(started.RiskEvidence, want) {
 		t.Fatalf("start risk_evidence = %#v, want %#v", started.RiskEvidence, want)
 	}
-	// Prompt parity: the phrases must be exactly what the interactive consent
-	// prompt would say for the same assessed candidate, from the same helper.
+	// Detailed evidence remains in risk_evidence; the prompt uses the same brief
+	// generic reason as the relay without exposing the evidence path.
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
@@ -58,10 +58,8 @@ func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 			started.RiskEvidence, reviewConsentEvidencePhrases(assessment.Reasons))
 	}
 	prompt := reviewConsentPrompt(assessment)
-	for _, phrase := range started.RiskEvidence {
-		if !strings.Contains(prompt, phrase) {
-			t.Fatalf("interactive consent prompt %q does not speak phrase %q", prompt, phrase)
-		}
+	if !strings.Contains(prompt, reviewConsentReason(assessment)) || strings.Contains(prompt, "service-token.ts") {
+		t.Fatalf("interactive consent prompt did not keep generic reason separate from evidence: %q", prompt)
 	}
 }
 
@@ -92,8 +90,8 @@ func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 	if !reflect.DeepEqual(started.RiskEvidence[1:], []string{want}) {
 		t.Fatalf("medium start risk_evidence = %#v, want the evidence phrase %q after the reason", started.RiskEvidence, want)
 	}
-	// Prompt parity: every phrase the START result carries must be spoken by
-	// the interactive consent prompt for the same assessed candidate.
+	// The prompt keeps the generic reason separate while the START result keeps
+	// the detailed evidence available to a relay.
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
@@ -110,10 +108,8 @@ func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := reviewConsentPrompt(assessment)
-	for _, phrase := range started.RiskEvidence {
-		if !strings.Contains(prompt, phrase) {
-			t.Fatalf("interactive consent prompt %q does not speak phrase %q", prompt, phrase)
-		}
+	if !strings.Contains(prompt, reviewConsentReason(assessment)) || strings.Contains(prompt, "view.go") {
+		t.Fatalf("interactive consent prompt did not keep generic reason separate from evidence: %q", prompt)
 	}
 }
 
@@ -134,12 +130,11 @@ func TestReviewConsentRiskEvidenceMediumNamesEvidencePath(t *testing.T) {
 		t.Fatalf("medium risk_evidence = %#v, want %#v", got, want)
 	}
 
-	// The interactive Why line speaks the same facts from the same helpers.
-	reason := reviewConsentReason(assessment)
-	for _, phrase := range want {
-		if !strings.Contains(reason, phrase) {
-			t.Fatalf("consent reason %q does not speak phrase %q", reason, phrase)
-		}
+	// The interactive Why line is intentionally generic; detailed evidence stays
+	// in risk_evidence for relays that need it.
+	if reason := reviewConsentReason(assessment); reason != "Review can help detect regressions in these changes." ||
+		strings.Contains(reason, "internal/counter/counter.go") {
+		t.Fatalf("consent reason did not stay generic and path-free: %q", reason)
 	}
 }
 
@@ -153,8 +148,8 @@ func TestReviewConsentRiskEvidenceMediumWithoutSpeakableReasonsStaysSingle(t *te
 	if got := reviewConsentRiskEvidence(assessment); !reflect.DeepEqual(got, want) {
 		t.Fatalf("medium risk_evidence without speakable reasons = %#v, want %#v", got, want)
 	}
-	if reason := reviewConsentReason(assessment); reason != reviewConsentMediumReason {
-		t.Fatalf("consent reason without speakable reasons = %q, want %q", reason, reviewConsentMediumReason)
+	if reason := reviewConsentReason(assessment); reason != "Review can help detect regressions in these changes." {
+		t.Fatalf("consent reason without specific signals = %q", reason)
 	}
 }
 
@@ -171,6 +166,81 @@ func TestReviewConsentRiskEvidenceHighTierUnchanged(t *testing.T) {
 	want := []string{"service credentials in service-token.ts"}
 	if got := reviewConsentRiskEvidence(assessment); !reflect.DeepEqual(got, want) {
 		t.Fatalf("high risk_evidence = %#v, want %#v", got, want)
+	}
+}
+
+func TestReviewConsentReasonUsesAuthoritativeRiskSignals(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		level   reviewtransaction.RiskLevel
+		reasons []reviewtransaction.RiskReason
+		english string
+		spanish string
+	}{
+		{
+			name: "security signal", level: reviewtransaction.RiskHigh,
+			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalSecurity, Path: "security.go"}},
+			english: "Review can help identify potential security issues.",
+			spanish: "La revisión puede ayudar a identificar posibles problemas de seguridad.",
+		},
+		{
+			name: "execution signal", level: reviewtransaction.RiskHigh,
+			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonShellSource, Signal: reviewtransaction.SignalShellProcess, Path: "scripts/deploy.sh"}},
+			english: "Review can help detect execution issues in these changes.",
+			spanish: "La revisión puede ayudar a detectar problemas de ejecución en estos cambios.",
+		},
+		{
+			name: "update signal", level: reviewtransaction.RiskHigh,
+			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalUpdate, Path: "update.go"}},
+			english: "Review can help detect update-related issues.",
+			spanish: "La revisión puede ayudar a detectar problemas relacionados con las actualizaciones.",
+		},
+		{
+			name: "security takes precedence", level: reviewtransaction.RiskHigh,
+			reasons: []reviewtransaction.RiskReason{
+				{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalUpdate, Path: "update.go"},
+				{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.SignalSecurity, Path: "security.go"},
+			},
+			english: "Review can help identify potential security issues.",
+			spanish: "La revisión puede ayudar a identificar posibles problemas de seguridad.",
+		},
+		{
+			name: "no specific signal", level: reviewtransaction.RiskMedium,
+			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonExecutableChange, Path: "internal/app.go"}},
+			english: "Review can help detect regressions in these changes.",
+			spanish: "La revisión puede ayudar a detectar regresiones en estos cambios.",
+		},
+		{
+			name: "unsupported signal", level: reviewtransaction.RiskHigh,
+			reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonHotPath, Signal: reviewtransaction.RiskSignal("unsupported"), Path: "unknown.go"}},
+			english: "Review can help detect regressions in these changes.",
+			spanish: "La revisión puede ayudar a detectar regresiones en estos cambios.",
+		},
+		{
+			name:    "high without evidence is not security",
+			level:   reviewtransaction.RiskHigh,
+			english: "Review can help detect regressions in these changes.",
+			spanish: "La revisión puede ayudar a detectar regresiones en estos cambios.",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assessment := reviewtransaction.RiskAssessment{Level: tt.level, Reasons: tt.reasons}
+			for locale, got := range map[string]string{
+				"English": reviewConsentReason(assessment),
+				"Spanish": reviewConsentSpanishReason(assessment),
+			} {
+				want := tt.english
+				if locale == "Spanish" {
+					want = tt.spanish
+				}
+				if got != want {
+					t.Fatalf("%s reason = %q, want %q", locale, got, want)
+				}
+				if len(strings.Fields(got)) > 25 || strings.Contains(got, ".go") || strings.Contains(got, ".sh") {
+					t.Fatalf("%s reason is not concise generic copy: %q", locale, got)
+				}
+			}
+		})
 	}
 }
 
@@ -299,102 +369,21 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 		t.Fatalf("service-token start lenses_required = %v, selected_lenses = %v, want lenses selected", started.LensesRequired, started.SelectedLenses)
 	}
 	// The direct route refuses --agent, so this caller never declared a
-	// runtime and the hint must not declare one for it (issue #2440): it
-	// carries the fill-in slot the reader replaces with their own identity.
-	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s", ReviewIntegrationContractV2, reviewUndeclaredRuntimeIdentitySlot, started.TargetIdentity, started.Projection)
+	// runtime and the hint must omit the complete agent segment (issue #2885).
+	// The self-describing evidence token rides beside --target (#4494), so the
+	// canonical hint carries it between --target and --projection.
+	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --target %s --target-evidence ", ReviewIntegrationContractV2, started.TargetIdentity)
 	if !strings.Contains(started.Hint, wantCommand) {
 		t.Fatalf("lenses-required start hint = %q, want it to contain %q", started.Hint, wantCommand)
 	}
-}
-
-// TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector proves the hint-replay
-// contract for a base-diff START that ALREADY has legacy (compact-v2)
-// authority: replaying the hint's named negotiated command resolves into the
-// SAME frozen lineage rather than creating a second one, and a stale replay
-// (after the candidate moved) is refused with nothing new persisted. This is
-// the "replay this hint verbatim" workflow the Wave 7 v2-collision start
-// guard (runReviewFacadeStart) explicitly carves an exact-content exception
-// for. Since issue #2447 (see the sibling
-// TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector below), a direct
-// CLI START can no longer create this authority itself for a lens-selecting
-// base-diff candidate, so this test constructs it directly via
-// runLegacyFacadeStartForTest and starts the replay from an authority that
-// already exists -- the complementary starting condition to the sibling test,
-// which starts with none.
-func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	writeReviewStartCandidate(t, repo, "dependency.go", "package dependency\n", 0o644)
-	runReviewCLIGit(t, repo, "add", "--", "dependency.go")
-	runReviewCLIGit(t, repo, "commit", "-m", "feature dependency")
-	runReviewCLIGit(t, repo, "branch", "feature-base")
-	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'candidate'\n", 0o644)
-	runReviewCLIGit(t, repo, "add", "--", "service-token.ts")
-	runReviewCLIGit(t, repo, "commit", "-m", "feature candidate")
-
-	var plain bytes.Buffer
-	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", "feature-base", "--committed-only"}, &plain); err != nil {
-		t.Fatal(err)
-	}
-	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, plain.Bytes(), &started)
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	baseTree := record.State.InitialSnapshot.BaseTree
-	if !strings.Contains(started.Hint, "--base-ref "+baseTree+" --committed-only") || strings.Contains(started.Hint, "--base-ref feature-base") {
-		t.Fatalf("base-diff hint did not carry the immutable resolved selector: %q", started.Hint)
-	}
-
-	opening := strings.IndexByte(started.Hint, '`')
-	closing := strings.IndexByte(started.Hint[opening+1:], '`')
-	if opening < 0 || closing < 0 {
-		t.Fatalf("hint has no executable command: %q", started.Hint)
-	}
-	command := strings.Fields(started.Hint[opening+1 : opening+1+closing])
-	if len(command) < 4 || !reflect.DeepEqual(command[:3], []string{"gentle-ai", "review", "start"}) {
-		t.Fatalf("hint command = %v", command)
-	}
-	args := append([]string{"start", "--cwd", repo}, withoutReplayRuntimeIdentity(t, command[3:])...)
-	var replay bytes.Buffer
-	if err := RunReview(args, &replay); err != nil {
-		t.Fatalf("hinted negotiated START failed: %v\n%s", err, replay.String())
-	}
-	var negotiated ReviewIntegrationStartResult
-	decodeStrictReviewJSON(t, replay.Bytes(), &negotiated)
-	if negotiated.RepositoryContext == nil || negotiated.RepositoryContext.TargetIdentity != started.TargetIdentity || negotiated.LineageID != started.LineageID {
-		t.Fatalf("hint replay selected context/lineage %#v/%q, want target %q lineage %q", negotiated.RepositoryContext, negotiated.LineageID, started.TargetIdentity, started.LineageID)
-	}
-	stores, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
-	if err != nil || len(stores) != 1 {
-		t.Fatalf("hint replay authorities = %d, %v; want exactly one", len(stores), err)
-	}
-
-	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'mutated'\n", 0o644)
-	runReviewCLIGit(t, repo, "add", "--", "service-token.ts")
-	runReviewCLIGit(t, repo, "commit", "-m", "mutate candidate")
-	var refused bytes.Buffer
-	if err := RunReview(args, &refused); err == nil {
-		t.Fatalf("stale hinted START succeeded: %s", refused.String())
-	}
-	failure := decodeReviewIntegrationFailure(t, refused.Bytes())
-	if failure.Code != reviewPreflightStaleTargetCode {
-		t.Fatalf("mutated hinted START code = %q, want %q", failure.Code, reviewPreflightStaleTargetCode)
-	}
-	stores, err = reviewtransaction.DiscoverCompactStores(context.Background(), repo)
-	if err != nil || len(stores) != 1 {
-		t.Fatalf("stale hint created authority: stores=%d error=%v", len(stores), err)
+	if !strings.Contains(started.Hint, " --projection "+string(started.Projection)) {
+		t.Fatalf("lenses-required start hint = %q, want it to keep the projection segment", started.Hint)
 	}
 }
 
 // TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector is the
-// complementary starting condition to
-// TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector above: no legacy
-// authority exists yet, because issue #2447 made a direct (non-negotiated)
+// complementary no-authority starting condition: issue #2447 made a direct
+// (non-negotiated)
 // base-diff START whose candidate selects lenses refuse up front, before
 // anything is persisted (see runReviewFacadeStart), naming the exact
 // negotiated `review start` continuation. This test proves that refusal's
@@ -404,6 +393,7 @@ func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 // (after the candidate moved) is refused with nothing persisted, exactly
 // like any other negotiated START would be.
 func TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "dependency.go", "package dependency\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "--", "dependency.go")
@@ -440,8 +430,19 @@ func TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector(t *testing.T) {
 	if err := RunReview(args, &replay); err != nil {
 		t.Fatalf("named negotiated START failed: %v\n%s", err, replay.String())
 	}
+	// Issue #2870: the named continuation now asks for consent (it carries
+	// --consent relay) instead of silently minting a lineage; answer the
+	// question's own granted invocation for the exact frozen candidate.
+	question := decodeConsentQuestion(t, replay.Bytes())
+	if question.Action != "consent_required" || len(question.Choices) != 2 {
+		t.Fatalf("named negotiated START did not ask for consent: %#v", question)
+	}
+	var granted bytes.Buffer
+	if err := RunReview(invocationArgs(t, question.Choices[0].Invocation), &granted); err != nil {
+		t.Fatalf("granted negotiated START failed: %v\n%s", err, granted.String())
+	}
 	var negotiated ReviewIntegrationStartResult
-	decodeStrictReviewJSON(t, replay.Bytes(), &negotiated)
+	decodeStrictReviewJSON(t, granted.Bytes(), &negotiated)
 	if negotiated.RepositoryContext == nil {
 		t.Fatalf("named negotiated START carried no repository_context: %#v", negotiated)
 	}

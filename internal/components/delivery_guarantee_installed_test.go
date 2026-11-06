@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	codexagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 )
 
 type installedDeliveryGuaranteeInvariant struct {
@@ -86,7 +86,7 @@ func assertRejectsOppositeFailureContract(t *testing.T, surface string, content 
 // installed outputs, one per protocol variant:
 //   - Claude Code CLAUDE.md — slim section (engram version above the
 //     Decision 1 floor, the surface where the bug was reproduced)
-//   - Antigravity GEMINI.md — full section
+//   - Antigravity staged prompt — full section
 //   - Codex engram-instructions.md — full + passive-capture concatenation
 func TestDeliveryGuarantee_InstalledOutputs(t *testing.T) {
 	t.Run("claude-slim", func(t *testing.T) {
@@ -118,9 +118,9 @@ func TestDeliveryGuarantee_InstalledOutputs(t *testing.T) {
 			t.Fatal("engram.Inject(antigravity) changed = false")
 		}
 
-		rulesFile := readTestFile(t, filepath.Join(home, ".gemini", "GEMINI.md"))
-		assertDeliveryGuarantee(t, "antigravity GEMINI.md (full)", rulesFile, installedFullFailureContract)
-		assertRejectsOppositeFailureContract(t, "antigravity GEMINI.md (full)", rulesFile, installedFullFailureContract, fullPositiveFailureContract, fullOppositeFailureContract)
+		rulesFile := readTestFile(t, antigravityAdapter().SystemPromptFile(home))
+		assertDeliveryGuarantee(t, "antigravity staged prompt (full)", rulesFile, installedFullFailureContract)
+		assertRejectsOppositeFailureContract(t, "antigravity staged prompt (full)", rulesFile, installedFullFailureContract, fullPositiveFailureContract, fullOppositeFailureContract)
 	})
 
 	t.Run("codex-instructions", func(t *testing.T) {

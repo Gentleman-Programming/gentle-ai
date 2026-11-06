@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 const (
@@ -212,10 +210,44 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	// it just means no edge advertises review repair this round, exactly like
 	// InspectCompactPristineAbandonment's per-edge eligibility below never
 	// aborts the whole exit computation.
+	//
+	// historicalExits (#2995) lists every historical (outdated) entry when the
+	// store's ONLY diagnostics are historical: each entry then has a reachable
+	// selector-scoped repair, so inspection surfaces one exit per entry —
+	// unless a retained edge still references the entry, which the
+	// exact-selector derivation refuses, so the exit is withheld individually
+	// (unreferenced siblings stay advertised). The reference is reachable:
+	// edges are built from loaded successors, so a loaded successor naming a
+	// now-historical predecessor produces it. A
+	// store with ANY non-historical diagnostic keeps today's stricter posture —
+	// no historical exit is advertised unless the selectorless derivation
+	// itself closes (the N=1 j92 case, unchanged below) — because a mixed
+	// store's selectorless preflight still refuses and this surface must never
+	// advertise a continuation the very next command would refuse. Malformed,
+	// unreadable, missing, and unexpected entries never gain an exit.
+	historicalExits := historicalDispositionExitLineages(report)
 	dispositionSeed := ""
+	for _, lineage := range historicalExits {
+		exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: lineage, Operation: CompactRecoveryEdgeExitRepair})
+	}
+	// The derivation runs UNCONDITIONALLY, decoupled from historicalExits:
+	// with historical exits present it must not append a second repair exit
+	// for a historical-class plan (the per-entry exits above already cover
+	// every historical lineage), but a non-historical admitted plan still
+	// feeds dispositionSeed below. That branch is reachable: a store mixing
+	// forensic historical entries (the only diagnostics, so historicalExits
+	// is non-empty) with a loaded content-mismatch pair closes the selectorless
+	// derivation on the EDGE plan. When historicalExits is empty the behavior
+	// is exactly the historical snapshot-identity exit or the seed, unchanged.
+	// A derivation refusal is still not propagated —
+	// it just means no extra plan exists this round, exactly like
+	// InspectCompactPristineAbandonment's per-edge eligibility below never
+	// aborts the whole exit computation.
 	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
 		if plan.AnomalyClass == compactHistoricalSnapshotIdentityClass {
-			exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
+			if len(historicalExits) == 0 {
+				exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
+			}
 		} else {
 			dispositionSeed = plan.SeedSet[0]
 		}
@@ -247,6 +279,24 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 			// This is #2014's "nothing applies" gap: neither reconcile nor
 			// abandon accepted the edge before Wave 2's disposition plan.
 			exit.Operation = CompactRecoveryEdgeExitRepair
+		case compactRecoveryReconciliationAnomalyClass(edge):
+			// Issue #2422: reconciliation's own two anomaly classes
+			// (unchanged_target, malformed_recovery_authorization) lost their
+			// only runnable exit when Wave 7 S3a retired `review
+			// reconcile-authority` with no replacement. A leaf successor in
+			// either class still gets `review abandon` above; this is reached
+			// only for an INTERIOR successor -- one another lineage already
+			// recovers from, so abandon's own read-only prediction refuses it
+			// -- where neither abandon nor repair (scoped to the disjoint
+			// content-mismatch class) ever applies. Naming the universal kill
+			// switch here does not repair the malformed recovery metadata; it
+			// is the one maintainer-authority path that actually unblocks a
+			// consumer today, so the stop is honest instead of terminal.
+			exit.Blocked = fmt.Sprintf(
+				"no repair or abandon operation admits this edge (anomaly classes: %s): its recovery metadata is malformed, but it has a successor of its own, so `review abandon` refuses it, and `review repair` covers only the disjoint content_mismatched_recovery_authorization class. "+
+					"This does not repair the edge, but a maintainer can stop it from blocking further review activity in this exact repository with `gentle-ai review mode disable --scope clone --cwd %s`. "+
+					"This report, with anomaly_classes and non_reconcilable_reason, is the artifact to escalate for an actual repair.",
+				strings.Join(edge.AnomalyClasses, ","), root)
 		default:
 			exit.Blocked = "no advertised operation admits this edge: `review abandon` does not accept the successor, and no other operation applies to this anomaly class. " +
 				"Nothing quarantines this shape today, so no command clears it and the entry stays exactly as persisted. " +
@@ -257,101 +307,63 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	return exits, nil
 }
 
-// CompactAuthorityDamageKinds names, one clause per damaged lineage, the KIND
-// of damage one inspection found: an unreadable entry, a dangling predecessor,
-// a forged authorization binding, a reconcilable anomaly class. A denial that
-// collapses all of them into one generic sentence leaves the operator unable
-// to distinguish a truncated file from a missing entry from a forged binding
-// while the product holds the exact diagnosis; this is that diagnosis, in the
-// same words the inspection publishes machine-readably.
-func CompactAuthorityDamageKinds(report CompactRecoveryInspectionReport) []string {
-	kinds := []string{}
-	for _, diagnostic := range report.EntryDiagnostics {
-		switch diagnostic.Problem {
-		case compactInspectionEntryMalformed:
-			kinds = append(kinds, fmt.Sprintf("store entry %q holds a record that does not load (%s): either its bytes do not parse — what an interrupted write leaves behind — or its persisted state is semantically invalid", diagnostic.LineageID, diagnostic.Problem))
-		case compactInspectionEntryOutdated:
-			kinds = append(kinds, fmt.Sprintf("store entry %q holds authority frozen by an earlier release under a retired snapshot-identity formula (%s); it is outdated — gate-invalid, preserved for forensics — not damaged, and it never blocks another lineage's operation", diagnostic.LineageID, diagnostic.Problem))
-		case compactInspectionEntryMissing:
-			kinds = append(kinds, fmt.Sprintf("store entry %q holds no compact state (%s)", diagnostic.LineageID, diagnostic.Problem))
-		case compactInspectionEntryUnreadable:
-			kinds = append(kinds, fmt.Sprintf("store entry %q cannot be read (%s)", diagnostic.LineageID, diagnostic.Problem))
-		default:
-			kinds = append(kinds, fmt.Sprintf("authority root entry %q does not belong there (%s)", diagnostic.LineageID, diagnostic.Problem))
-		}
+// historicalDispositionExitLineages returns every historical (outdated)
+// entry lineage, sorted, when the report's diagnostics are ALL historical —
+// the one store shape where every diagnostic has a reachable selector-scoped
+// repair (#2995). A diagnostic lineage any retained report edge still
+// references (on either side) is excluded individually: the exact-selector
+// derivation refuses that repair, and this surface must never advertise a
+// continuation the very next command refuses — unreferenced siblings stay
+// advertised. Any other shape returns nil: malformed, unreadable,
+// missing, and unexpected entries never gain an exit, and a store that mixes
+// them with historical entries keeps its existing exits unchanged.
+func historicalDispositionExitLineages(report CompactRecoveryInspectionReport) []string {
+	if len(report.historical) == 0 || len(report.historical) != len(report.EntryDiagnostics) {
+		return nil
 	}
-	for _, edge := range report.Edges {
-		if edge.Valid {
+	lineages := make([]string, 0, len(report.EntryDiagnostics))
+	for _, diagnostic := range report.EntryDiagnostics {
+		if diagnostic.Problem != compactInspectionEntryOutdated {
+			return nil
+		}
+		if _, found := report.historical[diagnostic.LineageID]; !found {
+			return nil
+		}
+		if historicalLineageEdgeReferenced(report, diagnostic.LineageID) {
 			continue
 		}
-		switch {
-		case len(edge.AnomalyClasses) > 0:
-			kinds = append(kinds, fmt.Sprintf("the recovery edge onto successor %q classifies as %s, an anomaly class no advertised operation admits since reconciliation retired", edge.SuccessorLineageID, strings.Join(edge.AnomalyClasses, ",")))
-		case edge.NonReconcilableReason != "":
-			kinds = append(kinds, edge.NonReconcilableReason)
-		case anyCompactProblemContains(edge.Problems, "missing predecessor"):
-			kinds = append(kinds, fmt.Sprintf("recovery successor %q names predecessor %q, which is missing from the store", edge.SuccessorLineageID, edge.PredecessorLineageID))
-		default:
-			kinds = append(kinds, fmt.Sprintf("the recovery edge onto successor %q does not re-derive: %s", edge.SuccessorLineageID, strings.Join(edge.Problems, "; ")))
-		}
+		lineages = append(lineages, diagnostic.LineageID)
 	}
-	return kinds
+	slices.Sort(lineages)
+	return lineages
 }
 
-func anyCompactProblemContains(problems []string, fragment string) bool {
-	for _, problem := range problems {
-		if strings.Contains(problem, fragment) {
+// historicalLineageEdgeReferenced reports whether any retained report edge
+// still names lineage on either side. The predecessor side of the reference
+// is reachable in real stores — edges are built from loaded successors, so a
+// loaded successor naming a now-historical predecessor yields the edge
+// (#2995) — while the successor side stays drift hardening: a historical
+// entry never loads and can never be an edge successor.
+func historicalLineageEdgeReferenced(report CompactRecoveryInspectionReport, lineage string) bool {
+	return slices.ContainsFunc(report.Edges, func(edge CompactRecoveryEdgeInspection) bool {
+		return edge.PredecessorLineageID == lineage || edge.SuccessorLineageID == lineage
+	})
+}
+
+// compactRecoveryReconciliationAnomalyClass reports whether edge carries
+// either of reconciliation's own two retired anomaly classes (unchanged_target,
+// malformed_recovery_authorization, compact_reconcile.go). It is deliberately
+// narrower than edge.AnomalyClasses being non-empty in general: the
+// content_mismatched_recovery_authorization class the disposition plan
+// already covers is a DIFFERENT (disjoint) classification that never sets
+// these two, so this check cannot accidentally shadow that exit.
+func compactRecoveryReconciliationAnomalyClass(edge CompactRecoveryEdgeInspection) bool {
+	for _, class := range edge.AnomalyClasses {
+		if class == compactRecoveryEdgeUnchangedTarget || class == compactRecoveryEdgeMalformedAuthorization {
 			return true
 		}
 	}
 	return false
-}
-
-// compactStartInvalidGraphRefusal turns the bare invalid-graph refusal REVIEW
-// START used to emit into one that names the sanctioned exit the read-only
-// inspection proves, following the same rule SanctionedCompactRecoveryExits
-// itself follows: a specific operation is named only when the operation's own
-// prediction accepts it, so the command printed never turns around and
-// refuses. When no edge has a sanctioned exit, only the diagnosis is named —
-// naming a dead end is worse than naming nothing.
-func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records map[string]CompactRecord, cause error) error {
-	report, inspectErr := inspectCompactRecoveryRecordSet(ctx, records, CompactRecoveryInspectionReport{
-		Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{},
-	})
-	if inspectErr != nil {
-		return cause
-	}
-	exits, exitsErr := SanctionedCompactRecoveryExits(ctx, repo, report)
-	if exitsErr != nil {
-		return cause
-	}
-	var continuation strings.Builder
-	for _, exit := range exits {
-		switch exit.Operation {
-		case CompactRecoveryEdgeExitAbandon:
-			eligibility, eligibilityErr := InspectCompactPristineAbandonment(ctx, repo, exit.SuccessorLineageID)
-			if eligibilityErr != nil || !eligibility.Eligible {
-				continue
-			}
-			fmt.Fprintf(&continuation, " Successor %q is pristine, so quarantining it whole clears its graph defect: %s",
-				exit.SuccessorLineageID, compactAbandonCommandText(repo, exit.SuccessorLineageID, eligibility))
-		case CompactRecoveryEdgeExitRepair:
-			// Re-derive with the same empty actor/reason `review repair
-			// --preflight` always uses (SanctionedCompactRecoveryExits'
-			// dispositionSeed check above), and re-confirm admission before
-			// naming the command — the same rule the abandon/reconcile cases
-			// above already follow, so this never advertises a plan whose own
-			// re-derivation would then refuse.
-			plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", "")
-			if planErr != nil || admitClosureDisposition(plan) != nil || len(plan.SeedSet) != 1 || plan.SeedSet[0] != exit.SuccessorLineageID {
-				continue
-			}
-			fmt.Fprintf(&continuation, " Successor %q closes the content-mismatched-recovery-authorization class, so `review repair` quarantines it whole without discarding its captured review data: %s",
-				exit.SuccessorLineageID, compactRepairCommandText(repo, plan))
-		}
-	}
-	return fmt.Errorf("%v.%s Capture the complete machine-readable diagnosis for every affected lineage with `gentle-ai review inspect-authority --cwd %s`",
-		cause, continuation.String(), pathquote.Quote(repo))
 }
 
 // inspectCompactRecoveryRecordSet applies the canonical all-edge inspection to

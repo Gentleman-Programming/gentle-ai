@@ -287,50 +287,6 @@ func baseAdvanceStatusAllowedForGate(gate GateKind, status string) bool {
 	}
 }
 
-func validateDerivedGate(receipt Receipt, context GateContext) GateResult {
-	if err := validateReceiptStructure(receipt); err != nil {
-		return GateInvalidated
-	}
-	if receipt.TerminalState == TerminalEscalated || context.ExternalEvidence == ExternalEvidenceEscalating {
-		return GateEscalated
-	}
-	if receipt.TerminalState != TerminalApproved {
-		return GateInvalidated
-	}
-	compatibleAdvance := context.BaseAdvance != nil && context.BaseAdvance.Compatible && baseAdvanceStatusAllowedForGate(context.Gate, context.BaseAdvance.Status)
-	if receipt.LineageID != context.LineageID || receipt.Generation != context.Generation {
-		return GateScopeChanged
-	}
-	if (receipt.FinalCandidateTree != context.CandidateTree || receipt.PathsDigest != context.PathsDigest) && !compatibleAdvance {
-		return GateScopeChanged
-	}
-	if context.ExternalEvidence == ExternalEvidenceInvalidating {
-		return GateInvalidated
-	}
-	if (receipt.BaseTree != context.BaseTree && !compatibleAdvance) || receipt.FixDeltaHash != context.FixDeltaHash ||
-		receipt.PolicyHash != context.PolicyHash || receipt.LedgerHash != context.LedgerHash ||
-		receipt.EvidenceHash != context.EvidenceHash {
-		return GateInvalidated
-	}
-	if (context.Gate == GatePrePR || context.Gate == GateRelease) && !context.BaseRelationshipValid && !compatibleAdvance {
-		return GateInvalidated
-	}
-	if context.Gate == GateRelease {
-		if receipt.Release == nil || context.Release == nil || *receipt.Release != *context.Release {
-			return GateInvalidated
-		}
-		if err := validateReleaseEvidence(*context.Release); err != nil || context.Release.ReleaseTree != context.CandidateTree {
-			return GateInvalidated
-		}
-	}
-	switch context.Gate {
-	case GatePostApply, GatePreCommit, GatePrePush, GatePrePR, GateRelease:
-		return GateAllow
-	default:
-		return GateInvalidated
-	}
-}
-
 func ParseGateContext(payload []byte) (GateContext, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()

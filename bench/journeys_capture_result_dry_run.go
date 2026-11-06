@@ -9,22 +9,25 @@ import (
 	"strings"
 )
 
+const captureResultDryRunLineage = "capture-result-dry-run"
+
 func captureResultDryRunJourneys() []Journey {
 	return []Journey{{
 		ID:     "j77-capture-result-input-preflight-is-read-only",
-		Title:  "Capture-result input preflight validates admission without persistence",
-		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2630",
+		Review: reviewOptedIn,
+		Title:  "#3417: capture-result preflight validates an exact active-lineage admission without persistence",
+		Source: "issue #2630 under #3417: preflight validates the exact active lineage, revision, target, and reviewer input without persistence",
 		Steps: []Step{
 			{Name: "fixture: repo", Fixture: baseRepo},
 			{Name: "fixture: stage ordinary code", Fixture: stageOrdinaryCode},
-			{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-			{Name: "dry-run admission then real capture", Requires: captureResultCapability, Composite: exerciseCaptureResultDryRun},
+			{Name: "review start with an exact active lineage", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", captureResultDryRunLineage), After: rememberLineage},
+			{Name: "exact active-lineage dry-run admission then real capture", Requires: captureResultCapability, Composite: exerciseCaptureResultDryRun},
 		},
 	}}
 }
 
 func exerciseCaptureResultDryRun(r *journeyRun) error {
-	envelope, statusBefore, err := readCaptureResultDryRunStatus(r)
+	envelope, statusBefore, err := readCaptureResultDryRunStatus(r, captureResultDryRunLineage)
 	if err != nil {
 		return err
 	}
@@ -99,7 +102,7 @@ func exerciseCaptureResultDryRun(r *journeyRun) error {
 		return fmt.Errorf("dry run changed Git state: before %q, after %q", gitBefore, gitAfter)
 	}
 
-	_, statusAfter, err := readCaptureResultDryRunStatus(r)
+	_, statusAfter, err := readCaptureResultDryRunStatus(r, captureResultDryRunLineage)
 	if err != nil {
 		return err
 	}
@@ -110,7 +113,7 @@ func exerciseCaptureResultDryRun(r *journeyRun) error {
 	if observation := r.run(realArgs, true); observation.ExitCode != 0 {
 		return fmt.Errorf("real capture after dry run failed: %s", firstLine(observation.Stderr))
 	}
-	advanced, err := readStatus(r)
+	advanced, err := readAtomicReviewStatus(r, captureResultDryRunLineage)
 	if err != nil {
 		return err
 	}
@@ -120,8 +123,8 @@ func exerciseCaptureResultDryRun(r *journeyRun) error {
 	return nil
 }
 
-func readCaptureResultDryRunStatus(r *journeyRun) (statusEnvelope, any, error) {
-	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, false)
+func readCaptureResultDryRunStatus(r *journeyRun, lineage string) (statusEnvelope, any, error) {
+	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContractV2, "--next-transition", "--lineage", lineage}, false)
 	var envelope statusEnvelope
 	var document any
 	payload := []byte(strings.TrimSpace(observation.Stdout))

@@ -1,7 +1,5 @@
 package reviewtransaction
 
-import "regexp"
-
 // ReviewerContextLevel names the mechanism that put the immutable candidate
 // evidence in front of a reviewer. It is recorded so a receipt stays
 // classifiable forever; it is never a gate input, and nothing in this product
@@ -34,31 +32,23 @@ const (
 	// whatever the caller produced with the provider's own output before the
 	// reviewer ran, so relaying is not trusted at all.
 	ReviewerContextLevelRuntimeInterception ReviewerContextLevel = "runtime_interception"
+	// ReviewerContextLevelProviderContract records Go-materialized and
+	// Go-admitted output delivered through the live provider transport after its
+	// immutable slot is durable. It records transport provenance, not UI
+	// provenance or a claim about how a user interface displayed the result.
+	ReviewerContextLevelProviderContract ReviewerContextLevel = "provider_contract"
 )
-
-// reviewerContextLevelShape bounds what may be persisted and read back. It
-// admits any lowercase snake_case token, which is what keeps an unknown future
-// level readable, while still rejecting bytes that would corrupt a receipt or
-// smuggle a path, newline, or separator into an audit record.
-var reviewerContextLevelShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}[a-z0-9]$`)
 
 // ReviewerContextLevelAccepted reports whether a caller may declare this level
 // now. It is a closed membership test on purpose: declaring a mechanism this
 // release does not implement would record a claim nothing produced.
 func ReviewerContextLevelAccepted(level ReviewerContextLevel) bool {
 	switch level {
-	case ReviewerContextLevelProviderCommand, ReviewerContextLevelRuntimeInterception:
+	case ReviewerContextLevelProviderCommand, ReviewerContextLevelRuntimeInterception, ReviewerContextLevelProviderContract:
 		return true
 	default:
 		return false
 	}
-}
-
-// ReviewerContextLevelWellFormed reports whether a persisted level is
-// structurally readable. It is deliberately NOT a membership test: a level this
-// binary has never heard of is readable, preserved, and reported unchanged.
-func ReviewerContextLevelWellFormed(level ReviewerContextLevel) bool {
-	return reviewerContextLevelShape.MatchString(string(level))
 }
 
 // lensMandate is the canonical role of one review lens: what the reviewer is

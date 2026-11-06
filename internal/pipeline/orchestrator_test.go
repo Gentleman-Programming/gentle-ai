@@ -61,6 +61,24 @@ func TestOrchestratorRollsBackApplyStepsOnFailure(t *testing.T) {
 	}
 }
 
+// TestOrchestratorRollbackCompensatesSuccessfulApply verifies that a
+// downstream failure can explicitly roll back an otherwise successful apply.
+func TestOrchestratorRollbackCompensatesSuccessfulApply(t *testing.T) {
+	order := []string{}
+	orchestrator := NewOrchestrator(DefaultRollbackPolicy())
+	result := orchestrator.Execute(StagePlan{Apply: []Step{newRollbackStep("apply-1", &order, nil)}})
+	if result.Err != nil {
+		t.Fatalf("Execute() error = %v", result.Err)
+	}
+
+	rollback := orchestrator.Rollback(result)
+	if !rollback.Success || !reflect.DeepEqual(order, []string{"run:apply-1", "rollback:apply-1"}) {
+		t.Fatalf("rollback = %#v, order = %v", rollback, order)
+	}
+}
+
+// TestOrchestratorSkipsRollbackWhenPolicyDisabled verifies that a disabled
+// policy leaves failed apply steps without compensation.
 func TestOrchestratorSkipsRollbackWhenPolicyDisabled(t *testing.T) {
 	order := []string{}
 	orchestrator := NewOrchestrator(RollbackPolicy{OnApplyFailure: false})
@@ -273,6 +291,39 @@ func TestExecuteRollbackAttemptsEveryStepAfterFailures(t *testing.T) {
 	}
 }
 
+// TestOrchestratorJoinsApplyAndRollbackErrors verifies that when apply fails
+// and the subsequent rollback also fails, Execute reports both errors instead
+// of letting the rollback error overwrite the original apply error.
+func TestOrchestratorJoinsApplyAndRollbackErrors(t *testing.T) {
+	order := []string{}
+	applyErr := errors.New("apply boom")
+	rollbackErr := errors.New("restore failed")
+	orchestrator := NewOrchestrator(DefaultRollbackPolicy())
+
+	result := orchestrator.Execute(StagePlan{
+		Apply: []Step{
+			&testStep{id: "apply-1", order: &order, rollErr: rollbackErr},
+			&testStep{id: "apply-2", order: &order, runErr: applyErr},
+		},
+	})
+
+	if result.Err == nil {
+		t.Fatalf("Execute() expected an error")
+	}
+	if !errors.Is(result.Err, applyErr) {
+		t.Fatalf("Execute() err = %v, want it to wrap apply error %v", result.Err, applyErr)
+	}
+	if !errors.Is(result.Err, rollbackErr) {
+		t.Fatalf("Execute() err = %v, want it to wrap rollback error %v", result.Err, rollbackErr)
+	}
+	if result.Rollback.Success {
+		t.Fatalf("Rollback.Success = true, want false")
+	}
+	if result.Rollback.Err == nil || !errors.Is(result.Rollback.Err, rollbackErr) {
+		t.Fatalf("Rollback.Err = %v, want it to wrap %v", result.Rollback.Err, rollbackErr)
+	}
+}
+
 func TestOrchestratorWithProgressFunc(t *testing.T) {
 	order := []string{}
 	events := []ProgressEvent{}
@@ -303,6 +354,28 @@ func TestOrchestratorWithProgressFunc(t *testing.T) {
 	}
 	if events[2].Stage != StageApply || events[2].StepID != "act" {
 		t.Fatalf("event[2] = %+v", events[2])
+	}
+}
+
+// Prepare steps are preflight gates: a failed gate must stop the prepare stage
+// even when the orchestrator continues past apply failures, so no later
+// prepare step (for example a package install) runs after a refusal.
+func TestOrchestratorContinueOnErrorStopsPrepareAtFirstFailedGate(t *testing.T) {
+	var order []string
+	refusal := errors.New("unsafe settings")
+	orchestrator := NewOrchestrator(DefaultRollbackPolicy(), WithFailurePolicy(ContinueOnError))
+	result := orchestrator.Execute(StagePlan{
+		Prepare: []Step{newRollbackStep("gate", &order, refusal), newTestStep("mutating-preflight", &order)},
+		Apply:   []Step{newTestStep("apply", &order)},
+	})
+	if !errors.Is(result.Err, refusal) {
+		t.Fatalf("result error = %v, want the gate refusal", result.Err)
+	}
+	if want := []string{"run:gate"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("executed steps = %v, want %v", order, want)
+	}
+	if len(result.Prepare.Steps) != 1 || result.Prepare.Steps[0].Status != StepStatusFailed || len(result.Apply.Steps) != 0 {
+		t.Fatalf("prepare steps = %#v, apply steps = %#v; want only the failed gate", result.Prepare.Steps, result.Apply.Steps)
 	}
 }
 

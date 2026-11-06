@@ -28,6 +28,9 @@ import (
 )
 
 func main() {
+	if handled, code := policyRuntimeVersionFixture(os.Args, os.Stdout); handled {
+		os.Exit(code)
+	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -185,6 +188,7 @@ func commandRunWith(args []string, isExecutable func(string) bool, journeys func
 	results.Totals, results.JourneysCounted, results.JourneysUnsupported, results.JourneysFailed = aggregate(results.Journeys)
 	results.Notes = []string{
 		"Driven mode: every journey ran in a fresh temp dir with its own HOME, XDG_*, throwaway git repo and local bare remote.",
+		"That HOME is a fresh install, so receipt-driven development defaults to ON without persisting a preference. Every journey declares its own precondition: one that reviews explicitly enables it first through `gentle-ai review mode enable --scope global`, uncounted; one whose subject is the switch leaves the mode untouched.",
 		"Reviewer results were synthesized from the binary's own collect envelope. No model was called.",
 		"No wall-clock timing is measured or reported.",
 		"by_design is a carve-out from out_of_band, not a subtraction from it: those blocks are still blocks and still in the total. Every one is listed with its declared shape and the verified quote of the product's own next-action text.",

@@ -68,7 +68,7 @@ func TestRenderWelcome_StaysWithinViewport(t *testing.T) {
 		{name: "narrow resize", width: 80, height: 24},
 		{name: "short viewport", width: 120, height: 19},
 		{name: "below compact height", width: 120, height: 2, minimum: true},
-		{name: "below compact width", width: 18, height: 20, minimum: true},
+		{name: "below compact width", width: 18, height: 19, minimum: true},
 		{name: "below frame border width", width: 2, height: 20, minimum: true, wantPrimary: "Go"},
 		{name: "tiny viewport uses atomic labels", width: 2, height: 2, minimum: true, wantPrimary: "Go", wantControl: "q"},
 		{name: "single column tiny viewport uses atomic labels", width: 1, height: 2, minimum: true, wantPrimary: ">", wantControl: "q"},
@@ -91,7 +91,7 @@ func TestRenderWelcome_StaysWithinViewport(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			view := RenderWelcomeWithAdvisory(0, "dev", tc.updateBanner, nil, true, false, 0, true, tc.width, tc.height, tc.advisory)
+			view := RenderWelcomeWithAdvisory(0, "dev", tc.updateBanner, nil, true, true, tc.width, tc.height, tc.advisory)
 
 			if got := lipgloss.Width(view); got > tc.width {
 				t.Fatalf("welcome width = %d, want <= %d\nview:\n%s", got, tc.width, view)

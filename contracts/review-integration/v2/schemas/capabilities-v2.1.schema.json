@@ -18,11 +18,14 @@
     "package": {"$ref": "../../v1/schemas/capabilities-v1.4.schema.json#/properties/package"},
     "build": {"$ref": "../../v1/schemas/capabilities-v1.4.schema.json#/properties/build"},
     "executable": {"$ref": "../../v1/schemas/capabilities-v1.4.schema.json#/properties/executable"},
-    "operations": {"$ref": "../../v1/schemas/capabilities-v1.4.schema.json#/properties/operations"},
+    "operations": {
+      "type": "array", "minItems": 5, "maxItems": 5, "uniqueItems": true,
+      "items": {"enum": ["review.capabilities", "review.repair", "review.start", "review.status", "review.validate"]}
+    },
     "gates": {"$ref": "../../v1/schemas/capabilities-v1.4.schema.json#/properties/gates"},
     "projections": {"$ref": "../../v1/schemas/capabilities-v1.4.schema.json#/properties/projections"},
     "schemas": {
-      "type": "array", "minItems": 22, "maxItems": 22, "uniqueItems": true,
+      "type": "array", "minItems": 19, "maxItems": 19, "uniqueItems": true,
       "items": {
         "enum": [
           "gentle-ai.review-admitted-result/v2",
@@ -33,17 +36,14 @@
           "gentle-ai.review-integration.capabilities/v2.1",
           "gentle-ai.review-integration.consent/v3",
           "gentle-ai.review-integration.failure/v2",
-          "gentle-ai.review-final-verification-incident/v1",
           "gentle-ai.review-integration.operation/v2",
           "gentle-ai.review-integration.projection/v1",
           "gentle-ai.review-integration.repair/v2",
           "gentle-ai.review-integration.start/v3",
-          "gentle-ai.review-integration.status/v3",
+          "gentle-ai.review-integration.status/v5",
           "gentle-ai.review-receipt/v1",
-          "gentle-ai.review-receipt/v2",
           "gentle-ai.review-result-artifact/v2",
           "gentle-ai.review-targeted-validation-request/v1",
-          "gentle-ai.review-verification-evidence/v2",
           "https://gentle-ai.dev/schema/review/refuter/v1",
           "https://gentle-ai.dev/schema/review/reviewer/v1",
           "https://gentle-ai.dev/schema/review/validator/v1"
@@ -53,8 +53,8 @@
     "features": {
       "type": "object", "additionalProperties": false, "required": ["mandatory", "optional"],
       "properties": {
-        "mandatory": {"type": "array", "minItems": 10, "maxItems": 10, "items": {"$ref": "#/$defs/feature"}},
-        "optional": {"type": "array", "minItems": 17, "maxItems": 17, "items": {"$ref": "#/$defs/feature"}}
+        "mandatory": {"type": "array", "minItems": 7, "maxItems": 7, "items": {"$ref": "#/$defs/feature"}},
+        "optional": {"type": "array", "minItems": 15, "maxItems": 15, "items": {"$ref": "#/$defs/feature"}}
       }
     },
     "bootstrap": {"$ref": "#/$defs/bootstrap"},
@@ -82,14 +82,12 @@
         "name": {
           "enum": [
             "base_ref_workspace_overlay", "bounded_process_waits", "classified_authority_repair", "compact_v2_authority",
-            "exact_gate_receipt_discovery", "exact_receipt_replay", "five_delivery_gates", "immutable_snapshot",
-            "legacy_v1_target_scoped_read_only", "native_frozen_candidate_context", "native_low_risk_verification",
-            "native_next_transition", "one_shot_final_verification_retry", "opaque_repository_context",
-            "outcome_bound_verification_evidence",
-            "provider_artifact_admission", "provider_bound_native_git_context", "provider_targeted_validation_request",
-            "recovered_correction_evidence", "repository_independent_capabilities", "restart_safe_projection", "risk_reasons",
-            "scope_change_diagnostics", "sdd_receipt_binding", "target_scoped_status", "uniform_failure_envelope",
-            "validating_result_reopen"
+            "immutable_snapshot", "legacy_v1_target_scoped_read_only", "native_frozen_candidate_context",
+            "native_low_risk_verification", "native_next_transition", "opaque_repository_context",
+            "provider_artifact_admission", "provider_bound_native_git_context", "provider_submission_descriptors",
+            "provider_targeted_validation_request", "recovered_correction_evidence", "repository_independent_capabilities",
+            "restart_safe_projection", "risk_reasons", "scope_change_diagnostics", "target_scoped_status",
+            "uniform_failure_envelope", "validating_result_reopen"
           ]
         },
         "supported": {"type": "boolean"},
@@ -100,7 +98,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["command", "target_selector_variants", "required_feature", "unsupported_outcome", "parent_only"],
       "properties": {
-        "command": {"const": "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition"},
+        "command": {"const": "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition"},
         "target_selector_variants": {"$ref": "../../v1/schemas/capabilities-v1.4.schema.json#/$defs/bootstrap/properties/target_selector_variants"},
         "required_feature": {"const": "native_next_transition"},
         "unsupported_outcome": {"const": "unsupported-capability"},

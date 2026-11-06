@@ -1,13 +1,18 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 const stateDir = ".gentle-ai"
@@ -39,14 +44,15 @@ type ClaudePhaseAssignmentState struct {
 
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
-	InstalledAgents     []string            `json:"installed_agents"`
-	ManagedAssetDigest  string              `json:"managed_asset_digest,omitempty"`
-	SelectionConfigured bool                `json:"selection_configured,omitempty"`
-	Components          []model.ComponentID `json:"components,omitempty"`
-	Skills              []model.SkillID     `json:"skills,omitempty"`
-	Preset              model.PresetID      `json:"preset,omitempty"`
-	SDDMode             model.SDDModeID     `json:"sdd_mode,omitempty"`
-	StrictTDD           bool                `json:"strict_tdd,omitempty"`
+	InstalledAgents        []string            `json:"installed_agents"`
+	InstalledBinaryVersion string              `json:"installed_binary_version,omitempty"`
+	ManagedAssetDigest     string              `json:"managed_asset_digest,omitempty"`
+	SelectionConfigured    bool                `json:"selection_configured,omitempty"`
+	Components             []model.ComponentID `json:"components,omitempty"`
+	Skills                 []model.SkillID     `json:"skills,omitempty"`
+	Preset                 model.PresetID      `json:"preset,omitempty"`
+	SDDMode                model.SDDModeID     `json:"sdd_mode,omitempty"`
+	StrictTDD              bool                `json:"-"` // decoded only for legacy compatibility; never persisted or used for routing
 	// CommunityTools records optional tools explicitly selected in the Gentle AI
 	// installer. Configured distinguishes a completed empty selection from legacy
 	// state files that predate persistence of this choice.
@@ -68,6 +74,10 @@ type InstallState struct {
 	// written before Kiro had its own picker options.
 	KiroModelAssignments map[string]string `json:"kiro_model_assignments,omitempty"`
 
+	// AntigravityModelAssignments maps Antigravity native agent roles to an agy
+	// model tier (inherit|flash_lite|flash|pro). Absent = every role inherits.
+	AntigravityModelAssignments map[string]string `json:"antigravity_model_assignments,omitempty"`
+
 	// CodexModelAssignments maps SDD phase names to a Codex reasoning_effort value
 	// (low|medium|high|xhigh). Persisted so that `gentle-ai sync` preserves the
 	// user's per-phase effort preset instead of falling back to Recommended.
@@ -75,6 +85,11 @@ type InstallState struct {
 
 	// CodexOrchestratorAssignment is optional so legacy state preserves the user's top-level Codex configuration.
 	CodexOrchestratorAssignment *CodexOrchestratorAssignmentState `json:"codexOrchestratorAssignment,omitempty"`
+
+	// CodexServiceTier is the top-level config.toml service_tier Gentle AI wrote
+	// (for example "priority" for Fast). Empty means Gentle AI manages none, so
+	// a user-set service_tier is never touched.
+	CodexServiceTier string `json:"codexServiceTier,omitempty"`
 
 	// CodexCarrilModelAssignments maps the three carril profile names
 	// (sdd-strong|sdd-mid|sdd-cheap) to OpenAI subscription model IDs
@@ -133,6 +148,17 @@ type InstallState struct {
 	// recorded is authority, not a cosmetic audit field. Nil for state files
 	// written before the switch existed.
 	RDDModeRecordedAt *time.Time `json:"rdd_mode_recorded_at,omitempty"`
+
+	BackgroundIntent model.OpenCodeBackgroundIntent `json:"opencode_background_subagents,omitempty"`
+
+	// PiBackgroundIntent is the managed Pi background-subagent choice. It is
+	// persisted separately from the OpenCode field because each key is part of
+	// an independent state contract.
+	PiBackgroundIntent model.PiBackgroundIntent `json:"pi_background_subagents,omitempty"`
+
+	// LastSyncedAt records when this home directory last completed a
+	// successful sync. Nil for state files written before this field was added.
+	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
 }
 
 // UnmarshalJSON preserves whether the persisted persona field was present.
@@ -148,15 +174,58 @@ func (s *InstallState) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
+	if fields == nil {
+		return errors.New("state file must contain a JSON object, not null; restore a valid state file from a backup that keeps your intended persona and installation settings, then retry")
+	}
+	if err := rejectAmbiguousPersonaKeys(data); err != nil {
+		return err
+	}
 
 	*s = InstallState(decoded)
+	if legacy, ok := fields["strict_tdd"]; ok {
+		if err := json.Unmarshal(legacy, &s.StrictTDD); err != nil {
+			return err
+		}
+	}
 	_, s.PersonaPresent = fields["persona"]
+	return nil
+}
+
+// rejectAmbiguousPersonaKeys refuses top-level keys that the case-insensitive
+// struct decoder would collapse into Persona, so presence and value cannot
+// disagree. Keys are compared after JSON unescaping.
+func rejectAmbiguousPersonaKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	seen := false
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := token.(string)
+		if strings.EqualFold(key, "persona") {
+			if key != "persona" {
+				return fmt.Errorf("state file key %q must be spelled %q; rename it and retry", key, "persona")
+			}
+			if seen {
+				return fmt.Errorf("state file has duplicate %q keys; keep exactly one and retry", "persona")
+			}
+			seen = true
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // Path returns the absolute path to the state file for the given home directory.
 func Path(homeDir string) string {
-	return filepath.Join(homeDir, stateDir, stateFile)
+	return filepath.Join(Dir(homeDir), stateFile)
 }
 
 // Read reads and unmarshals the state file from the given home directory.
@@ -175,18 +244,30 @@ func Read(homeDir string) (InstallState, error) {
 
 func (s *InstallState) SetSelection(selection model.Selection) {
 	s.SelectionConfigured = true
-	s.Components = append([]model.ComponentID(nil), selection.Components...)
+	s.Components = activeComponents(selection.Components)
 	s.Skills = append([]model.SkillID(nil), selection.Skills...)
-	s.Preset, s.SDDMode, s.StrictTDD = selection.Preset, selection.SDDMode, selection.StrictTDD
+	s.Preset, s.SDDMode, s.StrictTDD = selection.Preset, "", false
 }
 
 func (s InstallState) RestoreSelection(selection *model.Selection) {
 	if !s.SelectionConfigured {
 		return
 	}
-	selection.Components = append([]model.ComponentID(nil), s.Components...)
+	selection.Components = activeComponents(s.Components)
 	selection.Skills = append([]model.SkillID(nil), s.Skills...)
-	selection.Preset, selection.SDDMode, selection.StrictTDD = s.Preset, s.SDDMode, s.StrictTDD
+	selection.Preset, selection.SDDMode, selection.StrictTDD = s.Preset, "", false
+}
+
+// activeComponents preserves the persisted legacy value for decoding and
+// historical restore while keeping it out of current install/sync selections.
+func activeComponents(components []model.ComponentID) []model.ComponentID {
+	var active []model.ComponentID
+	for _, component := range components {
+		if component != model.ComponentSDD {
+			active = append(active, component)
+		}
+	}
+	return active
 }
 
 // MergeAgents returns a new InstallState that combines existing with the
@@ -217,21 +298,24 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 
 	return InstallState{
 		InstalledAgents:             merged,
+		InstalledBinaryVersion:      existing.InstalledBinaryVersion,
 		ManagedAssetDigest:          existing.ManagedAssetDigest,
 		SelectionConfigured:         existing.SelectionConfigured,
 		Components:                  existing.Components,
 		Skills:                      existing.Skills,
 		Preset:                      existing.Preset,
 		SDDMode:                     existing.SDDMode,
-		StrictTDD:                   existing.StrictTDD,
+		StrictTDD:                   false,
 		CommunityTools:              existing.CommunityTools,
 		CommunityToolsConfigured:    existing.CommunityToolsConfigured,
 		ModelAssignments:            existing.ModelAssignments,
 		ClaudeModelAssignments:      existing.ClaudeModelAssignments,
 		ClaudePhaseAssignments:      existing.ClaudePhaseAssignments,
 		KiroModelAssignments:        existing.KiroModelAssignments,
+		AntigravityModelAssignments: existing.AntigravityModelAssignments,
 		CodexModelAssignments:       existing.CodexModelAssignments,
 		CodexOrchestratorAssignment: existing.CodexOrchestratorAssignment,
+		CodexServiceTier:            existing.CodexServiceTier,
 		CodexCarrilModelAssignments: existing.CodexCarrilModelAssignments,
 		CodexPhaseModelAssignments:  existing.CodexPhaseModelAssignments,
 		Persona:                     existing.Persona,
@@ -240,20 +324,50 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		PendingSync:                 existing.PendingSync,
 		RDDMode:                     existing.RDDMode,
 		RDDModeRecordedAt:           existing.RDDModeRecordedAt,
+
+		BackgroundIntent:   existing.BackgroundIntent,
+		PiBackgroundIntent: existing.PiBackgroundIntent,
+		LastSyncedAt:       existing.LastSyncedAt,
 	}
 }
 
 // Write persists the full install state to disk under the given home directory.
 // It creates the .gentle-ai directory if it does not already exist.
 func Write(homeDir string, s InstallState) error {
-	dir := filepath.Join(homeDir, stateDir)
+	dir := Dir(homeDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
+	data, err := marshal(s)
 	if err != nil {
 		return err
 	}
-	_, err = filemerge.WriteFileAtomic(Path(homeDir), append(data, '\n'), 0o644)
+	_, err = filemerge.WriteFileAtomic(Path(homeDir), data, 0o644)
 	return err
+}
+
+// WriteReconciled persists install state and treats an atomic-write error as
+// successful when the requested bytes are visible on disk after the error.
+func WriteReconciled(homeDir string, s InstallState) error {
+	err := Write(homeDir, s)
+	if err == nil {
+		return nil
+	}
+
+	data, marshalErr := marshal(s)
+	if marshalErr == nil {
+		if visible, readErr := os.ReadFile(Path(homeDir)); readErr == nil && bytes.Equal(visible, data) {
+			log.Printf("state: write returned %v but requested state is visible; treating persistence as successful", err)
+			return nil
+		}
+	}
+	return err
+}
+
+func marshal(s InstallState) ([]byte, error) {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }

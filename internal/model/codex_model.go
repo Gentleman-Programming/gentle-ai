@@ -1,8 +1,14 @@
 package model
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os/exec"
+	"slices"
 	"strings"
+	"time"
 )
 
 // codexModelCatalog is Gentle AI's curated selectable Codex model catalog for
@@ -10,6 +16,9 @@ import (
 // availability probe; the Codex CLI remains the source of truth at execution
 // time. Order is intentional: newest/most-capable first.
 var codexModelCatalog = []string{
+	"gpt-6.1-astra",
+	"gpt-6.1-sol",
+	"gpt-6.1-luna",
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
@@ -18,6 +27,21 @@ var codexModelCatalog = []string{
 	"gpt-5.4-mini",
 	"gpt-5.3-codex",
 	"gpt-5.2-codex",
+}
+
+// ValidCodexReviewModel accepts a single CLI model identifier, including IDs
+// discovered from Codex that are not yet in the bundled catalog. Rejecting
+// whitespace and option prefixes keeps persisted state from shaping argv.
+func ValidCodexReviewModel(id string) bool {
+	if id == "" || id[0] == '-' {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 // CodexAvailableModels returns Gentle AI's curated selectable Codex model
@@ -29,16 +53,180 @@ func CodexAvailableModels() []string {
 	return out
 }
 
-// FilterCodexModels returns the subset of CodexAvailableModels whose ID contains
-// query as a case-insensitive substring. An empty query returns all models.
-func FilterCodexModels(query string) []string {
-	all := CodexAvailableModels()
+var codexModelDiscoveryTimeout = 3 * time.Second
+
+const codexModelDiscoveryOutputLimit = 1 << 20
+
+var codexLookPath = exec.LookPath
+var codexCommand = exec.CommandContext
+
+type codexDiscoveryOutput struct {
+	data     strings.Builder
+	limit    int
+	overflow bool
+}
+
+func (w *codexDiscoveryOutput) Write(p []byte) (int, error) {
+	remaining := w.limit - w.data.Len()
+	if remaining <= 0 {
+		w.overflow = true
+		return 0, io.ErrShortWrite
+	}
+	if len(p) > remaining {
+		_, _ = w.data.Write(p[:remaining])
+		w.overflow = true
+		return remaining, io.ErrShortWrite
+	}
+	return w.data.Write(p)
+}
+
+type codexDiscoveredModelCatalog struct {
+	Models []codexCatalogModel `json:"models"`
+}
+
+type codexCatalogModel struct {
+	Slug                     string `json:"slug"`
+	Visibility               string `json:"visibility"`
+	SupportedInAPI           *bool  `json:"supported_in_api"`
+	SupportedReasoningLevels []struct {
+		Effort string `json:"effort"`
+	} `json:"supported_reasoning_levels"`
+	// ServiceTiers is nil when an older Codex omits the key entirely.
+	ServiceTiers *[]CodexServiceTier `json:"service_tiers"`
+}
+
+// CodexServiceTier is one Codex service tier a model advertises. ID is the
+// request value written to config.toml's top-level service_tier key; "fast"
+// is the priority tier, a speed selection rather than a reasoning effort.
+type CodexServiceTier struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// CodexModelCapabilities is what the installed Codex runtime advertises for
+// one model: its reasoning efforts and its service tiers.
+type CodexModelCapabilities struct {
+	Efforts      []CodexEffort
+	ServiceTiers []CodexServiceTier
+	// ServiceTiersReported is false when the runtime predates service_tiers;
+	// the tiers are then unknown and a persisted selection must be kept.
+	ServiceTiersReported bool
+}
+
+// CodexModelCatalog is the Custom picker catalog. Models missing from
+// Capabilities (including the whole curated fallback) have unknown
+// capabilities, so callers keep their curated effort list for them.
+type CodexModelCatalog struct {
+	Models       []string
+	Capabilities map[string]CodexModelCapabilities
+}
+
+// DiscoverCodexModels returns selectable models and their advertised
+// capabilities from the locally installed Codex CLI. It falls back to the
+// curated catalog if Codex is unavailable, times out, returns invalid JSON,
+// or reports no selectable models.
+func DiscoverCodexModels(ctx context.Context) CodexModelCatalog {
+	fallback := CodexModelCatalog{Models: CodexAvailableModels()}
+	discoveryCtx, cancel := context.WithTimeout(ctx, codexModelDiscoveryTimeout)
+	defer cancel()
+
+	codexPath, err := codexLookPath("codex")
+	if err != nil {
+		return fallback
+	}
+	cmd := codexCommand(discoveryCtx, codexPath, "debug", "models")
+	output := &codexDiscoveryOutput{limit: codexModelDiscoveryOutputLimit}
+	cmd.Stdout = output
+	if err := cmd.Run(); err != nil || output.overflow {
+		return fallback
+	}
+
+	var catalog codexDiscoveredModelCatalog
+	if err := json.Unmarshal([]byte(output.data.String()), &catalog); err != nil {
+		return fallback
+	}
+
+	discovered := CodexModelCatalog{Models: make([]string, 0, len(catalog.Models))}
+	seen := make(map[string]struct{}, len(catalog.Models))
+	for _, entry := range catalog.Models {
+		slug := strings.TrimSpace(entry.Slug)
+		if slug == "" || (entry.Visibility != "" && entry.Visibility != "list") || (entry.SupportedInAPI != nil && !*entry.SupportedInAPI) {
+			continue
+		}
+		if _, ok := seen[slug]; ok {
+			continue
+		}
+		seen[slug] = struct{}{}
+		discovered.Models = append(discovered.Models, slug)
+		if capabilities, ok := entry.capabilities(); ok {
+			if discovered.Capabilities == nil {
+				discovered.Capabilities = make(map[string]CodexModelCapabilities)
+			}
+			discovered.Capabilities[slug] = capabilities
+		}
+	}
+	if len(discovered.Models) == 0 {
+		return fallback
+	}
+	return discovered
+}
+
+// capabilities keeps only efforts Gentle AI can route, in canonical order, and
+// service tiers that are safe request values. "default" is Codex's explicit
+// standard-routing sentinel, not a tier.
+func (entry codexCatalogModel) capabilities() (CodexModelCapabilities, bool) {
+	var capabilities CodexModelCapabilities
+	advertised := make(map[CodexEffort]bool, len(entry.SupportedReasoningLevels))
+	for _, level := range entry.SupportedReasoningLevels {
+		advertised[CodexEffort(level.Effort)] = true
+	}
+	for _, effort := range codexEffortOrder {
+		if advertised[effort] {
+			capabilities.Efforts = append(capabilities.Efforts, effort)
+		}
+	}
+	if entry.ServiceTiers != nil {
+		capabilities.ServiceTiersReported = true
+	}
+	for _, tier := range ptrValue(entry.ServiceTiers) {
+		if tier.ID != "default" && ValidCodexServiceTier(tier.ID) && !slices.ContainsFunc(capabilities.ServiceTiers, func(t CodexServiceTier) bool { return t.ID == tier.ID }) {
+			capabilities.ServiceTiers = append(capabilities.ServiceTiers, tier)
+		}
+	}
+	return capabilities, len(capabilities.Efforts) > 0 || capabilities.ServiceTiersReported
+}
+
+func ptrValue[T any](value *T) T {
+	if value == nil {
+		var zero T
+		return zero
+	}
+	return *value
+}
+
+// ValidCodexServiceTier accepts a single lowercase request token so persisted
+// state cannot shape config.toml beyond one string value.
+func ValidCodexServiceTier(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// FilterCodexModelList returns the subset of models whose ID contains query as a
+// case-insensitive substring. An empty query returns a copy of models.
+func FilterCodexModelList(models []string, query string) []string {
 	if strings.TrimSpace(query) == "" {
-		return all
+		return append([]string(nil), models...)
 	}
 	q := strings.ToLower(query)
-	out := make([]string, 0, len(all))
-	for _, m := range all {
+	out := make([]string, 0, len(models))
+	for _, m := range models {
 		if strings.Contains(strings.ToLower(m), q) {
 			out = append(out, m)
 		}
@@ -55,16 +243,17 @@ const (
 	CodexEffortMedium CodexEffort = "medium"
 	CodexEffortHigh   CodexEffort = "high"
 	CodexEffortXHigh  CodexEffort = "xhigh"
+	// Max and Ultra exist only on models whose runtime catalog advertises them.
+	CodexEffortMax   CodexEffort = "max"
+	CodexEffortUltra CodexEffort = "ultra"
 )
 
-// Valid reports whether the effort value is one of the four known levels.
+// codexEffortOrder is the canonical low-to-high order of routable efforts.
+var codexEffortOrder = []CodexEffort{CodexEffortLow, CodexEffortMedium, CodexEffortHigh, CodexEffortXHigh, CodexEffortMax, CodexEffortUltra}
+
+// Valid reports whether the effort value is a known routable level.
 func (e CodexEffort) Valid() bool {
-	switch e {
-	case CodexEffortLow, CodexEffortMedium, CodexEffortHigh, CodexEffortXHigh:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(codexEffortOrder, e)
 }
 
 type CodexCarrilDefault struct {
@@ -82,31 +271,123 @@ const (
 
 var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
 	CodexPresetLowCost: {
-		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
-		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+		"sdd-mid":    {Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+		"sdd-cheap":  {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetRecommended: {
-		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortHigh},
-		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+		"sdd-mid":    {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 	},
 	CodexPresetPowerful: {
-		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortXHigh},
-		"sdd-mid":    {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
-		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortHigh},
+		"sdd-strong": {Model: "gpt-6.1-astra", Effort: CodexEffortXHigh},
+		"sdd-mid":    {Model: "gpt-6.1-sol", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
 	},
 }
 
 // codexPresetOrchestrator is the main-session model per preset. It is no
 // longer one shared policy: the low-cost preset runs the orchestrator on
-// Terra, because a Plus plan cannot afford Sol in both the main session and
+// Luna, because a Plus plan cannot afford Sol in both the main session and
 // every strong lane, and the strong lanes are where reasoning actually pays.
 // Unknown keys fall back to Recommended, as the carril matrix does.
 var codexPresetOrchestrator = map[CodexPresetKey]CodexOrchestratorAssignment{
-	CodexPresetLowCost:     {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
-	CodexPresetRecommended: {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
-	CodexPresetPowerful:    {Model: "gpt-5.6-sol", Effort: CodexEffortMedium},
+	CodexPresetLowCost:     {Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+	CodexPresetRecommended: {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+	CodexPresetPowerful:    {Model: "gpt-6.1-astra", Effort: CodexEffortMedium},
+}
+
+// CodexODDRoles maps ODD worker classes to legacy saved carril keys.
+// Carril keys remain readable for existing custom model assignments, but
+// do not determine ODD's default models or effort.
+var codexODDRoles = []struct{ Role, Carril string }{
+	{"odd-explorer", "sdd-cheap"},
+	{"odd-worker", "sdd-mid"},
+	{"odd-verify", "sdd-strong"},
+}
+
+var codexODDDefaults = map[CodexPresetKey]map[string]CodexCarrilDefault{
+	CodexPresetLowCost: {
+		"odd-explorer": {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6.1-luna", Effort: CodexEffortMedium},
+		"odd-verify":   {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+	},
+	CodexPresetRecommended: {
+		"odd-explorer": {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-verify":   {Model: "gpt-6.1-sol", Effort: CodexEffortMedium},
+	},
+	CodexPresetPowerful: {
+		"odd-explorer": {Model: "gpt-6.1-luna", Effort: CodexEffortHigh},
+		"odd-worker":   {Model: "gpt-6.1-sol", Effort: CodexEffortHigh},
+		"odd-verify":   {Model: "gpt-6.1-astra", Effort: CodexEffortXHigh},
+	},
+}
+
+// CodexODDEffortsForPreset provides ODD-only effort assignments without SDD
+// phase keys. A caller retiring the old picker rows can use these directly.
+func CodexODDEffortsForPreset(preset string) map[string]CodexEffort {
+	defaults, ok := codexODDDefaults[CodexPresetKey(preset)]
+	if !ok {
+		defaults = codexODDDefaults[CodexPresetRecommended]
+	}
+	out := make(map[string]CodexEffort, len(defaults))
+	for role, value := range defaults {
+		out[role] = value.Effort
+	}
+	return out
+}
+
+func codexLegacyPresetForEfforts(efforts map[string]CodexEffort) CodexPresetKey {
+	for _, preset := range []CodexPresetKey{CodexPresetLowCost, CodexPresetPowerful} {
+		defaults := codexPresetEfforts(string(preset))
+		if len(efforts) != len(defaults) {
+			continue
+		}
+		match := true
+		for phase, effort := range defaults {
+			if efforts[phase] != effort {
+				match = false
+				break
+			}
+		}
+		if match {
+			return preset
+		}
+	}
+	return CodexPresetRecommended
+}
+
+// CodexODDRoleCarrils returns the worker-class to preset-lane mapping.
+func CodexODDRoleCarrils() []struct{ Role, Carril string } {
+	return append([]struct{ Role, Carril string }(nil), codexODDRoles...)
+}
+
+// RenderCodexODDAssignments provides spawn_agent arguments for ODD work.
+// RDD assignments remain persisted for the native adapter, not prompt delegation.
+func RenderCodexODDAssignments(phaseModels map[string]string, efforts map[string]CodexEffort, carrilModels map[string]string) string {
+	// Compatibility with persisted 14-phase preset maps; new ODD-only maps
+	// use explicit odd-* effort values and never require SDD phase keys.
+	preset := codexLegacyPresetForEfforts(efforts)
+	var b strings.Builder
+	b.WriteString("| ODD worker class | Model | reasoning_effort |\n|---|---|---|\n")
+	for _, role := range CodexODDRoleCarrils() {
+		defaults := codexODDDefaults[preset][role.Role]
+		modelID := carrilModels[role.Carril]
+		if modelID == "" {
+			modelID = codexODDDefaults[CodexPresetRecommended][role.Role].Model
+		}
+		if phaseModels[role.Role] != "" {
+			modelID = phaseModels[role.Role]
+		}
+		effort := efforts[role.Role]
+		if !effort.Valid() {
+			effort = defaults.Effort
+		}
+		fmt.Fprintf(&b, "| `%s` | `%s` | `%s` |\n", role.Role, modelID, effort)
+	}
+	return b.String()
 }
 
 // CodexOrchestratorAssignment is the explicit top-level Codex session model
@@ -176,7 +457,7 @@ func MigrateLegacyCodexCarrilDefaults(assignments map[string]string) map[string]
 
 func codexPresetEfforts(preset string) map[string]CodexEffort {
 	defaults := CodexPresetCarrilDefaults(preset)
-	out := make(map[string]CodexEffort, 13)
+	out := make(map[string]CodexEffort, 14)
 	for _, tier := range codexTierGroups {
 		effort := defaults[tier.Profile].Effort
 		for _, phase := range tier.Phases {
@@ -205,8 +486,8 @@ func CodexModelPresetLowCost() map[string]CodexEffort {
 // extension), the canonical default model id for that carril, the default
 // reasoning_effort tier, and the SDD phases covered.
 //
-// Phase groupings (Approach C — orthogonal carril axis). Sol reasons, Terra
-// writes, Luna transcribes:
+// Phase groupings (Approach C — orthogonal carril axis). Sol/Astra reason,
+// Luna/Sol write, Luna handles lightweight work:
 //   - sdd-strong (Razonamiento): explore, propose, design, verify, judge-a, judge-b, default
 //   - sdd-mid    (Código):       apply, fix-agent
 //   - sdd-cheap  (Liviano):      spec, tasks, archive, onboard
@@ -243,7 +524,7 @@ var codexTierGroups = []CodexTierGroup{
 		Profile:       "sdd-strong",
 		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Model,
 		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Effort,
-		Phases:        []string{"sdd-explore", "sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
+		Phases:        []string{"sdd-explore", "sdd-research", "sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
 	},
 	{
 		Profile:       "sdd-mid",
@@ -276,14 +557,6 @@ func DefaultCarrilModels() map[string]string {
 	return m
 }
 
-// codexEffortRank maps effort levels to a numeric rank for max-derivation.
-var codexEffortRank = map[CodexEffort]int{
-	CodexEffortLow:    0,
-	CodexEffortMedium: 1,
-	CodexEffortHigh:   2,
-	CodexEffortXHigh:  3,
-}
-
 func maxEffort(assignments map[string]CodexEffort, phases []string) CodexEffort {
 	best := CodexEffortLow
 	for _, phase := range phases {
@@ -291,7 +564,7 @@ func maxEffort(assignments map[string]CodexEffort, phases []string) CodexEffort 
 		if !ok {
 			continue
 		}
-		if codexEffortRank[e] > codexEffortRank[best] {
+		if slices.Index(codexEffortOrder, e) > slices.Index(codexEffortOrder, best) {
 			best = e
 		}
 	}
@@ -360,75 +633,6 @@ func RenderCodexPhaseEfforts(assignments map[string]CodexEffort, carrilModels ma
 			effort,
 			phases,
 		))
-	}
-
-	return sb.String()
-}
-
-// codexPhaseOrder is the canonical phase ordering for the per-phase table,
-// matching codexTierGroups phase groupings.
-var codexPhaseOrder = []string{
-	"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks",
-	"sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
-	"jd-judge-a", "jd-judge-b", "jd-fix-agent", "default",
-}
-
-// phaseToCarrilModel returns the default model id for a phase by looking up its
-// carril via codexTierGroups.
-func phaseToCarrilModel(phase string, carrilModels map[string]string) string {
-	for _, tier := range codexTierGroups {
-		for _, p := range tier.Phases {
-			if p == phase {
-				if m := carrilModels[tier.Profile]; m != "" {
-					return m
-				}
-				return tier.Model
-			}
-		}
-	}
-	return codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Model // ultimate fallback
-}
-
-// RenderCodexPhaseEffortsByPhase renders a per-phase Markdown table for the
-// Codex sdd-orchestrator.md asset when Custom per-phase model assignments are
-// active. Each row shows: phase | model | reasoning_effort.
-//
-// phaseModels maps phase names to custom model IDs. Phases not present in
-// phaseModels fall back to carrilModels, preserving the selected or explicitly
-// saved carril assignments. efforts maps phase names to CodexEffort values
-// (typically from a preset + user overrides). When efforts is nil,
-// CodexModelPresetRecommended is used. When carrilModels is nil, the canonical
-// Recommended carril models are used.
-//
-// The output is deterministic: phases are always rendered in codexPhaseOrder.
-func RenderCodexPhaseEffortsByPhase(phaseModels map[string]string, efforts map[string]CodexEffort, carrilModels map[string]string) string {
-	if len(efforts) == 0 {
-		efforts = CodexModelPresetRecommended()
-	}
-	if len(carrilModels) == 0 {
-		carrilModels = DefaultCarrilModels()
-	}
-
-	var sb strings.Builder
-	sb.WriteString("| Phase | Model | `reasoning_effort` |\n")
-	sb.WriteString("|-------|-------|--------------------|\n")
-
-	for _, phase := range codexPhaseOrder {
-		// Resolve model: custom per-phase override takes priority over carril default.
-		modelID := ""
-		if phaseModels != nil {
-			modelID = phaseModels[phase]
-		}
-		if modelID == "" {
-			modelID = phaseToCarrilModel(phase, carrilModels)
-		}
-
-		effort := efforts[phase]
-		if effort == "" {
-			effort = CodexEffortMedium // safe fallback
-		}
-
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | `%s` |\n", phase, modelID, effort))
 	}
 
 	return sb.String()

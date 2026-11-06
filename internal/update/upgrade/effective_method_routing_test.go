@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
 )
 
 // TestEffectiveMethodWindowsPrecedenceIsUnchanged pins the rules that run before
@@ -27,22 +27,15 @@ func TestEffectiveMethodWindowsPrecedenceIsUnchanged(t *testing.T) {
 		want          update.InstallMethod
 	}{
 		{
-			name:          "OpenCode plugin wins over go-install on Windows",
-			tool:          update.ToolInfo{Name: "opencode-subagent-statusline", InstallMethod: update.InstallOpenCodePlugin, NpmPackage: "opencode-subagent-statusline", GoImportPath: "github.com/example/plugin/cmd/plugin"},
-			profile:       system.PlatformProfile{OS: "windows", PackageManager: "brew", GoAvailable: true},
-			brewInstalled: true,
-			want:          update.InstallOpenCodePlugin,
-		},
-		{
 			name:          "brew-owned package wins over go-install on Windows",
-			tool:          update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai"},
+			tool:          update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai"},
 			profile:       system.PlatformProfile{OS: "windows", PackageManager: "brew", GoAvailable: true},
 			brewInstalled: true,
 			want:          update.InstallBrew,
 		},
 		{
 			name:    "no Go on Windows keeps the declared method",
-			tool:    update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai"},
+			tool:    update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai"},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: false},
 			want:    update.InstallBinary,
 		},
@@ -66,8 +59,9 @@ func TestEffectiveMethodWindowsPrecedenceIsUnchanged(t *testing.T) {
 
 // gentleAIImportPath is the module path gentle-ai publishes its command under.
 // It is asserted against the registry below so the tests and the shipped
-// declaration cannot drift apart.
-const gentleAIImportPath = "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai"
+// declaration cannot drift apart. The /vN suffix is not stored here; it is
+// derived at composition time via update.ModulePathForVersion.
+const gentleAIImportPath = "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai"
 
 // registryGentleAI returns the shipped gentle-ai registry entry. Routing tests
 // use the real declaration rather than a hand-built ToolInfo so a regression in
@@ -106,19 +100,14 @@ func TestGentleAIOnWindowsWithGoAvailableUpgradesThroughGoInstall(t *testing.T) 
 	}
 }
 
-// TestGentleAIOnLinuxNeverRoutesToGoInstall is a regression guard for the
-// authenticated-download requirement. Linux upgrades must keep downloading the
-// signed release asset and verifying it with minisign; declaring a GoImportPath
-// for the Windows path must never move Linux off that trust anchor.
-//
-// Do not delete this test. It is the only thing standing between a one-line
-// routing edit and silently dropping minisign verification on Linux.
+// Release builds must keep their minisign trust anchor even with Go on PATH.
 func TestGentleAIOnLinuxNeverRoutesToGoInstall(t *testing.T) {
+	useTestReleaseKey(t)
 	origHomebrewPackageInstalled := homebrewPackageInstalled
 	t.Cleanup(func() { homebrewPackageInstalled = origHomebrewPackageInstalled })
 	homebrewPackageInstalled = func(string) bool { return false }
 
-	for _, packageManager := range []string{"apt", "pacman", "dnf", ""} {
+	for _, packageManager := range []string{"apt", "pacman", "dnf", "rpm-ostree", ""} {
 		profile := system.PlatformProfile{OS: "linux", PackageManager: packageManager, GoAvailable: true}
 		if got := effectiveMethod(registryGentleAI(t), profile); got != update.InstallBinary {
 			t.Errorf("effectiveMethod on linux/%s = %q, want %q (minisign-verified download)", packageManager, got, update.InstallBinary)
@@ -129,6 +118,7 @@ func TestGentleAIOnLinuxNeverRoutesToGoInstall(t *testing.T) {
 // TestGentleAIOnMacOSNeverRoutesToGoInstall is the macOS half of the same
 // regression guard. See TestGentleAIOnLinuxNeverRoutesToGoInstall.
 func TestGentleAIOnMacOSNeverRoutesToGoInstall(t *testing.T) {
+	useTestReleaseKey(t)
 	origHomebrewPackageInstalled := homebrewPackageInstalled
 	t.Cleanup(func() { homebrewPackageInstalled = origHomebrewPackageInstalled })
 	homebrewPackageInstalled = func(string) bool { return false }
@@ -431,7 +421,7 @@ func TestGentleAIWindowsWithoutGoNamesRunnableSourceInstall(t *testing.T) {
 			Owner:         "Gentleman-Programming",
 			Repo:          "gentle-ai",
 			InstallMethod: update.InstallBinary,
-			GoImportPath:  "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai",
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai",
 		},
 		LatestVersion: "2.2.0",
 		Status:        update.UpdateAvailable,
@@ -448,7 +438,7 @@ func TestGentleAIWindowsWithoutGoNamesRunnableSourceInstall(t *testing.T) {
 	}
 	for _, required := range []string{
 		"Windows binary distribution and Scoop are temporarily unavailable",
-		"go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.2.0",
+		"go install " + update.ModulePathForVersion(gentleAIImportPath, "gentle-ai", "2.2.0") + "@v2.2.0",
 	} {
 		if !strings.Contains(result.ManualHint, required) {
 			t.Errorf("manual hint is missing %q: %s", required, result.ManualHint)

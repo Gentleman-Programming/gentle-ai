@@ -429,9 +429,8 @@ func requireNoDoubleMoveAcrossClosure(r *journeyRun) error {
 // This is resolved by reusing the EXACT deterministic phase-hook
 // interruption the Go matrix uses (compactReclaimPhaseHook), made reachable
 // through the real binary via a build-tag-gated product hook
-// (internal/reviewtransaction/bench_fixture.go, `-tags bench_fixture`,
-// mirroring internal/sddstatus/bench_fixture.go's own established pattern
-// for j57): GENTLE_AI_BENCH_CRASH_AT_PHASE names the exact "<phase>:<lineage>"
+// (internal/reviewtransaction/bench_fixture.go, `-tags bench_fixture`):
+// GENTLE_AI_BENCH_CRASH_AT_PHASE names the exact "<phase>:<lineage>"
 // pair to refuse right after, a genuine interruption of the real command
 // with nothing after that point in the SAME process ever executing — not an
 // authored on-disk state. Six journeys are generated, one per (phase,
@@ -491,16 +490,14 @@ func clearedCrashDispositionRepairArgs(reason string) func(*Sandbox) ([]string, 
 // bench_fixture.go marker text, proof the interruption is the deterministic
 // one this journey asked for. A binary without the bench_fixture build tag
 // never links that hook, so GENTLE_AI_BENCH_CRASH_AT_PHASE has no effect and
-// the disposition simply completes (exit 0) instead: that specific shape
-// reports the journey unsupported rather than failed, mirroring j57's own
-// graceful degradation when its equivalent build-tag seam is absent
-// (axis_source_coupled.go).
+// the disposition completes instead. That is a failed crash-position proof,
+// never an unsupported result borrowed from a retired axis.
 func requireGenuineBenchFixtureCrash(_ *Sandbox, observation Observation) error {
 	if observation.ExitCode != 0 && strings.Contains(observation.Stderr, benchFixtureCrashMarker) {
 		return nil
 	}
 	if observation.ExitCode == 0 {
-		return errSourceCoupledFixtureUnavailable
+		return fmt.Errorf("crash-inducing repair completed without the required bench_fixture hook; build the product with -tags bench_fixture")
 	}
 	return fmt.Errorf("crash-inducing repair attempt exited %d without the expected bench_fixture marker: %s", observation.ExitCode, observation.Stderr)
 }
@@ -640,6 +637,7 @@ func crashRecoveryPositionJourney(phase string, role crashPositionRole, extraSte
 	)
 	return Journey{
 		ID:     "ds11-crash-recovery-" + phase + "-" + role.label,
+		Review: reviewOptedIn,
 		Title:  "A closure genuinely interrupted right after its " + role.label + "'s " + phase + " phase resumes byte-identically through the real binary",
 		Source: "rdd-root-simplification-wave6 fix cycle 2 (journey-level crash-position coverage, sdd-verify cycle-2 WARNING) — the real-binary twin of TestAuthorityDispositionResumeCrashPositionMatrix's " + phase + "/" + role.label + " case",
 		Steps:  steps,
@@ -688,6 +686,7 @@ func closureDispositionJourneys() []Journey {
 	journeys := []Journey{
 		{
 			ID:     "ds09-multi-chain-closure",
+			Review: reviewOptedIn,
 			Title:  "A multi-hop closure — one damaged seed with a two-hop descendant chain — derives and disposes end-to-end",
 			Source: "rdd-root-simplification-wave6 Slices S1/S2 (topological ordering, ordered N-node transaction)",
 			// ds06 above proves the N=1 base case. This is Wave 6's own
@@ -720,6 +719,7 @@ func closureDispositionJourneys() []Journey {
 		},
 		{
 			ID:     "ds10-cross-lineage-closure",
+			Review: reviewOptedIn,
 			Title:  "The over-collection guard: everything NOT in the closure — the predecessor and an unrelated lineage — stays byte-identical",
 			Source: "rdd-root-simplification-wave6 design decision D6 (over-collection guard)",
 			// ds09 proves the closure disposes. This journey isolates the
@@ -743,6 +743,7 @@ func closureDispositionJourneys() []Journey {
 		},
 		{
 			ID:     "ds12-negotiated-transition-route",
+			Review: reviewOptedIn,
 			Title:  "The negotiated route: `review status --next-transition` surfaces the closure disposition collect/execute, not a raw flag triad",
 			Source: "rdd-root-simplification-wave6 Slice S4/D7 (negotiated transition route)",
 			// ds06/ds08/ds09/ds10/ds11 above all drive --plan-digest and

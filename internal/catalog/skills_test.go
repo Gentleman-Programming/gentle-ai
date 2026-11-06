@@ -3,8 +3,8 @@ package catalog
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // TestMVPSkillsCoverAllPresetSkills ensures every skill that presets.go would
@@ -44,6 +44,7 @@ func TestMVPSkillsIncludeRequestedBundledSkillsWithCanonicalNames(t *testing.T) 
 		model.SkillCommentWriter:       "comment-writer",
 		model.SkillJudgmentDay:         "judgment-day",
 		model.SkillSDDInit:             "sdd-init",
+		model.SkillSDDResearch:         "sdd-research",
 		model.SkillImprover:            "skill-improver",
 		model.SkillRDDDefectWorkflow:   "rdd-defect-workflow",
 		model.SkillSystemicIssueTriage: "systemic-issue-triage",

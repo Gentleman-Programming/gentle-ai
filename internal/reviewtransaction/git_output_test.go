@@ -14,22 +14,25 @@ import (
 func TestRunGitCapturesBoundedSeparateOutput(t *testing.T) {
 	// Keep these subtests sequential because gitCommandContext is package-global.
 	for _, tt := range []struct {
-		name       string
-		mode       string
-		runner     string
-		wantOutput string
-		wantLimits []int
-		wantActual []int
-		wantExit   int
-		wantStderr string
-		wantDiag   string
+		name        string
+		mode        string
+		runner      string
+		wantOutput  string
+		wantLimits  []int
+		wantActual  []int
+		wantExit    int
+		wantStderr  string
+		wantDiag    string
+		wantEntries int
 	}{
 		{name: "ordinary success", mode: "stdout", wantOutput: "machine-output\n"},
 		{name: "ordinary stdout excludes diagnostics", mode: "stdout-stderr", wantOutput: "machine-output\n"},
 		{name: "isolated stdout excludes diagnostics", mode: "stdout-stderr", runner: "isolated", wantOutput: "machine-output\n"},
 		{name: "inventory default limit success", mode: "stdout", runner: "inventory", wantOutput: "machine-output\n"},
 		{name: "inventory diagnostics are typed", mode: "stdout-stderr", runner: "inventory", wantDiag: "diagnostic output"},
-		{name: "inventory default limit overflow", mode: "stdout-overflow", runner: "inventory", wantLimits: []int{defaultGitOutputLimit}, wantActual: []int{defaultGitOutputLimit + 1}},
+		// #3498: a tracked inventory past the 8 MiB command limit is ordinary.
+		{name: "inventory admits an eight MiB payload", mode: "stdout-overflow", runner: "inventory", wantOutput: strings.Repeat("o", defaultGitOutputLimit+1)},
+		{name: "inventory default limit overflow names entries", mode: "inventory-overflow", runner: "inventory", wantLimits: []int{defaultGitInventoryLimit}, wantActual: []int{defaultGitInventoryLimit + 1}, wantEntries: defaultGitInventoryLimit/2 + 1},
 		{name: "zero limit uses default", mode: "stdout-overflow", runner: "zero-limit", wantLimits: []int{defaultGitOutputLimit}, wantActual: []int{defaultGitOutputLimit + 1}},
 		{name: "stdout overflow", mode: "stdout-overflow", wantLimits: []int{defaultGitOutputLimit}, wantActual: []int{defaultGitOutputLimit + 1}},
 		{name: "stderr overflow", mode: "stderr-overflow", wantLimits: []int{defaultGitStderrLimit}, wantActual: []int{defaultGitStderrLimit + 1}},
@@ -60,8 +63,11 @@ func TestRunGitCapturesBoundedSeparateOutput(t *testing.T) {
 			}
 			if len(tt.wantLimits) != 0 {
 				var firstOverflow *GitOutputLimitError
-				if !errors.Is(err, ErrGitOutputLimit) || !errors.As(err, &firstOverflow) || firstOverflow.Limit != tt.wantLimits[0] {
+				if !errors.Is(err, ErrGitOutputLimit) || !errors.As(err, &firstOverflow) || firstOverflow.Limit != tt.wantLimits[0] || firstOverflow.Entries != tt.wantEntries {
 					t.Fatalf("output overflow typing = %T %#v", err, firstOverflow)
+				}
+				if tt.wantEntries != 0 && !strings.Contains(err.Error(), fmt.Sprintf("(%d NUL-terminated entries)", tt.wantEntries)) {
+					t.Fatalf("inventory overflow = %q, want it to name %d entries", err, tt.wantEntries)
 				}
 				limits, actual := gitOutputLimitDetails(err)
 				if !reflect.DeepEqual(limits, tt.wantLimits) || !reflect.DeepEqual(actual, tt.wantActual) {
@@ -139,6 +145,8 @@ func TestRunGitOutputHelper(t *testing.T) {
 		fmt.Fprint(os.Stderr, "diagnostic output\n")
 	case "stdout-overflow":
 		fmt.Fprint(os.Stdout, strings.Repeat("o", defaultGitOutputLimit+1))
+	case "inventory-overflow":
+		fmt.Fprint(os.Stdout, strings.Repeat("o\x00", defaultGitInventoryLimit/2)+"\x00")
 	case "stderr-overflow":
 		fmt.Fprint(os.Stderr, strings.Repeat("e", defaultGitStderrLimit+1))
 	case "failure":

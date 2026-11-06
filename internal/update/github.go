@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -109,6 +110,69 @@ func fetchMainCommit(ctx context.Context, owner, repo string) (githubCommit, err
 		return githubCommit{}, fmt.Errorf("decode github commit: %w", err)
 	}
 	return commit, nil
+}
+
+// fetchBetaModulePath reads the module directive at the same immutable commit
+// reported by the main-head check. Raw content needs no GitHub credentials.
+func fetchBetaModulePath(ctx context.Context, owner, repo, sha string) (string, error) {
+	if !validBetaCommit(sha) {
+		return "", fmt.Errorf("invalid beta commit SHA")
+	}
+	url := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/go.mod", owner, repo, sha)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch beta go.mod: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetch beta go.mod: HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024+1))
+	if err != nil || len(body) > 1024*1024 {
+		return "", fmt.Errorf("read beta go.mod: invalid or oversized response: %v", err)
+	}
+	module := ""
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(strings.SplitN(line, "//", 2)[0])
+		if len(fields) == 0 || fields[0] != "module" {
+			continue
+		}
+		if module != "" || len(fields) != 2 {
+			return "", fmt.Errorf("invalid beta module directive")
+		}
+		module = fields[1]
+		if strings.HasPrefix(module, "\"") {
+			module, err = strconv.Unquote(module)
+			if err != nil {
+				return "", fmt.Errorf("invalid beta module directive: %w", err)
+			}
+		}
+	}
+	if !validBetaModulePath(module, owner, repo) {
+		return "", fmt.Errorf("unexpected beta module path %q", module)
+	}
+	return module, nil
+}
+
+var betaCommitPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+func validBetaCommit(sha string) bool { return betaCommitPattern.MatchString(sha) }
+
+func validBetaModulePath(module, owner, repo string) bool {
+	base := strings.ToLower(fmt.Sprintf("github.com/%s/%s", owner, repo))
+	if module == base {
+		return true
+	}
+	suffix := strings.TrimPrefix(module, base+"/v")
+	if suffix == module || suffix == "" {
+		return false
+	}
+	n, err := strconv.Atoi(suffix)
+	return err == nil && n >= 2 && strconv.Itoa(n) == suffix
 }
 
 // fetchLatestReleaseMatchingPattern fetches releases and returns the newest non-draft,

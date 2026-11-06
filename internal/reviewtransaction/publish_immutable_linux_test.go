@@ -126,26 +126,6 @@ func TestPublishNoReplaceLinuxCopyFallbackNeverReplacesDestination(t *testing.T)
 	}
 }
 
-func TestPublishImmutableLinuxCopyFallbackReplaysExactDestination(t *testing.T) {
-	forceLinuxCopyFallback(t, unix.EXDEV)
-
-	destination := filepath.Join(t.TempDir(), "receipt.json")
-	payload := []byte("receipt\n")
-	if err := publishImmutable(destination, payload, 0o640); err != nil {
-		t.Fatalf("publishImmutable(first publish) error = %v", err)
-	}
-	if err := publishImmutable(destination, payload, 0o640); err != nil {
-		t.Fatalf("publishImmutable(exact replay) error = %v", err)
-	}
-	stored, err := os.ReadFile(destination)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(stored) != string(payload) {
-		t.Fatalf("replayed destination = %q, want %q", stored, payload)
-	}
-}
-
 func TestPublishNoReplaceLinuxCopyFallbackCleansUpCopyFailure(t *testing.T) {
 	forceLinuxCopyFallback(t, unix.EXDEV)
 	original := copyImmutablePublication

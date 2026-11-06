@@ -94,11 +94,45 @@ func (m Manifest) DisplayLabel() string {
 	return base
 }
 
+// PathKind classifies a backed-up path for restore. The empty value is the
+// legacy "unknown" state — persisted manifests written before this field
+// existed carry it implicitly, and the restore path applies a safe
+// compatibility policy (see RestoreService for details).
+type PathKind string
+
+const (
+	// PathKindUnknown is the legacy default. Restore treats unknown
+	// Existed==false entries as preserve-only (do not delete) so we
+	// never destroy a path whose original type we cannot prove.
+	PathKindUnknown PathKind = ""
+
+	// PathKindRegularFile marks a regular file. Snapshotted into the
+	// archive and restored by reading the archive entry.
+	PathKindRegularFile PathKind = "regular"
+
+	// PathKindDirectory marks an empty directory. Not archived.
+	// Restore ensures the directory still exists; never deletes a
+	// pre-existing directory even if the install/sync that produced
+	// this snapshot created it.
+	PathKindDirectory PathKind = "directory"
+
+	// PathKindSymlinkDirectory marks a relative symlink to a
+	// directory. Not archived. Restore validates LinkTarget is a safe
+	// relative path and recreates the symlink if it is missing.
+	PathKindSymlinkDirectory PathKind = "symlink_directory"
+)
+
 type ManifestEntry struct {
-	OriginalPath string `json:"original_path"`
-	SnapshotPath string `json:"snapshot_path"`
-	Existed      bool   `json:"existed"`
-	Mode         uint32 `json:"mode,omitempty"`
+	OriginalPath string   `json:"original_path"`
+	SnapshotPath string   `json:"snapshot_path"`
+	Existed      bool     `json:"existed"`
+	Mode         uint32   `json:"mode,omitempty"`
+	Kind         PathKind `json:"kind,omitempty"`
+
+	// LinkTarget is the recorded symlink target. Only set when Kind
+	// is PathKindSymlinkDirectory. Restore validates that it is a safe
+	// relative path (no leading '/', no '..' segments that escape).
+	LinkTarget string `json:"link_target,omitempty"`
 }
 
 func WriteManifest(path string, manifest Manifest) error {

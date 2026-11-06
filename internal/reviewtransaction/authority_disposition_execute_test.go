@@ -189,8 +189,8 @@ func TestAuthorityDispositionExecuteLockAndCASReinspection(t *testing.T) {
 
 	// Written directly to store bytes, like forgedRecoveryPair itself: the
 	// existing forged pair already makes the whole authority graph invalid,
-	// so a product write path (StartCompactAuthority) that validates the
-	// whole graph would refuse here. A plain unrelated lineage changes
+	// so an ordinary product write path that validates the whole graph would
+	// refuse here. A plain unrelated lineage changes
 	// authority_inventory_revision — the exact drift the plan's CAS must
 	// catch — without depending on graph validity.
 	driftState := newCompactTestState(t, repo, "cas-drift-unrelated")
@@ -505,7 +505,7 @@ func TestAuthorityDispositionExecuteRefusalNeverBlocksElsewhere(t *testing.T) {
 	}
 
 	unrelatedRepo := initSnapshotRepo(t)
-	if _, err := StartCompactAuthority(context.Background(), unrelatedRepo, CompactStartRequest{State: newCompactTestState(t, unrelatedRepo, "unrelated-candidate")}); err != nil {
+	if _, err := createAtomicCompactAuthority(t, context.Background(), unrelatedRepo, newCompactTestState(t, unrelatedRepo, "unrelated-candidate")); err != nil {
 		t.Fatalf("unrelated candidate blocked by outstanding refusal elsewhere: %v", err)
 	}
 }

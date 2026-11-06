@@ -62,16 +62,17 @@ Use work-unit commits as the foundation for chained PRs:
 3. Commit it with a Conventional Commit message.
 4. If the PR approaches 400 changed lines, promote commits or groups of commits into chained PRs.
 
-## SDD Relationship
+## ODD Relationship
 
-When `sdd-tasks` produces a Review Workload Forecast:
+Organic Driven Development (ODD) closes every substantial task with a work-unit commit on the feature branch:
 
-- Low risk: keep work-unit commits inside one PR.
-- Medium risk: commit by work unit and monitor changed lines before PR creation.
-- High risk: follow SDD `delivery_strategy` — ask on `ask-on-risk`, auto-slice on `auto-chain`, require `size:exception` on over-budget `single-pr`, or record accepted `size:exception` on `exception-ok`.
+- Every ODD task closes with at least one work-unit commit, branch first when on the default branch, with tests and docs alongside the behavior and a Conventional Commit message.
+- The native review candidate is that commit, or the PR slice it belongs to when review is deferred, against the previous reviewed boundary. It is never a TODO checkbox and never the accumulated feature branch.
+- The running authored line count from work-unit commits feeds the delivery-strategy vocabulary: `ask-on-risk`, `auto-chain`, `single-pr`, `exception-ok`.
 - Count authored additions plus deletions for the `>400` threshold. Exclude generated goldens from that authored count, but include every generated file in complete snapshot identity and receipt validation.
+- The ODD feature document records the commit identity as evidence and, once a delivery strategy applies, the chosen chain strategy and slice boundaries (which commits each PR holds).
 
-Each SDD work unit should map cleanly to a commit or PR with:
+Each ODD work unit should map cleanly to a commit or PR with:
 
 - clear start state,
 - clear finished state,

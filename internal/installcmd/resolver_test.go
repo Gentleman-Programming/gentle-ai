@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/versions"
 )
 
 func TestValidateGoForModuleInstall(t *testing.T) {
@@ -180,6 +180,12 @@ func TestResolveDependencyInstall(t *testing.T) {
 			want:    CommandSequence{{"sudo", "dnf", "install", "-y", "somepkg"}},
 		},
 		{
+			name:    "silverblue resolves rpm-ostree command",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "rpm-ostree"},
+			dep:     "somepkg",
+			want:    CommandSequence{{"rpm-ostree", "install", "-y", "--apply-live", "somepkg"}},
+		},
+		{
 			name:    "windows resolves winget command",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			dep:     "somepkg",
@@ -325,40 +331,40 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 		{
-			name:    "opencode on darwin uses official anomalyco brew tap",
+			name:    "opencode on darwin uses V2 npm package",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"brew", "install", "anomalyco/tap/opencode"}},
+			want:    CommandSequence{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on ubuntu system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on ubuntu nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", NpmWritable: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on arch system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on fedora system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on fedora nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			// Issue #2499: the probe (#2493) accepts any Linux package manager
@@ -366,13 +372,13 @@ func TestResolveAgentInstall(t *testing.T) {
 			name:    "opencode on alpine system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "alpine", PackageManager: "apk", Supported: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "opencode on opensuse nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "opensuse-leap", PackageManager: "zypper", Supported: true, NpmWritable: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			// A Linux profile the probe rejected (no manager on PATH) must keep
@@ -392,7 +398,7 @@ func TestResolveAgentInstall(t *testing.T) {
 			name:    "opencode on windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+			want:    CommandSequence{{"npm", "install", "-g", "@opencode/cli@latest"}},
 		},
 		{
 			name:    "kimi on windows uses uv to strictly enforce secure package installation",
@@ -563,6 +569,26 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 			wantErr:     true,
 			errContains: "npm",
 		},
+		{
+			name:    "silverblue missing npm returns actionable remediation and degraded path",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "rpm-ostree", Supported: true},
+			agent:   model.AgentClaudeCode,
+			lookPath: func(file string) (string, error) {
+				return "", fmt.Errorf("not found")
+			},
+			wantErr:     true,
+			errContains: "rpm-ostree install -y nodejs npm && systemctl reboot",
+		},
+		{
+			name:    "silverblue missing uv returns actionable remediation and degraded path",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "rpm-ostree", Supported: true},
+			agent:   model.AgentKimi,
+			lookPath: func(file string) (string, error) {
+				return "", fmt.Errorf("not found")
+			},
+			wantErr:     true,
+			errContains: "rpm-ostree install -y uv && systemctl reboot",
+		},
 	}
 
 	for _, tt := range tests {
@@ -600,6 +626,10 @@ func TestValidateAgentInstallPreflight(t *testing.T) {
 }
 
 func TestResolveComponentInstall(t *testing.T) {
+	// Keep the pre-trust command sequences deterministic on every host.
+	original := cmdBrewHelpTrust
+	cmdBrewHelpTrust = func(string) error { return fmt.Errorf("unknown command: trust") }
+	t.Cleanup(func() { cmdBrewHelpTrust = original })
 	r := NewResolver()
 
 	tests := []struct {
@@ -861,5 +891,35 @@ func TestGGAInstall_CleanupCommandBehavior(t *testing.T) {
 func TestPowerShellSingleQuotedValue(t *testing.T) {
 	if got, want := system.PowerShellSingleQuoted(`C:\Users\O'Brien\Temp`), `C:\Users\O''Brien\Temp`; got != want {
 		t.Fatalf("PowerShellSingleQuoted() = %q, want %q", got, want)
+	}
+}
+
+func TestUVInstallHint(t *testing.T) {
+	tests := []struct {
+		pm   string
+		want string
+	}{
+		{
+			pm:   "rpm-ostree",
+			want: "rpm-ostree install -y --apply-live uv (or see https://docs.astral.sh/uv/getting-started/installation/)",
+		},
+		{
+			pm:   "brew",
+			want: "brew install uv",
+		},
+		{
+			pm:   "unknown-pm",
+			want: "https://docs.astral.sh/uv/getting-started/installation/",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pm, func(t *testing.T) {
+			profile := system.PlatformProfile{OS: "linux", PackageManager: tt.pm}
+			got := uvInstallHint(profile)
+			if got != tt.want {
+				t.Fatalf("uvInstallHint(%q) = %q, want %q", tt.pm, got, tt.want)
+			}
+		})
 	}
 }

@@ -1,421 +1,353 @@
 # Review Integration Contract
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
-Gentle AI exposes two negotiated review contracts. `gentle-ai.review-integration/v1` preserves the published Base64 candidate-diff transport byte for byte. `gentle-ai.review-integration/v2` is the native-Git contract: it carries immutable base/candidate tree IDs and an ordered changed-path manifest, never an inline patch. Its current minor is v2.1, which selects the immutable review runtime explicitly. Both let a consumer reconstruct one target after restart, drive explicit review operations, and validate the resulting receipt without reading provider-private authority files.
+`gentle-ai.review-integration/v2` coordinates one immutable review transaction at a time. Go owns the candidate snapshot, review admission, correction boundary, terminal burn, and all provider-facing bindings. Claude Code, OpenCode, Codex, and Pi transport provider-issued work; no runtime adapter decides review or delivery.
 
-## Advisory Model Review
+## RDD defaults to ON
 
-`gentle-ai review advisory` is the provider-owned prompt/text seam for Claude Code, OpenCode, and Codex. Codex was activated once its organic positive and negative runtime proof passed (`TestRealCodexReviewerOrdinarySessionAdmitsRawOutput` and its fail-closed companions, `e2e/organicruntime`): a real `codex exec` process, launched by `CodexAdapter` in an empty scratch directory it creates and deletes itself, received only the canonical prompt and its raw output reached native admission and a terminal receipt. Any runtime name outside the advertised set (`claude-code`, `codex`, `opencode`) still gets `PromptFor`'s typed unavailable error.
+RDD is on by default and opt-out. With no configured preference, status reports `effective: on, source: default` without saving a user decision. Explicit global or clone-local OFF wins; use `gentle-ai review mode disable` to opt out. A global OFF never depends on reading the clone-local override: `review mode status` reports `off (decided by global)` and the stop hook stays silent even when the Git common directory cannot hold review authority, such as an SMB/UNC share on Windows. With reviews on, that directory is refused with a typed unsupported-filesystem error whose continuation is `gentle-ai review mode disable --scope global` or moving the repository to a local NTFS or ReFS volume. A local long-path form such as `\\?\C:\repo\.git` is refused the same way, but the refusal does not describe it as a remote share. When the mode cannot be resolved, `review mode status`, `enable`, and `disable` print `receipt-driven development: unavailable` instead of a deciding source; the `--json` result keeps the fail-closed `off` projection. Automation must not toggle the mode or persist a preference on the user's behalf. Candidate consent is separate, and delivery always follows ordinary repository policy. Enabling revalidates the current candidate; it never resumes stale authority.
 
-CI coverage of these two organic proofs is not symmetric today: `organic-runtime-e2e` installs a pinned OpenCode binary and actually re-executes `TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput` on every run, while the equivalent Codex job step only verifies `TestRealCodexReviewerOrdinarySessionAdmitsRawOutput` is registered (`go test -list`) -- it does not install a codex binary or an authenticated account, so that test skips in CI and its activation proof is currently maintainer-executed locally instead. Continuous CI execution of the real Codex proof is tracked in [#2662](https://github.com/Gentleman-Programming/gentle-ai/issues/2662).
+## Quick path
 
-Its binding form is closed and identical to `review lens-context`: `gentle-ai review advisory prompt --repository-context <handle> --lens <lens> --runtime <runtime>` and `gentle-ai review advisory validate --repository-context <handle> --lens <lens> --input <result.json>`. The repository context and lens are the only caller-supplied tokens; lineage, target, revision, order, the signed artifact subject, and every path's evidence are all derived from frozen native authority, exactly as `review lens-context` derives them. There is no caller-authored request file.
+The orchestrator enters this lifecycle once per candidate, after an authorized implementation is complete and normalized and before reporting it complete, whenever the switch reads enabled; it does not wait for the user to ask for a review.
 
-It exports one bounded canonical prompt -- rendered with the same lens mandate (title and inspection focus) `review lens-context` renders from `reviewtransaction.LensMandate` -- and validates one strict native reviewer-result shape against the signed artifact subject and its ordered frozen path manifest, including a required self-reported lens binding. The transport validation records its raw hash and preserves findings, including `BLOCKER`/`CRITICAL`, evidence class, and causal disposition. A model never directly emits PASS, a receipt, a gate result, or delivery authorization.
-
-Native Go then performs the existing admission and RDD pipeline unchanged: candidate-causality checks, deterministic/inferential handling, refutation, bounded correction, verification, terminal receipt issuance, and delivery gates decide the consequence of an admitted finding.
-
-`advisory` is a model-transport trust label, not a non-blocking severity or delivery disposition.
-
-OpenCode advisory review runs from the normal session. It does not require a restart, a special terminal, or global `OPENCODE_DISABLE_PROJECT_CONFIG` / `OPENCODE_DISABLE_EXTERNAL_SKILLS` variables. Runtime adapters only transport the prompt and return text; Go owns evidence bounds, schema, and validation.
-
-## Negotiate the provider first
-
-Resolve the exact `gentle-ai` executable that will perform review operations, then query it outside a repository:
+1. Preflight only the current worktree with selectorless negotiated STATUS.
+2. Execute its exact START, then retain the returned lineage, revision, and target tokens.
+3. Use those exact tokens for every STATUS and capture call; after approval, run only the exact acknowledgement transition STATUS or the terminal response owns.
+4. Follow ordinary repository policy for commit, push, PR, release, and archive.
 
 ```bash
-gentle-ai review capabilities \
-  --contract gentle-ai.review-integration/v1
+gentle-ai review status \
+  --cwd <repo> \
+  --contract gentle-ai.review-integration/v2 \
+  --agent claude-code \
+  --next-transition
 ```
 
-The response identifies the protocol major, package and build identity, executable SHA-256, operations, five gates, projections, schemas, mandatory and optional features, and compatibility window. The executable digest is self-reported evidence; compare it with the published release manifest before trusting the binary.
+Claude Code also gets a deterministic per-session baseline and end-of-turn reminder through its installed `SessionStart` and `Stop` hooks, both backed by the review stop-hook subcommand: SessionStart records the session's starting candidate, and Stop reminds only about candidates that session itself produced; neither starts a review by itself.
 
-New integrations SHOULD negotiate `gentle-ai.review-integration/v2`. The current response is capabilities v2.1 and requires `--agent claude-code` for negotiated STATUS and START. Capabilities v2.0, status v3, and consent v2 remain historical byte-pinned artifacts; they are not rewritten or emitted as the current response. Existing v1 consumers remain valid and MUST continue validating the published v1 schemas and fixture bytes; they do not gain tree-only fields additively.
+These hooks, like the telemetry and skill-registry hooks, are added to Claude Code settings that use comments or trailing commas (JSONC): the hook writers in install, sync, and uninstall rewrite only the `hooks` value and keep every other byte. Other settings writers, such as persona, permissions, and output style, still normalize the file. When the `hooks` value holds comments, or its key is duplicated or spelled with escapes, the hook writers stop with an error and leave the file unchanged rather than normalize it.
 
-Protocol v1.5 advertises `gentle-ai.review-integration.capabilities/v1.5` and adds `outcome_bound_verification_evidence` without changing the preserved v1.4 identity or its `one_shot_final_verification_retry` feature. `review capture-evidence` requires one closed `--outcome` (`passed`, `verification_failed`, or `procedural_tooling_failed`) and persists `gentle-ai.review-verification-evidence/v2` beside immutable candidate-addressed raw bytes. The record binds lineage, authority revision, target tree, canonical paths and ledger IDs, raw SHA-256 and size, outcome, and its own canonical digest. FINALIZE derives captured approval or escalation from that record; a caller-supplied `--failed` may agree with it but cannot override it.
+## Cross-repository root
 
-Protocol v1.4 advertises `gentle-ai.review-integration.capabilities/v1.4` and adds `one_shot_final_verification_retry`, operation `review.retry_final_verification`, and incident schema `gentle-ai.review-final-verification-incident/v1`. This is a dedicated provider-owned retry for one exact completed failed final-verification tooling incident; it does not relax generic recovery.
+A session in repository A may review a nested target in unrelated repository B only after the user explicitly authorizes B. Native Go resolves the requested path to B's canonical worktree root; adapters carry opaque provider output and never parse authorization or roots.
 
-Protocol v1.3 introduced `provider_artifact_admission`, `validating_result_reopen`, `recovered_correction_evidence`, and `classified_authority_repair`. START v2 supplies one provider-owned `ArtifactSubject` per selected lens. Result artifact v2 and status v2 expose the admitted subject hash and completed admission decision. Status v2 also requires a bounded `gentle-ai.review-authority-repair-assessment/v1`; `review.repair` publishes the matching strict preflight and execution contract. The durable admitted-result envelope preserves raw and canonical payload identities, the result identity, and repository-verified candidate-causal finding IDs. Exact accounting-only recovery may reuse that evidence only when the corrected predecessor bytes are the successor's exact initial target. Protocol v1.0 through v1.4 capability schemas and fixtures remain packaged unchanged. Consumers must reject an unknown schema/minor identity they do not support; v1.5 consumers validate the v1.5 schema before relying on the current features.
-
-The v1.2 feature set includes `native_frozen_candidate_context`, `opaque_repository_context`, and `provider_targeted_validation_request`. Its published reviewer transport contains the canonical candidate diff and ordered changed-path manifest. Opaque repository context lets an external actor return results without receiving or rediscovering a repository path. Provider-targeted validation supplies the exact corrected candidate and frozen finding IDs to validate. Contract v2 replaces only that reviewer transport with immutable tree IDs; it does not rewrite v1.
-
-The v1.1 artifact remains the compatibility record for `base_ref_workspace_overlay`, `bounded_process_waits`, `exact_gate_receipt_discovery`, `native_low_risk_verification`, `native_next_transition`, `risk_reasons`, and `scope_change_diagnostics`. The overlay feature requires immutable snapshots and restart-safe projection.
-
-Consumers MUST reject an incompatible protocol major, an unsupported mandatory feature, an unknown mandatory enum, or a schema identity mismatch. Unknown optional fields may be ignored only under the advertised additive-minor policy. Existing unnegotiated CLI responses remain separate compatibility surfaces and do not gain negotiated fields silently.
-
-Pass the same contract explicitly to negotiated repository operations:
-
-```bash
-gentle-ai review start --contract gentle-ai.review-integration/v2 --agent claude-code --cwd .
-gentle-ai review status --contract gentle-ai.review-integration/v2 --agent claude-code --cwd .
-gentle-ai review finalize --contract gentle-ai.review-integration/v2 --cwd . --lineage <lineage> ...
-gentle-ai review validate --contract gentle-ai.review-integration/v2 --cwd . --gate pre-commit
-gentle-ai review bind-sdd --contract gentle-ai.review-integration/v2 --cwd . --change <change> --lineage <lineage> --expected-binding-revision=<revision>
-```
-
-### Zero-help lifecycle bootstrap
-
-When capabilities advertise `native_next_transition`, the parent orchestrator starts lifecycle routing exactly once with:
-
-```bash
-gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition
-```
-
-Append a target selector only when its type is already known: `--projection staged`, `--base-ref <ref>`, `--workspace-overlay --base-ref <ref>`, or `--workspace-overlay --base-tree <tree>`. If the feature is unavailable, query exactly once `gentle-ai review capabilities --contract gentle-ai.review-integration/v2` and stop with `unsupported-capability`; do not explore commands or consult help. After bootstrap, only the parent executes the exact native `next_transition`. Reviewers, validators, executors, and refuters receive role inputs and return artifacts; they never invoke review lifecycle commands.
-
-### Per-candidate consent relay
-
-A session that can relay a blocking question to a human declares it on negotiated START with `--consent relay`. When the frozen candidate's tier would ask the per-candidate consent question (medium or high risk), START responds with the consent envelope matching the negotiated contract: `consent/v1` for integration v1 or current `consent/v3` for integration v2.1. The v2.1 envelope requires `agent: claude-code` and carries why input is required, the complete choice set, and one runnable follow-up invocation per choice scoped to the exact `--target` identity. Nothing is persisted while the question is outstanding, and no console notice is printed. Pass `--locale en` or `--locale es` to localize every human envelope field; omitting it preserves the established English projection. Answer tokens, commands, target IDs, projections, and invocations remain machine-stable.
-
-The orchestrator relays the complete envelope losslessly and answers with exactly one named invocation. `--consent granted` revalidates the exact target before creating compact review authority; it is replay-safe and a rerun resumes that authority. `--consent declined` reports the typed declined START outcome (`consent: declined_this_candidate`) without creating a review lineage or receipt, then atomically records a canonical native candidate-decline authorization in the Git common directory. That authorization permits only exact `pre-commit`, `pre-push`, and `pre-pr` delivery to proceed under ordinary repository policy, reported as `candidate_declined/unmanaged`; it is never an approval and never permits release. Content, path, mode, base, untracked, publication-range, or advertised-head drift rejects it. Replay recovers lost output only for the same canonical decline, corrupted or ambiguous decline records fail closed, and a later candidate asks again. A decline is deliberately not the kill switch; the permanent disable remains `gentle-ai review mode disable`, documented in the envelope's `off_path` and never offered as a choice. Without the declaration, START behavior is unchanged: low risk asks nothing, a resolved question asks nothing, and a headless undeclared session keeps the skip-and-notice fallback.
-
-## Keep provider and consumer ownership separate
-
-| Gentle AI provider owns | Consumer owns |
+| Rule | Contract |
 | --- | --- |
-| Git-derived immutable snapshot identity and projection | User interaction and explicit maintainer confirmation |
-| Deterministic risk reasons, tier, lenses, and correction budget | Reviewer, validator, and correction actor execution |
-| Compact-v2 authority transitions, opaque repository context, lock, and expected-revision CAS | Process invocation, cancellation, and transport diagnostics |
-| Artifact subjects, admission decisions, and repository-derived causal checks | Echoing the exact subject and reporting structured candidate inspection |
-| Corrected-candidate identity and targeted-validation request | Running the requested validator and returning its typed result |
-| Receipt derivation and exact receipt publication replay | Rendering native outcomes without weakening them |
-| Target applicability, replayability, and gate evaluation | Rechecking command intent immediately before execution |
-| Approved-receipt binding for SDD | Derived worktree and temporary-view lifecycle |
+| Lifecycle root | After B is selected, the host keeps canonical B from STATUS through consent, collection, correction, targeted validation, and burn. A is never a fallback. |
+| Commands | Run provider-issued tokens unchanged. If a command omits `--cwd`, run it with process cwd B. |
+| Opaque capture | `repository_context` can materialize or capture from another process cwd, but remains B-bound. |
+| Isolation | Equal lineage text in A and B names independent transactions. Approval burns B only; A remains untouched. |
+| Delivery | Ordinary repository policy and any explicit delivery authorization name B. Approval never authorizes delivery. |
 
-Consumers MUST NOT reconstruct receipts, derive canonical hashes, inspect the Git common-dir authority store, select an ambiguous lineage automatically, or infer that a transport interruption did not mutate state. Gentle AI does not choose models, run arbitrary user commands, or replace a consumer's command-safety policy.
+This lifecycle is available only to Claude Code, Codex, OpenCode, and Pi. Unsupported runtimes fail before repository or authority mutation.
 
-## Drive the bounded operation set
+### Repository context handles
 
-| Operation | Mutation boundary | Contract behavior |
+The provider-issued `repository_context` stays opaque (#3797). Its format depends on the runtime that STATUS renders for: the declared `--agent`, else Pi when the exact Pi relay handshake (`GENTLE_PI_REVIEW_RELAY_CONTRACT`) is present, else the lineage's frozen runtime. A lineage that froze no runtime keeps the manual route.
+
+| Handle | Issued to | Resolution |
 | --- | --- | --- |
-| `review.capabilities` | None | Reports the deterministic repository-independent provider surface. |
-| `review.start` | Compact authority | Freezes one target, tier, lens set, and correction budget; negotiated selected-lens responses also return context derived from that exact authority. It never starts because a gate was invoked. |
-| `review.status` | Provider-private derived context only | Reconstructs target-scoped applicability, projection, lifecycle, and one next action without mutating authority. |
-| `review.repair` | Audited whole-lineage quarantine | Preflights the complete authority inventory and executes only the unique provider-classified historical alias repair with exact revision CAS and maintainer authorization. |
-| `review.retry_final_verification` | One provider-derived compact successor | Re-enters only `validating` after an exact completed failed final-verification procedural/tooling incident. It copies frozen authority and accounting, clears active evidence, and creates no review or correction budget. |
-| `review.finalize` | Compact authority and derived receipt | Accepts selected lens results and bounded correction evidence, performs deterministic native verification for an eligible low-risk zero-lens target, or performs an exact receipt-publication replay. |
-| `review.validate` | None | Revalidates one existing content-bound receipt at a named lifecycle gate. |
-| `review.bind_sdd` | SDD binding artifact | Binds only an approved receipt to an SDD change. |
+| `rctx2_` + sha256 hex | Claude Code, Codex, Pi, manual, and every START/STATUS envelope | A digest over repository identity, lineage, target, and revision, verified against the caller's repository (`--cwd`). |
+| `rctx3_` + unpadded base64url | OpenCode collect inputs and provider tasks only (#5136, #4516) | Seals B's canonical root and identity digest with AES-256-GCM under a private per-user key, `~/.gentle-ai/review-context.key` (32 bytes, mode `0600`, created on first use). Go opens the repository at the sealed root only, re-derives the digest, and requires live authority. Host cwd, worktree registries, and submodule lists never take part. |
 
-`review.start` is the only ordinary entry point that creates a review budget. Finalize continues that frozen lifecycle. The dedicated final-verification retry creates a successor lineage but copies every frozen budget and accounting field without adding a reviewer, correction, SDD, or other budget. Status, validation, and gates are read-only.
+The OpenCode relay resolves `rctx3` only; given `rctx2`, it refuses and names the OpenCode STATUS that reissues the Task. Other commands dispatch by prefix, so an OpenCode host can run `capture-result`, `capture-unachievable`, or `lens-context` with its collect input from any cwd. A tampered handle, another user's handle, a moved or replaced root, or stale authority refuses without mutation. An unsafe key file refuses with its repair.
 
-`gentle-ai review capture-result` is an additive headless command, not a negotiated repository operation. It accepts no `--contract`; the provider-issued subject hash selects the transport version. Capture emits a manifest with capability `review.native_result_artifact` and schema `gentle-ai.review-result-artifact/v2`; the manifest binds `subject_hash` and `admission_decision: completed`, and exactly one provider-owned `path` or opaque `reference` locates the durable admitted-result envelope (`review-admitted-result/v1` for a v1 subject, `review-admitted-result/v2` for a v2 subject). A negotiated capture transition carries `--repository-context <opaque-handle>` plus `--expected-revision <revision>`, so consumers can invoke capture from an unrelated working directory without learning the repository path. Explicit `--cwd` remains the capture compatibility path-manifest mode and cannot be combined with a repository-context handle.
+### Opaque repository-context refusals
 
-Add `--preflight --input <file>` to validate the same native admission without persistence. A successful input preflight emits `gentle-ai.review-capture-result-dry-run/v1` with `validation: accepted` and the existing lineage, lens, order, and subject binding. It does not emit an artifact path, reference, raw-input hash, or canonical-result hash. `--preflight` without `--input` retains the binding-only response.
+An `rctx2_` handle is an opaque hexadecimal digest, not a path or proof of active authority. Resolution checks the supplied repository and binding against current authority without mutating it.
 
-### Choose the target explicitly
-
-| Invocation | Frozen boundary |
+| Code | Meaning and next action |
 | --- | --- |
-| `review start` | `HEAD` to the synthetic staged/unstaged workspace tree. |
-| `review start --base-ref <ref> --committed-only` | `<ref>` to `HEAD`; workspace changes are excluded. |
-| `review start --base-ref <ref> --workspace-overlay` | `<ref>` to the synthetic workspace tree, including branch commits and staged and unstaged bytes. |
+| `rctx2_binding_unusable` | Structurally invalid handle or binding tuple, or a tuple that does not match the supplied repository and handle. Verify `--cwd` names the intended repository, then obtain the exact native `next_transition`; do not reconstruct tokens. A digest mismatch cannot identify which field differs. |
+| `rctx2_resolution_failed` | An underlying repository or authority check failed. Inspect the scrubbed cause and verify the repository and active binding; refreshing alone may not repair missing, unreadable, or mismatched authority. This does not prove the binding was valid when issued. |
 
-Review scope is declared, never inferred from the worktree. A file Git does not track enters the candidate only once it is in the index, which `git add` is the only way to put it there; an untracked, unignored file that merely exists in the workspace is out of scope and its bytes never reach a reviewer (issue #2394). `intended_untracked` therefore stays empty for every target START freezes, and remains only as an explicit provider input.
+Git ownership refusals retain `git_repository_untrusted`; authority from a newer release retains `review_authority_newer_release`. Neither is repaired by refreshing a transition. Unrelated, non-V2 errors retain their existing generic classification.
 
-Overlay mode requires workspace projection and cannot be combined with `--committed-only`. START returns `target_mode` and `target_identity` only for this mode. Under contract v2, selected-lens START responses also return `base_tree` and `candidate_tree` as reviewer context for every target kind. Restarted consumers select an overlay target with `review status --base-tree <START base_tree> --workspace-overlay`; `--base-ref` remains available for a fresh symbolic selection, but cannot be combined with `--base-tree`. Snapshot construction uses a temporary index and does not mutate the real index or worktree.
+## Atomic lifecycle
 
-### Use frozen reviewer context
+### 1. Selectorless STATUS preflights only
 
-Under integration v2, negotiated START with selected lenses returns `base_tree`, `candidate_tree`, `changed_path_manifest`, and one `artifact_subjects` entry per lens. The provider derives them from the selected authority's persisted initial snapshot, not the current index, worktree, or a correction snapshot. Each subject self-hashes the exact lineage, authority revision, target, both tree IDs, manifest digest, lens, selected order, and optional correction target.
+Selectorless STATUS evaluates only the current worktree candidate and renders one exact START invocation. It does **not** discover ambient authority, resume another worktree, recover history, or select a stale lineage. The parent runs only the returned `next_transition` and its ordered tokens.
 
-After a restart, v2 `review status --next-transition` returns that same context inside every missing `review.capture-result` input. No v2 START, status, task, environment, or plugin payload contains the full patch or a Base64 copy. Contract v1 deliberately retains its published Base64 candidate-diff field.
+#### START options through STATUS (`start_options_preflight`)
 
-Reviewers inspect the frozen candidate through read-only native Git commands against the exact `base_tree` and `candidate_tree` from their collection input. They treat the ordered `changed_path_manifest` as the complete frozen scope, begin with compact discovery, and then open only the paths their lens needs:
+A parent that runs only provider-issued tokens passes the START options to the negotiated STATUS instead of appending them to the START it receives. `review status --contract <contract> --next-transition` accepts `--request-context <file>`, `--escalate-item <1-6>`, `--escalate-reason <text>`, `--lenses <r,...>`, and `--lenses-reason <text>`:
 
-```bash
-env -i PATH="$PATH" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
-  git --no-replace-objects --no-pager -c color.ui=false -c core.attributesFile=/dev/null -c diff.external= \
-  diff --name-status --text --no-ext-diff --no-textconv --no-renames --ignore-submodules=none \
-  <base_tree> <candidate_tree> --
+- STATUS validates them with START's own rules (see the two sections below) before it reads the repository, and creates no authority. A refusal is a `not_started` `invalid_request` failure, and nothing is written.
+- When the next transition is a fresh `review.start` (`fresh_target_ready`), its arguments end with the options: `request-context` (the absolute path of the file), then `escalate-item` and `escalate-reason`, then `lenses` (canonical lens names in 4R order) and `lenses-reason`. The binding and every other argument are unchanged. START itself reads the file again and freezes the request and the escalation.
+- Any other next transition is refused instead of being returned without the options: an existing lineage already froze its own options at START, and the other routes run no START. Rerun STATUS without the options, follow its transition, and pass them again to the STATUS that offers `review.start`.
+- The options require `--contract` and `--next-transition`, and each may appear only once.
 
-env -i PATH="$PATH" LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
-  git --no-replace-objects --no-pager -c color.ui=false -c core.attributesFile=/dev/null -c diff.external= \
-  diff --patch --text --full-index --no-color --no-renames --no-ext-diff --no-textconv \
-  --diff-algorithm=myers --no-indent-heuristic --unified=3 --ignore-submodules=none \
-  <base_tree> <candidate_tree> -- ':(literal)<path>'
+Without the options, STATUS and its START vector are unchanged. Forward the options through STATUS only when `review capabilities` lists `start_options_preflight`; see "Detecting support" below.
+
+### 2. START freezes an independent transaction
+
+START freezes the candidate in one compact transaction, explicitly bound to its lineage, worktree, and target. It selects risk and lenses natively. Capture the returned lineage, revision, and target tokens.
+
+An exact replay of an active START can return `replayed`. A genuinely new START is independent. Do not reuse a burned lineage.
+
+#### Request context (`--request-context <file>`)
+
+Pass `--request-context <file>` to show the lenses what the change intends. Lenses read the request as intent only and still review through their own lens: requirement and specification compliance belongs to verify, which runs before review. The file holds the verbatim request or feature specs. START freezes its exact bytes and their hash with the authority, exactly like `--policy`:
+
+- Every lens context then carries a `GENTLE_AI_REVIEW_REQUEST_CONTEXT` section. The instruction tells the lens to use it only to understand the intended change, including which existing behavior it was asked to change, and not to audit the candidate against it.
+- The refuter prompt carries the same section, framed as untrusted evidence, so the refuter can tell behavior the request asked to change from unrequested scope. The section is part of the prompt only: the refuter request JSON and its `request_hash` are unchanged.
+- The request counts against the lens context budget and against the refuter prompt START measures. A request that cannot fit beside the evidence in either is refused by START before any authority exists; it is never truncated.
+- The request hash is bound into the capture phase revision, so every artifact subject commits to it. Replaying START on the same lineage with a different request is an `atomic_start_conflict`.
+- Recovery successors inherit the frozen request. A relayed consent answer repeats `--request-context`.
+
+The file may end with an optional verify section opened by a line `## Verify` (per-spec verdicts and probes). Verify results are inside evidence, so the reviewers never see them: the lens context and the refuter prompt carry the request only up to that heading. The frozen bytes and their hash still include the whole file, and recovery successors inherit it unchanged.
+
+The file must be non-empty UTF-8 text, and the flag may appear only once. Without the flag, START, the lens context, the refuter prompt, and the persisted authority are unchanged. Authority that carries a request context is persisted with two extra fields (`request_context_hash`, `frozen_request_context`).
+
+If the candidate alone fits the lens context budget and the request is what overflows, START's `lens_context_budget_exceeded` refusal names `--request-context` and says to shorten the file or omit the flag. When the candidate also overflows, the refusal asks for smaller candidates and adds that the request counts against the same budget.
+
+Older binaries and the new fields: a binary released before `--request-context` (or before the START escalate flags below) cannot decode authority that carries `request_context_hash`, `frozen_request_context`, or `agent_escalation`. Its `review status` reports that lineage with `applicability: corrupted` and action `repair_authority`, and its `review repair` does not support that repair, so the older binary can neither continue nor repair the lineage. Continue it with a binary that includes these fields. Authority started without them keeps its bytes and stays readable by older binaries.
+
+#### Agent escalation (`--escalate-item <1-6> --escalate-reason <text>`)
+
+START accepts the same escalation pair as `review assess`, with the same validation: both flags or neither, an item from 1 to 6 of the shared high-risk list, and a non-empty reason of at most 500 bytes (UTF-8) on one line. Each flag may appear only once.
+
+- The escalation raises `passive` or `medium` to `high`, so START selects the canonical 4R lenses. It never lowers a tier.
+- `risk_reasons` gains an `agent_escalation` reason (signal `agent_escalation`, no path). Consent names it as "the agent that made this change flagged it as high risk" ("el agente que hizo este cambio lo marcó como de alto riesgo").
+- START freezes the escalation with the authority (`agent_escalation` in the state and in its START binding) and binds it into the capture phase revision. Replaying START on the same lineage with a different escalation, or without it, is an `atomic_start_conflict`.
+- Recovery successors inherit the frozen escalation and stay `high`. A relayed consent answer repeats both flags.
+
+Without the flags, START and the persisted authority are unchanged. Authority that carries an escalation is not readable by older binaries; see the request-context compatibility note above. The `next_transition` of `review assess` is a `review status` preflight, not a START, so it does not carry the escalation: pass the same pair to START yourself.
+
+#### Agent lens selection (`--lenses <r,...> --lenses-reason <text>`)
+
+The agent names the 4R lenses pertinent to what it touched and how, instead of taking the tier default (one `review-reliability` lens for `medium`, all four for `high`). `--lenses` takes a comma-separated list of `risk`, `resilience`, `readability`, and `reliability` (or their `review-` names). `--lenses-reason` is a non-empty one-line reason of at most 500 bytes. Both flags or neither, each at most once, never together with `--focus`.
+
+- START runs exactly the named lenses, in canonical 4R order, on a `medium` or `high` candidate. A `high` candidate may run fewer than four. A candidate that selects no lenses (structural readback) refuses a selection.
+- START freezes the reason with the authority (`lens_selection_reason` in the state and in its START binding) and binds it into the capture phase revision. Replaying START on an active lineage keeps its frozen selection: a resume that names a different selection or reason replays the existing authority and returns the frozen `selected_lenses`. Any other immutable difference is still an `atomic_start_conflict`.
+- Recovery successors inherit the selection and its reason. A relayed consent answer repeats both flags.
+
+Without the flags, START keeps the tier default and the persisted authority is unchanged. Authority that carries a selection is not readable by older binaries; see the request-context compatibility note above.
+
+#### Detecting support (`review capabilities`)
+
+Callers detect both START inputs, and their STATUS preflight, from `gentle-ai review capabilities` instead of probing START or STATUS. Both negotiated advertisements (`capabilities/v1.5` and `capabilities/v2.6`) list four optional features:
+
+| Feature | Input | Requires |
+| --- | --- | --- |
+| `start_request_context` | START `--request-context <file>` | `compact_v2_authority` |
+| `start_agent_escalation` | START `--escalate-item <1-6> --escalate-reason <text>` | `risk_reasons` |
+| `start_options_preflight` | STATUS `--next-transition` with the same three flags | `native_next_transition`, `start_agent_escalation`, `start_request_context` |
+| `start_lens_selection` | START and STATUS `--lenses <r,...> --lenses-reason <text>` | `start_options_preflight` |
+
+`start_request_context` and `start_agent_escalation` promise the flags on a direct START only. A binary that lists them without `start_options_preflight` rejects the flags on STATUS. When a feature is absent, omit its flags: released binaries without it reject them. The published v1.5 and v2.6 schemas accept historical optional-feature counts (13 and 15), advertisements with the two START features only (15 and 17), advertisements with the preflight but without `start_lens_selection` (16 and 18), and current counts (17 and 19); the contract version alone does not prove support for any of the four. Older advertisements (`capabilities/v2.3` through `v2.5`) keep their exact feature lists.
+
+### 3. Bound calls drive the transaction
+
+A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. The parent runs that command verbatim, with the repository as process cwd, and satisfies every later STATUS and bound capture call only with the exact tokens each returned transition names. The parent routes only from that transaction's returned `next_transition`:
+
+| Transition | Parent action |
+| --- | --- |
+| `execute` | Run the exact operation and ordered arguments unchanged. |
+| `collect` | Provide only its named input through its exact capture operation, then query bound STATUS again. |
+| `stop` | Run no lifecycle operation. Do not infer a recovery from prose. |
+
+A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
+
+#### Native recovery for an explicitly selected lineage
+
+When native STATUS selects legal, representable recovery, its returned
+`review.recover` invocation carries four core arguments: predecessor lineage,
+exact predecessor revision, successor lineage, and disposition. Replay every
+returned target selector unchanged, including declared untracked scope and its
+inventory digest. Native RECOVER derives actor, reason, and the exact audit
+binding; consumers must not manufacture an external authorization collection.
+This does not supply missing runtime consent or authorize delivery.
+
+STATUS preserves an explicit `--recovery-successor-lineage`; otherwise it derives
+one name from the existing worktree-and-target identity. It never searches for
+an available suffix. An occupied name, the predecessor's own name, or an already
+recorded successor fails closed with a read-only `review inspect-authority`
+diagnostic. Run that diagnostic with the requested repository as process cwd;
+do not invent a new successor to bypass the conflict.
+
+When strict compact-state decoding and historical compatibility both fail,
+`CompactStore.Load` reports the lineage and both failure causes, retaining the
+strict error as its wrapped cause. The record remains rejected and unchanged;
+`review inspect-authority` keeps its existing problem codes, not these details.
+This diagnostic does not grant compatibility, recovery, or mutation authority.
+
+Explicit compatibility remains available through the complete successor,
+`--recovery-actor`, `--recovery-reason`, and `--recovery-authorization` binding.
+STATUS renders the existing seven-argument RECOVER form only for an exact binding.
+Explicit empty/wrong authorization or a partial tuple refuses without mutation;
+it never falls back to self-derivation. Core recovery legality remains unchanged,
+including failed-criteria and accounting-only evidence checks.
+
+### 4. Approved authority awaits acknowledgement, then burns
+
+Native Go owns frozen lenses, provider context and admission, refutation, one bounded correction, repository evidence, and targeted validation. A successful final capture or zero-lens START first records `approved` with one exact acknowledgement transition. The terminal closure and approved authority remain replayable until that acknowledgement succeeds.
+
+| Moment | Consumer action | Native behavior |
+| --- | --- | --- |
+| Approval response | Retain the provider-owned acknowledgement operation, ordered arguments, binding, and token exactly as returned. | START or the terminal closure returns `approved` without burning the authority. |
+| Retry before acknowledgement | Re-query bound STATUS; do not reconstruct or substitute an acknowledgement. | STATUS reoffers the same exact acknowledgement transition while the approved authority remains current. |
+| Wrong, stale, or mismatched acknowledgement | Treat the error as non-mutating, retain the original binding, then re-query bound STATUS. | Validation fails before mutation; the authority and pending acknowledgement remain replayable. |
+| Exact acknowledgement | Run the returned command once. If its outcome is uncertain, re-query bound STATUS instead of guessing or replaying an invented command. | Under the existing lock, Go validates the complete binding and token, then burns the exact lineage and artifacts. |
+
+The acknowledgement transition is an execution detail of `gentle-ai.review-integration/v2`; it does not authorize delivery. Escalated and other non-approved terminal paths retain their existing response and STATUS behavior and do not gain an acknowledgement transition. After a malformed, incomplete, or unavailable capture, retain the exact lineage, revision, and target binding, query bound STATUS once, and follow only the reoffered capture route.
+
+After a successful burn, no terminal receipt, tombstone, witness, mirror, or delivery authority survives. Other lineages and worktrees are unaffected.
+
+## Reviewer transport
+
+The provider contract is shared by Claude Code, OpenCode, Codex, and Pi. Go derives frozen trees, manifest, subject hash, role, binding, schema, evidence limits, and admission. Adapters transport opaque provider output and never parse bindings, manufacture a verdict, or mutate review authority. Gentle AI writes nothing into the Pi system prompt because gentle-pi owns it, so this contract ships as `orchestration/pi.md` in the published provider contract bundle, which gentle-pi mirrors and injects at session start.
+
+The in-process Claude Code reviewer uses the saved model and effort for each role (`risk`, `readability`, `reliability`, `resilience`, `refuter`, and `validator`). It passes `--effort` only for a non-default effort supported by the assigned model, using the same compatibility rule as generated `review-*` subagents. Default effort and legacy model-only assignments omit the flag. Missing or malformed assignments preserve native defaults or a valid legacy model fallback. The reviewer keeps `--setting-sources ""`; it does not inherit user or project effort settings.
+
+Each provider-issued capture input is one slot. Its reviewer prompt starts with `GENTLE_AI_REVIEW_BINDING ` followed by one-line binding JSON. A result echoes the exact `subject_hash`, reports completed inspection of the full manifest, and supplies structured findings/evidence. On malformed, incomplete, or unavailable inspection, query bound STATUS again; relaunch only when it reoffers the exact same slot.
+
+Reviewers inspect only provider-bound immutable trees. They never inspect the live worktree, index, `HEAD`, or another revision, and candidate bytes must not move through `/tmp`, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`. The one exception is the Codex refuter probe below: Go itself writes the frozen candidate tree into a fresh scratch copy it creates and removes.
+
+Dependency locks (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `go.sum`, and `Cargo.lock`, including nested paths) retain their generated classification in the changed-path manifest and carry complete frozen patches as semantic evidence. Existing changed-line accounting is unchanged: text lockfile additions and deletions are still counted. Lenses, refuters, and targeted validators use the same evidence policy; other generated outputs retain metadata-only summaries. The existing 4 MiB native ceiling and any smaller runtime-context budget still apply: oversized evidence is refused, never truncated, and tool-free reviewers receive no additional tools.
+
+### Non-lens provider roles: refuter and targeted validator
+
+`gentle-ai review capture-refuter` and `gentle-ai review capture-validation` bind the transaction-wide refuter batch and the correction-bound targeted validator the same way `review capture-result` binds a lens — `--lineage`, `--target`, `--expected-revision` (plus `--request-hash` for the validator) — and exactly one of three modes. A compiled runtime (Claude Code, Codex, OpenCode) passes `--agent` and `--execute`: Go materializes the role request, runs its own in-process adapter, and admits the raw result; no submission descriptor exists for this form, and `--materialize`/`--input` refuse typed for it. Pi is host-relay, so `--execute` refuses typed for it: Go never spawns a process for a pi role. STATUS instead renders the pi collect input as `--materialize=true` plus a `submission` descriptor, exactly like the lens `capture-result` path — `gentle-pi` materializes the read-only prompt, runs the model itself, and submits the raw result through `--input=<path|->`, whose `{{value}}` slot repeats every binding token (including `--agent`) and drops only the `--materialize` selector. Go admits that submission through the same raw admitters the compiled `--execute` path uses, with the same binding; no adapter runs and no retry is granted, so an unadmittable submission leaves the slot open for STATUS to reoffer, exactly like a malformed in-process capture.
+
+#### Refuter probe
+
+The refuter may confirm or drop a severe claim with one isolated reproducing command, but only where the adapter can isolate it:
+
+| Runtime | Probe | Why |
+|---|---|---|
+| Codex | Yes | Go creates a fresh `mktemp -d` scratch directory under the system temp dir (never inside the workspace), writes the frozen candidate tree into it from Git objects, and runs Codex there with `--sandbox workspace-write`, `sandbox_workspace_write.network_access=false`, and the temp-dir writable roots excluded. |
+| Claude Code | No | Enabling tools gives no network isolation. |
+| Pi | No | The reviewer runs in process without tools. |
+| OpenCode | No | The bash default is unknown. |
+
+- The refuter prompt carries the runtime's paragraph: Codex may run one reproducing command per claim in the scratch copy, with no network and no installs, and must cite the command and its observed output in `proof_refs`. Every other runtime is told to run no command.
+- On a no-probe runtime Go appends `probe unavailable on <runtime>` to each admitted result's `proof_refs`, so the receipt states that no command ran. Result and receipt shapes do not change, and the request hash does not depend on the runtime paragraph.
+- `TMPDIR` can point anywhere, so before creating anything Go resolves the system temp dir and the reviewed repository root through symlinks. If the temp dir is the repository or lies inside it, the refuter fails with `refuter probe scratch would be inside the reviewed workspace`; no scratch is created, no candidate is written, and Codex does not run. Point `TMPDIR` outside the repository and retry.
+- The scratch directory is removed when the refuter returns, also on error and timeout, including read-only output a probe leaves behind. The probe is bounded by the existing capture timeout.
+- Every severe (BLOCKER/CRITICAL) inferential finding with candidate causality reaches the refuter. A deterministic one reaches it too when the runtime frozen at START can run the refuter (Pi, OpenCode, Claude Code, Codex), so a deterministic false positive can be dropped; on any other runtime or the manual lane it blocks directly, so the review closes instead of stopping. A refuted finding becomes a `refuted` advisory; corroborated and inconclusive findings go to the bounded correction. Non-severe findings, and severe findings that are pre-existing, base-only, of unknown causality, or with insufficient evidence, never reach it.
+- The bounds stay the same: one refuter batch per transaction, one result per issued claim, the runtime prompt cap, and the START envelope floor.
+- Authority admitted before this change replays unchanged: a deterministic finding the refuter did not answer stays corroborated.
+- The single corrective re-invocation keeps the probe copy and its source root, so a corrective Codex refuter still runs in the confined candidate scratch.
+
+The role submission descriptor is a negotiated status contract change, so the negotiated status schema for this lifecycle is `gentle-ai.review-integration.status/v9` (v5 forbade a `submission` field on role inputs). Go no longer owns a pi adapter or the `~/.pi/gentle-ai/models.json` model-routing lookup it used to read before spawning a role process for pi; `gentle-pi`'s own host relay owns that routing now, the same way it already owns routing for the lens path.
+
+## Corrections and consent
+
+Native Go alone selects lenses, classifies candidate causality, performs refutation, derives repository evidence, and permits at most one bounded correction. A validator that cannot inspect its immutable trees has no verdict; report that block rather than submitting a failed validation.
+
+Medium and high-risk START may return the typed `gentle-ai.review-integration.consent/v3` envelope. Relay the complete choice envelope losslessly, preserve machine tokens and invocations exactly, and run only the invocation selected by the human. Global RDD mode permits review; it never grants per-candidate consent. A decline is not the kill switch.
+
+## Read-only risk assessment (`gentle-ai review assess`)
+
+`gentle-ai review assess --cwd <repo> [--agent <runtime>] [--base-ref <ref> --committed-only] [--untracked-scope exclude|select --intended-untracked <path> --expected-untracked-inventory <digest>] [--escalate-item <1-6> --escalate-reason <text>] [--json]` prints the same candidate risk classification START uses to select lenses (`reviewtransaction.AssessSnapshotRisk`), without creating any review authority, lineage, or store mutation. It works identically with receipt-driven development on or off, so a host can gate delegated verification on the result before ever calling `review start`.
+
+It builds the exact same candidate `review start` would: current changes by default, or an immutable base-to-HEAD comparison with `--base-ref` (which requires `--committed-only` to acknowledge dirty tracked changes, exactly like `review start`). The untracked-scope flags accept the same values `review start` does. The optional `--agent` declares the runtime identity to carry on `next_transition` below; it is validated exactly as `review status --agent` is.
+
+The optional `--escalate-item` and `--escalate-reason` let an agent raise the risk to `high` by citing one high-risk item. They must be passed together: `--escalate-item` is an integer from 1 to 6 (1 data or irreversible effects, 2 security, 3 contracts others consume, 4 concurrency, 5 delivery or environment, 6 no test would catch a regression), and `--escalate-reason` is a non-empty reason of at most 500 bytes (UTF-8); keep it to one line. Escalation raises `passive` or `medium` to `high`, never lowers a tier, and appends an `agent_escalation` reason naming the item. Missing either flag, an item outside 1-6, or an empty or oversized reason fails with a rerun hint.
+
+With `--json`, it prints the typed `gentle-ai.review-assessment/v1` envelope:
+
+```json
+{
+  "schema": "gentle-ai.review-assessment/v1",
+  "risk": "high",
+  "reasons": [{"code": "service_token", "path": "internal/auth/service-token.go"}],
+  "changed_paths": 1,
+  "changed_lines": 43,
+  "candidate": {"kind": "base-diff", "base_ref": "15ea98ed", "consumed": false},
+  "review_due": true,
+  "review_due_reason": "high_risk",
+  "next_transition": {
+    "operation": "review.status",
+    "command": "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition --base-ref 15ea98ed --committed-only",
+    "arguments": [
+      {"name": "cwd", "value": "<repo>"},
+      {"name": "contract", "value": "gentle-ai.review-integration/v2"},
+      {"name": "agent", "value": "claude-code"},
+      {"name": "next-transition", "value": "true"},
+      {"name": "base-ref", "value": "15ea98ed"},
+      {"name": "committed-only", "value": "true"}
+    ]
+  }
+}
 ```
 
-Reviewers may also use the corresponding allowlisted `--numstat`, selective `--stat`, and exact `cat-file -p '<tree>:<path>'` forms. Several related literal pathspecs may share one selective command. Reviewers never pass `--binary` and never render the entire candidate patch automatically. They run only these clean-environment commands in the session working directory. The frozen trees resolve through the repository object store shared by every worktree of the same repository. The guarantee is immutable candidate content addressed by the frozen trees, not byte-identical rendered patch transport across Git versions. Reviewers never inspect the live worktree, index, `HEAD`, or an unbound revision; a runtime without the enforced Git command boundary reports incomplete inspection instead of substituting live files.
+`risk` is `passive`, `medium`, or `high`. `passive` is exactly the tier START selects zero reviewer lenses for (every authored path proven passive documentation by its own frozen bytes); `medium` and `high` keep the same vocabulary and evidence codes START's own `risk_reasons` already publishes, so this projection can never disagree with the classification a review of the same candidate would use.
 
-Manifest entries stay in persisted path order and expose:
+`candidate.consumed` reports whether this exact candidate identity's terminal review authority was already acknowledged (`reviewtransaction.CompactTargetConsumed`, the same evidence `review status` itself consults before ever offering a fresh START for the identical identity), so a caller never re-derives that from a tombstone.
 
-| Field | Meaning |
+`review_due` and `review_due_reason` turn the tier into the one consequence an orchestrator needs, in evaluation order: a consumed candidate always reports `already_reviewed` (`review_due: false`) regardless of tier; `high` risk always reports `review_due: true` with `high_risk`; `medium` always reports `review_due: false` with `under_budget`, whatever its `changed_lines` (automatic review is for high risk only; size is a reviewer prompt budget, not risk); `passive` always reports `review_due: false` with `passive`. `changed_lines` is whatever range the caller assessed — pass `--base-ref <last reviewed boundary> --committed-only` to make it the accumulated ODD slice.
+
+`next_transition` is present only when `review_due` is `true`: it is the exact, literally runnable `review status ... --next-transition` preflight continuation, built with the same argument builders and conventions `review status` itself uses, so an orchestrator executes `next_transition.command` verbatim instead of reconstructing the invocation from prose. Argument order is fixed: `--cwd`, `--contract`, the optional `--agent` the caller declared, `--next-transition`, and — only for a named base comparison — the caller's own `--base-ref` echoed verbatim plus `--committed-only`.
+
+Without `--json`, it prints the same information as human-readable text, including a `review due: yes/no (<reason>) -> <command>` line.
+
+When the candidate cannot be built or classified (for example an unresolvable `--base-ref`), the command fails closed and names a runnable continuation of the same command with a resolvable `--base-ref`. A host that cannot resolve the named continuation should treat the failure exactly as it would treat a `"high"` result.
+
+## Delivery remains human-owned
+
+`gentle-ai review validate` and named gates (`post-apply`, `pre-commit`, `pre-push`, `pre-pr`, and `release`) are compatibility/informational commands. They never discover authority or decide delivery:
+
+| Mode | Informational result |
 | --- | --- |
-| `path` | Repository-relative logical path; absolute repository paths are never emitted. |
-| `status` | Stable `A`, `D`, `M`, or `T` tree-diff status. |
-| `old_mode` / `new_mode` | Six-digit Git modes, including zero modes for additions/deletions and symlink or gitlink modes where supported. |
-| `deleted` / `type_changed` / `mode_only` | Explicit state that consumers do not need to infer from patch prose. |
-| `intended_untracked` | Whether the frozen snapshot bound the path as intended-untracked provenance. START never sets it: since #2394 declared scope arrives through the index instead. |
+| RDD enabled | `invalidated/unmanaged` |
+| RDD disabled | `disabled/unmanaged` |
 
-Under v2, selected lenses require both valid tree IDs and the manifest. An empty candidate has equal valid tree IDs with `changed_path_manifest: []`; missing context remains invalid. V1 continues to require its candidate diff and manifest. Unnegotiated START retains its legacy response shape and emits no candidate contents.
+They never allow, approve, block, commit, push, or open a pull request. Delivery follows ordinary repository policy.
 
-Reviewer results must echo the exact `subject_hash` and report structured `inspection: {status: "completed", paths: [...]}` for the complete frozen manifest, including root-level paths. Finding IDs use the ASCII form `R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*`. Proof and evidence recognize `path:positive-line` only for canonical paths present in the immutable base/candidate tree union: bare root references contain a dot, while quoted references support extensionless, Unicode, and space-containing paths. Digests, timestamps, status labels, URLs, and arbitrary colon-delimited prose are not path references. The provider accepts transport prose around exactly one complete JSON object, but rejects zero, multiple, or unterminated objects. Missing inspection, access-denied or unavailable-inspection evidence, paths or locations outside the frozen candidate, repeated finding IDs, wrong lens prefixes, binding mismatch, and unsupported causal metadata are classified and rejected before publication. Severe findings must retain a supported `evidence_class` and `causal_disposition`; `introduced`, `behavior-activated`, and `worsened` claims are admitted only when repository-derived changed-line evidence supports the claimed location. Reviewer results may omit the top-level `lens`; when present, it must match the selected-lens position returned by START.
+Terminal review state is informational and never authorizes a commit. Commit, push, PR, release, and archive follow ordinary repository policy and require their own explicit authorization. For a selected repository B, any authorized delivery action runs in B only.
 
-Claude Code, OpenCode, and Codex provide the enforced fresh reviewer-execution boundary through the one shared advisory contract: Claude reviewers are tool-free fresh agents with prompt-carried native evidence, OpenCode provider injection replaces the reviewer task with bound native evidence from an ordinary already-running session (no restart, child process, special user-visible session, or `OPENCODE_DISABLE_PROJECT_CONFIG` / `OPENCODE_DISABLE_EXTERNAL_SKILLS` variable), and Codex's shared advisory `CodexAdapter` launches a brand-new `codex exec` process in an empty scratch directory it creates and deletes itself, receiving only the canonical `review advisory prompt --runtime codex` output. Kilo receives `immutable_review_transport_unsupported` before repository, target, authority, collection, or process work; that typed result names the clone-scoped review-mode exit and the supported runtimes. Normal SDD and the manual compatibility path remain available; no provider or model is substituted.
+## Compatibility
 
-Durable controllers capture each result with exact lineage, target, lens, selected order, authority revision, and provider-issued repository context. Current captures emit pathless manifests with opaque references; the provider can discover every canonical result with `--captured-results`, or controllers can write each emitted manifest to its own file and pass those files to FINALIZE in selected-lens order with repeatable `--result-artifact-file <path>` flags. A `--result-artifact-file -` occurrence reads exactly one manifest from stdin; because FINALIZE has one shared stdin, `-` may appear only once across reviewer results, artifact manifests, validation, refuter outcomes, and evidence.
-
-Windows PowerShell 5.1 should use file transport because native argument reconstruction does not preserve dynamic inline JSON reliably. Write BOM-less UTF-8 so the strict JSON decoder receives the manifest bytes directly:
-
-```powershell
-$manifest = & gentle-ai review capture-result --repository-context $repositoryContext --expected-revision $revision --lineage $lineage --target $target --lens $lens --order $order --input $resultPath
-$manifestPath = Join-Path $env:TEMP "gentle-ai-review-manifest.json"
-$manifestText = [string]::Join([Environment]::NewLine, [string[]]$manifest)
-[System.IO.File]::WriteAllText($manifestPath, $manifestText, (New-Object System.Text.UTF8Encoding($false)))
-& gentle-ai review finalize --cwd $repo --lineage $lineage --result-artifact-file $manifestPath
-```
-
-Repeat `--result-artifact-file` once per selected lens. Each file contains one canonical manifest. For current captures, Gentle AI preserves the opaque reference and resolves it from private provider storage; for compatibility path manifests, it preserves path bytes. Both forms retain strict schema, lineage, target, lens, selected-order, subject, admission, ownership, lowercase SHA-256, file-identity, payload, and hash checks. The provider reopens the durable admitted envelope and re-runs admission before FINALIZE; a manifest is never authority by itself. File transport does not normalize manifest JSON or paths. Repository-context and artifact references are opaque capabilities, not serialized repository paths: the provider revalidates repository identity and Git-directory containment, and rejects them when lineage, target, revision, selected lens/order, or live authority no longer match.
-
-The POSIX inline form remains fully compatible:
-
-```bash
-gentle-ai review finalize --cwd "$repo" --lineage "$lineage" \
-  --result-artifact "$manifest_json"
-```
-
-Inline `--result-artifact`, file/stdin `--result-artifact-file`, legacy `--result`, and `--captured-results` are mutually exclusive reviewer-result sources. Legacy four-field captures use explicit `--cwd`; legacy `--result` files and path manifests remain compatible but are not a durable cross-agent handoff.
-
-Proof and evidence strings accept ordinary technical notation, including `HEAD^{tree}`, `{}`, `<A>`, and `=>`. Blank values and exact non-evidence sentinels such as `n/a`, `none`, `todo`, `tbd`, `pass`, `passed`, `success`, and `placeholder` remain invalid.
-
-Every public zero-lens result encodes `selected_lenses: []`, never `null`. Historical compact-v2 state and receipts that contain `null` remain readable: the provider verifies their original checksum before normalizing the value in memory and does not rewrite authority. Ordinary non-operational Markdown and static documentation assets may be low risk. `AGENTS.md`, `SKILL.md`, prompt/agent/workflow/runtime/OpenSpec paths, MDX, source or configuration files, binaries, symlinks, gitlinks, executable files, and mode-only changes are not eligible for native low-risk verification.
-
-An exact no-input FINALIZE is eligible only when the frozen authority is low risk, selected no lenses, has no findings or correction state, and still resolves to the same Git snapshot and repository-derived risk assessment. The provider then hashes domain-separated native structural evidence into the normal compact state and receipt. External evidence remains accepted for backward compatibility. Medium/high-risk, corrected, SDD, and release flows still require their existing external evidence.
-
-### Validate exactly five gates
-
-| Gate | Required boundary |
-| --- | --- |
-| `post-apply` | Revalidate the implemented candidate against the terminal receipt. |
-| `pre-commit` | Revalidate the intended staged candidate before commit. |
-| `pre-push` | Revalidate the committed candidate before publication. |
-| `pre-pr` | Revalidate the candidate, selected remote base, and compatible-base evidence before opening or updating a PR. |
-| `release` | Revalidate the immutable release tree, configuration, generated manifest, provenance, publication boundary, and evidence freshness. |
-
-There is no `archive` gate. An advisory preflight is not delivery authorization; the native live gate result is authoritative.
-
-### Historical v2.2.0 compatibility boundary: unmanaged delivery and re-enabling
-
-This is a historical compatibility boundary introduced in `v2.2.0`, not the current release version. Work delivered while the kill switch is off and no exact governing receipt applies is recorded as unmanaged, and it stays recorded as unmanaged: native lifecycle gates report `disabled/unmanaged` at exit 0, the change closes under ordinary repository policy, and nothing — not a stale receipt, not a later empty-candidate approval — may ever make that window read as reviewed. SDD status differs: it structurally omits `reviewGate` while the kill switch is off, and also when it is on but no review was discovered for the candidate; archive proceeds under ordinary policy in both cases. A present `reviewGate.result: allow` is required only for discovered review activity. Re-enabling re-validates the current state through one full fresh review, exactly as if receipt-driven development had never run: every downstream stop over unreviewed content names `gentle-ai review start` (with `--base-ref <commit>` when the delivered work is already committed), and completing that review is what unblocks the stop. The fresh review subsumes the unmanaged history; durable retroactive reconciliation — per-delivery dispositions, retroactive receipts, or any ledger that blesses past unmanaged deliveries — is deliberately not part of that historical release boundary.
-
-### Follow applicability and action, not inventory
-
-| Applicability | Meaning |
-| --- | --- |
-| `current_target` | Exactly one validated authority applies to the requested Git target. |
-| `unrelated` | No authority applies, even when unrelated historical authority exists. |
-| `ambiguous` | More than one authority applies or a required lineage selector is missing. |
-| `corrupted` | Authority required for classification cannot be validated safely. |
-
-STATUS derives one immutable live Git snapshot, then discovers the authority inventory and compact recovery graph once. Each selected compact candidate uses a bounded double-collect: it reads state, receipt, and finalize journal; rechecks state revision and snapshot identities; then rereads receipt and journal in the same order. Projection accepts only matching artifact existence, raw identity, and canonical content across both observations. Concurrent publication is retried at most three times; continuing churn is an operational concurrency error, not semantic corruption. Legacy approved receipts are inspected only after pure target matching selects that lineage, so unrelated receiptless v1 history remains readable. Git subprocess count therefore does not grow with terminal history; authority inventory and comparison remain linear CPU/filesystem work.
-
-Persisted `intended_untracked` membership is immutable historical proof, not a request to rebuild an old workspace against current tracking state. When the live base tree equals a receipt-bound final candidate tree, the reviewed bytes and modes have been committed exactly. A clean target or disjoint next slice is `unrelated`; a contraction or overlap with frozen genesis scope remains scope-changed evidence. A path that became tracked or later disappeared does not make healthy authority `corrupted`, and STATUS never repairs, archives, invalidates, or rewrites that authority.
-
-The provider returns one historical action from `start`, `finalize`, `validate`, `recover`, `retry_final_verification`, `maintainer_action`, `select_lineage`, `repair_authority`, `reconcile_finalize`, or `stop`. A consumer that negotiates `native_next_transition` requests `--next-transition` with STATUS or FINALIZE and MUST route only from its single `next_transition`. `execute` contains one native operation, every exact argument, immutable lineage/revision/target binding, and path-free native artifact identities; execute those values unchanged. `collect` names the exact missing input, schema, capture operation, and content-bound arguments. `stop` has exactly one reason code and no executable or collect routing data; `corrected_candidate_unavailable` additionally retains the read-only provider correction request needed to edit safely. Existing v1 consumers that do not request the flag retain their historical strict payload; `eligibility` remains a compatibility detail and is never a routing authority. Missing worktrees, refs, targets, lineage, revisions, ambiguous/corrupt authority, and unverifiable materiality never yield an executable partial operation. Applicable non-terminal legacy-v1 authority always stops. A consumer MUST NOT infer an authorization, command binding, template, recovery disposition, or target selector from prose, state, eligibility, or a statusline.
-
-Native v2 STATUS with `--next-transition` also returns a descriptive one-step `forecast`. Its sole step mirrors the current `next_transition` kind and reason code, with a human description; it is never a route or a promise of a tail. `partial` means the head is non-stop and the consumer MUST re-query after executing or collecting it. `terminal` means the current head is `stop`. Consumers route and execute only from `next_transition`; a localized human relay preserves the forecast horizon and every step field in order.
-
-For a fresh target, STATUS emits a complete START call with `contract`, frozen `target`, and explicit `projection`, plus an explicit `lineage` when one was requested. Base-diff START uses the resolved tree as `base-ref` with `committed-only=true`; workspace overlay uses the resolved tree as `base-ref` with `workspace-overlay=true`. START rejects partial or repeated negotiated bindings and revalidates the frozen snapshot immediately before new authority publication. The START surface does not accept or emit `base-tree`.
-
-For compact-v2 current STATUS, `target_identity` identifies the live selected Git target. When the frozen authority `CurrentSnapshot` differs, STATUS also emits `authority_target_identity`; absence means the authority target equals the live target. A corrected candidate awaiting a dedicated final-verification retry keeps the corrected live identity in `target_identity` and the frozen validating identity in `authority_target_identity`. Retry authorization, retry execution, and successor final-evidence capture bind the authority identity; consumers MUST NOT substitute the live identity when the two differ.
-
-An explicit compact-v2 reviewing lineage with pending reviewer input resumes its frozen collection after live drift; it never replays live target or untracked selectors. Selectorless STATUS remains live and collects new intended-untracked selection.
-
-For `repair_authority`, the provider scans every compact-v2 and legacy-v1 lineage within fixed lineage, event, operation, event-size, and total-byte limits. Exactly one legacy lineage whose only anomaly is an approved historical `review/complete-fix` or `review/validate-fix` alias yields `repair.status: eligible`. Unknown or mixed corruption, multiple candidates, same-lineage v1/v2 collision, invalidated authority, active maintenance ownership, concurrent change, or a limit hit yields a non-executable stop with no candidate. This filesystem classification adds no Git subprocess after STATUS has resolved the repository root.
-
-Run `gentle-ai review repair --preflight --cwd <repo>` before collecting maintainer intent. The path-free response supplies only provider-owned class, lineage, expected revision, cause, disposition, opaque repository binding, and authorization schema. The maintainer then provides `actor`, `reason`, and the exact nine-line LF-only authorization. An authorized STATUS transition marks `maintainer-authorization` as `provided` instead of echoing the completed authorization; the controller must reuse the exact secret it already holds. No response emits a repository path, quarantine record, or ready-made authorization string. The direct `repair-legacy-alias` verb remains compatibility-only.
-
-STATUS keeps repair classification scoped to the selected native target. It publishes an eligible repair only when that target is `corrupted` with action `repair_authority`; a healthy explicit lineage retains the bounded unsupported sentinel and never absorbs an unrelated global repair candidate.
-
-Classified execution persists a route-specific assessment digest, authorization-free request digest, and opaque record identity around the prepare/rename/commit boundary. A timeout joins the executing repair worker before reporting its mutation truth. Durable prepared or renamed progress retains `mutation_outcome: unknown` but permits only the bound `exact_replay_safe` repair request; committed progress reports `mutation_outcome: committed`. Exact retry accepts only one strict classified record, revalidates the complete live inventory and physical residue under exclusive maintenance ownership, and never adopts a compatibility-command record.
-
-Before any correction edit, `correction_plan_required` carries a strict `gentle-ai.review-correction-plan-request/v1` object. Its provider-derived hash binds the current lineage, authority revision, frozen target, correction budget, canonical `fix_finding_ids`, and each accepted finding's location, claim, proof references, classification evidence, evidence class, and causal disposition. The same request is re-derived at the post-forecast revision and retained on `corrected_candidate_unavailable`; reading it does not consume an attempt or correction budget. Consumers plan and edit only from this accepted set, never from raw reviewer output.
-
-### Already-edited pre-plan correction
-
-At `correction_plan_required`, do not submit a retrospective forecast. Read the lineage row from `gentle-ai review status --cwd <repo>`, then run `review abandon` with `operator_disposition`, a maintainer actor, and this exact LF-only V2 binding (no trailing newline):
-
-```text
-gentle-ai.review-abandon-authorization/v2
-lineage=<entries[].lineage_id>
-revision=<entries[].revision>
-snapshot_identity=<entries[].snapshot_identity>
-reason=operator_disposition
-captured_lens_results=<entries[].discarded_work.captured_lens_results comma-joined in the listed order>
-findings_present=<entries[].discarded_work.findings_present>
-evidence_records_present=<entries[].discarded_work.evidence_records_present>
-actor=<actor>
-```
-
-Copy every array item verbatim in its listed order, then join them with a single `,` and no added whitespace. The native inventory uses lexicographic captured reviewer-result artifact filename order; do not re-sort or derive a different lens order.
-
-Run `gentle-ai review abandon --cwd <repo> --lineage <lineage> --expected-revision <revision> --reason operator_disposition --actor <actor> --maintainer-authorization <binding>`.
-
-The audit record quarantines authority and provenance; it creates no receipt and preserves candidate bytes. With RDD enabled, delivery stays denied until a fresh review. This applies only before a forecast or validator result, not post-forecast failed-validator or broader-scope cases.
-
-After a correction forecast and an actual candidate change, STATUS first collects candidate-bound repository/full-suite verification evidence. A `verification_failed` record leaves the correction transaction open: no attempt, changed-line charge, or budget is consumed, and a changed candidate receives a distinct immutable evidence directory without replacing the failed bytes. A `procedural_tooling_failed` record executes a terminal escalation before any retry eligibility is considered. Only `passed` repository evidence unlocks `targeted_validation` with a strict `gentle-ai.review-targeted-validation-request/v1` object.
-
-Execute the targeted request unchanged. Its provider-derived hash binds the lineage, expected authority revision, original target, exact frozen finding IDs, projection, corrected candidate tree and identity, and the exact canonical correction-path subset plus its digest. FINALIZE accepts the correction through one atomic state transition only when the targeted validation and passed repository record bind the same authority revision, candidate identity, paths, and ledger IDs. If the candidate did not materially change, no targeted-validation request is issued and routing stops with `corrected_candidate_unavailable`; consumers must not invent a validator request or another correction forecast. An ordinary lineage admits exactly one changed-target correction attempt, even when its measured delta is zero. It never admits a zero-edit correction or second fix transition.
-
-When the action is `recover`, negotiated status also returns the exact generic recovery disposition: `scope_changed`, `escalated`, or `invalidated`. A materially changed escalated candidate exposes only generic `review.recover`. An unchanged escalated candidate normally exposes only `stop`; it exposes `retry_final_verification` with disposition `final_verification_retry` only when native state, receipt, journal, failed evidence, ancestry, leaf, and live-current-snapshot proof all establish the dedicated boundary below. The disposition identifies the accepted provider class but never authorizes either operation. A consumer MUST NOT substitute a different disposition or route the dedicated class through generic `review recover`.
-
-One recovery-only target expands an approved base-diff receipt into the exact staged index: request STATUS with the predecessor lineage, its original `--base-ref`, `--projection staged`, and `--workspace-overlay`. Native routing emits those same three selectors for `review recover` only when HEAD still equals the reviewed candidate, the index retains every reviewed path and adds at least one path, and the canonical predecessor receipt is present. The authorization binds the distinct successor lineage and the staged overlay identity, which already commits the base tree, index tree, projection, paths, and their digests. Unstaged and undeclared untracked bytes are excluded. The successor starts a fresh review with newly derived risk, lenses, changed-line count, and budget; it inherits no approval or evidence. Direct staged-overlay START, unchanged or disjoint scope, a removed reviewed path, selector drift, stale authority, or index drift stops without mutation.
+The v1 contract and historical artifacts remain published compatibility surfaces. They may be inspected with explicit, manual compatibility operations, but they are not an ordinary v2 lifecycle, cannot resurrect a burned transaction, and do not authorize delivery.
 
 ### Continue after a stop reason code
 
-`stop` carries exactly one reason code and no executable or collect route (see above), so a consumer that does not already know a code's continuation cannot safely proceed from prose alone. The read-only `correction_request` on `corrected_candidate_unavailable` defines what may be edited but does not authorize or name a command. The table below names every reason code `newReviewNextTransition` and its helpers in `internal/cli/review_next_transition.go` can emit, the exact continuation for consumers that hold `--cwd` access, and `terminal` where no flag-driven continuation exists. `terminal` never means "contact support with no further detail"; each terminal row states the concrete precondition that would unblock it.
+A `stop` carries one reason code and no executable transition. The table below is the complete continuation inventory for the atomic target-root lifecycle. `Terminal` means no in-lineage continuation exists; it never authorizes delivery. For every clone-scoped exit, gates remain unmanaged and ordinary repository policy decides delivery.
 
 | Reason code | Continuation |
 | --- | --- |
-| `captured_artifacts_unverifiable` | Terminal — a previously captured reviewer artifact failed local verification (tampering or hash mismatch). Requires a maintainer to inspect the review authority store before any further `review.capture-result` is trusted. |
-| `captured_result_selection_unavailable` | Terminal — internal invariant violation: every selected lens already reports a captured artifact, yet the caller was routed here because the count was still short. File a defect; there is no caller-side retry. |
-| `captured_verification_evidence_invalid` | Terminal — the captured verification record, immutable raw payload, or their content binding failed integrity validation. Requires a maintainer to inspect the authority artifacts before that evidence is trusted. |
-| `corrected_candidate_unavailable` | Two distinct situations share this code; pick the one that is true. When the review found real defects: change the candidate content so it differs from the frozen original, then re-run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition` (or `gentle-ai review finalize --lineage <id>`) to receive the `targeted_validation` collection — see "After a correction forecast and an actual candidate change" above. When the reviewers were given the wrong input and their findings describe content that was never the candidate: a maintainer quarantines those admitted results and reopens their lenses over the same frozen candidate with `gentle-ai review reopen-results --prepare --cwd <repo> --lineage <id> --expected-revision <revision> --target <target> --reason <reason> --actor <actor> --quarantine-lens <lens>` (repeat per affected lens), then applies the emitted authorization; the overridden result bytes are preserved in quarantine and named in the audit record. |
-| `correction_repository_verification_failed` | Change the correction candidate within the same open frozen budget, then re-run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition`. The failed candidate's evidence remains immutable under its own identity; no correction attempt or changed-line accounting was consumed. |
-| `corrupted_or_unverifiable_authority` | Terminal — `gentle-ai review repair --preflight --cwd <repo>` classified this authority as `unsupported`, `ambiguous`, `conflicting`, or `truncated` rather than `eligible`. Requires a maintainer to inspect the review authority store directly; automated repair cannot proceed. |
-| `final_verification_retry_unavailable` | Terminal — internal invariant violation: routed to final-verification-retry collection without a retry-eligible disposition. File a defect; there is no caller-side retry. |
-| `manual_intervention_required` | Terminal — the authority state is not one of this negotiated protocol's known states. Requires maintainer review of the lineage. |
-| `missing_authority_binding` | Terminal — internal invariant violation: applicability was `current_target` but no authority binding resolved. File a defect; there is no caller-side retry. |
-| `native_stop_required` | Terminal — the authority state (for example an escalated lineage not yet eligible for recovery) accepts no automated action from this negotiation. Requires maintainer review of the lineage before any further command. |
-| `original_finalize_request_required` | Re-run `gentle-ai review finalize --lineage <id>` with the exact original content-bound payload (results/evidence). A different payload is a typed reconciliation failure, not a retry — see "Re-run a non-terminal FINALIZE" above. |
-| `recovery_scope_unchanged` | Change the candidate so its target identity differs from the current authority's, then retry the same selector-scoped `review.recover` once the identities differ. |
-| `rdd_disabled` | Run the exact source-scoped `gentle-ai review mode enable` command rendered with this STATUS result, then re-run its exact repository-bound STATUS command. |
-| `staged_delivery_candidate_required` | Stage every reviewed path exactly as it was reviewed, then re-run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --lineage <id> --projection staged --gate pre-commit --next-transition`. STATUS returns `review.validate` only when that staged candidate exactly matches the approved receipt. |
-| `staged_workspace_overlay_recovery_unavailable` | Terminal for a fresh target — staged projection combined with `--workspace-overlay` is recovery-only. Pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh. |
-| `unchanged_or_unverified_authority` | Terminal — the single correction attempt for this lineage is already consumed without a verified candidate change. `gentle-ai review start` on this exact unchanged candidate only resumes this same lineage, not a fresh one. Change the candidate content first, then run `gentle-ai review start` to begin a genuinely new lineage. |
+| `captured_artifacts_unverifiable` | Terminal — a captured reviewer artifact failed local verification. Ask a maintainer to inspect the B authority, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `captured_result_selection_unavailable` | Terminal — an internal result-selection invariant failed. Ask a maintainer to inspect the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `corrected_candidate_unavailable` | Change the correction candidate in B, then re-query `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition` with the captured lineage and target. For a committed-only review, commit the bounded correction (or amend its commit); uncommitted tracked changes do not change that candidate, and unrelated tracked worktree edits are ignored. The accepted correction forecast is one-shot: do not capture it again. Do not reuse the pre-correction target. |
+| `empty_base_diff_bootstrap_required` | Terminal — the committed base has no reviewable paths. Use the separately authorized empty-root bootstrap for a new target, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `lens_context_budget_exceeded` | Terminal — immutable reviewer context cannot be truncated. Reduce the B candidate scope and start a new transaction, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `correction_context_budget_exceeded` | Release this review authority: the corrected candidate's evidence plus its recorded findings cannot fit the runtime context budget, so no targeted validation can ever be assembled and `gentle-ai review invalidate` refuses once lens results are admitted. Run `gentle-ai review abandon --cwd <repo> --lineage <id> --expected-revision <revision> --reason operator_disposition --actor <actor> --maintainer-authorization <binding>` (run `gentle-ai review abandon` with no flags to print the binding template). The STATUS stop carries that release as `next_transition.continuation` with `operation: "abandon"` whenever the authority is eligible, and omits it entirely when it is not, rather than naming a command the live operation would refuse. Then review the change as smaller candidates, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `managed_assets_outdated` | Run the exact sync command named in the stop's `continuation` field (anchored to the executable that reported the stale assets, so it cannot resolve to a different `gentle-ai` on `PATH`, and bound to the runtime agent STATUS was asked for), then re-query the exact repository-bound STATUS command; the same candidate is offered again once the recorded digest converges. Authority-mutating verbs (`capture-result` and the other captures, `repair`) refuse with the same typed, not-started `managed_assets_outdated` failure; their continuation carries no `--agent` because those verbs are not bound to a runtime agent, so it syncs every agent. The failure `cause` names the recorded digest and the one this binary embeds. The plain CLI verbs with no negotiated failure envelope (`review-bundle-import`, `review abandon`) keep the same refusal text and append `; continue with: <sync command>` with the same executable-anchored command. Under the v1 failure contract the code is published without `continuation`, which only the v2 schema defines. The quoted Windows form is cmd.exe command syntax; PowerShell requires the call operator (`& "..." sync ...`). |
+| `corrupted_or_unverifiable_authority` | Terminal — the authority is unreadable or unsupported. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `manual_intervention_required` | Terminal — the authority state is outside the negotiated lifecycle. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `missing_authority_binding` | Terminal — a current target had no authority binding. File a bounded defect with the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `native_stop_required` | Terminal — the lineage is escalated but has no native continuation. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `recovery_scope_unchanged` | Change B so its target identity differs, then retry the exact returned `gentle-ai review recover` invocation. |
+| `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and start a fresh target; otherwise run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `unachievable_lens_slot` | A host reported a selected reviewer slot unachievable under current conditions. If that was transient, re-run `gentle-ai review capture-unachievable` with the same binding and `--withdraw=true` so B re-offers the same slot. If it is not transient, reduce the B candidate scope and start a new `gentle-ai review start`, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `target_already_acknowledged` | Terminal: this exact target was already acknowledged and its review authority burned. No further review action is required; delivery follows ordinary repository policy. Changed targets remain eligible for review. Only when deliberately requesting a new independent review, use `gentle-ai review start`; do not automatically restart this consumed target. |
+| `acknowledged_predecessor_passive_delta` | Terminal: this committed range only adds passive content (documentation or notes) to a candidate that was already approved and acknowledged, so there is nothing new to review and no review authority was created. No further review action is required; delivery follows ordinary repository policy. Any non-passive change is offered for review again. Only when deliberately requesting a new independent review, use `gentle-ai review start`. |
+| `acknowledged_boundary_reaches_head` | The reviewed boundary advances on acknowledgement (#5638) and reaches HEAD: every commit since the acknowledged boundary was empty, so nothing unreviewed remains between the boundary and the live candidate and no review authority was created. Continue working; any new commit re-derives a fresh candidate and `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition` offers it. |
+| `rdd_disabled` | Run the exact source-scoped `gentle-ai review mode enable` command rendered by STATUS, then re-run its exact repository-bound STATUS command. |
 
-### Retry one failed final verification
+## Published v1 compatibility reference
 
-`gentle-ai review retry-final-verification` is provider-only and one-shot across the entire ancestry. Eligibility requires one exact compact-v2 leaf at the supplied revision in `escalated`, its matching receipt, exactly one completed receipt-published FINALIZE attempt whose last transition is `review/complete-verification`, a `procedural_tooling_failed` record whose digest and raw bytes match both journal and terminal bindings, and an unchanged exact live `CurrentSnapshot`. A genuine `verification_failed` outcome is permanently ineligible. Reviewer-result, correction, scoped-validator, SDD, ambiguous, superseded, already-retried, or target-drift states are also ineligible.
+The published v1 directory contains 23 strict JSON Schemas and 24 deterministic conformance fixtures. These are read-only compatibility inventory, not durable v2 receipt, gate-allow, or mirror state.
 
-The incident file must be the compact canonical JSON object plus one LF for `gentle-ai.review-final-verification-incident/v1`. Its only class is `procedural_tooling_failure`; it binds predecessor lineage, terminal and validating revisions, current target identity, failed-evidence hash, and FINALIZE request digest. Inspect its closed shape with `gentle-ai review schema final-verification-incident`; the native parser additionally enforces canonical bytes.
+- `legacy_v1_read_only` failures retain `mutation_outcome` values `not_started`, `unknown`, and `committed`; Legacy-v1 never reports `publication_pending`, with retry and replay disabled where its historical operation requires a new compact lineage.
+- Historical `ordinary_4r` legacy status omits `frozen`. START, BIND-SDD, invalidation, and direct append are compatibility names only and never re-enter the atomic lifecycle.
+- Published vocabulary remains readable: `native_frozen_candidate_context`, `base_tree`, `candidate_tree`, `changed_path_manifest`, `opaque_repository_context`, `provider_targeted_validation_request`, `provider_artifact_admission`, `validating_result_reopen`, and `recovered_correction_evidence`.
+- Artifact compatibility names remain `artifact_subjects`, `subject_hash`, and `admission_decision: completed`; low-risk compatibility names remain `native_low_risk_verification`, `selected_lenses: []`, and `receipt_scope_changed`. They describe historical data only and do not restore a receipt after an atomic approval burn.
+- Operational bounds remain a 25-second aggregate budget, 120-second budget, 180-second budget, and one-second wait delay. Persistent compact `LOCK` JSON is advisory diagnostics. `context.scope_change` and `review.recover` are explicit compatibility/recovery vocabulary, not ambient lifecycle discovery.
 
-The maintainer authorization is exact LF-only text in this order: `gentle-ai.review-final-verification-retry-authorization/v1`, predecessor lineage and revision, successor lineage, validating revision, target identity, failed-evidence hash, FINALIZE request digest, incident class and digest, actor, and reason. Public STATUS emits only path-free provider inputs and collects this authorization externally; it never emits the completed authorization or the failed-evidence path.
+## Checklist
 
-Creation is revision-CAS guarded under the repository-wide compact lock. The successor is generation `+1` in `validating`; every frozen target, policy, risk, lens, finding, classification, outcome, follow-up, correction attempt, cumulative-line, and budget field is copied exactly, while the active raw hash, record digest, outcome, target, and authority-revision bindings are cleared and recovery proof is added. An exact replay converges on the same successor. Any different replay, collision, stale revision, evidence mismatch, live drift, a different existing successor, or prior ancestry retry returns `final_verification_retry_denied` with `mutation_outcome: not_started` and no authority mutation. Capture new final evidence against the successor's `CurrentSnapshot`, then use normal FINALIZE. Success approves; another failure escalates permanently.
-
-When an incomplete FINALIZE journal applies, negotiated status instead returns `action: reconcile_finalize`, `replayability: status_required`, `reconciliation.required: true`, and `next_transition.kind: stop`. Re-run a non-terminal FINALIZE only with the original content-bound payload; a different payload is a typed reconciliation failure, not a retry. If authority is already terminal and only receipt publication remains, `next_transition.execute` carries the exact explicit lineage and no mutation inputs.
-
-Unqualified gate discovery compares every valid terminal receipt with the live immutable target before selecting authority. Zero exact matches returns `receipt_missing` or `receipt_unrelated`; exactly one scope-changed predecessor returns `receipt_scope_changed` with its complete recovery context. Multiple exact or viable scope-changed predecessors return `receipt_ambiguous` without choosing a predecessor or inventing singular recovery context. The failure requires only `lineage_id`, directs the caller to target-scoped `review.status`, and status returns the canonical sorted candidate lineage IDs for explicit selection. An explicit lineage remains a direct fail-closed lookup and derives its own scope diagnostics. Truly unrelated historical receipts never create false ambiguity.
-
-Persistent compact `LOCK` JSON is advisory diagnostics, not current-holder proof. Status opens and probes the existing inode non-blockingly without creating, truncating, unlinking, or replacing it: live contention is `owned`, a released lock is `released`, and malformed metadata or probe failure is `ambiguous`. START waits at most two seconds for that lock and returns a typed non-retryable timeout or cancellation without claiming a persisted PID or hostname is the holder.
-
-### Preserve the uniform failure envelope
-
-Every failed negotiated operation emits the failure envelope matching its contract: `failure/v1` for integration v1 and `failure/v2` for integration v2, and still exits nonzero. Capabilities defaults to v1; repository operations use the selected envelope when `--contract` is present. Unnegotiated command errors retain their compatibility behavior.
-
-| Field | Runtime meaning |
-| --- | --- |
-| `operation`, `phase`, `code`, `message` | Stable operation identity, failure boundary, machine code, and bounded package-controlled message. |
-| `mutation_outcome` | Exactly `not_started`, `unknown`, or `committed`; uncertainty is never weakened to a no-mutation claim. |
-| `authority_applicability` | `current_target`, `unrelated`, `ambiguous`, `corrupted`, or `not_evaluated`. |
-| `retry_safe`, `replayability` | Independent retry and replay safety. Unknown mutation requires status; exact replay requires the declared identity. |
-| `lineage_id`, `request_digest` | Present only when the provider has safe canonical replay evidence. |
-| `required_inputs`, `next_action` | The bounded input names and one safe follow-up action. |
-| `context` | Optional strict diagnostics. Scope change includes expected and actual tree/path evidence, canonical differing paths/count/digest, predecessor identity, and explicit `review.recover` inputs. Binding CAS conflicts expose the caller's expected binding revision and the current native revision; either value may be empty for the initial bind. |
-
-Messages never contain authority or receipt paths, locks, tokens, raw provider stderr, completed repair authorizations, or canonical store bytes. Invalid or unsupported explicit contracts fail before mutation through the same envelope. A negotiated gate denial is a failure envelope, not a successful operation result; gate evaluation remains read-only. Malformed state, checksum, graph, or receipt evidence is semantic `corrupted` authority. Git command, timeout, process-control, cancellation/deadline, maintenance-lock timeout or cancellation, and non-missing filesystem failures instead propagate as operational errors and never become a successful `corrupted` status result. A valid terminal `invalidated` state remains complete, authoritative, and auditable, but delivery and ordinary status routing still refuse it.
-
-Negotiated operations have a 25-second aggregate budget. Local Git children have a 120-second budget, remote `ls-remote` children have a 180-second budget, and every child uses a one-second wait delay after cancellation. The per-command child budgets are hang guards, not latency assertions: they sit far above scheduler-starvation dilation on loaded runners, a cut child reports the exact command and its observed elapsed time, and inside a negotiated operation the 25-second aggregate budget still fires first. `operation_timeout`, `git_command_timeout`, and `git_command_failed` are typed, non-amplifying failures with `retry_safe: false`. Process-control failures — a Git child that could not be started or whose process tree could not be brought under control (for example Windows job-object or resume failures) — classify as `git_command_failed` and carry the underlying cause in `message`. Read-only and proven pre-transition Git failures report `not_started`. Negotiated START renders and validates a new target's context before creating authority. If context rendering instead fails after START selected an existing durable authority, the failure reports `phase: native_committed`, `mutation_outcome: unknown`, the exact lineage input, and `next_action: review.status`; it never falsely reports `not_started` or recommends replay. Once FINALIZE has committed any native transition, a later Git or process failure follows the same unknown/status rule. Deterministic lock, receipt-discovery, and scope-change failures never recommend automatic retry.
-
-## Reconcile interruptions before replay
-
-| Replayability | Consumer behavior |
-| --- | --- |
-| `not_replayable` | Do not repeat the mutation from transport evidence alone. |
-| `exact_replay_safe` | Replay only the provider-declared canonical request with every required input unchanged. |
-| `status_required` | Run target-scoped status before deciding whether any replay is safe. |
-| `manual_action_required` | Stop and obtain the named maintainer action or repair prerequisite. |
-
-Reviewer-input schema and semantic preflight rejection happens before journal creation or authority mutation, so the caller may correct the input and retry the same explicit lineage. That retry is neither a correction attempt nor a journal replay. Once preflight succeeds, the provider atomically writes a separate `finalize-attempt-journal.json` before FINALIZE mutates compact authority. It binds lineage, the expected entry revision, a canonical request digest, candidate and payload digests (reviewer results, correction forecast, validation, refuter, evidence, and failed flag), and each committed transition. The journal never stores caller paths and does not alter historical `review-state.json` compatibility. Every journal replacement is reread as strict exact content after rename; an incomplete entry accepts only its exact matching request and is reconciled against current authority. Any mismatch fails with the typed replay-mismatch contract instead of becoming a generic retry.
-
-Finalize commits terminal compact authority before publishing its derived receipt. If receipt publication is interrupted after that commit, the failure envelope reports `mutation_outcome: committed`, `exact_replay_safe`, the lineage, and the canonical request digest. That declaration permits the exact explicit-lineage finalize replay with no new review inputs; target status independently reports the same publication-pending condition after restart. The replay derives the same receipt bytes and does not mutate authority or open another budget. If a different or non-regular receipt already occupies the immutable path, replay cannot succeed: negotiated failure reports `receipt_publication_conflict`, `manual_action_required`, and `explicit-maintainer-action` instead.
-
-Terminal compact receipts are published with a synced temporary file and a platform-native atomic no-clobber operation: an exact existing byte sequence is an idempotent success, while different or non-regular existing content is rejected without replacement. On filesystems that support directory synchronization, the parent directory is synced after publication. Windows may reject directory-handle synchronization; Gentle AI still provides atomic visibility and conflict rejection there, but does not claim power-loss durability for the directory entry.
-
-SDD review bindings are records in the repository-common native SDD runtime CAS chain, not mutable `binding.json` authority. A repository with the old compatibility file imports it exactly once in the first native binding record and never writes it back or consults it after import. Binding replacement compares `expected_binding_revision` only with the effective binding revision; an authority revision or runtime-ledger HEAD is the wrong token and returns `binding_revision_conflict` before publication with `context.binding_revision.expected` and `.current`. Immutable records are published no-clobber, then one atomically replaced `HEAD` selects the chain. A post-HEAD directory-sync failure reports `binding_publication_pending` with `exact_replay_safe`; replay `review.bind_sdd` with the same change, lineage, and expected binding revision.
-
-An ambiguous or lost transport result is never proof of `not_started`. Reconcile it with `review.status`; do not launch another reviewer, correction, or lineage while the outcome is unknown.
-
-For `gate_scope_changed` or `receipt_scope_changed`, use the strict `context.scope_change` evidence to present the exact drift. Recovery remains explicit: pass `predecessor_lineage_id`, `expected_predecessor_revision`, a distinct `successor_lineage_id`, `disposition`, `reason`, and `actor` to `review.recover`. Diagnostics never create a successor, allocate another budget, or mutate the predecessor.
-
-When a release merge retains an approved `current-changes` candidate but expands its path scope, add `--release-scope` to that explicit `scope_changed` recovery. The provider derives an immutable `HEAD^1..HEAD` base-diff; it rejects caller-selected base flags, candidate-tree changes, projection changes, omitted predecessor paths, and non-expanding scopes. The fresh successor must complete its newly derived review tier before the release gate can allow publication.
-
-Malformed reviewer JSON, missing required reviewer arrays, canonicalization failures, and selected-lens mismatches are deterministic preflight failures. Negotiated finalize reports `invalid_request`, `mutation_outcome: not_started`, `retry_safe: true`, `replayability: not_replayable`, and `next_action: correct_request`, while preserving a valid requested lineage for target-scoped recovery. Correct the payload before retrying; do not run authority repair.
-
-### Reopen unusable validating results without another budget
-
-`gentle-ai review reopen-results` is a bounded maintenance operation for an uncorrected validating or correction-required authority. Native detection quarantines a historical reviewer artifact that was unadmitted or whose preserved evidence says candidate inspection was unavailable; a maintainer may additionally name admitted results with `--quarantine-lens <lens>` when the reviewers' input, not the candidate, was wrong — the emitted authorization binds those named lenses verbatim, the overridden bytes are preserved in quarantine, and the audit record lists every authorized lens. It never starts a lineage or recalculates target, tier, lenses, changed-line count, or correction budget, and a completed correction attempt closes the door for good.
-
-First run `--prepare` with the exact lineage, authority revision, target, reason, and actor. Native classification re-decodes and re-admits the exact bytes in every frozen lens slot, then compares their canonical and stored hashes: only a current provider-admitted match is retained; historical, unadmitted, inspection-unavailable, or tampered slots are quarantined. The returned plan contains the exact maintainer authorization. Re-run without `--prepare` and pass that authorization unchanged. Under the store lock, Gentle AI rechecks the same slot classification, archives quarantined bytes and digest sidecars before replacement, records the transition, and moves the same lineage from `validating` to `reviewing`. Retry with the exact request is convergent. A receipt, stale revision, changed artifact, corrected authority, unknown artifact failure, or a plan with no unusable slot fails closed.
-
-An escalated predecessor may transfer review and correction evidence to a fresh successor only for the `recovered_correction_evidence` class. The predecessor must contain one otherwise successful correction that exceeded its frozen budget only under stored historical line accounting. Native Git evidence must prove a smaller positive correction within both forecast and budget; the predecessor initial target to successor target must classify as `changed-scope` with the same genesis paths; and the corrected predecessor candidate tree must equal the successor initial tree exactly. Policy, risk, lenses, projection, intended-untracked set, path scope, receipt, predecessor revision, review evidence hash, correction attempt, and targeted-validation request all remain bound. The successor starts directly in `validating` and still requires successor-bound final verification. Any changed bytes or mismatched scope start a fresh reviewing successor instead; evidence is never partially imported.
-
-## Preserve compatibility without reopening legacy mutation
-
-Compact-v2 is the sole ordinary mutable authority. Legacy-v1 is in an active, release-based compatibility window with these guarantees:
-
-- Valid applicable historical receipts remain readable and evaluable at supported gates.
-- Ordinary legacy mutation through START, finalize, BIND-SDD, invalidation, and direct append—including the `review-step` compatibility route—returns the typed `LegacyReadOnlyError`, preserves `errors.Is(ErrLegacyReadOnly)`, and exposes stable code `legacy_v1_read_only` without changing authority bytes across retries or restarts.
-- Negotiated wrappers preserve that typed cause as `legacy_v1_read_only` with `mutation_outcome: not_started`, retry and replay disabled, `next_action: stop`, and a package-controlled message that contains no provider paths or raw diagnostics.
-- Applicable non-terminal legacy status returns the deterministic read-only action `stop`; applicable approved legacy receipts remain evaluable at supported gates.
-- Applicable approved legacy status validates the canonical published v1 receipt and reports its SHA-256 identity as `present`. Legacy-v1 never reports `publication_pending`; a missing, corrupt, or wrong legacy receipt fails closed as corrupted authority without compact exact-replay semantics.
-- Frozen tier, authored-line count, and correction budget are compact-v2 fields. Historical `ordinary_4r` legacy status omits `frozen` rather than inventing values; compact current targets still require the complete frozen object.
-- Unrelated valid legacy history does not block a current compact target.
-- An explicit valid compact lineage remains `current_target` when unrelated malformed legacy history exists. Unscoped inventory still fails closed and reports the malformed history; the provider does not quarantine or repair it automatically.
-- Same-lineage mixed v1/v2 authority and unclassifiable corruption fail closed.
-- The public classified repair may quarantine exactly one proven historical alias lineage; it never appends to, rewrites, migrates, or validates legacy history.
-- Explicit maintenance transport import/export may preserve historical compatibility.
-- Removal is not scheduled and requires at least one compatibility release plus separate reachability evidence.
-
-The provider does not auto-upgrade, migrate, rewrite, quarantine, or delete legacy authority. A later deletion is a separate compatibility decision, not part of protocol v1 negotiation.
-
-## Respect compatibility and non-goals
-
-Protocol v1 supports `workspace` and `staged` projections and preserves existing compact authority and receipt schemas. Published archives contain the versioned JSON Schemas and conformance fixtures under `contracts/review-integration/v1/` and `contracts/review-integration/v2/`; consumers should validate against those packaged bytes rather than copying private Go structs.
-
-This contract does not implement Gentle Pi, select a model or provider, transmit repository data, add remote telemetry, claim Windows runtime durability, define an archive coordinator, defend against a malicious actor with local filesystem access, or authorize a command merely because review passed.
-
-## Consume the contract from Gentle Pi
-
-Gentle Pi should remain a thin consumer:
-
-1. Resolve and independently verify the exact Gentle AI executable.
-2. Negotiate capabilities before repository work and cache them only for that executable identity.
-3. Use negotiated status to reconstruct the provider-selected projection after restart.
-4. Execute reviewers and validators, then pass their typed results to finalize without constructing authority bytes.
-5. Preserve native actions, gate results, replayability, and mutation outcomes without semantic remapping.
-6. Reconcile uncertain mutations through status before an exact replay.
-7. Keep command interception, worktrees, user confirmation, and final intent rederivation on the Pi side.
-
-Pi adoption, fallback retirement, package pinning, and Pi release sequencing are separate consumer work. They do not change Gentle AI's provider authority or release ownership.
-
-## Inspect packaged contract artifacts
-
-Each release archive contains:
-
-- `contracts/review-integration/v1/schemas/` — 24 strict JSON Schemas, including preserved capability protocols v1.0–v1.4, current v1.5, versioned START/status/result-artifact contracts, outcome-bound verification evidence, final-verification incident, classified repair, provider subject/admission, correction planning, and targeted validation.
-- `contracts/review-integration/v1/fixtures/` — 27 deterministic conformance fixtures, including all six capability minors, preserved v1 plus current v2 START/status examples, outcome-bound verification evidence, the final-verification incident and retry projection, classified repair preflight, and typed failure envelopes.
-- `contracts/review-integration/v2/schemas/` — 15 strict JSON Schemas, including the capture-result dry-run response contract.
-- `contracts/review-integration/v2/fixtures/` — 9 deterministic conformance fixtures, including the capture-result dry-run response.
-- `docs/review-integration.md` — this ownership and consumption guide.
-
-Repository maintainers can verify source inventory or a complete GoReleaser snapshot:
-
-```bash
-scripts/test-review-contract-package.sh
-scripts/test-review-contract-package.sh dist
-```
-
-The archive assertion compares every packaged contract file with the repository source by SHA-256 and verifies each platform archive against `checksums.txt`.
-
-### Next steps
-
-- Read the [review authority threat model](review-authority-threat-model.md) before integrating delivery authorization.
-- Query `review capabilities` from the exact executable you intend to run.
-- Validate the packaged fixtures before implementing or updating a consumer.
-
-← [Back to README](../README.md)
+- [ ] Selectorless STATUS was used only to preflight the current worktree candidate.
+- [ ] START's lineage, revision, and target tokens were retained and replayed unchanged.
+- [ ] Reviewers and validators used only provider-issued immutable context.
+- [ ] `approved` acknowledgement was retained and run only from the provider-owned START, STATUS, or terminal-closure transition.
+- [ ] Commit, push, PR, release, and archive followed ordinary repository policy.
+- [ ] Each delivery action has explicit authorization.

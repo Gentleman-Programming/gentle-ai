@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
 
 var intendedUntrackedStatusCapability = &Capability{
 	Verb:  []string{"review", "status"},
-	Flags: []string{"--cwd", "--contract", "--next-transition", "--untracked-scope", "--intended-untracked", "--expected-untracked-inventory"},
+	Flags: []string{"--cwd", "--contract", "--agent", "--next-transition", "--untracked-scope", "--intended-untracked", "--expected-untracked-inventory"},
 }
 
 var unbornIntendedUntrackedStatusCapability = &Capability{
@@ -19,7 +20,42 @@ var unbornIntendedUntrackedStatusCapability = &Capability{
 	Flags: []string{"--cwd", "--contract", "--agent", "--next-transition"},
 }
 
+const unbornIntendedDeliveryPath = "docs/unborn-candidate.md"
+
+type intendedUntrackedSelectionStatus struct {
+	Schema     string    `json:"schema"`
+	Authority  *struct{} `json:"authority"`
+	Projection struct {
+		Paths []string `json:"paths"`
+	} `json:"projection"`
+	NextTransition struct {
+		Kind       string `json:"kind"`
+		ReasonCode string `json:"reason_code"`
+		Collect    struct {
+			Inputs []struct {
+				Name             string                         `json:"name"`
+				Schema           string                         `json:"schema"`
+				CaptureOperation string                         `json:"capture_operation"`
+				Arguments        []struct{ Name, Value string } `json:"arguments"`
+				Submission       *waveSubmissionDescriptor      `json:"submission"`
+			} `json:"inputs"`
+		} `json:"collect"`
+		Execute struct {
+			Operation string `json:"operation"`
+			Command   string `json:"command"`
+		} `json:"execute"`
+	} `json:"next_transition"`
+}
+
+type closedIntendedUntrackedSelection struct {
+	Schema                     string   `json:"schema"`
+	UntrackedScope             string   `json:"untracked_scope"`
+	ExpectedUntrackedInventory string   `json:"expected_untracked_inventory"`
+	IntendedUntracked          []string `json:"intended_untracked"`
+}
+
 func mixedIntendedUntrackedCandidate(sandbox *Sandbox) error {
+	sandbox.PiReviewRelayContract = "gentle-pi.review-relay/v1"
 	if err := sandbox.write(filepath.Join(sandbox.Repo, "README.md"), "# demo\n\ntracked review candidate\n"); err != nil {
 		return err
 	}
@@ -28,47 +64,116 @@ func mixedIntendedUntrackedCandidate(sandbox *Sandbox) error {
 		"docs/second file,with comma.md": "# Second\n",
 		"unrelated-credentials.env":      "EXAMPLE_API_TOKEN=synthetic-placeholder\n",
 		"ignored.txt":                    "ignored\n",
-		".gitignore":                     "ignored.txt\n",
 	} {
 		if err := sandbox.write(filepath.Join(sandbox.Repo, path), contents); err != nil {
 			return err
 		}
 	}
-	return nil
+	return sandbox.write(filepath.Join(sandbox.Repo, ".git", "info", "exclude"), "ignored.txt\n")
 }
 
 func selectIntendedUntrackedAndRunPrintedStart(r *journeyRun) error {
-	status, err := readStatusForContract(r, reviewContractV2)
-	if err != nil {
+	initialObservation := r.run(productArgsFor(r,
+		"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContractV2,
+		"--agent", "pi", "--next-transition"), false)
+	var initial intendedUntrackedSelectionStatus
+	if err := decodeWaveObservation(initialObservation, &initial, "initial Pi STATUS"); err != nil {
 		return err
 	}
-	if status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "intended_untracked_selection_required" ||
-		len(status.NextTransition.Collect.Inputs) != 1 {
-		return fmt.Errorf("initial STATUS did not collect intended untracked selection: %+v", status.NextTransition)
+	if initial.Schema != statusSchemaV9 || initial.Authority != nil ||
+		initial.NextTransition.Kind != "collect" || initial.NextTransition.ReasonCode != "intended_untracked_selection_required" ||
+		len(initial.NextTransition.Collect.Inputs) != 1 {
+		return fmt.Errorf("initial Pi STATUS = %+v", initial)
 	}
-	digest := status.argument("expected_untracked_inventory")
+	input := initial.NextTransition.Collect.Inputs[0]
+	if input.Name != "intended_untracked_selection" || input.Schema != "gentle-ai.review-intended-untracked-selection/v1" ||
+		input.CaptureOperation != "external.select_intended_untracked" || input.Submission == nil {
+		return fmt.Errorf("initial intended-untracked submission = %+v", input)
+	}
+	inventory := ""
+	for _, argument := range input.Arguments {
+		if argument.Name == "expected_untracked_inventory" {
+			inventory = argument.Value
+			break
+		}
+	}
+	if inventory == "" {
+		return fmt.Errorf("initial intended-untracked selection omitted its inventory: %+v", input.Arguments)
+	}
 	selectedPaths := []string{"docs/chosen, file.md", "docs/second file,with comma.md"}
-	selectors := []string{"--untracked-scope=select", "--expected-untracked-inventory=" + digest}
-	for _, path := range selectedPaths {
-		selectors = append(selectors, "--intended-untracked="+path)
+	answer, err := json.Marshal(closedIntendedUntrackedSelection{
+		Schema:                     "gentle-ai.review-intended-untracked-selection/v1",
+		UntrackedScope:             "select",
+		ExpectedUntrackedInventory: inventory,
+		IntendedUntracked:          selectedPaths,
+	})
+	if err != nil {
+		return fmt.Errorf("encode intended-untracked selection: %w", err)
 	}
-	selected, err := readStatusForContract(r, reviewContractV2, selectors...)
+	arguments, err := intendedUntrackedSelectionSubmissionArguments(input.Submission, string(answer))
 	if err != nil {
 		return err
 	}
-	if selected.NextTransition.Kind != "execute" || selected.NextTransition.Execute.Operation != "review.start" ||
-		slices.Contains(selected.Projection.Paths, "unrelated-credentials.env") ||
-		!slices.Contains(selected.Projection.Paths, selectedPaths[0]) || !slices.Contains(selected.Projection.Paths, selectedPaths[1]) {
-		return fmt.Errorf("selected STATUS = %+v", selected)
+	selectedObservation := r.runAt(r.sandbox.Repo, arguments, false)
+	var selected intendedUntrackedSelectionStatus
+	if err := decodeWaveObservation(selectedObservation, &selected, "selected intended-untracked STATUS"); err != nil {
+		return err
 	}
-	started, err := runPrintedTransition(r, selected)
+	if selected.Schema != statusSchemaV9 || selected.NextTransition.Kind != "execute" ||
+		selected.NextTransition.Execute.Operation != "review.start" ||
+		!slices.Equal(selected.Projection.Paths, []string{"README.md", selectedPaths[0], selectedPaths[1]}) {
+		return fmt.Errorf("selected Pi STATUS = %+v", selected)
+	}
+	var printed statusEnvelope
+	if err := json.Unmarshal([]byte(strings.TrimSpace(selectedObservation.Stdout)), &printed); err != nil {
+		return fmt.Errorf("parse selected printed START: %w", err)
+	}
+	started, err := runPrintedTransition(r, printed)
 	if err != nil {
 		return err
 	}
-	if started.ExitCode != 0 {
-		return fmt.Errorf("printed selected START exited %d: %s", started.ExitCode, firstLine(started.Stderr))
+	var terminal struct {
+		State  string `json:"state"`
+		Action string `json:"action"`
+	}
+	if err := decodeWaveObservation(started, &terminal, "printed selected START"); err != nil {
+		return err
+	}
+	if terminal.State != "approved" || terminal.Action != "closed" {
+		return fmt.Errorf("printed selected START terminal result = %+v", terminal)
 	}
 	return nil
+}
+
+func intendedUntrackedSelectionSubmissionArguments(descriptor *waveSubmissionDescriptor, value string) ([]string, error) {
+	if descriptor == nil || descriptor.OperationToken != "status" || descriptor.Value == nil || len(descriptor.Values) != 0 ||
+		descriptor.Value.Slot != "intended_untracked_selection" || descriptor.Value.Domain != "schema_bound_json" ||
+		descriptor.Value.Schema != "gentle-ai.review-intended-untracked-selection/v1" ||
+		descriptor.Value.SubstitutionLocation < 0 || descriptor.Value.SubstitutionLocation >= len(descriptor.ArgumentTokens) {
+		return nil, fmt.Errorf("intended-untracked submission descriptor = %+v", descriptor)
+	}
+	placeholders := 0
+	for index, token := range descriptor.ArgumentTokens {
+		if !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") {
+			return nil, fmt.Errorf("intended-untracked submission leaked a caller-owned token: %q", token)
+		}
+		if strings.Contains(token, "{{value}}") {
+			placeholders++
+			if index != descriptor.Value.SubstitutionLocation || strings.Count(token, "{{value}}") != 1 {
+				return nil, fmt.Errorf("intended-untracked submission slot = %q at %d", token, index)
+			}
+		}
+	}
+	if placeholders != 1 {
+		return nil, fmt.Errorf("intended-untracked submission descriptor has %d value slots: %+v", placeholders, descriptor)
+	}
+	arguments := append([]string{"review", descriptor.OperationToken}, descriptor.ArgumentTokens...)
+	index := descriptor.Value.SubstitutionLocation + 2
+	arguments[index] = strings.Replace(arguments[index], "{{value}}", value, 1)
+	if strings.Contains(strings.Join(arguments, "\x00"), "{{value}}") {
+		return nil, fmt.Errorf("intended-untracked submission did not replace its value slot: %v", arguments)
+	}
+	return arguments, nil
 }
 
 func unbornUntrackedExecutableCandidate(sandbox *Sandbox) error {
@@ -126,10 +231,296 @@ func unbornUntrackedStatusCollectsSelection(r *journeyRun) error {
 	return nil
 }
 
+func unbornIntendedDeliveryCandidate(sandbox *Sandbox) error {
+	if err := os.MkdirAll(sandbox.Repo, 0o755); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "init", "-b", "main", "-q"); err != nil {
+		return err
+	}
+	return sandbox.write(filepath.Join(sandbox.Repo, unbornIntendedDeliveryPath), "# Reviewed candidate\n")
+}
+
+func selectAndStartUnbornIntendedDelivery(r *journeyRun) error {
+	status, err := readStatusForContract(r, reviewContractV2, "--agent", "opencode")
+	if err != nil {
+		return err
+	}
+	if status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "intended_untracked_selection_required" {
+		return fmt.Errorf("unborn delivery STATUS did not collect intended untracked selection: %+v", status.NextTransition)
+	}
+	digest := status.argument("expected_untracked_inventory")
+	selected, err := readStatusForContract(r, reviewContractV2,
+		"--agent", "opencode", "--untracked-scope=select", "--expected-untracked-inventory="+digest,
+		"--intended-untracked="+unbornIntendedDeliveryPath)
+	if err != nil {
+		return err
+	}
+	if selected.NextTransition.Kind != "execute" || selected.NextTransition.Execute.Operation != "review.start" ||
+		!slices.Equal(selected.Projection.Paths, []string{unbornIntendedDeliveryPath}) {
+		return fmt.Errorf("selected unborn delivery STATUS = %+v", selected)
+	}
+	started, err := runPrintedTransition(r, selected)
+	if err != nil {
+		return err
+	}
+	if started.ExitCode != 0 {
+		return fmt.Errorf("printed unborn delivery START exited %d: %s", started.ExitCode, firstLine(started.Stderr))
+	}
+	if err := rememberLineage(r.sandbox, started); err != nil || r.sandbox.Lineage == "" {
+		return fmt.Errorf("printed unborn delivery START did not publish a lineage: %v", err)
+	}
+	r.sandbox.Scratch["unborn-intended-inventory"] = digest
+	return nil
+}
+
+func requireUnbornIntendedStagedDeliveryStop(r *journeyRun) error {
+	if _, err := gitOut(r.sandbox, r.sandbox.Repo, "rev-parse", "--verify", "HEAD"); err == nil {
+		return fmt.Errorf("unborn delivery fixture unexpectedly has a HEAD")
+	}
+	if cached, err := gitOut(r.sandbox, r.sandbox.Repo, "ls-files", "--cached"); err != nil || cached != "" {
+		return fmt.Errorf("unborn delivery real index = %q, %v", cached, err)
+	}
+	selectors := []string{
+		"--agent", "opencode", "--lineage", r.sandbox.Lineage, "--gate", "pre-commit",
+		"--untracked-scope=select", "--expected-untracked-inventory=" + r.sandbox.Scratch["unborn-intended-inventory"],
+		"--intended-untracked=" + unbornIntendedDeliveryPath,
+	}
+	status, err := readStatusForContract(r, reviewContractV2, selectors...)
+	if err != nil {
+		return err
+	}
+	replayed, replayErr := readStatusForContract(r, reviewContractV2, selectors...)
+	if replayErr != nil || status.Authority.State != "approved" || status.Authority.Revision == "" ||
+		status.Authority.Revision != replayed.Authority.Revision || status.NextTransition.Kind != "stop" ||
+		status.NextTransition.ReasonCode != "staged_delivery_candidate_required" || status.NextTransition.Execute.Operation != "" {
+		return fmt.Errorf("unborn intended staged delivery stop = %+v, replay = %+v, %v", status, replayed, replayErr)
+	}
+	if cached, err := gitOut(r.sandbox, r.sandbox.Repo, "ls-files", "--cached"); err != nil || cached != "" {
+		return fmt.Errorf("unborn delivery STATUS mutated the real index: %q, %v", cached, err)
+	}
+	return nil
+}
+
+func stageUnbornIntendedDeliveryCandidate(sandbox *Sandbox) error {
+	return sandbox.git(sandbox.Repo, "add", "--", unbornIntendedDeliveryPath)
+}
+
+func validateUnbornIntendedStagedDelivery(r *journeyRun) error {
+	status, err := readStatusForContract(r, reviewContractV2,
+		"--agent", "opencode", "--lineage", r.sandbox.Lineage, "--gate", "pre-commit", "--projection", "staged")
+	if err != nil {
+		return err
+	}
+	if status.NextTransition.Kind != "execute" || status.NextTransition.ReasonCode != "approved_receipt_ready" ||
+		status.NextTransition.Execute.Operation != "review.validate" || status.NextTransition.Execute.Command == "" {
+		return fmt.Errorf("exact unborn intended staged transition = %+v", status.NextTransition)
+	}
+	observation, err := runPrintedTransition(r, status)
+	if err != nil {
+		return err
+	}
+	return requireGateForLineage(observation, r.sandbox.Lineage, false)
+}
+
+const selectedUntrackedTerminalPath = "internal/selected.go"
+
+func selectedUntrackedTerminalCandidate(sandbox *Sandbox) error {
+	return sandbox.write(filepath.Join(sandbox.Repo, selectedUntrackedTerminalPath), "package selected\n\nfunc Value() int { return 1 }\n")
+}
+
+func selectUntrackedCaptureAndResumeTerminal(r *journeyRun) error {
+	start, _, err := frozenLineageSelectedStatus(r, "", selectedUntrackedTerminalPath)
+	if err != nil || start.NextTransition.Kind != "execute" || start.NextTransition.Execute.Operation != "review.start" {
+		return fmt.Errorf("selected untracked START = %+v, %v", start.NextTransition, err)
+	}
+	if err := startFrozenLineageWithConsent(r, start); err != nil {
+		return err
+	}
+	active, _, err := frozenLineageStatus(r, r.sandbox.Lineage)
+	if err != nil || active.Authority.LineageID != r.sandbox.Lineage || active.Authority.State != "reviewing" ||
+		active.NextTransition.Kind != "collect" || active.NextTransition.ReasonCode != "reviewer_results_required" ||
+		len(active.NextTransition.Collect.Inputs) != 1 {
+		return fmt.Errorf("selected untracked reviewer STATUS = authority=%+v transition=%+v err=%v", active.Authority, active.NextTransition, err)
+	}
+	if err := captureFrozenReviewerResult(r, active); err != nil {
+		return err
+	}
+	resumed, _, err := frozenLineageStatus(r, r.sandbox.Lineage)
+	if err != nil || resumed.TargetIdentity != active.TargetIdentity || resumed.Authority.LineageID != r.sandbox.Lineage ||
+		resumed.Authority.State != "approved" || resumed.NextTransition.Kind != "execute" ||
+		resumed.NextTransition.ReasonCode != "approved_acknowledgement_required" ||
+		resumed.NextTransition.Execute.Operation != "review.acknowledge-approved" ||
+		resumed.executeArgument("lineage") != r.sandbox.Lineage || resumed.executeArgument("target") != active.TargetIdentity ||
+		resumed.executeArgument("expected-revision") != resumed.Authority.Revision {
+		return fmt.Errorf("selected untracked terminal resume = authority=%+v target=%q transition=%+v err=%v", resumed.Authority, resumed.TargetIdentity, resumed.NextTransition, err)
+	}
+	return nil
+}
+
+const (
+	selectedUntrackedCorrectionTrackedPath    = "internal/selected_correction.go"
+	selectedUntrackedCorrectionUntrackedPath  = "docs/selected-correction.md"
+	selectedUntrackedCorrectionUnselectedPath = "local-only.txt"
+)
+
+func selectedUntrackedCorrectionCandidate(sandbox *Sandbox) error {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, selectedUntrackedCorrectionTrackedPath), "package selected\n\nfunc Value() int { return 1 }\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "--", selectedUntrackedCorrectionTrackedPath); err != nil {
+		return err
+	}
+	if err := sandbox.write(filepath.Join(sandbox.Repo, selectedUntrackedCorrectionUntrackedPath), "# Selected correction input\n"); err != nil {
+		return err
+	}
+	return sandbox.write(filepath.Join(sandbox.Repo, selectedUntrackedCorrectionUnselectedPath), "local-only untracked state\n")
+}
+
+func startSelectedUntrackedCorrection(r *journeyRun) error {
+	start, _, err := frozenLineageSelectedStatus(r, "", selectedUntrackedCorrectionUntrackedPath)
+	if err != nil || start.NextTransition.Kind != "execute" || start.NextTransition.Execute.Operation != "review.start" ||
+		start.NextTransition.Execute.Command == "" {
+		return fmt.Errorf("selected untracked correction START = %+v, %v", start.NextTransition, err)
+	}
+	relay, err := runPrintedTransition(r, start)
+	if err != nil {
+		return err
+	}
+	granted, err := resolveAtomicStartConsentAt(r, r.sandbox.Repo, start, relay)
+	if err != nil {
+		return err
+	}
+	if err := rememberLineage(r.sandbox, granted); err != nil || r.sandbox.Lineage == "" {
+		return fmt.Errorf("selected untracked correction granted START = lineage %q: %v", r.sandbox.Lineage, err)
+	}
+	status, _, err := frozenLineageStatus(r, r.sandbox.Lineage)
+	if err != nil || status.Authority.LineageID != r.sandbox.Lineage || status.Authority.State != "reviewing" ||
+		status.TargetIdentity == "" || status.NextTransition.Kind != "collect" ||
+		status.NextTransition.ReasonCode != "reviewer_results_required" || len(status.NextTransition.Collect.Inputs) == 0 ||
+		len(status.paths()) != 2 || !slices.Contains(status.paths(), selectedUntrackedCorrectionTrackedPath) ||
+		!slices.Contains(status.paths(), selectedUntrackedCorrectionUntrackedPath) {
+		return fmt.Errorf("selected untracked correction reviewing STATUS = authority=%+v target=%q transition=%+v err=%v", status.Authority, status.TargetIdentity, status.NextTransition, err)
+	}
+	r.sandbox.Scratch["j4435-target"] = status.TargetIdentity
+	return nil
+}
+
+func captureSelectedUntrackedCorrectionFinding(r *journeyRun) error {
+	var terminal Observation
+	for capture := 0; capture < 8; capture++ {
+		status, _, err := frozenLineageStatus(r, r.sandbox.Lineage)
+		if err != nil {
+			return err
+		}
+		if status.NextTransition.ReasonCode == "provider_refuter_required" {
+			// The deterministic finding reaches the refuter on this
+			// refuter-capable runtime (L20); its corroborating capture closes.
+			terminal, err = corroborateProviderRefuter(r, status)
+			if err != nil {
+				return err
+			}
+			var closure lastEventClosure
+			if err := json.Unmarshal([]byte(strings.TrimSpace(terminal.Stdout)), &closure); err != nil {
+				return fmt.Errorf("decode selected untracked refuter closure: %w", err)
+			}
+			if closure.State != "correction_required" || closure.LineageID != r.sandbox.Lineage || closure.StatusContinuation == nil || closure.StatusContinuation.Operation != "review.status" {
+				return fmt.Errorf("selected untracked refuter closure = %+v", closure)
+			}
+			r.sandbox.Scratch["j4435-closure"] = terminal.Stdout
+			return nil
+		}
+		if status.Authority.LineageID != r.sandbox.Lineage || status.Authority.State != "reviewing" ||
+			status.TargetIdentity != r.sandbox.Scratch["j4435-target"] || status.NextTransition.Kind != "collect" ||
+			status.NextTransition.ReasonCode != "reviewer_results_required" || len(status.NextTransition.Collect.Inputs) == 0 {
+			return fmt.Errorf("selected untracked correction reviewer STATUS = authority=%+v target=%q transition=%+v", status.Authority, status.TargetIdentity, status.NextTransition)
+		}
+		input := status.NextTransition.Collect.Inputs[0]
+		if input.Name != "reviewer_result" || input.CaptureOperation != "review.capture-result" || input.ArtifactSubject.SubjectHash == "" ||
+			status.argument("lineage") != r.sandbox.Lineage || status.argument("target") != r.sandbox.Scratch["j4435-target"] ||
+			status.argument("expected-revision") == "" || status.argument("lens") == "" || status.argument("order") == "" {
+			return fmt.Errorf("selected untracked correction reviewer binding = %+v", input)
+		}
+		payload, err := synthesizeReviewerResult(input.ArtifactSubject.SubjectHash, status.paths())
+		if err != nil {
+			return err
+		}
+		if capture == 0 {
+			payload, err = json.Marshal(map[string]any{
+				"subject_hash": input.ArtifactSubject.SubjectHash,
+				"inspection":   map[string]any{"status": "completed", "paths": status.paths()},
+				"findings": []any{map[string]any{
+					"location": "internal/selected_correction.go:3", "severity": "CRITICAL", "claim": "selected candidate returns the wrong value",
+					"proof_refs":     []string{"internal/selected_correction.go:3 is introduced by the selected candidate"},
+					"evidence_class": "deterministic", "causal_disposition": "introduced",
+				}},
+				"evidence": []string{"the frozen selected candidate returns 1 instead of the required value"},
+			})
+			if err != nil {
+				return err
+			}
+		}
+		path, err := writeScratch(r.sandbox, fmt.Sprintf("j4435-reviewer-%d.json", capture), payload)
+		if err != nil {
+			return err
+		}
+		terminal = r.run([]string{
+			"review", "capture-result", "--cwd", r.sandbox.Repo,
+			"--lineage", status.argument("lineage"), "--target", status.argument("target"),
+			"--expected-revision", status.argument("expected-revision"), "--lens", status.argument("lens"),
+			"--order", status.argument("order"), "--input", path,
+		}, true)
+		if terminal.ExitCode != 0 {
+			return fmt.Errorf("capture selected untracked correction reviewer %d: %s", capture, firstLine(terminal.Stderr))
+		}
+		var closure lastEventClosure
+		if err := json.Unmarshal([]byte(strings.TrimSpace(terminal.Stdout)), &closure); err != nil {
+			return fmt.Errorf("decode selected untracked correction closure: %w", err)
+		}
+		if closure.State == "correction_required" {
+			if closure.LineageID != r.sandbox.Lineage || closure.StatusContinuation == nil || closure.StatusContinuation.Operation != "review.status" {
+				return fmt.Errorf("selected untracked correction closure = %+v", closure)
+			}
+			r.sandbox.Scratch["j4435-closure"] = terminal.Stdout
+			return nil
+		}
+	}
+	return fmt.Errorf("selected untracked correction reviewer captures did not reach correction_required: %s", terminal.Stdout)
+}
+
+func executeSelectorlessSelectedUntrackedCorrectionContinuation(r *journeyRun) error {
+	closure := Observation{Stdout: r.sandbox.Scratch["j4435-closure"]}
+	var result lastEventClosure
+	if err := json.Unmarshal([]byte(strings.TrimSpace(closure.Stdout)), &result); err != nil {
+		return fmt.Errorf("decode selected untracked correction continuation: %w", err)
+	}
+	if result.LineageID != r.sandbox.Lineage || result.StatusContinuation == nil || result.StatusContinuation.Operation != "review.status" {
+		return fmt.Errorf("selected untracked correction continuation = %+v", result)
+	}
+	for _, argument := range result.StatusContinuation.Arguments {
+		for _, forbidden := range []string{"--untracked-scope", "--expected-untracked-inventory", "--intended-untracked"} {
+			if strings.HasPrefix(argument.Token, forbidden+"=") || argument.Token == forbidden {
+				return fmt.Errorf("selected untracked correction continuation leaked selector %q", argument.Token)
+			}
+		}
+	}
+	status, continued, err := correctionStatusFromLastEventCapture(r, closure)
+	if err != nil || !continued {
+		return fmt.Errorf("execute selected untracked correction continuation: continued=%t err=%v", continued, err)
+	}
+	if status.Authority.LineageID != r.sandbox.Lineage || status.Authority.State != "correction_required" ||
+		status.TargetIdentity != r.sandbox.Scratch["j4435-target"] || status.NextTransition.Kind != "collect" ||
+		status.NextTransition.ReasonCode != "correction_plan_required" {
+		return fmt.Errorf("selected untracked correction continuation STATUS = authority=%+v target=%q transition=%+v", status.Authority, status.TargetIdentity, status.NextTransition)
+	}
+	return nil
+}
+
 func intendedUntrackedJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j75-intended-untracked-selection-executes-printed-start",
+			Review: reviewOptedIn,
 			Title:  "Mixed workspace candidate: STATUS collects explicit untracked intent and its printed START executes exactly",
 			Source: "issue #2652: intended untracked files require explicit inventory-bound admission; #2394 keeps unrelated local bytes excluded",
 			Steps: []Step{
@@ -139,7 +530,32 @@ func intendedUntrackedJourneys() []Journey {
 			},
 		},
 		{
+			ID:     "j4435-selected-untracked-correction-continuation-is-selectorless",
+			Review: reviewOptedIn,
+			Title:  "#4435: selected untracked correction continuation omits selection selectors and preserves its frozen target",
+			Source: "#4435: the selected-untracked admission is frozen at START, so correction STATUS resumes only through its exact lineage",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: tracked and selected untracked correction candidate", Fixture: selectedUntrackedCorrectionCandidate},
+				{Name: "negotiate v2 selected-untracked START and grant its published consent invocation", Requires: frozenLineageStatusCapability, Composite: startSelectedUntrackedCorrection},
+				{Name: "capture a deterministic introduced CRITICAL finding through correction-required", Requires: captureResultCapability, Composite: captureSelectedUntrackedCorrectionFinding},
+				{Name: "execute the selectorless returned STATUS continuation and retain the frozen lineage and target", Requires: frozenLineageStatusCapability, Composite: executeSelectorlessSelectedUntrackedCorrectionContinuation},
+			},
+		},
+		{
+			ID:     "j126-selected-untracked-terminal-status-resumes-without-flags",
+			Review: reviewOptedIn,
+			Title:  "#4018: selected untracked reviewer closure resumes its terminal acknowledgement without selection flags",
+			Source: "#4018: an explicit occupied lineage owns its immutable intended-untracked selection through terminal continuation",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: selected untracked Go review candidate", Fixture: selectedUntrackedTerminalCandidate},
+				{Name: "select untracked candidate, close its actual reviewer slot, and resume the acknowledgement through lineage STATUS without flags", Requires: frozenLineageStatusCapability, Composite: selectUntrackedCaptureAndResumeTerminal},
+			},
+		},
+		{
 			ID:     "j88-unborn-status-collects-untracked-selection",
+			Review: reviewOptedIn,
 			Title:  "Unborn repository: STATUS collects explicit untracked selection before snapshot assessment",
 			Source: "issue #2843: an unselected executable candidate must collect inventory-bound intent, never return generic retry or create authority",
 			Steps: []Step{
@@ -148,5 +564,78 @@ func intendedUntrackedJourneys() []Journey {
 				{Name: "v2 OpenCode STATUS collects the inventory-bound untracked selection", Requires: unbornIntendedUntrackedStatusCapability, Composite: unbornUntrackedStatusCollectsSelection},
 			},
 		},
+		{
+			ID:     "j110-untracked-terminal-burn-and-unmanaged-staged-validation",
+			Review: reviewOptedIn,
+			Title:  "#3797: an untracked intended candidate awaits acknowledgement before burn and staged validation stays unmanaged",
+			Source: "#3797 preserves explicit intended-untracked START selection while requiring exact acknowledgement before terminal burn",
+			Steps: []Step{
+				{Name: "fixture: unborn repository with one all-untracked candidate", Fixture: unbornIntendedDeliveryCandidate},
+				{Name: "select every untracked path and execute printed zero-lens START", Requires: unbornIntendedUntrackedStatusCapability, Composite: selectAndStartUnbornIntendedDelivery},
+				{Name: "the zero-lens terminal event emits acknowledgement before burning the unborn transaction", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					return requireAtomicLineageAcknowledged(r, r.sandbox.Lineage,
+						"--agent", "opencode", "--untracked-scope=select",
+						"--expected-untracked-inventory="+r.sandbox.Scratch["unborn-intended-inventory"],
+						"--intended-untracked="+unbornIntendedDeliveryPath,
+					)
+				}},
+				{Name: "unstaged unborn pre-commit validation is informational and unmanaged", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+					return requireUnmanagedShippedGate(observation, "pre-commit")
+				}},
+				{Name: "fixture: stage the formerly reviewed candidate", Fixture: stageUnbornIntendedDeliveryCandidate},
+				{Name: "staged unborn pre-commit validation remains informational and unmanaged", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
+					return requireUnmanagedShippedGate(observation, "pre-commit")
+				}},
+			},
+		},
 	}
+}
+
+var (
+	refuterRequestHashPattern = regexp.MustCompile(`"request_hash":"(sha256:[0-9a-f]{64})"`)
+	refuterFindingIDPattern   = regexp.MustCompile(`"finding_id":"([A-Za-z0-9-]+)"`)
+)
+
+// corroborateProviderRefuter answers a provider_refuter_required STATUS the
+// way a host would: it materializes the Go-issued refuter task through the Pi
+// relay, corroborates every claim it names, and captures that result. The
+// sandbox keeps the Pi relay handshake afterwards.
+func corroborateProviderRefuter(r *journeyRun, status statusEnvelope) (Observation, error) {
+	// The Pi relay captures the refuter, so the returned continuation names
+	// the Pi runtime; keep its handshake for the rest of the journey.
+	r.sandbox.PiReviewRelayContract = "gentle-pi.review-relay/v1"
+	binding := []string{
+		"--cwd", r.sandbox.Repo, "--lineage", status.argument("lineage"), "--target", status.argument("target"),
+		"--expected-revision", status.argument("expected-revision"), "--repository-context", status.argument("repository-context"), "--agent", "pi",
+	}
+	task := r.run(append([]string{"review", "capture-refuter"}, append(binding, "--materialize")...), false)
+	if task.ExitCode != 0 {
+		return task, fmt.Errorf("materialize provider refuter: %s", firstLine(task.Stderr))
+	}
+	hash := refuterRequestHashPattern.FindStringSubmatch(task.Stdout)
+	if hash == nil {
+		return task, fmt.Errorf("materialized provider refuter task has no request hash")
+	}
+	results := []map[string]any{}
+	seen := map[string]bool{}
+	for _, match := range refuterFindingIDPattern.FindAllStringSubmatch(task.Stdout, -1) {
+		if seen[match[1]] {
+			continue
+		}
+		seen[match[1]] = true
+		results = append(results, map[string]any{"finding_id": match[1], "outcome": "corroborated", "proof_refs": []string{"independent reproduction of " + match[1]}})
+	}
+	payload, err := json.Marshal(map[string]any{"refuter_request_hash": hash[1], "results": results})
+	if err != nil {
+		return task, err
+	}
+	path, err := writeScratch(r.sandbox, "provider-refuter-result.json", payload)
+	if err != nil {
+		return task, err
+	}
+	captured := r.run(append([]string{"review", "capture-refuter"}, append(binding, "--input", path)...), true)
+	if captured.ExitCode != 0 {
+		return captured, fmt.Errorf("capture provider refuter: %s", firstLine(captured.Stderr))
+	}
+	return captured, nil
 }

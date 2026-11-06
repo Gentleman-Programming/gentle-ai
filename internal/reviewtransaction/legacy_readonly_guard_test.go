@@ -13,38 +13,12 @@ package reviewtransaction
 //     verb literal is reachable from internal/cli/review_facade.go's own
 //     dispatch switches (runReviewCommand, runReviewCommandContext).
 //
-// RG.1b's own outcome (WU19, S8, row 24): the design's original plan
-// assumed WU18 (switch removal) would land before WU19 ran, making
-// compact-v2 a purely historical, frozen concern by classification time --
-// under that assumption, each of the six D4 verbs
-// (invalidate/abandon/recover/reclaim/dispose-result/reopen-results) would
-// be classified as either dead (delete) or a residual D5 forensic-READ path
-// (retain read-only). WU18 was DEFERRED (coordinator scope decision,
-// specs/rdd-single-lifecycle/spec.md's amendment), so this assumption does
-// not hold: GENTLE_AI_RDD_NEW_LINEAGE and the legacy start branch are still
-// live, so compact-v2 REMAINS the default, actively-mutated lifecycle for
-// every candidate started without the switch. WU19's classification of all
-// six verbs, evidence-based (each one's own handler constructs/mutates a
-// reviewtransaction.Compact* record -- ReviewAbandonResult's
-// CompactReclaimRecord, RunReviewInvalidate's own "pristine reviewing
-// authority" framing, and so on for reclaim/dispose-result/reopen-results):
-// every one is LIVE, ACTIVE MUTATION surface for the current default
-// lifecycle, not a legacy-frozen relic and not a D5 retained-READ path
-// (D5's retained-read list is for FROZEN v1 forensic access, never for a
-// still-mutable compact-v2 verb). None qualify for deletion; none qualify
-// for read-only retention either -- they simply are not legacy yet. This
-// guard's own scope narrows to match: legacyRetiredMutationVerbs now lists
-// only the 5 verbs actually retired this wave (reconcile-authority/-batch,
-// the 3 quarantine/repair verbs); legacyLiveCompactV2MutationVerbs is a
-// new, separate, POSITIVE assertion that the 6 D4 verbs remain reachable
-// -- this guard is GREEN either way it looks at the current dispatch
-// table, honestly, rather than forced green by deleting live surface.
-//
-// Re-classification is a live task for the wave that lands switch removal:
-// once GENTLE_AI_RDD_NEW_LINEAGE and the legacy branch are actually gone,
-// re-run this exact classification (does the verb's own handler still
-// mutate reachable compact-v2 state, or is that state now permanently
-// frozen) and move each verb to delete or D5-retained-read accordingly.
+// The atomic-v3 START cutover is now unconditional. The five D4 verbs below
+// remain dispatch-reachable only for existing compact-v2 authority while their
+// separate retirement is out of scope; their reachability must not be read as
+// permission for fresh START to create compact-v2 state. This guard therefore
+// distinguishes the six verbs already retired this wave from the five compact
+// compatibility verbs whose removal needs a dedicated lifecycle decision.
 
 import (
 	"go/ast"
@@ -57,48 +31,39 @@ import (
 
 // legacyRetainedReadSymbols is D5's closed retained-read list: file path
 // (relative to this package directory) -> identifier names that file must
-// still declare. sddstatus/legacy_binding_read.go, sddstatus/review_binding.go
-// and candidate_decline.go live outside this package's own directory, so
-// their paths are relative to this package's own directory.
+// still declare. candidate_decline.go lives outside this package's own
+// directory, so its path is relative to this package's own directory.
 // AuthoritativeStore/LoadChain/NewLegacyReadOnlyError are declared inside
 // THIS package (store.go, compact_store.go) — review_facade.go:1632-1635
 // (design.md) is only their call site, not their declaration.
 var legacyRetainedReadSymbols = map[string][]string{
-	"../sddstatus/legacy_binding_read.go": {"parseLegacyBinding"},
-	"../sddstatus/review_binding.go":      {"parseBinding", "bindingBytes", "bindingDigest", "bindingPath"},
-	"candidate_decline.go":                {"parseCandidateDeclineAuthorization"},
-	"store.go":                            {"AuthoritativeStore", "LoadChain"},
-	"compact_store.go":                    {"NewLegacyReadOnlyError"},
+	"candidate_decline.go": {"parseCandidateDeclineAuthorization"},
+	"store.go":             {"AuthoritativeStore", "LoadChain"},
+	"compact_store.go":     {"NewLegacyReadOnlyError"},
 }
 
 // legacyRetiredMutationVerbs is the exact case-clause literal set this wave
-// actually retired: reconcile-authority/-batch (S3/S4), and the three
-// quarantine/repair verbs (S5). The six D4 verbs of ambiguous vintage (S8,
-// row 24) are NOT in this list -- WU19 classified them as still-live
-// compact-v2 mutation surface (see legacyLiveCompactV2MutationVerbs below
-// and this file's own package-level doc comment for the full
-// WU18-deferral-driven rationale), not retired.
+// actually retired: reconcile-authority/-batch (S3/S4), the three
+// quarantine/repair verbs (S5), and dispose-result (G2a3). The five remaining
+// D4 verbs of ambiguous vintage (S8, row 24) are NOT in this list -- WU19
+// classified them as still-live compact-v2 mutation surface (see
+// legacyLiveCompactV2MutationVerbs below and this file's own package-level doc
+// comment for the full WU18-deferral-driven rationale), not retired.
 var legacyRetiredMutationVerbs = []string{
 	"reconcile-authority", "reconcile-authority-batch",
 	"quarantine-legacy", "quarantine-legacy-fix-scope", "repair-legacy-alias",
+	"dispose-result",
 }
 
-// legacyLiveCompactV2MutationVerbs is WU19's (S8, row 24) classification
-// outcome for the six D4 verbs: each one's own handler mutates a
-// reviewtransaction.Compact* record (ReviewAbandonResult's
-// CompactReclaimRecord, RunReviewInvalidate's own "pristine reviewing
-// authority" framing, and equivalently for reclaim/dispose-result/
-// reopen-results) -- live, active mutation surface for the current default
-// (switch-gated) compact-v2 lifecycle, confirmed reachable and expected to
-// STAY reachable while GENTLE_AI_RDD_NEW_LINEAGE and the legacy start
-// branch remain (WU18 deferred, specs/rdd-single-lifecycle/spec.md's
-// amendment). This is a positive assertion, not a RED-until-something
-// placeholder: TestLegacyReadOnlyGuardLiveCompactV2VerbsRemainReachable
-// fails if any of these six literals disappear from dispatch without this
-// list being updated in the same slice, the same discipline
-// legacyRetiredMutationVerbs already holds retired verbs to.
+// legacyLiveCompactV2MutationVerbs lists the five D4 verbs that still handle
+// existing compact-v2 authority. Each handler mutates a Compact* record, so
+// their dispatch remains an explicit compatibility surface until a dedicated
+// retirement changes this list. G2a3 moved dispose-result to the retired set
+// because its compact authority handler is gone. This list never authorizes a
+// fresh CLI START to create compact-v2 state. TestLegacyReadOnlyGuardLiveCompactV2VerbsRemainReachable
+// fails if a literal disappears without this list changing in the same slice.
 var legacyLiveCompactV2MutationVerbs = []string{
-	"invalidate", "abandon", "recover", "reclaim", "dispose-result", "reopen-results",
+	"invalidate", "abandon", "recover", "reclaim", "reopen-results",
 }
 
 // legacyDispatchFunctions is the closed set of functions in
@@ -144,13 +109,12 @@ func TestLegacyReadOnlyGuardMutationVerbsUnreachable(t *testing.T) {
 }
 
 // TestLegacyReadOnlyGuardLiveCompactV2VerbsRemainReachable is RG.1b's
-// live-verb half, added at WU19 classification time: the six D4 verbs are
-// NOT retired (see this file's own package-level doc comment and
+// live-verb half, added at WU19 classification time: the five remaining D4
+// verbs are NOT retired (see this file's own package-level doc comment and
 // legacyLiveCompactV2MutationVerbs for the full WU18-deferral rationale) --
-// this is a positive assertion that they stay reachable, exactly as
-// reachable as any other still-live dispatch case, and fails loudly (not
-// silently) if one disappears without this list being updated in the same
-// slice.
+// this is a positive assertion that they stay reachable, exactly as reachable
+// as any other still-live dispatch case, and fails loudly (not silently) if one
+// disappears without this list being updated in the same slice.
 func TestLegacyReadOnlyGuardLiveCompactV2VerbsRemainReachable(t *testing.T) {
 	reachable := dispatchReachableVerbs(t)
 	var missing []string
@@ -160,7 +124,7 @@ func TestLegacyReadOnlyGuardLiveCompactV2VerbsRemainReachable(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("compact-v2 mutation verbs classified as still-live (WU19) are no longer reachable from review_facade.go dispatch: %v (either this was an unintentional deletion, or the verb genuinely retired -- move it to legacyRetiredMutationVerbs with the written reason in the same slice)", missing)
+		t.Fatalf("compact-v2 mutation verbs still live after G2a3 retired dispose-result are no longer reachable from review_facade.go dispatch: %v (either this was an unintentional deletion, or the verb genuinely retired -- move it to legacyRetiredMutationVerbs with the written reason in the same slice)", missing)
 	}
 }
 

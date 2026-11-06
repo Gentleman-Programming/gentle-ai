@@ -11,20 +11,22 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/skillregistry"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v4/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/skillregistry"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/verify"
 )
 
 // Version is set from main via ldflags at build time.
@@ -38,7 +40,11 @@ var (
 	selfUpdateFn              = selfUpdate
 	ensureCurrentOSSupported  = system.EnsureCurrentOSSupported
 	detectSystem              = system.Detect
-	runTUI                    = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+	runShellInstallSelection  = cli.RunShellInstallSelectionProcess
+	runInlineShellInstall     = func(ctx context.Context, request shellinstaller.UserInstallRequest, report func(shellinstaller.UserInstallProgress)) error {
+		return cli.RunShellInstallInline(ctx, cli.ShellInstallSelection{Request: request, Confirmed: true, Executed: true}, report, io.Discard)
+	}
+	runTUI = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
 		p := tea.NewProgram(m, opts...)
 		return p.Run()
 	}
@@ -60,7 +66,39 @@ func Run() error {
 	return RunArgs(os.Args[1:], os.Stdout)
 }
 
+const nonInteractiveTUIError = "gentle-ai requires both stdin and stdout to be terminals (TTYs); use --version, gentle-ai update, or --help for non-interactive use"
+
+// clearPendingSyncAfterDeferredSync clears PendingSync under the canonical
+// install-state lock. It re-reads the latest state inside the lock so changes
+// written by a concurrent writer between the deferred sync and this clear are
+// preserved; the stale fallback is used only when the state file does not
+// exist yet.
+func clearPendingSyncAfterDeferredSync(homeDir string, fallback state.InstallState) error {
+	return statecoord.WithLock(homeDir, func() error {
+		current, readErr := state.Read(homeDir)
+		if readErr != nil {
+			if errors.Is(readErr, os.ErrNotExist) {
+				current = fallback
+			} else {
+				return readErr
+			}
+		}
+		current.PendingSync = false
+		return state.Write(homeDir, current)
+	})
+}
+
 func RunArgs(args []string, stdout io.Writer) error {
+	// Shell installation and ordinary owned launches bypass generic setup,
+	// detection, self-update and gates; each platform backend (Linux supervisor,
+	// Windows worker) validates its own physical limits.
+	if len(args) > 0 && args[0] == "shell" {
+		return cli.RunShell(args[1:], stdout)
+	}
+	if len(args) == 0 && (!isattyFn(os.Stdin.Fd()) || !isattyFn(os.Stdout.Fd())) {
+		return errors.New(nonInteractiveTUIError)
+	}
+
 	// Propagate the build-time version to the CLI and upgrade layers so backup
 	// manifests record which version of gentle-ai created them.
 	cli.AppVersion = Version
@@ -79,6 +117,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
 			return nil
+		case "bench-model-picker":
+			if handled, err := runBenchModelPickerCommand(args[1:], stdout); handled {
+				return err
+			}
 		case "uninstall":
 			if len(args) >= 2 && args[1] == "opencode-plugin" {
 				_, err := cli.RunUninstallOpenCodePlugin(args[2:], stdout)
@@ -87,17 +129,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return runUninstall(args[1:], stdout)
 		case "skill-registry":
 			return runSkillRegistry(args[1:], stdout)
-		case "sdd-status":
-			return cli.RunSDDStatus(args[1:], stdout)
-		case "sdd-continue":
-			return cli.RunSDDContinue(args[1:], stdout)
-		case "sdd-attempt":
-			// Content digests canonicalize at this boundary (#2523); the ledger stays strict (#2395).
-			return cli.RunSDDAttempt(cli.CanonicalizeSDDAttemptRevisionArgs(args[1:]), stdout)
-		case "sdd-verify-validate":
-			return cli.RunSDDVerifyValidate(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
+		case "telemetry":
+			return cli.RunTelemetry(args[1:], stdout)
 		case "review":
 			// The kill switch must stay reachable even when review authority
 			// itself is disabled, so it is dispatched ahead of the facade.
@@ -116,13 +151,45 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "review-bundle-import":
 			return cli.RunReviewBundleImport(args[1:], stdout)
 		case "review-validate":
-			return cli.RunReviewValidate(args[1:], stdout)
+			return cli.RunReviewValidateNonDeciding(args[1:], stdout)
 		case "install":
 			if hasHelpFlag(args[1:]) {
 				cli.PrintInstallHelp(stdout)
 				return nil
 			}
+		case "sync":
+			if hasHelpFlag(args[1:]) {
+				cli.PrintSyncHelp(stdout)
+				return nil
+			}
+		case "restore":
+			// Answer an explicit help request before system detection: a host
+			// with no resolvable home directory must still be able to read the
+			// restore usage, and cli.RunRestore answers --help before it
+			// resolves the home directory itself.
+			if hasHelpFlag(args[1:]) {
+				return cli.RunRestore([]string{"--help"}, stdout)
+			}
 		}
+	}
+
+	// Issue #535: parse the upgrade command's arguments exactly once, before
+	// any platform validation, system detection, self-update, update check,
+	// backup, or execution effect. Unsupported pre-delimiter dash arguments
+	// are rejected here with zero effects. The parsed value is forwarded to
+	// runUpgrade below so the executor never reparses raw CLI args. The
+	// help selection branch is added in the follow-up help-behavior change.
+	var parsedUpgrade *upgradeArgs
+	if len(args) > 0 && args[0] == "upgrade" {
+		parsed, err := parseUpgradeArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		parsedUpgrade = &parsed
+	}
+
+	if err := validateIsolationEnv(); err != nil {
+		return err
 	}
 
 	if err := ensureCurrentOSSupported(); err != nil {
@@ -136,6 +203,16 @@ func RunArgs(args []string, stdout io.Writer) error {
 
 	if !result.System.Supported {
 		return system.EnsureSupportedPlatform(result.System.Profile)
+	}
+
+	// Reject invalid install plans before self-update can persist its cooldown
+	// or replace the binary. Dispatch reuses this plan without reparsing flags.
+	var preparedInstall cli.PreparedInstall
+	if len(args) > 0 && args[0] == "install" {
+		preparedInstall, err = cli.PrepareInstall(args[1:], result)
+		if err != nil {
+			return err
+		}
 	}
 
 	var (
@@ -169,9 +246,12 @@ func RunArgs(args []string, stdout io.Writer) error {
 
 		// Load persisted state so the TUI pre-selects the agents the user
 		// previously chose instead of re-selecting every detected config dir.
-		// A missing or unreadable state file is not an error — NewModel falls
-		// back to filesystem detection for first-time installs.
-		installedState, _ := state.Read(homeDir)
+		// Missing state preserves the first-time filesystem fallback; unreadable
+		// state cannot safely be treated as an empty selection.
+		installedState, err := state.Read(homeDir)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read install state: %w", err)
+		}
 
 		// Deferred sync: if a previous gentle-ai self-upgrade set PendingSync=true,
 		// run sync now with the new binary before entering the TUI. On success,
@@ -183,17 +263,25 @@ func RunArgs(args []string, stdout io.Writer) error {
 				_, _ = fmt.Fprintf(stdout, "Warning: deferred sync failed: %v\n", err)
 				// Leave PendingSync=true so the next launch retries.
 			} else {
-				installedState.PendingSync = false
-				if writeErr := state.Write(homeDir, installedState); writeErr != nil {
+				// Re-read the latest state inside the canonical lock so a
+				// concurrent writer's changes survive the PendingSync clear.
+				if writeErr := clearPendingSyncAfterDeferredSync(homeDir, installedState); writeErr != nil {
 					// Best-effort: surface the failure so it's not silently swallowed.
 					// Idempotent re-sync on the next launch is acceptable.
 					_, _ = fmt.Fprintf(stdout, "Warning: failed to clear PendingSync flag: %v\n", writeErr)
 				}
 			}
+			// TUI self-update path: the previous launch completed a gentle-ai
+			// self-upgrade under the old binary and set PendingSync=true. We are
+			// now running under the new binary; print the doctor advisory so the
+			// user can verify ecosystem health against the post-upgrade state.
+			// Print regardless of sync outcome — the advisory is informational.
+			printPostUpgradeDoctorAdvisory(stdout)
 		}
 
-		m := tui.NewModel(result, Version, installedState)
-		m.ExecuteFn = tuiExecute
+		m := tui.NewModel(result, Version, installedState).WithShellInstaller().WithShellInstallRunner(runInlineShellInstall)
+		m.ExecuteFn = tuiExecuteWithBackground
+		m.ExecuteSDKFn = tuiExecuteWithSDK
 		m.RestoreFn = tuiRestore
 		m.DeleteBackupFn = func(manifest backup.Manifest) error {
 			return backup.DeleteBackup(manifest)
@@ -208,17 +296,27 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.Backups = ListBackups()
 		m.UpgradeFn = tuiUpgrade(resolveProfile(), homeDir)
 		m.SyncFn = tuiSync(homeDir)
+		m.SyncDetailedFn = tuiSyncDetailed(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
-		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
-		// Slice 3b — wire the 4-layer managed-uninstall runner used by the
-		// standalone "Uninstall OpenCode Plugin" TUI shortcut. The TUI
-		// model falls back to opencodeplugin.Uninstall when this field is
-		// nil; assigning it explicitly here keeps the production wiring
-		// visible at the same seam as the other injected functions.
-		m.OpenCodePluginUninstallFn = opencodeplugin.Uninstall
+		m.UninstallWithEngramScopeFn = tuiUninstallWithEngramScope(homeDir)
+		// The review store is clone-scoped, so the TUI acts on the repository
+		// the user launched it from. Both closures resolve the working
+		// directory at call time rather than at wiring time, so a survey and
+		// the reset it authorized can never disagree about which clone they
+		// mean.
+		m.ReviewStoreResetSurveyFn = tuiReviewStoreSurvey
+		m.ReviewStoreResetFn = tuiReviewStoreReset
 		finalModel, err := runTUI(m, tea.WithAltScreen())
 		if err != nil {
 			return err
+		}
+		// Bubble Tea has restored the terminal before any installer runs.
+		if selector, ok := finalModel.(interface {
+			ShellInstallSelection() cli.ShellInstallSelection
+		}); ok {
+			if selection := selector.ShellInstallSelection(); selection.Confirmed && !selection.Executed {
+				return runShellInstallSelection(selection, stdout)
+			}
 		}
 		if latestVersion, ok := gentleAIUpgradeVersionFromTUI(finalModel); ok {
 			return restartAfterGentleAIUpgrade(latestVersion, stdout)
@@ -230,9 +328,9 @@ func RunArgs(args []string, stdout io.Writer) error {
 	case "update":
 		return runUpdate(context.Background(), Version, resolveProfile(), stdout)
 	case "upgrade":
-		return runUpgrade(context.Background(), args[1:], result, stdout)
+		return runUpgrade(context.Background(), *parsedUpgrade, result, stdout)
 	case "install":
-		installResult, err := cli.RunInstall(args[1:], result)
+		installResult, err := cli.RunPreparedInstall(preparedInstall, result)
 		if err != nil {
 			return err
 		}
@@ -247,12 +345,15 @@ func RunArgs(args []string, stdout io.Writer) error {
 		return nil
 	case "sync":
 		syncResult, err := cli.RunSync(args[1:])
-		if err != nil {
+		var partial *cli.PartialSyncError
+		if err != nil && !errors.As(err, &partial) {
 			return err
 		}
 
+		// A partial sync applied the other agents: print what changed, then
+		// fail so automation notices the skipped agent.
 		_, _ = fmt.Fprintln(stdout, cli.RenderSyncReport(syncResult))
-		return nil
+		return err
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
 	case "doctor":
@@ -272,7 +373,10 @@ func runUninstall(args []string, stdout io.Writer) error {
 
 func hasHelpFlag(args []string) bool {
 	for _, arg := range args {
-		if arg == "--help" || arg == "-h" {
+		// The flag package treats one and two leading dashes as equivalent,
+		// and both "help" and "h" trigger flag.ErrHelp, so the pre-dispatch
+		// must match every spelling the parser accepts.
+		if arg == "--help" || arg == "-help" || arg == "-h" || arg == "--h" {
 			return true
 		}
 	}
@@ -318,6 +422,13 @@ func resolveSkillRegistryDirs(cwd string) (string, string, error) {
 			return "", "", fmt.Errorf("resolve cwd: %w", err)
 		}
 	}
+	// Canonicalize cwd before project-identity decisions so explicit relative
+	// values such as --cwd . compare against the same project root as default cwd.
+	absCWD, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve cwd: %w", err)
+	}
+	cwd = absCWD
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", "", fmt.Errorf("resolve home directory: %w", err)
@@ -351,6 +462,16 @@ func runSkillRegistryRefresh(args []string, stdout io.Writer) error {
 	cwd, home, err := resolveSkillRegistryDirs(cwd)
 	if err != nil {
 		return err
+	}
+	// Startup hooks run refresh from whatever directory the host resolved; a
+	// brand-new non-project directory can resolve to "/", $HOME, or a
+	// markerless folder. Never initialize there: skip silently under --quiet
+	// (a startup hook must not scream) and with a one-line notice otherwise.
+	if reason := skillregistry.RefreshSkip(cwd, home); reason != skillregistry.SkipNone {
+		if !quiet {
+			_, _ = fmt.Fprintf(stdout, "Skill registry refresh skipped (%s): %s is not a project root; run it from a project directory (one containing .git or .atl), or create the project first.\n", reason, cwd)
+		}
+		return nil
 	}
 	if ensureGitignore {
 		if err := skillregistry.EnsureATLIgnored(cwd); err != nil {
@@ -431,7 +552,13 @@ func runSkillRegistryList(args []string, stdout io.Writer) error {
 func runUpdate(ctx context.Context, currentVersion string, profile system.PlatformProfile, stdout io.Writer) error {
 	results := updateCheckAll(ctx, currentVersion, profile)
 	_, _ = fmt.Fprint(stdout, update.RenderCLI(results))
-	return updateCheckError(results)
+	if err := updateCheckError(results); err != nil {
+		return err
+	}
+	if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
+		cli.TelemetryTrigger(homeDir)
+	}
+	return nil
 }
 
 // runUpgrade handles the `gentle-ai upgrade [--dry-run] [tool...]` command.
@@ -442,21 +569,14 @@ func runUpdate(ctx context.Context, currentVersion string, profile system.Platfo
 //   - Executes binary-only upgrades; does NOT invoke install or sync pipelines
 //   - Skips gentle-ai itself when running as a dev build (version="dev")
 //   - Falls back to source-install guidance where official binaries are unavailable
-func runUpgrade(ctx context.Context, args []string, detection system.DetectionResult, stdout io.Writer) error {
-	dryRun := false
-	noBackup := false
-	var toolFilter []string
-
-	for _, arg := range args {
-		switch {
-		case arg == "--dry-run" || arg == "-n":
-			dryRun = true
-		case arg == "--no-backup":
-			noBackup = true
-		case !strings.HasPrefix(arg, "-"):
-			toolFilter = append(toolFilter, arg)
-		}
-	}
+//
+// Issue #535: runUpgrade consumes a structured upgradeArgs value parsed once
+// in RunArgs. It forwards the parsed flags and tool filters to the update
+// check and executor exactly once and never reparses raw CLI arguments.
+func runUpgrade(ctx context.Context, args upgradeArgs, detection system.DetectionResult, stdout io.Writer) error {
+	dryRun := args.dryRun
+	noBackup := args.noBackup
+	toolFilter := args.toolFilter
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -469,9 +589,12 @@ func runUpgrade(ctx context.Context, args []string, detection system.DetectionRe
 	sp := upgrade.NewSpinner(stdout, "Checking for updates")
 	checkResults := updateCheckFiltered(ctx, Version, profile, toolFilter)
 	checkErr := updateCheckError(checkResults)
-	sp.Finish(checkErr == nil)
-	if checkErr != nil {
+	sp.Finish(!update.HasCheckFailures(checkResults))
+	if update.HasCheckFailures(checkResults) {
+		// Preserve partial-check diagnostics even when healthy tools can upgrade.
 		_, _ = fmt.Fprint(stdout, update.RenderCLI(checkResults))
+	}
+	if checkErr != nil {
 		return checkErr
 	}
 
@@ -499,7 +622,14 @@ func runUpgrade(ctx context.Context, args []string, detection system.DetectionRe
 	}
 	if !dryRun {
 		if latestVersion, ok := gentleAIUpgradeSucceeded(report); ok {
-			return restartAfterGentleAIUpgrade(latestVersion, stdout)
+			if err := restartAfterGentleAIUpgrade(latestVersion, stdout); err != nil {
+				return err
+			}
+			// CLI upgrade path: print the doctor advisory so the user can verify
+			// ecosystem health against the post-upgrade state. Informational only;
+			// does not run any checks or change exit status.
+			printPostUpgradeDoctorAdvisory(stdout)
+			return nil
 		}
 	}
 	return nil
@@ -507,7 +637,10 @@ func runUpgrade(ctx context.Context, args []string, detection system.DetectionRe
 
 func updateCheckError(results []update.UpdateResult) error {
 	failed := update.CheckFailures(results)
-	if len(failed) == 0 {
+	// A failed tool must not invalidate the usable results of other tools.
+	// Non-failed statuses retain their existing semantics, including unknown
+	// versions, absent tools, and development builds; none implies up-to-date.
+	if len(failed) == 0 || len(failed) < len(results) {
 		return nil
 	}
 
@@ -515,16 +648,37 @@ func updateCheckError(results []update.UpdateResult) error {
 }
 
 // tuiExecute creates a real install runtime and runs the pipeline with progress reporting.
-func tuiExecute(
+var appUserHomeDir = os.UserHomeDir
+var appStateWriteReconciled = state.WriteReconciled
+
+func tuiExecuteWithBackground(
 	selection model.Selection,
 	resolved planner.ResolvedPlan,
 	detection system.DetectionResult,
+	background model.OpenCodeBackgroundIntent,
+	backgroundPersist model.OpenCodeBackgroundIntent,
+	piBackground model.PiBackgroundIntent,
+	piBackgroundPersist model.PiBackgroundIntent,
 	onProgress pipeline.ProgressFunc,
+) pipeline.ExecutionResult {
+	return tuiExecuteWithSDK(selection, resolved, detection, background, backgroundPersist, piBackground, piBackgroundPersist, onProgress, nil)
+}
+
+func tuiExecuteWithSDK(
+	selection model.Selection,
+	resolved planner.ResolvedPlan,
+	detection system.DetectionResult,
+	background model.OpenCodeBackgroundIntent,
+	backgroundPersist model.OpenCodeBackgroundIntent,
+	piBackground model.PiBackgroundIntent,
+	piBackgroundPersist model.PiBackgroundIntent,
+	onProgress pipeline.ProgressFunc,
+	consent *cli.OpenCodeSDKConsent,
 ) pipeline.ExecutionResult {
 	restoreCommandOutput := cli.SetCommandOutputStreaming(false)
 	defer restoreCommandOutput()
 
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := appUserHomeDir()
 	if err != nil {
 		return pipeline.ExecutionResult{Err: fmt.Errorf("resolve user home directory: %w", err)}
 	}
@@ -532,32 +686,63 @@ func tuiExecute(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult := cli.ExecuteTUIInstall(homeDir, selection, resolved, profile, onProgress)
+	execResult, orchestrator, codexServiceTier := cli.ExecuteTUIInstallRecordingCodexServiceTier(homeDir, selection, resolved, profile, background, piBackground, onProgress, consent)
+	// The TUI settles asynchronously: keep its deduplicated rollback snapshot
+	// until state persistence succeeds or the failure has been compensated.
+	if orchestrator != nil {
+		defer orchestrator.Finish()
+	}
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
-		agentIDs := make([]string, 0, len(selection.Agents))
-		for _, a := range selection.Agents {
-			agentIDs = append(agentIDs, string(a))
-		}
-		claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
-		installState := state.InstallState{
-			InstalledAgents:             agentIDs,
-			CommunityTools:              appCommunityToolIDsToStrings(selection.CommunityTools),
-			CommunityToolsConfigured:    true,
-			ClaudeModelAssignments:      claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState),
-			ClaudePhaseAssignments:      claudePhaseState,
-			KiroModelAssignments:        kiroAliasesToStrings(selection.KiroModelAssignments),
-			CodexModelAssignments:       codexEffortsToStrings(selection.CodexModelAssignments),
-			CodexOrchestratorAssignment: codexOrchestratorToState(selection.CodexOrchestratorAssignment),
-			CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
-			CodexPhaseModelAssignments:  selection.CodexPhaseModelAssignments,
-			ModelAssignments:            modelAssignmentsToState(selection.ModelAssignments),
-			Persona:                     string(selection.Persona),
-		}
-		installState.SetSelection(selection)
-		if writeErr := state.Write(homeDir, installState); writeErr != nil {
-			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
+		persistErr := statecoord.WithLock(homeDir, func() error {
+			agentIDs := make([]string, 0, len(selection.Agents))
+			for _, a := range selection.Agents {
+				agentIDs = append(agentIDs, string(a))
+			}
+			claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
+			installState, readErr := state.Read(homeDir)
+			if errors.Is(readErr, os.ErrNotExist) {
+				installState = state.InstallState{}
+			} else if readErr != nil {
+				return fmt.Errorf("read persisted install state: %w", readErr)
+			}
+			installState.InstalledAgents = agentIDs
+			installState.CommunityTools = appCommunityToolIDsToStrings(selection.CommunityTools)
+			installState.CommunityToolsConfigured = true
+			installState.ClaudeModelAssignments = claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState)
+			installState.ClaudePhaseAssignments = claudePhaseState
+			installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+			installState.AntigravityModelAssignments = model.AntigravityModelTiersToStrings(selection.AntigravityModelAssignments)
+			installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+			installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
+			if codexServiceTier != nil { // only what engram actually left in config.toml
+				installState.CodexServiceTier = *codexServiceTier
+			}
+			installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+			installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
+			installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+			installState.Persona = string(selection.Persona)
+			installState.SetSelection(selection)
+			if backgroundPersist != "" {
+				installState.BackgroundIntent = backgroundPersist
+			}
+			if piBackgroundPersist != "" {
+				installState.PiBackgroundIntent = piBackgroundPersist
+			}
+			if writeErr := appStateWriteReconciled(homeDir, installState); writeErr != nil {
+				return fmt.Errorf("persist install state: %w", writeErr)
+			}
+			return nil
+		})
+		if persistErr != nil {
+			execResult.Err = persistErr
+			if orchestrator != nil {
+				rollback := orchestrator.Rollback(execResult)
+				if rollback.Err != nil {
+					execResult.Err = errors.Join(execResult.Err, rollback.Err)
+				}
+			}
 		}
 	}
 
@@ -596,32 +781,57 @@ func tuiUpgrade(profile system.PlatformProfile, homeDir string) tui.UpgradeFunc 
 //
 // When overrides is non-nil, model assignments are merged into the selection
 // so that the "Configure Models" TUI flow persists its choices to disk.
+// A partial sync is its error here: this plain seam has no manual actions.
 func tuiSync(homeDir string) tui.SyncFunc {
 	return func(overrides *model.SyncOverrides) ([]string, error) {
-		agentIDs := syncAgentIDs(homeDir, overrides)
-		syncFlags := cli.SyncFlags{IncludePermissions: syncShouldIncludePermissions(agentIDs)}
-		selection := cli.BuildSyncSelection(syncFlags, agentIDs)
-
-		// Load persisted model assignments so a plain sync (no overrides)
-		// preserves the user's previous choices instead of falling back
-		// to the "balanced" preset.
-		loadPersistedAssignments(homeDir, &selection)
-
-		applyOverrides(&selection, overrides)
-
-		result, err := cli.RunSyncWithSelection(homeDir, selection)
-		if err != nil {
-			return nil, err
-		}
-
-		// Persist model assignments that were actually used (from overrides
-		// or loaded from state) so the next sync preserves them too.
-		if err := persistAssignments(homeDir, selection); err != nil {
-			return nil, fmt.Errorf("persist model assignments: %w", err)
-		}
-
-		return result.ChangedFiles, nil
+		files, _, err := runTUISync(homeDir, overrides)
+		return files, err
 	}
+}
+
+// tuiSyncDetailed reports a skipped agent as a manual action next to the
+// files that were synced, the same channel as other non-fatal sync notes.
+func tuiSyncDetailed(homeDir string) tui.SyncDetailedFunc {
+	return func(overrides *model.SyncOverrides) ([]string, []string, error) {
+		files, actions, err := runTUISync(homeDir, overrides)
+		var partial *cli.PartialSyncError
+		if errors.As(err, &partial) {
+			for _, skipped := range partial.Skipped {
+				actions = append(actions, skipped.Action())
+			}
+			return files, actions, nil
+		}
+		return files, actions, err
+	}
+}
+
+// runTUISync returns a *cli.PartialSyncError together with the synced files
+// when some selected agent was skipped.
+func runTUISync(homeDir string, overrides *model.SyncOverrides) ([]string, []string, error) {
+	agentIDs := syncAgentIDs(homeDir, overrides)
+	syncFlags := cli.SyncFlags{IncludePermissions: syncShouldIncludePermissions(agentIDs)}
+	selection := cli.BuildSyncSelection(syncFlags, agentIDs)
+
+	// Load persisted model assignments so a plain sync (no overrides)
+	// preserves the user's previous choices instead of falling back
+	// to the "balanced" preset.
+	loadPersistedAssignments(homeDir, &selection)
+
+	applyOverrides(&selection, overrides)
+
+	result, err := cli.RunSyncWithSelection(homeDir, selection)
+	var partial *cli.PartialSyncError
+	if err != nil && !errors.As(err, &partial) {
+		return nil, nil, err
+	}
+
+	// Persist model assignments that were actually used (from overrides
+	// or loaded from state) so the next sync preserves them too.
+	if err := persistAssignments(homeDir, selection); err != nil {
+		return nil, nil, fmt.Errorf("persist model assignments: %w", err)
+	}
+
+	return result.ChangedFiles, result.ManualActions, err
 }
 
 // tuiUninstall returns a tui.UninstallFunc that mirrors the CLI uninstall path
@@ -636,13 +846,13 @@ func tuiUninstall(homeDir string) tui.UninstallFunc {
 	}
 }
 
-func tuiUninstallWithProfiles(homeDir string) tui.UninstallWithProfilesFunc {
-	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+func tuiUninstallWithEngramScope(homeDir string) tui.UninstallWithEngramScopeFunc {
+	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
 		workspaceDir, err := os.Getwd()
 		if err != nil {
 			return componentuninstall.Result{}, fmt.Errorf("resolve workspace directory: %w", err)
 		}
-		return cli.RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir, agentIDs, componentIDs, profileNames, engramScope)
+		return cli.RunUninstallWithSelectionAndEngramScope(homeDir, workspaceDir, agentIDs, componentIDs, engramScope)
 	}
 }
 
@@ -704,12 +914,18 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.KiroModelAssignments != nil {
 		selection.KiroModelAssignments = overrides.KiroModelAssignments
 	}
+	if overrides.AntigravityModelAssignments != nil {
+		selection.AntigravityModelAssignments = overrides.AntigravityModelAssignments
+	}
 	if overrides.ClearCodexOrchestratorAssignment {
 		selection.CodexOrchestratorAssignment = nil
 		selection.ClearCodexOrchestratorAssignment = true
 	} else if overrides.CodexOrchestratorAssignment != nil {
 		selection.CodexOrchestratorAssignment = overrides.CodexOrchestratorAssignment
 		selection.ClearCodexOrchestratorAssignment = false
+	}
+	if overrides.CodexServiceTier != nil {
+		selection.CodexServiceTier = *overrides.CodexServiceTier
 	}
 	if overrides.CodexModelAssignments != nil {
 		selection.CodexModelAssignments = overrides.CodexModelAssignments
@@ -723,20 +939,15 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.SDDMode != "" {
 		selection.SDDMode = overrides.SDDMode
 	}
-	if overrides.SDDProfileStrategy != "" {
-		selection.SDDProfileStrategy = overrides.SDDProfileStrategy
-	}
 	if overrides.StrictTDD != nil {
 		selection.StrictTDD = *overrides.StrictTDD
 	}
-	if len(overrides.Profiles) > 0 {
-		selection.Profiles = overrides.Profiles
-		// Profiles are an OpenCode multi-mode feature — if profiles are being
-		// created/synced, SDDModeMulti is required so that WriteSharedPromptFiles
-		// runs and the {file:...} prompt references resolve correctly.
-		if selection.SDDMode == "" {
-			selection.SDDMode = model.SDDModeMulti
-		}
+	// A persisted component selection loaded earlier via loadPersistedAssignments
+	// may omit the SDD component. When the caller explicitly asked for model
+	// assignment work through this override, that request must not be silently
+	// dropped — see issue #3430.
+	if model.CarriesSDDWork(overrides.ModelAssignments) {
+		selection.EnsureComponent(model.ComponentSDD)
 	}
 }
 
@@ -753,9 +964,6 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if len(selection.ClaudePhaseAssignments) == 0 && len(s.ClaudePhaseAssignments) > 0 {
 		m := make(map[string]model.ClaudePhaseAssignment, len(s.ClaudePhaseAssignments))
 		for k, v := range s.ClaudePhaseAssignments {
-			if k == "orchestrator" {
-				continue
-			}
 			a := model.ClaudePhaseAssignment{Model: model.ClaudeModelAlias(v.Model), Effort: model.ClaudeEffort(v.Effort)}
 			if a.Valid() {
 				m[k] = a
@@ -766,11 +974,6 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
 		m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
 		for k, v := range s.ClaudeModelAssignments {
-			// Claude Code controls the main session/orchestrator model itself.
-			// Keep persisted assignments scoped to Agent tool calls only.
-			if k == "orchestrator" {
-				continue
-			}
 			m[k] = model.ClaudeModelAlias(v)
 		}
 		selection.ClaudeModelAssignments = m
@@ -781,6 +984,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 			m[k] = model.KiroModelAlias(v)
 		}
 		selection.KiroModelAssignments = m
+	}
+	if len(selection.AntigravityModelAssignments) == 0 {
+		selection.AntigravityModelAssignments = model.AntigravityModelTiersFromStrings(s.AntigravityModelAssignments)
 	}
 	if len(selection.CodexModelAssignments) == 0 && len(s.CodexModelAssignments) > 0 {
 		m := make(map[string]model.CodexEffort, len(s.CodexModelAssignments))
@@ -801,6 +1007,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	}
 	if !selection.ClearCodexOrchestratorAssignment && selection.CodexOrchestratorAssignment == nil && s.CodexOrchestratorAssignment != nil {
 		selection.CodexOrchestratorAssignment = codexOrchestratorFromState(s.CodexOrchestratorAssignment)
+	}
+	if model.ValidCodexServiceTier(s.CodexServiceTier) {
+		selection.CodexServiceTier, selection.CodexManagedServiceTier = s.CodexServiceTier, s.CodexServiceTier
 	}
 	if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 		m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
@@ -823,6 +1032,7 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 	hasAssignmentSignal := selection.ClaudeModelAssignments != nil ||
 		selection.ClaudePhaseAssignments != nil ||
 		selection.KiroModelAssignments != nil ||
+		selection.AntigravityModelAssignments != nil ||
 		selection.ModelAssignments != nil ||
 		selection.CodexModelAssignments != nil ||
 		selection.CodexOrchestratorAssignment != nil ||
@@ -832,72 +1042,80 @@ func persistAssignments(homeDir string, selection model.Selection) error {
 	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasAssignmentSignal {
 		return nil
 	}
-	current, err := state.Read(homeDir)
-	if err != nil {
-		// State file may not exist yet (e.g. pre-state users). Other read
-		// failures, such as invalid JSON, must not overwrite existing state.
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil
+	// The whole read-modify-write runs under the canonical install-state lock:
+	// the written value derives from the read below, so the read must happen
+	// inside the lock or a concurrent writer's changes would be lost.
+	return statecoord.WithLock(homeDir, func() error {
+		current, err := state.Read(homeDir)
+		if err != nil {
+			// State file may not exist yet (e.g. pre-state users). Other read
+			// failures, such as invalid JSON, must not overwrite existing state.
+			if !errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			current = state.InstallState{}
 		}
-		current = state.InstallState{}
-	}
-	if selection.ClaudeModelAssignments != nil {
-		if len(selection.ClaudeModelAssignments) > 0 {
-			current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
-		} else {
+		if selection.ClaudeModelAssignments != nil {
+			if len(selection.ClaudeModelAssignments) > 0 {
+				current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
+			} else {
+				current.ClaudeModelAssignments = nil
+			}
+		}
+		if selection.ClaudePhaseAssignments != nil {
+			if len(selection.ClaudePhaseAssignments) > 0 {
+				current.ClaudePhaseAssignments = claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
+			} else {
+				current.ClaudePhaseAssignments = nil
+			}
 			current.ClaudeModelAssignments = nil
 		}
-	}
-	if selection.ClaudePhaseAssignments != nil {
-		if len(selection.ClaudePhaseAssignments) > 0 {
-			current.ClaudePhaseAssignments = claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
-		} else {
-			current.ClaudePhaseAssignments = nil
+		if selection.KiroModelAssignments != nil {
+			if len(selection.KiroModelAssignments) > 0 {
+				current.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+			} else {
+				current.KiroModelAssignments = nil
+			}
 		}
-		current.ClaudeModelAssignments = nil
-	}
-	if selection.KiroModelAssignments != nil {
-		if len(selection.KiroModelAssignments) > 0 {
-			current.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
-		} else {
-			current.KiroModelAssignments = nil
+		if selection.AntigravityModelAssignments != nil {
+			current.AntigravityModelAssignments = model.AntigravityModelTiersToStrings(selection.AntigravityModelAssignments)
 		}
-	}
-	if selection.ClearCodexOrchestratorAssignment {
-		current.CodexOrchestratorAssignment = nil
-	} else if selection.CodexOrchestratorAssignment != nil {
-		current.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
-	}
-	if selection.CodexModelAssignments != nil {
-		if len(selection.CodexModelAssignments) > 0 {
-			current.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
-		} else {
-			current.CodexModelAssignments = nil
+		if selection.ClearCodexOrchestratorAssignment {
+			current.CodexOrchestratorAssignment = nil
+		} else if selection.CodexOrchestratorAssignment != nil {
+			current.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
 		}
-	}
-	if selection.CodexCarrilModelAssignments != nil {
-		if len(selection.CodexCarrilModelAssignments) > 0 {
-			current.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
-		} else {
-			current.CodexCarrilModelAssignments = nil
+		if selection.CodexModelAssignments != nil {
+			if len(selection.CodexModelAssignments) > 0 {
+				current.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+			} else {
+				current.CodexModelAssignments = nil
+			}
 		}
-	}
-	// non-nil, len > 0 → write; non-nil, len == 0 → clear (explicit preset signal); nil → leave untouched.
-	if selection.CodexPhaseModelAssignments != nil {
-		if len(selection.CodexPhaseModelAssignments) > 0 {
-			current.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
-		} else {
-			current.CodexPhaseModelAssignments = nil
+		if selection.CodexCarrilModelAssignments != nil {
+			if len(selection.CodexCarrilModelAssignments) > 0 {
+				current.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+			} else {
+				current.CodexCarrilModelAssignments = nil
+			}
 		}
-	}
-	if selection.ModelAssignments != nil {
-		if len(selection.ModelAssignments) > 0 {
-			current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
-		} else {
-			current.ModelAssignments = nil
+		// non-nil, len > 0 → write; non-nil, len == 0 → clear (explicit preset signal); nil → leave untouched.
+		if selection.CodexPhaseModelAssignments != nil {
+			if len(selection.CodexPhaseModelAssignments) > 0 {
+				current.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
+			} else {
+				current.CodexPhaseModelAssignments = nil
+			}
 		}
-	}
-	return state.Write(homeDir, current)
+		if selection.ModelAssignments != nil {
+			if len(selection.ModelAssignments) > 0 {
+				current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+			} else {
+				current.ModelAssignments = nil
+			}
+		}
+		return state.Write(homeDir, current)
+	})
 }
 
 // claudeAliasesToStrings converts a typed ClaudeModelAlias map to plain strings
@@ -908,11 +1126,6 @@ func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]stri
 	}
 	out := make(map[string]string, len(m))
 	for k, v := range m {
-		// Claude Code owns the main session/orchestrator model; do not persist it
-		// as a Gentle AI model assignment.
-		if k == "orchestrator" {
-			continue
-		}
 		out[k] = string(v)
 	}
 	return out
@@ -928,13 +1141,15 @@ func claudeLegacyAssignmentsForState(
 	return claudeAliasesToStrings(legacy)
 }
 
+// Keep orchestrator metadata so the picker can recognize persisted presets.
+// Persisting a choice does not configure Claude Code's main session model.
 func claudePhaseAssignmentsToState(m map[string]model.ClaudePhaseAssignment) map[string]state.ClaudePhaseAssignmentState {
 	if len(m) == 0 {
 		return nil
 	}
 	out := make(map[string]state.ClaudePhaseAssignmentState, len(m))
 	for k, v := range m {
-		if k == "orchestrator" || !v.Valid() {
+		if !v.Valid() {
 			continue
 		}
 		out[k] = state.ClaudePhaseAssignmentState{Model: string(v.Model), Effort: string(v.Effort)}
@@ -986,7 +1201,7 @@ func ListBackups() []backup.Manifest {
 		return nil
 	}
 
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	backupRoot := state.BackupsDir(homeDir)
 	entries, err := os.ReadDir(backupRoot)
 	if err != nil {
 		return nil
@@ -1040,4 +1255,29 @@ func codexOrchestratorFromState(a *state.CodexOrchestratorAssignmentState) *mode
 		return nil
 	}
 	return &model.CodexOrchestratorAssignment{Model: a.Model, Effort: model.CodexEffort(a.Effort)}
+}
+
+// tuiReviewStoreSurvey reports what a review store reset would remove for the
+// clone the TUI was launched from. It is read-only.
+func tuiReviewStoreSurvey() (reviewtransaction.StoreResetReport, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return reviewtransaction.StoreResetReport{}, err
+	}
+	return reviewtransaction.SurveyReviewStore(context.Background(), cwd, reviewtransaction.StoreResetRequest{})
+}
+
+// tuiReviewStoreReset applies the reset for that same clone.
+//
+// It never sets IncludeInFlight, and never sets IncludeAdapterReviews either.
+// The TUI has no keystroke that destroys a review somebody is in the middle of,
+// nor one that destroys a store this command cannot classify: the confirmation
+// screen refuses outright and prints the CLI invocation that overrides it, so
+// every override stays an act the user has to type out.
+func tuiReviewStoreReset() (reviewtransaction.StoreResetReport, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return reviewtransaction.StoreResetReport{}, err
+	}
+	return reviewtransaction.ResetReviewStore(context.Background(), cwd, reviewtransaction.StoreResetRequest{})
 }

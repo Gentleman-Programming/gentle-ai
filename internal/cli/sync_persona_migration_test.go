@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 )
 
 var errStateUnreadableForTest = errors.New("state unreadable")
@@ -46,6 +47,67 @@ func TestMigratePersistedPersonaAliasRewritesStateOnce(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Fatalf("second run printed %q, want silence", buf.String())
+	}
+}
+
+// TestMigratePersistedPersonaAliasReReadsLatestStateAfterLockContention is the
+// #1809 preservation proof for the persona alias migration: the advisory
+// snapshot is read before the lock, so the rewrite must re-read the latest
+// state inside the canonical lock instead of writing the stale snapshot back.
+// A concurrent writer's RDDMode must survive the remap, and a contended lock
+// must fail fast without writing anything or printing the notice.
+func TestMigratePersistedPersonaAliasReReadsLatestStateAfterLockContention(t *testing.T) {
+	var buf bytes.Buffer
+	previous := personaNoticeWriter
+	personaNoticeWriter = &buf
+	defer func() { personaNoticeWriter = previous }()
+
+	home := t.TempDir()
+	// Advisory snapshot taken before the lock exists: it still shows the
+	// legacy alias, but is stale by the time the migration runs.
+	persisted := state.InstallState{Persona: string(model.PersonaGentlemanNeutralArtifacts)}
+
+	held, err := reviewtransaction.AcquireAuthorityFileLock(mustInstallStateLockPath(t, home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(home, state.InstallState{
+		Persona: string(model.PersonaGentlemanNeutralArtifacts),
+		RDDMode: string(reviewtransaction.RDDModeOn),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := migratePersistedPersonaAlias(home, &persisted, nil); err == nil || !strings.Contains(err.Error(), "acquire install state lock") {
+		t.Fatalf("contended migration error = %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("contended run printed %q, want silence", buf.String())
+	}
+	contended, err := state.Read(home)
+	if err != nil || contended.Persona != string(model.PersonaGentlemanNeutralArtifacts) || contended.RDDMode != string(reviewtransaction.RDDModeOn) {
+		t.Fatalf("state after contended run = %#v, err = %v", contended, err)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The advisory snapshot predates the concurrent RDDMode write. The
+	// migration must preserve that concurrent field and still remap the alias.
+	if err := migratePersistedPersonaAlias(home, &persisted, nil); err != nil {
+		t.Fatalf("migratePersistedPersonaAlias() error = %v", err)
+	}
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("re-read state: %v", err)
+	}
+	if got.Persona != string(model.PersonaNeutral) {
+		t.Fatalf("persisted persona = %q, want %q", got.Persona, model.PersonaNeutral)
+	}
+	if got.RDDMode != string(reviewtransaction.RDDModeOn) {
+		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
+	}
+	if !strings.Contains(buf.String(), personaAliasRemapNotice) {
+		t.Fatalf("notice not printed; got %q", buf.String())
 	}
 }
 

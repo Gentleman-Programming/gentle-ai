@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/verify"
 )
 
 // TestWithPostInstallNotesNamesOnlyTheInstalledRunnableAgents closes fisidj
@@ -31,7 +31,7 @@ func TestWithPostInstallNotesNamesOnlyTheInstalledRunnableAgents(t *testing.T) {
 			report := verify.Report{Ready: true, FinalNote: verify.ReadyMessage}
 			resolved := planner.ResolvedPlan{Agents: tt.agents}
 
-			updated := withPostInstallNotes(report, resolved)
+			updated := withPostInstallNotes(report, resolved, false)
 			hasClaude := strings.Contains(updated.FinalNote, "`claude`")
 			hasOpenCode := strings.Contains(updated.FinalNote, "`opencode`")
 			if hasClaude != tt.wantClaude {
@@ -54,7 +54,7 @@ func TestWithPostInstallNotesFallsBackWhenNoRunnableAgentSelected(t *testing.T) 
 	report := verify.Report{Ready: true, FinalNote: verify.ReadyMessage}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentAntigravity}}
 
-	updated := withPostInstallNotes(report, resolved)
+	updated := withPostInstallNotes(report, resolved, false)
 	if strings.Contains(updated.FinalNote, "claude") || strings.Contains(updated.FinalNote, "opencode") {
 		t.Fatalf("FinalNote names an agent that was never installed: %q", updated.FinalNote)
 	}
@@ -67,12 +67,11 @@ func TestWithPostInstallNotesFallsBackWhenNoRunnableAgentSelected(t *testing.T) 
 func TestWithPostInstallNotesDoesNotOverrideAnAlreadyCustomizedFinalNote(t *testing.T) {
 	t.Parallel()
 
-	// AgentClaudeCode (not OpenCode) so withOpenCodeExperimentalNote has
-	// nothing to append -- isolating the ready-agent-run override.
+	// AgentClaudeCode isolates the ready-agent-run override.
 	report := verify.Report{Ready: true, FinalNote: "You're ready."}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentClaudeCode}}
 
-	updated := withPostInstallNotes(report, resolved)
+	updated := withPostInstallNotes(report, resolved, false)
 	if updated.FinalNote != "You're ready." {
 		t.Fatalf("FinalNote changed unexpectedly: %q", updated.FinalNote)
 	}

@@ -28,8 +28,7 @@
     "eligibility": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/action_eligibility"},
     "forecast": {"$ref": "#/$defs/forecast"},
     "next_transition": {"$ref": "#/$defs/next_transition"},
-    "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
-    "final_verification_retry": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/final_verification_retry"}
+    "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"}
   },
   "dependentRequired": {"forecast": ["next_transition"]},
   "$defs": {
@@ -47,7 +46,7 @@
       "properties": {
         "kind": {"enum": ["execute", "collect", "stop"]},
         "reason_code": {"type": "string", "pattern": "^[a-z0-9_]+$"},
-        "execute": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_execution"},
+        "execute": {"$ref": "transition-execution.schema.json"},
         "collect": {"$ref": "#/$defs/transition_collection"},
         "correction_request": {"$ref": "../../v1/schemas/correction-plan-request.schema.json"}
       },
@@ -72,7 +71,7 @@
         "name": {"type": "string", "pattern": "^[a-z0-9_]+$"},
         "schema": {"type": "string", "minLength": 1},
         "capture_operation": {"type": "string", "minLength": 1},
-        "arguments": {"type": "array", "minItems": 1, "items": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_argument"}},
+        "arguments": {"type": "array", "minItems": 1, "items": {"$ref": "transition-execution.schema.json#/$defs/transition_argument"}},
         "submission": {"$ref": "#/$defs/submission_descriptor"},
         "artifact_subject": {"$ref": "artifact-subject.schema.json"},
         "base_tree": {"$ref": "#/$defs/git_tree"},
@@ -96,8 +95,8 @@
         "value": {"$ref": "#/$defs/submission_value"}
       },
       "allOf": [
-        {"if": {"properties": {"value": {"properties": {"slot": {"const": "correction_lines"}}, "required": ["slot"]}}, "required": ["value"]}, "then": {"properties": {"argument_tokens": {"minItems": 7, "maxItems": 7, "prefixItems": [{"const": "--contract=gentle-ai.review-integration/v2"}, {"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--request-hash=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=rctx1_[0-9a-f]{64}$"}, {"const": "--correction-lines={{value}}"}], "items": false}}}},
-        {"if": {"properties": {"value": {"properties": {"slot": {"const": "validation"}}, "required": ["slot"]}}, "required": ["value"]}, "then": {"properties": {"argument_tokens": {"minItems": 8, "maxItems": 8, "prefixItems": [{"const": "--contract=gentle-ai.review-integration/v2"}, {"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--request-hash=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=rctx1_[0-9a-f]{64}$"}, {"const": "--validation={{value}}"}, {"const": "--captured-evidence=true"}], "items": false}}}}
+        {"if": {"properties": {"value": {"properties": {"slot": {"const": "correction_lines"}}, "required": ["slot"]}}, "required": ["value"]}, "then": {"properties": {"argument_tokens": {"minItems": 7, "maxItems": 7, "prefixItems": [{"const": "--contract=gentle-ai.review-integration/v2"}, {"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--request-hash=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=rctx[12]_[0-9a-f]{64}$"}, {"const": "--correction-lines={{value}}"}], "items": false}}}},
+        {"if": {"properties": {"value": {"properties": {"slot": {"const": "validation"}}, "required": ["slot"]}}, "required": ["value"]}, "then": {"properties": {"argument_tokens": {"minItems": 8, "maxItems": 8, "prefixItems": [{"const": "--contract=gentle-ai.review-integration/v2"}, {"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--request-hash=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=rctx[12]_[0-9a-f]{64}$"}, {"const": "--validation={{value}}"}, {"const": "--captured-evidence=true"}], "items": false}}}}
       ]
     },
     "submission_value": {
@@ -123,8 +122,6 @@
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/1"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/2"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/3"},
-    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/4"},
-    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/5"},
-    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/6"}
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/4"}
   ]
 }

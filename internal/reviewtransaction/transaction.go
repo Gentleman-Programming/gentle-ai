@@ -105,14 +105,24 @@ func (counters *Counters) UnmarshalJSON(payload []byte) error {
 }
 
 type Start struct {
-	LineageID            string
-	Mode                 Mode
-	Generation           int
-	Snapshot             Snapshot
-	PolicyHash           string
-	RiskLevel            RiskLevel
-	SelectedLenses       []string
+	LineageID  string
+	Mode       Mode
+	Generation int
+	Snapshot   Snapshot
+	PolicyHash string
+	// PolicyContent preserves the exact bytes START already read and hashed when
+	// creating compact authority. Nil is retained only for historical authority.
+	PolicyContent  *string
+	RiskLevel      RiskLevel
+	SelectedLenses []string
+	// LensSelectionReason, when set, marks SelectedLenses as the agent's own
+	// START --lenses choice (any non-empty canonical subset on a reviewed
+	// tier) and records why it chose them.
+	LensSelectionReason  string
 	OriginalChangedLines *int
+	// RuntimeAgent is the validated runtime identity START was bound to, or
+	// empty on the manual/non-agent route. It is frozen with the lineage.
+	RuntimeAgent string
 }
 
 type LensResult struct {
@@ -155,6 +165,18 @@ type FollowUp struct {
 	ProofRefs   []string `json:"proof_refs"`
 }
 
+// Regression names one observed regression backing a failed
+// correction_regression verdict (issue #4214): a targeted validator that
+// reports the check failed without naming what regressed produced no
+// verdict, and admitting it anyway escalated lineages on false alarms.
+// Location, Claim, and ProofRefs are mandatory; only ID may be omitted.
+type Regression struct {
+	ID        string   `json:"id,omitempty"`
+	Location  string   `json:"location"`
+	Claim     string   `json:"claim"`
+	ProofRefs []string `json:"proof_refs"`
+}
+
 type FindingEvidence struct {
 	FindingID string            `json:"finding_id"`
 	Severity  string            `json:"severity,omitempty"`
@@ -167,6 +189,9 @@ type RefuterClaim struct {
 	FindingID        string `json:"finding_id"`
 	SnapshotIdentity string `json:"snapshot_identity"`
 	Proof            string `json:"proof"`
+	// Claim is the finding's own assertion. Without it the refuter has no
+	// proposition to corroborate or refute (issue #3482).
+	Claim string `json:"claim,omitempty"`
 }
 
 type EvidenceRoute struct {
@@ -911,23 +936,6 @@ func (transaction *Transaction) CompleteFinalVerification(evidenceHash string, a
 	return nil
 }
 
-func ParseTransaction(payload []byte) (Transaction, error) {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
-	var transaction Transaction
-	if err := decoder.Decode(&transaction); err != nil {
-		return Transaction{}, err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return Transaction{}, errors.New("multiple JSON values in review transaction")
-	}
-	if err := transaction.validate(); err != nil {
-		return Transaction{}, err
-	}
-	return transaction, nil
-}
-
 func (transaction *Transaction) UnmarshalJSON(payload []byte) error {
 	type persistedTransaction Transaction
 	decoder := json.NewDecoder(bytes.NewReader(payload))
@@ -1097,7 +1105,7 @@ func pristineReviewing(transaction Transaction) bool {
 	if transaction.State != StateReviewing || transaction.LedgerHash != "" || transaction.LedgerFindingsHash != "" ||
 		transaction.EvidenceHash != "" ||
 		transaction.Release != nil || transaction.FailedEvidenceRevision != "" || transaction.FixDeltaHash != EmptyFixDeltaHash ||
-		!snapshotsEqual(transaction.Snapshot, Snapshot{Kind: transaction.Snapshot.Kind, BaseTree: transaction.BaseTree, CandidateTree: transaction.InitialReviewTree, PathsDigest: transaction.PathsDigest, IntendedUntracked: transaction.Snapshot.IntendedUntracked, IntendedUntrackedProof: transaction.Snapshot.IntendedUntrackedProof, LedgerIDs: transaction.Snapshot.LedgerIDs, Paths: transaction.Snapshot.Paths, Identity: transaction.Snapshot.Identity}) ||
+		!snapshotsEqual(transaction.Snapshot, Snapshot{Kind: transaction.Snapshot.Kind, GeneratedPathInterpretation: transaction.Snapshot.GeneratedPathInterpretation, BaseTree: transaction.BaseTree, CandidateTree: transaction.InitialReviewTree, PathsDigest: transaction.PathsDigest, IntendedUntracked: transaction.Snapshot.IntendedUntracked, IntendedUntrackedProof: transaction.Snapshot.IntendedUntrackedProof, LedgerIDs: transaction.Snapshot.LedgerIDs, Paths: transaction.Snapshot.Paths, Identity: transaction.Snapshot.Identity}) ||
 		transaction.FinalCandidateTree != transaction.InitialReviewTree || len(transaction.LensResults) != 0 || len(transaction.Findings) != 0 ||
 		len(transaction.Classifications) != 0 || len(transaction.Outcomes) != 0 || len(transaction.FixFindingIDs) != 0 || len(transaction.PendingRefuterIDs) != 0 ||
 		len(transaction.FixCausedFindings) != 0 || len(transaction.FollowUps) != 0 ||
@@ -1229,6 +1237,40 @@ func validateCounters(mode Mode, counters Counters) error {
 		}
 	}
 	return nil
+}
+
+// validateAgentSelectedLenses admits the agent's own lens choice
+// (verify-always-rdd-high S8): one to four supported lenses on a medium or
+// high tier, without repeats, in canonical 4R order.
+// ValidateAgentSelectedLenses is validateAgentSelectedLenses for callers
+// outside the transaction that check a published lens set.
+func ValidateAgentSelectedLenses(riskLevel RiskLevel, lenses []string) error {
+	_, err := validateAgentSelectedLenses(riskLevel, lenses)
+	return err
+}
+
+func validateAgentSelectedLenses(riskLevel RiskLevel, lenses []string) ([]string, error) {
+	if riskLevel != RiskMedium && riskLevel != RiskHigh {
+		return nil, fmt.Errorf("an agent lens selection needs a medium or high risk review, not %q", riskLevel) // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+	}
+	if len(lenses) == 0 || len(lenses) > len(supportedLenses) {
+		return nil, errors.New("an agent lens selection names one to four lenses") // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+	}
+	next := 0
+	for _, lens := range lenses {
+		position := -1
+		for index := next; index < len(supportedLenses); index++ {
+			if supportedLenses[index] == lens {
+				position = index
+				break
+			}
+		}
+		if position < 0 {
+			return nil, fmt.Errorf("agent-selected lens %q is unknown, repeated, or out of canonical 4R order", lens) // refusal:by-design world-action: START validates the agent selection and names the rerun command before this provider-owned check can refuse
+		}
+		next = position + 1
+	}
+	return append([]string{}, lenses...), nil
 }
 
 func validateSelectedLenses(mode Mode, riskLevel RiskLevel, lenses []string) ([]string, error) {

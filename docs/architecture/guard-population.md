@@ -1,16 +1,20 @@
 # Guard population declarations
 
-Guard population declarations make the accepted input set of selected production guards explicit at the check itself. The v2.2.1 contract covers eight evidenced guard families in `internal/cli`, `internal/reviewtransaction`, and `internal/sddstatus`.
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
+Guard population declarations make the accepted input set of selected production guards explicit at the check itself. They cover guards in `internal/cli` and `internal/reviewtransaction`.
 
 ## Review rule
 
-A production Go guard qualifies when all of these are true:
+A production Go guard qualifies when both of these are true:
 
-1. It is in one of the three scoped packages.
-2. It decides whether external, repository, filesystem, or persisted review state is legitimate for a security, integrity, admission, repair, or governance boundary.
-3. It belongs to one of the registered families below.
+1. It is in `internal/cli` or `internal/reviewtransaction`.
+2. It decides whether external, repository, filesystem, or persisted state is legitimate for a security, integrity, admission, repair, or governance boundary.
 
-Arbitrary control flow does not qualify. Shell and workflow guards are out of scope for v2.2.1.
+Arbitrary control flow does not qualify. Shell and workflow guards are out of scope.
+
+Families are discovered from the declarations in source, not from a fixed list. The table below illustrates the families declared today; it is not a closed or complete set:
 
 | Family | Legitimate population under review |
 |---|---|
@@ -18,10 +22,7 @@ Arbitrary control flow does not qualify. Shell and workflow guards are out of sc
 | `darwin-search-ancestor` | Directory permission shapes allowed during secure ancestry traversal |
 | `nested-worktree-scope` | Opaque nested repositories excluded from or admitted to review scope |
 | `authority-repair-removal` | Damaged authority graphs on which one repair may proceed |
-| `result-reopen-state` | Review states eligible to quarantine contaminated reviewer input |
-| `convergent-lock-contention` | Lock contenders allowed to wait rather than fail immediately |
-| `finalize-result-admission` | Reviewer-result sources allowed to govern finalization |
-| `receipt-content-governance` | Terminal receipts allowed to govern delivered content |
+| `persisted-sync-state-integrity` | Persisted sync state admitted before persona mutation |
 
 Reviewers own identification of a new or omitted qualifying guard. The mechanism cannot derive the real-world population from source and MUST NOT be described as semantic completeness.
 
@@ -35,14 +36,8 @@ Place one declaration immediately above the `if`, `switch`, or `return` node tha
 
 Use `too-tight` when drift is expected to reject legitimate inputs, `too-loose` when it may admit illegitimate inputs, and `fail-closed` when the important contract is safe refusal under uncertainty.
 
-`TestEveryRegisteredGuardPopulationDeclarationMatchesProduction` AST-binds each declaration to the adjacent guard node. `.guard-population-baseline.txt` freezes the source path, family, direction, claim, node kind, and guard-node fingerprint. The test fails in both directions: a declaration missing from the registry and a registry entry missing from production are both drift.
-
-After an intentional reviewed declaration or guard-node change, regenerate the registry before final verification:
-
-```bash
-GENTLE_AI_GUARD_POPULATION_UPDATE=1 go test ./internal/cli -run TestEveryRegisteredGuardPopulationDeclarationMatchesProduction -count=1
-```
+`TestEveryGuardPopulationDeclarationIsAdjacentAndUnique` scans both packages and fails when a declaration is malformed, is not directly above an `if`, `switch`, or `return` node, reuses a family already declared elsewhere, or when the scan finds no declarations at all. There is no registry to regenerate: adding, moving, or rewording a declaration needs only a well-formed, adjacent marker.
 
 ## Proof boundary
 
-The contract proves declaration presence, AST adjacency, and exact registry agreement. It does not prove that the population claim is true, that every qualifying guard was identified, or that tests sample the outside world. Review must challenge the claim against production platforms, repository shapes, persisted states, and incident evidence.
+The scan proves declaration syntax, AST adjacency, and family uniqueness. It does not prove that the population claim is true, that every qualifying guard was identified, or that tests sample the outside world. Review must challenge each claim against the named behavior tests that exercise the guard, and against production platforms, repository shapes, persisted states, and incident evidence.

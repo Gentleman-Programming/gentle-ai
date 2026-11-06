@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -34,12 +35,14 @@ func TestCompareSemanticVersionPrerelease(t *testing.T) {
 
 func TestValidateGPT56Runtime(t *testing.T) {
 	tests := []struct {
-		name    string
-		output  string
-		cmdErr  error
-		wantErr bool
+		name        string
+		output      string
+		cmdErr      error
+		wantErr     bool
+		unavailable bool
 	}{
-		{name: "missing command", cmdErr: exec.ErrNotFound, wantErr: true},
+		{name: "missing command", cmdErr: exec.ErrNotFound, wantErr: true, unavailable: true},
+		{name: "permission denied executable", cmdErr: &exec.Error{Name: "codex", Err: os.ErrPermission}, wantErr: true},
 		{name: "malformed version", output: "codex-cli development", wantErr: true},
 		{name: "false match on trailing line", output: "codex-cli development\nhelper 9.9.9", wantErr: true},
 		{name: "trailing token", output: "codex-cli 0.145.0 helper", wantErr: true},
@@ -82,6 +85,9 @@ func TestValidateGPT56Runtime(t *testing.T) {
 			err := ValidateGPT56Runtime()
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ValidateGPT56Runtime() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if IsGPT56RuntimeUnavailable(err) != tt.unavailable {
+				t.Fatalf("IsGPT56RuntimeUnavailable(%v) = %t, want %t", err, IsGPT56RuntimeUnavailable(err), tt.unavailable)
 			}
 			if tt.wantErr {
 				for _, want := range []string{"Codex >=0.144.0", "npm install -g --ignore-scripts @openai/codex@latest"} {

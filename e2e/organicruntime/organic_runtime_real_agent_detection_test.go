@@ -77,7 +77,8 @@ func TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents(t *testing.T) {
 			if readErr != nil {
 				t.Fatalf("configured agent %s received no routing guidance at %s: %v", agent.agentID, agent.path, readErr)
 			}
-			for _, fragment := range organicRoutingGuidanceRequiredFragments {
+			required := append(append([]string{}, organicRoutingGuidanceRequiredFragments...), organicRoutingGuidanceRDDFragments...)
+			for _, fragment := range required {
 				if !bytes.Contains(rendered, []byte(fragment)) {
 					t.Fatalf("routing guidance for %s omits %q:\n%s", agent.agentID, fragment, rendered)
 				}
