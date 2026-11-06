@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/versions"
 )
 
@@ -73,6 +74,11 @@ func context7Args() []string {
 // agent config file (e.g. ~/.codex/config.toml) using Context7's remote MCP
 // endpoint. The file is created if it does not yet exist.
 func injectTOMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	if adapter.Agent() == model.AgentCodex {
+		if err := system.ValidateCodexHome(homeDir); err != nil {
+			return InjectionResult{}, err
+		}
+	}
 	configPath := adapter.MCPConfigPath(homeDir, "context7")
 
 	existingBytes, err := osReadFile(configPath)

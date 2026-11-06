@@ -25,6 +25,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
@@ -273,6 +275,24 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	switch adapter.Agent() {
+	case model.AgentAntigravity:
+		// The upgraded binary's sync republishes the staged guidance as agy
+		// rules and retires the sections older releases appended to GEMINI.md.
+		owned, err := antigravityrules.OwnedRulePaths(homeDir)
+		if err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: skipping Antigravity rules: %v", err)
+		}
+		add(owned...)
+		add(presentPaths([]string{antigravityrules.LegacyPromptPath(homeDir)})...)
+	case model.AgentGeminiCLI:
+		// The upgraded binary's sync moves the guidance older releases wrote
+		// into GEMINI.md to the staging file and republishes the modules
+		// GEMINI.md imports.
+		if _, err := geminimodules.OwnedModulePaths(homeDir); err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: Gemini CLI module manifest unreadable: %v", err)
+		}
+		// Owned and to-be-written modules, the manifest, staging and root.
+		add(presentPaths(geminimodules.ManagedPaths(homeDir))...)
 	case model.AgentClaudeCode:
 		add(claude.UserConfigPath(homeDir))
 		add(theme.VisualThemePaths(homeDir, adapter)...)

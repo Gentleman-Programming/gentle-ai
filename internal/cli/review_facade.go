@@ -620,6 +620,11 @@ func RunReview(args []string, stdout io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), reviewFacadeOperationDeadline(operation, args[1:]))
 	defer cancel()
+	var statusTimings *reviewtransaction.StatusPhaseTimings
+	if operation == "review.status" && reviewStatusPhaseTimingsEnabled(args[1:]) {
+		statusTimings = reviewtransaction.NewStatusPhaseTimings()
+		ctx = reviewtransaction.WithStatusPhaseTimings(ctx, statusTimings)
+	}
 	metadata, _ := reviewIntegrationOperationByName(operation)
 	joinOnTimeout := metadata.JoinOnTimeout && reviewIntegrationOperationMutates(metadata, args[1:])
 	var output bytes.Buffer
@@ -641,9 +646,15 @@ func RunReview(args []string, stdout io.Writer) error {
 			runErr = ctx.Err()
 		}
 	}
+	if statusTimings != nil {
+		emitReviewStatusPhaseTimings(statusTimings)
+	}
 	if runErr == nil {
 		_, err := io.Copy(stdout, &output)
 		return err
+	}
+	if statusTimings != nil {
+		runErr = fmt.Errorf("%w (%s)", runErr, statusTimings.Snapshot().FormatSummary())
 	}
 	failure := newReviewIntegrationFailure(operation, args[1:], runErr)
 	// Generate the defect report before emitting the envelope so a stdout
@@ -685,11 +696,7 @@ func runReviewCollectCaptureCommand(operation string, args []string, stdout io.W
 		_, err := io.Copy(stdout, &output)
 		return err
 	}
-	failure := newReviewIntegrationFailure(operation, args[1:], runErr)
-	// The capture verbs exist only in the v2.1 negotiated lifecycle and the
-	// published v1 failure schema does not admit their operation names, so
-	// the envelope publishes under the v2 identity unconditionally.
-	failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+	failure := reviewCollectCaptureFailureIdentity(newReviewIntegrationFailure(operation, args[1:], runErr))
 	// Generate the defect report before emitting the envelope so a stdout
 	// write failure cannot suppress the artifact, exactly as the negotiated
 	// route does.
@@ -708,6 +715,18 @@ func runReviewCollectCaptureCommand(operation string, args []string, stdout io.W
 		return errors.Join(typedFailure, emitErr)
 	}
 	return typedFailure
+}
+
+// reviewCollectCaptureFailureIdentity publishes a classified capture failure
+// under the v2 identity. The capture verbs exist only in the v2.1 negotiated
+// lifecycle and the published v1 failure schema does not admit their operation
+// names, so the envelope publishes under v2 unconditionally. Order matters:
+// the classifier sees no --contract flag on a capture and returns a v1
+// envelope that may already carry a managed_assets_outdated continuation
+// (#4379), which Validate rejects until this identity is applied.
+func reviewCollectCaptureFailureIdentity(failure ReviewIntegrationFailure) ReviewIntegrationFailure {
+	failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
+	return failure
 }
 
 func runReviewCommandContext(ctx context.Context, args []string, stdout io.Writer) error {
@@ -806,8 +825,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	escalateReason := flags.String("escalate-reason", "", "preflight review start --escalate-reason and render it into the fresh START next transition")
 	lensSelection := flags.String("lenses", "", "preflight review start --lenses and render it into the fresh START next transition")
 	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason and render it into the fresh START next transition")
+	phaseTimings := flags.Bool("phase-timings", false, "emit opt-in native STATUS phase timing diagnostics")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
+	}
+	if reviewtransaction.StatusPhaseTimingsFromContext(ctx) == nil && (*phaseTimings || reviewStatusPhaseTimingsEnvEnabled()) {
+		timings := reviewtransaction.NewStatusPhaseTimings()
+		ctx = reviewtransaction.WithStatusPhaseTimings(ctx, timings)
+		defer emitReviewStatusPhaseTimings(timings)
 	}
 	if reviewHelpRequested(args) {
 		return nil
@@ -931,10 +956,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
 		hydratedIntendedScope := false
 		// pendingApprovedTerminalTarget carries the exact frozen target kind
-		// and base ref an approved-pending lineage resumed below, so a
-		// selectorless refresh can rebuild the same committed-range
-		// projection instead of silently defaulting to current-changes
-		// (gentle-pi#569).
+		// and base ref an approved-pending or correction-required lineage
+		// resumed below, so a selectorless refresh can rebuild the same
+		// committed-range projection instead of silently defaulting to
+		// current-changes (gentle-pi#569, gentle-shell#2379).
 		var pendingApprovedTerminalTarget *reviewtransaction.Snapshot
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
@@ -960,14 +985,23 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					// plain re-entry dead-ended the correction lineage and bound the
 					// resulting collect input to a different (live, declaration-less)
 					// target identity than the one the authority is bound to (issue
-					// #3849 and #4435). A frozen EXCLUDE declaration (empty selection)
-					// is left alone here because it is indistinguishable on its own from
+					// #3849 and #4435). For a workspace-scoped (current-changes or
+					// overlay) target a frozen EXCLUDE declaration (empty selection) is
+					// left alone here because it is indistinguishable on its own from
 					// "nothing was ever declared"; that path still requires a fresh live
-					// declaration when eligible untracked files exist.
+					// declaration when eligible untracked files exist. A committed-range
+					// (base-diff) target has no such ambiguity: its candidate is the
+					// frozen commit range plus the frozen selection, so even an empty
+					// selection is the immutable decision and resumes as-is
+					// (gentle-shell#2379, #1596).
 					_, pendingApproval := reviewtransaction.PendingApprovedCompactAcknowledgement(record)
 					resumeCorrectionUntracked := false
 					declaredUntracked := record.State.InitialSnapshot.IntendedUntracked
-					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) != 0 {
+					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) == 0 &&
+						record.State.CurrentSnapshot.Kind == reviewtransaction.TargetBaseDiff &&
+						selectedBaseRef == "" && !*workspaceOverlay {
+						resumeCorrectionUntracked = true
+					} else if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) != 0 {
 						inventory, _, inventoryErr := builder.IntendedUntrackedInventory(ctx)
 						if inventoryErr != nil {
 							return reviewPreflightError(inventoryErr)
@@ -1005,7 +1039,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		// Issue gentle-pi#569: a caller-authorized committed-range approval
 		// (base-diff, committed-only) must survive a selectorless STATUS
-		// refresh performed only to reach `review.acknowledge-approved`. The
+		// refresh performed only to reach `review.acknowledge-approved`; the
+		// same holds for a committed-range correction_required lineage
+		// re-entered without a selector (gentle-shell#2379). The
 		// caller supplied no --base-ref/--committed-only/--workspace-overlay
 		// of its own, so nothing above already claimed this target; without
 		// this, the default current-changes target above projects an empty
@@ -1861,7 +1897,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	// overrides inheritance, so the successor target derives from the exact
 	// selection STATUS authorized rather than from the predecessor alone.
 	declaredSelection := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
-	currentChangesSuccessor := !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay
+	currentChangesSuccessor := !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay && !baseDiff
 	if declaredSelection && !currentChangesSuccessor {
 		return errors.New("intended-untracked selection requires a current-changes recovery; rerun `gentle-ai review recover` without --untracked-scope, --intended-untracked, and --expected-untracked-inventory")
 	}
@@ -1896,6 +1932,10 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		if target.BaseRef == "" {
 			target.BaseRef = predecessorRecord.State.InitialSnapshot.BaseTree
 		}
+	} else if baseDiff {
+		// Issues #5038/#5420: a base-diff predecessor recovered without a base
+		// selector keeps its frozen base tree, as an overlay predecessor does.
+		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, predecessorRecord.State.InitialSnapshot.BaseTree
 	}
 	var snapshot reviewtransaction.Snapshot
 	if *releaseScope {

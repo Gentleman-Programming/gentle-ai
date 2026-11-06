@@ -47,10 +47,12 @@ func issue3766Journeys() []Journey {
 	}}
 }
 
+// Navigate from the restored featured default without wrapping past tail rows.
+// The hero occupies index zero; the unchanged ordinary RDD action moves to nine.
 func reviewModeTTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 	return waitForReviewModeTTY(reader, "Start installation", "q: quit", "", func() error {
 		time.Sleep(100 * time.Millisecond)
-		if _, err := io.WriteString(writer, strings.Repeat("\x1b[A", 4)+"\r"); err != nil {
+		if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", 9)+"\r"); err != nil {
 			return err
 		}
 		return waitForReviewModeTTY(reader, "RDD runs a bounded review before delivery and records review evidence.", "Delivery remains governed by repository policy", "RDD is currently DISABLED globally.", func() error {
@@ -59,7 +61,7 @@ func reviewModeTTYExchange(reader *bufio.Reader, writer io.WriteCloser) error {
 			}
 			return waitForReviewModeTTY(reader, "Start installation", "q: quit", "", func() error {
 				time.Sleep(100 * time.Millisecond)
-				if _, err := io.WriteString(writer, strings.Repeat("\x1b[A", 4)+"\r"); err != nil {
+				if _, err := io.WriteString(writer, strings.Repeat("\x1b[B", 9)+"\r"); err != nil {
 					return err
 				}
 				return waitForReviewModeTTY(reader, "RDD is currently ENABLED globally.", "Disable globally", "", func() error {

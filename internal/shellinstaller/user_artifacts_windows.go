@@ -6,7 +6,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,101 +17,24 @@ import (
 	"time"
 )
 
-type userWindowsArtifact struct {
-	URL, SHA, Archive, Prefix string
-	Bound, Size               int64
-}
+// Preserve the Windows artifact/retained JSON ABI while sharing the fixed
+// canonical Main producer. ZIP/custody/provision/activation stay platform-owned.
+type userWindowsArtifact = userSnapshotArtifact
 
-// Descriptor construction alone does not authenticate or resolve Main source.
 func userWindowsMainArtifact(commit, archiveSHA string) (userWindowsArtifact, error) {
-	if !userWindowsLowerHex(commit, 40) || !userWindowsLowerHex(archiveSHA, 64) {
-		return userWindowsArtifact{}, errors.New("invalid frozen Gentle Shell Main commit/archive digest")
-	}
-	return userWindowsArtifact{URL: "https://codeload.github.com/Gentleman-Programming/gentle-shell/zip/" + commit, SHA: archiveSHA, Archive: "main.zip", Prefix: "gentle-shell-" + commit, Bound: 32 << 20}, nil
+	return userMainDescriptor(commit, archiveSHA)
 }
 
 func userWindowsLowerHex(value string, length int) bool {
-	_, err := hex.DecodeString(value)
-	return len(value) == length && err == nil && value == strings.ToLower(value)
+	return userSnapshotLowerHex(value, length)
 }
 
-// One fixed-publisher ref lookup; no redirects, proxy, credentials or retries.
 func userWindowsMainSnapshot(ctx context.Context) (userWindowsArtifact, []byte, error) {
-	if ctx == nil || ctx.Err() != nil {
-		return userWindowsArtifact{}, nil, errors.New("Main acquisition canceled before requests")
-	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy, transport.DisableCompression = nil, true
-	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return errors.New("Main publisher redirect refused")
-	}}
-	get := func(url string, bound int64) ([]byte, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Accept-Encoding", "identity")
-		req.Header.Set("User-Agent", "gentle-shell-windows-installer")
-		response, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer response.Body.Close()
-		if response.StatusCode != http.StatusOK || response.ContentLength > bound || (response.Header.Get("Content-Encoding") != "" && response.Header.Get("Content-Encoding") != "identity") {
-			return nil, errors.New("Main publisher status/encoding/bound refused")
-		}
-		data, err := io.ReadAll(io.LimitReader(response.Body, bound+1))
-		if err != nil || int64(len(data)) > bound {
-			return nil, errors.Join(err, errors.New("Main publisher response bound"))
-		}
-		return data, nil
-	}
-	metadata, err := get("https://api.github.com/repos/Gentleman-Programming/gentle-shell/commits/main", 256<<10)
-	var record struct {
-		SHA string `json:"sha"`
-	}
-	if err != nil {
-		return userWindowsArtifact{}, nil, err
-	}
-	if err := json.Unmarshal(metadata, &record); err != nil || !userWindowsLowerHex(record.SHA, 40) {
-		return userWindowsArtifact{}, nil, errors.Join(err, errors.New("canonical Main ref identity refused"))
-	}
-	data, err := get("https://codeload.github.com/Gentleman-Programming/gentle-shell/zip/"+record.SHA, 32<<20)
-	if err != nil {
-		return userWindowsArtifact{}, nil, err
-	}
-	artifact, err := userWindowsMainArtifact(record.SHA, userWindowsSHA(data))
-	return artifact, data, err
+	return userMainSnapshot(ctx)
 }
 
 func userWindowsMainFiles(ctx context.Context, data []byte, artifact userWindowsArtifact) (map[string]*zip.File, error) {
-	if _, err := userWindowsZIP(ctx, data, artifact, "", artifact.Prefix+"/package.json"); err != nil {
-		return nil, err
-	}
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return nil, err
-	}
-	files := map[string]*zip.File{}
-	for _, file := range reader.File {
-		name := strings.TrimSuffix(file.Name, "/")
-		if name == artifact.Prefix {
-			continue
-		}
-		relative := strings.TrimPrefix(name, artifact.Prefix+"/")
-		first := strings.ToLower(strings.Split(relative, "/")[0])
-		if first == "node_modules" || first == ".gentle-ai" {
-			return nil, errors.New("Main archive may not replace native/dependency custody")
-		}
-		files[relative] = file
-		for parent := filepath.ToSlash(filepath.Dir(relative)); parent != "."; parent = filepath.ToSlash(filepath.Dir(parent)) {
-			if _, exists := files[parent]; !exists {
-				files[parent] = nil // Implicit archive directory.
-			}
-		}
-	}
-	return files, nil
+	return userMainSourceFiles(ctx, data, artifact)
 }
 
 func userWindowsCompareMain(ctx context.Context, data []byte, artifact userWindowsArtifact, destination string) error {
@@ -181,7 +103,90 @@ var userWindowsArtifacts = []userWindowsArtifact{
 	{"https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip", "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5", "rg.zip", "ripgrep-15.2.0-x86_64-pc-windows-msvc", 32 << 20, 1789611},
 }
 
+// userWindowsDownloadCacheDirectory resolves, creates and owns the private
+// per-user download cache directory below the real LOCALAPPDATA, which is
+// resolved from the user token even when the sanitized worker environment
+// omits LOCALAPPDATA. Only the fixed supplier archives in
+// userWindowsArtifacts are cached, keyed by their exact archive name; the
+// Main snapshot descriptor and every mutable/user artifact are acquired
+// through their own path and are never routed through userWindowsAcquire.
+// Every failure — an unresolvable LOCALAPPDATA, a creation error or a
+// foreign/aliased cache identity — is a bypass, never an install failure:
+// caching is a pure optimization.
+func userWindowsDownloadCacheDirectory() (string, bool) {
+	local, err := userWindowsLocalAppData()
+	if err != nil {
+		return "", false
+	}
+	cache := filepath.Join(local, "gentle-shell", "cache", "downloads")
+	if _, err := os.Lstat(cache); err != nil {
+		if !errors.Is(err, os.ErrNotExist) || os.MkdirAll(cache, 0700) != nil {
+			return "", false
+		}
+	}
+	if err := userWindowsPrivate(cache); err != nil {
+		return "", false // Foreign, aliased or otherwise uncertain cache custody.
+	}
+	return cache, true
+}
+
+// userWindowsDownloadCacheHit returns cached archive bytes only when the
+// exact-name entry is owned (no reparse point, current-SID owner, private
+// DACL, NTFS, canonical path), stays within the artifact byte bound and
+// matches the artifact descriptor's exact size and SHA-256. Anything else is
+// a miss; unverified cache bytes are never returned.
+func userWindowsDownloadCacheHit(ctx context.Context, artifact userWindowsArtifact) ([]byte, bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	cache, ok := userWindowsDownloadCacheDirectory()
+	if !ok {
+		return nil, false
+	}
+	data, err := userWindowsRead(filepath.Join(cache, artifact.Archive), artifact.Bound)
+	if err != nil ||
+		(artifact.Size != 0 && int64(len(data)) != artifact.Size) ||
+		userWindowsSHA(data) != artifact.SHA {
+		return nil, false
+	}
+	return data, true
+}
+
+// userWindowsDownloadCacheStore best-effort retains already verified supplier
+// bytes under their exact archive name. Any failure is dropped: a partial or
+// unverified entry is removed rather than left behind, and an entry another
+// concurrent install already stored is kept as found (it is re-verified
+// before any later read).
+func userWindowsDownloadCacheStore(artifact userWindowsArtifact, data []byte) {
+	cache, ok := userWindowsDownloadCacheDirectory()
+	if !ok {
+		return
+	}
+	entry := filepath.Join(cache, artifact.Archive)
+	if err := userWindowsWrite(entry, data); err != nil && !errors.Is(err, os.ErrExist) {
+		_ = os.Remove(entry)
+	}
+}
+
 func userWindowsAcquire(ctx context.Context, artifact userWindowsArtifact, target string) ([]byte, error) {
+	if data, hit := userWindowsDownloadCacheHit(ctx, artifact); hit {
+		if err := userWindowsWrite(target, data); err != nil {
+			return nil, err
+		}
+		return data, nil
+	}
+	data, err := userWindowsAcquireNetwork(ctx, artifact)
+	if err != nil {
+		return nil, err // A failed download never writes the cache.
+	}
+	if err := userWindowsWrite(target, data); err != nil {
+		return nil, err
+	}
+	userWindowsDownloadCacheStore(artifact, data)
+	return data, nil
+}
+
+func userWindowsAcquireNetwork(ctx context.Context, artifact userWindowsArtifact) ([]byte, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DisableCompression = true
@@ -214,9 +219,6 @@ func userWindowsAcquire(ctx context.Context, artifact userWindowsArtifact, targe
 	if err != nil || int64(len(data)) > artifact.Bound || (artifact.Size != 0 && int64(len(data)) != artifact.Size) || userWindowsSHA(data) != artifact.SHA {
 		return nil, errors.Join(err, errors.New("Windows supplier digest/size differs"))
 	}
-	if err := userWindowsWrite(target, data); err != nil {
-		return nil, err
-	}
 	return data, nil
 }
 
@@ -224,39 +226,9 @@ func userWindowsAcquire(ctx context.Context, artifact userWindowsArtifact, targe
 // ZIP names, link modes, duplicates and aggregate inflation are checked before
 // publishing any extracted object. Archives remain retained for later readback.
 func userWindowsZIP(ctx context.Context, data []byte, artifact userWindowsArtifact, destination, member string) ([]byte, error) {
-	if int64(len(data)) > artifact.Bound || userWindowsSHA(data) != artifact.SHA || ctx.Err() != nil {
-		return nil, errors.New("Windows archive authority differs")
-	}
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil || len(reader.File) > 32768 {
-		return nil, errors.Join(err, errors.New("Windows archive entry bound"))
-	}
-	seen := map[string]bool{}
-	var total uint64
-	for _, file := range reader.File {
-		name := strings.TrimSuffix(file.Name, "/")
-		key := strings.ToLower(name)
-		if ctx.Err() != nil || name == "" || (name == artifact.Prefix && !file.FileInfo().IsDir()) || seen[key] || file.Mode()&os.ModeSymlink != 0 || strings.ContainsAny(name, "\\:\x00\r\n") || (name != artifact.Prefix && !strings.HasPrefix(name, artifact.Prefix+"/")) || (!file.Mode().IsRegular() && !file.FileInfo().IsDir()) {
-			return nil, errors.New("Windows archive path/type/duplicate refused")
-		}
-		seen[key] = true
-		for _, part := range strings.Split(name, "/") {
-			base := strings.ToUpper(strings.SplitN(part, ".", 2)[0])
-			if part == "" || part == "." || part == ".." || strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") || base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || (len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '0' && base[3] <= '9') {
-				return nil, errors.New("Windows archive noncanonical component")
-			}
-		}
-		memberBound := uint64(32 << 20)
-		if artifact.Archive == "node.zip" || artifact.Archive == "go.zip" {
-			memberBound = 128 << 20 // Authenticated Node/compiler executables.
-		}
-		if file.UncompressedSize64 > memberBound {
-			return nil, errors.New("Windows archive member byte bound")
-		}
-		total += file.UncompressedSize64
-		if total > 1<<30 {
-			return nil, errors.New("Windows archive aggregate byte bound")
-		}
+	reader, err := userSnapshotZIP(ctx, data, artifact)
+	if err != nil {
+		return nil, err
 	}
 	var selected []byte
 	for _, file := range reader.File {

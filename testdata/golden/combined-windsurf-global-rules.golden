@@ -133,11 +133,14 @@ Format for `mem_save`:
 - **scope**: `project` (default) | `personal`
 - **topic_key** (recommended for evolving topics): stable key like `architecture/auth-model`
 - **capture_prompt**: optional; default `true`. Do not set this for normal human/proactive saves. Set `false` only for automated artifacts such as task-document mirrors, testing-capabilities caches, onboarding/state artifacts, or skill-registry output.
-- **content**:
-  - **What**: One sentence — what was done
-  - **Why**: What motivated it (user request, bug, performance, etc.)
-  - **Where**: Files or paths affected
-  - **Learned**: Gotchas, edge cases, things that surprised you (omit if none)
+- **content** (required, single JSON string): A concise, self-contained summary. Recommended structure inside the string:
+  ```
+  What: One sentence — what was done
+  Why: What motivated it (user request, bug, performance, etc.)
+  Where: Files or paths affected
+  Learned: Gotchas, edge cases, things that surprised you (omit if none)
+  ```
+  Example: `"What: Fixed N+1 query in UserList. Why: N+1 caused 200ms overhead. Where: internal/repo/user_list.go. Learned: preload() avoids the N+1."`
 
 Prompt capture behavior (Engram v1.15.3+):
 - `mem_save` captures the user prompt best-effort when the MCP process already has prompt context for the same `project + session_id`.

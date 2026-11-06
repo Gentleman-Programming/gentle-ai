@@ -4,6 +4,9 @@ package scripts
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Independent literals: the fixed official Node archive size per kernel.
@@ -103,6 +107,55 @@ func TestBootstrapPublishesPinnedArchive(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(destination, "node")); !os.IsNotExist(err) {
 		t.Fatal("stage published inside an existing destination")
+	}
+}
+
+// Exercise the PATH entrypoints, not only the canonical npm package script.
+func TestBootstrapPackageLaunchers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires external bootstrap and Node processes")
+	}
+	archive := os.Getenv("GENTLE_SHELL_NODE_ARCHIVE")
+	if archive == "" || runtime.GOOS != "linux" {
+		t.Skip("requires the qualified Linux publisher archive")
+	}
+	destination, output, err := bootstrapRun(t, archive)
+	if err != nil {
+		t.Fatalf("bootstrap = %v, %q", err, output)
+	}
+	for _, name := range []string{"bin/node", "lib/node_modules/npm/bin/npm-cli.js", "lib/node_modules/npm/bin/npx-cli.js", "lib/node_modules/npm/lib/cli.js"} {
+		file, err := os.Open(filepath.Join(destination, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual := sha256.New()
+		_, copyErr := io.Copy(actual, file)
+		closeErr := file.Close()
+		if copyErr != nil || closeErr != nil {
+			t.Fatal(copyErr, closeErr)
+		}
+		original := sha256.New()
+		cmd := exec.Command("/usr/bin/tar", "-xOf", archive, "node-v24.18.0-linux-x64/"+name)
+		cmd.Stdout = original
+		if err := cmd.Run(); err != nil || !bytes.Equal(actual.Sum(nil), original.Sum(nil)) {
+			t.Fatalf("publisher bytes changed for %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{"npm", "npx"} {
+		t.Run(name, func(t *testing.T) {
+			info, err := os.Lstat(filepath.Join(destination, "bin", name))
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0100 == 0 {
+				t.Fatal("launcher is not a regular executable", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `exec "$1" --version`, "sh", name)
+			cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + filepath.Join(destination, "bin") + ":/usr/bin:/bin", "UV_THREADPOOL_SIZE=1"}
+			output, err := cmd.CombinedOutput()
+			if err != nil || string(output) != "11.16.0\n" {
+				t.Fatalf("PATH launcher %s = %v, %q", name, err, output)
+			}
+		})
 	}
 }
 

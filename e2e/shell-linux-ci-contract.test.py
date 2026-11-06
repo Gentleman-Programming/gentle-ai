@@ -22,6 +22,41 @@ class LinuxCIContract(unittest.TestCase):
         self.text = WORKFLOW.read_text()
         self.workflow = yaml.load(self.text, Loader=yaml.BaseLoader)
 
+    def guest_report_script(self):
+        lines = self.text.splitlines()
+        start = next(i for i, line in enumerate(lines) if 'harness.py full' in line and 'user-guest.raw' in line)
+        begin = next(i for i in range(start, len(lines)) if lines[i].rstrip().endswith("<<'PY'"))
+        end = next(i for i in range(begin + 1, len(lines)) if lines[i].strip() == 'PY')
+        body = lines[begin + 1:end]
+        indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+        return '\n'.join(line[indent:] for line in body) + '\n'
+
+    def run_guest_report(self, raw, status=1):
+        with tempfile.TemporaryDirectory() as directory:
+            script, output = pathlib.Path(directory, 'report.py'), pathlib.Path(directory, 'user-guest.raw')
+            script.write_text(self.guest_report_script())
+            output.write_bytes(raw)
+            return subprocess.run([sys.executable, '-I', str(script), str(output), str(status)], capture_output=True, text=True, timeout=30)
+
+    def test_oversized_guest_output_still_names_its_bounded_verdict(self):
+        import base64
+        small = self.run_guest_report(b'{"functionalReady":true}\n', 0)
+        self.assertEqual(small.returncode, 0)
+        self.assertIn('GUEST-RAW-BASE64:' + base64.b64encode(b'{"functionalReady":true}\n').decode(), small.stdout)
+        verdict = b'{"functionalReady":false,"reason":"named cause"}'
+        large = self.run_guest_report(b'diagnostic line\n' * 400 + verdict + b'\n')
+        self.assertNotEqual(large.returncode, 0)
+        self.assertIn('STOP: entire Guest output withheld at byte/NUL bound', large.stderr)
+        self.assertNotIn('GUEST-RAW-BASE64:', large.stdout)
+        self.assertIn('GUEST-REPORT-BASE64:' + base64.b64encode(verdict).decode(), large.stdout)
+        unbounded = self.run_guest_report(b'x' * 5000 + b'\n')
+        self.assertNotEqual(unbounded.returncode, 0)
+        self.assertNotIn('GUEST-REPORT-BASE64:', unbounded.stdout)
+        nul = self.run_guest_report(b'line\n' + b'\0' + verdict + b'\n')
+        self.assertNotEqual(nul.returncode, 0)
+        self.assertNotIn('GUEST-RAW-BASE64:', nul.stdout)
+        self.assertNotIn('GUEST-REPORT-BASE64:', nul.stdout)
+
     def test_upstream_pull_request_uses_exact_public_head(self):
         self.assertIn('pull_request', self.workflow['on'])
         self.assertIn('main', self.workflow['on']['pull_request']['branches'])
@@ -101,7 +136,9 @@ class LinuxCIContract(unittest.TestCase):
         self.assertEqual([value.value for value in geometry.args[1:]], [80, 72, 0, 0])
         self.assertIn("b'el Gentleman package is active.'", text)
         self.assertIn("require(expected in raw,", text)
-        self.assertIn("min(45, remaining())", text)
+        # The window covers the first boot's expansive setup on the single-CPU
+        # worker (#5904); no success check was lowered, only given time.
+        self.assertIn("min(150, remaining())", text)
         self.assertIn("len(raw) <= 65536", text)
         self.assertIn("require(not violations, 'fixture blank caller project changed during launch')", text)
 

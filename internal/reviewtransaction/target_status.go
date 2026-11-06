@@ -262,6 +262,7 @@ func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([
 // history, an empty range, or any Git fault -- is returned as an error so the
 // caller keeps the truthful fallback.
 func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error) {
+	defer StartStatusPhase(ctx, StatusPhaseImplicitBaseRangeDerivation)()
 	if base, ok := resolveCommittedRangeBaseFromUpstream(ctx, repo); ok {
 		return base, nil
 	}
@@ -351,6 +352,7 @@ func selectorlessCommittedBaseDiffMatchedPredecessor(ancestors []selectorlessCom
 }
 
 func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) ([]selectorlessCommittedBaseDiffCorrection, error) {
+	defer StartStatusPhase(ctx, StatusPhasePredecessorConsumptionAncestry)()
 	stores, err := DiscoverCompactStores(ctx, repo)
 	if err != nil {
 		return nil, err

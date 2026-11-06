@@ -184,6 +184,98 @@ func TestIntendedUntrackedSelectionSubmissionExecutesSelectedStatusThenPrintedSt
 	}
 }
 
+// A base-ref STATUS that asks for an untracked selection must hand back a
+// submission that re-enters the same target: dropping the --base-ref selector
+// resolves a current-changes target with a different base and path set.
+func TestIntendedUntrackedSelectionSubmissionKeepsBaseRefTarget(t *testing.T) {
+	for _, tt := range []struct {
+		name, scope, token string
+	}{
+		{name: "committed-only base diff", scope: "--committed-only", token: "--committed-only=true"},
+		{name: "workspace overlay", scope: "--workspace-overlay", token: "--workspace-overlay=true"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+			reviewEnabledHome(t)
+			repo := initReviewCLIRepo(t)
+			baseRef := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+			writeReviewStartCandidate(t, repo, "docs/committed.md", "# Committed\n", 0o644)
+			runReviewCLIGit(t, repo, "commit", "-qm", "add committed doc")
+			writeUndeclaredWorkspaceFile(t, repo, "docs/chosen.md", "# Chosen\n", 0o644)
+
+			target := []string{"--agent", "pi", "--base-ref", baseRef, tt.scope}
+			status := intendedUntrackedStatus(t, repo, target...)
+			digest, inventory := intendedUntrackedSelection(t, status)
+			if !reflect.DeepEqual(inventory, []string{"docs/chosen.md"}) {
+				t.Fatalf("selection inventory = %v", inventory)
+			}
+			submission := status.NextTransition.Collect.Inputs[0].Submission
+			if submission == nil {
+				t.Fatal("base-ref selection lacks its selected-STATUS submission")
+			}
+			want := []string{"--base-ref=" + status.Projection.BaseTree, tt.token}
+			if got := submission.ArgumentTokens[3 : len(submission.ArgumentTokens)-1]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("submission selector = %v, want %v", got, want)
+			}
+			if err := submission.Validate(); err != nil {
+				t.Fatalf("base-ref submission %v: %v", submission.ArgumentTokens, err)
+			}
+
+			answer, _ := json.Marshal(reviewIntendedUntrackedSelection{Schema: reviewIntendedUntrackedSelectionSchema, UntrackedScope: "select", ExpectedInventory: digest, Intended: []string{"docs/chosen.md"}})
+			tokens := append([]string{submission.OperationToken, "--cwd", repo}, submission.ArgumentTokens...)
+			for index := range tokens {
+				tokens[index] = strings.ReplaceAll(tokens[index], reviewSubmissionValuePlaceholder, string(answer))
+			}
+			var output bytes.Buffer
+			if err := RunReview(tokens, &output); err != nil {
+				t.Fatalf("submitted STATUS: %v\n%s", err, output.String())
+			}
+			var submitted ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, output.Bytes(), &submitted)
+
+			direct := intendedUntrackedStatus(t, repo, append(target, intendedUntrackedSelectArgs(digest, "docs/chosen.md")...)...)
+			if submitted.TargetIdentity != direct.TargetIdentity || submitted.Projection.PathsDigest != direct.Projection.PathsDigest || submitted.Projection.BaseTree != direct.Projection.BaseTree {
+				t.Fatalf("submitted target = %s paths_digest %s base %s, want %s paths_digest %s base %s",
+					submitted.TargetIdentity, submitted.Projection.PathsDigest, submitted.Projection.BaseTree,
+					direct.TargetIdentity, direct.Projection.PathsDigest, direct.Projection.BaseTree)
+			}
+			if !reflect.DeepEqual(submitted.Projection.Paths, []string{"docs/chosen.md", "docs/committed.md"}) {
+				t.Fatalf("submitted projection paths = %v", submitted.Projection.Paths)
+			}
+		})
+	}
+}
+
+func TestIntendedUntrackedSelectionSubmissionRejectsForeignSelector(t *testing.T) {
+	// The descriptor names the pi runtime, which is eligible only through the
+	// host relay contract; pin it so the test does not depend on the caller's env.
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	tree := strings.Repeat("a", 40)
+	for _, tt := range []struct {
+		name     string
+		selector []string
+		valid    bool
+	}{
+		{name: "workspace", selector: []string{"--projection=workspace"}, valid: true},
+		{name: "committed-only base diff", selector: []string{"--base-ref=" + tree, "--committed-only=true"}, valid: true},
+		{name: "workspace overlay", selector: []string{"--base-ref=" + tree, "--workspace-overlay=true"}, valid: true},
+		{name: "staged projection", selector: []string{"--projection=staged"}},
+		{name: "symbolic base ref", selector: []string{"--base-ref=HEAD", "--committed-only=true"}},
+		{name: "base ref without scope", selector: []string{"--base-ref=" + tree, "--projection=workspace"}},
+		{name: "scope without base ref", selector: []string{"--projection=workspace", "--committed-only=true"}},
+		{name: "no selector"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := append([]string{"--contract=" + ReviewIntegrationContractV2, "--next-transition=true", "--agent=pi"}, tt.selector...)
+			tokens = append(tokens, "--intended-untracked-selection="+reviewSubmissionValuePlaceholder)
+			submission := ReviewTransitionSubmission{OperationToken: "status", ArgumentTokens: tokens, Value: &ReviewTransitionSubmissionValue{Slot: "intended_untracked_selection", Domain: "schema_bound_json", Schema: reviewIntendedUntrackedSelectionSchema, SubstitutionLocation: len(tokens) - 1}}
+			if err := submission.Validate(); (err == nil) != tt.valid {
+				t.Fatalf("Validate(%v) = %v, want valid=%v", tokens, err, tt.valid)
+			}
+		})
+	}
+}
+
 func TestIntendedUntrackedSelectionUsesCanonicalPathsAndPrintedStart(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)

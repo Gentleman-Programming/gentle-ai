@@ -261,6 +261,20 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.1.1
 ```
 
+When the install directory is not on your `PATH` yet, `install.sh` adds one marked line (`# gentle-ai installer`) to the startup file your shell reads: `~/.zshrc` for zsh, `~/.bashrc` for bash on Linux, for bash on macOS the first existing of `~/.bash_profile`, `~/.bash_login`, or `~/.profile` (else `~/.bash_profile`), a `conf.d` file for fish, and `~/.profile` otherwise. `install.ps1` adds the directory to your user `Path`. Open a new terminal afterwards, or run the command the installer prints under `Current terminal:` to use `gentle-ai` in the current one. If the startup file is a symlink or cannot be edited, nothing is written and the installer prints the line to add yourself.
+
+`go install` never changes your `PATH`. It puts `gentle-ai` in `$(go env GOBIN)` or, when that is unset, in `$(go env GOPATH)/bin` (usually `~/go/bin`), and Go's Linux and macOS setups do not add that directory for you. If `gentle-ai` is not found after `go install`, add it once and open a new terminal (use your `GOBIN` directory instead when it is set, and `~/.zshrc` for zsh):
+
+```bash
+echo "export PATH=\"$(go env GOPATH)/bin:\$PATH\"" >> ~/.bashrc
+```
+
+To install `main` with the `PATH` set up for you, use `install.sh --channel beta`, which runs `go install` from `main` and then adds its directory as described above:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
+```
+
 ```bash
 gentle-ai          # pick your agents, components and persona
 gentle-ai doctor   # verify — read-only, changes nothing

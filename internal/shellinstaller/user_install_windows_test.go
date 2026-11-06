@@ -5,10 +5,13 @@ package shellinstaller
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUserWindowsMainDescriptorReadback(t *testing.T) {
@@ -61,6 +64,112 @@ func TestUserWindowsMainArchiveAuthority(t *testing.T) {
 				t.Fatal("changed retained archive digest accepted")
 			}
 		})
+	}
+}
+
+func TestUserWindowsVerifyGoZipRequiredFollowsMarker(t *testing.T) {
+	root := t.TempDir()
+	required, err := userWindowsVerifyGoZipRequired(root)
+	if !required || err != nil {
+		t.Fatalf("absent marker must keep the pinned go.zip contract: required=%v err=%v", required, err)
+	}
+	goExe := userWindowsSystemGoFixture(t, "")
+	root = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsSystemGoStage(root, userWindowsSystemGo{Go: goExe, Version: "go1.27.1"}); err != nil {
+		t.Fatal(err)
+	}
+	required, err = userWindowsVerifyGoZipRequired(root)
+	if required || err != nil {
+		t.Fatalf("valid marker must accept the absent go.zip artifact: required=%v err=%v", required, err)
+	}
+	root = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsWrite(filepath.Join(root, "runtime", "system-go.json"), []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = userWindowsVerifyGoZipRequired(root)
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("malformed marker was not refused: %v", err)
+	}
+}
+
+// The complete verification must refuse a present but invalid reuse marker
+// outright, before any pinned-archive noise can mask it.
+func TestUserWindowsVerifyRefusesMalformedSystemGoMarker(t *testing.T) {
+	root := userWindowsLaunchFixture(t)
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsWrite(filepath.Join(root, "runtime", "system-go.json"), []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	err := userWindowsVerify(context.Background(), root, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "system Go") {
+		t.Fatalf("complete verification did not refuse the malformed system Go marker: %v", err)
+	}
+}
+
+// The owned provision/launch PATH entry for the Go toolchain follows the
+// reuse marker: a valid marker puts the system Go directory on PATH and
+// removes the pinned runtime entry; absence or any doubt keeps the pinned
+// entry, so launch never depends on the marker.
+func TestUserWindowsSystemGoBinFollowsMarker(t *testing.T) {
+	goExe := userWindowsSystemGoFixture(t, "")
+	root := t.TempDir()
+	if got := userWindowsSystemGoBin(root); got != filepath.Join(root, "runtime", "go", "bin") {
+		t.Fatalf("absent marker changed the pinned Go PATH entry: %q", got)
+	}
+	root = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsWrite(filepath.Join(root, "runtime", "system-go.json"), []byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	if got := userWindowsSystemGoBin(root); got != filepath.Join(root, "runtime", "go", "bin") {
+		t.Fatalf("malformed marker changed the pinned Go PATH entry: %q", got)
+	}
+	root = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsSystemGoStage(root, userWindowsSystemGo{Go: goExe, Version: "go1.27.1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := userWindowsSystemGoBin(root); got != filepath.Dir(goExe) {
+		t.Fatalf("valid marker did not select the system Go directory: %q", got)
+	}
+}
+
+func TestUserWindowsEnvironmentCarriesSystemGoPath(t *testing.T) {
+	goExe := userWindowsSystemGoFixture(t, "")
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "runtime"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsSystemGoStage(root, userWindowsSystemGo{Go: goExe, Version: "go1.27.1"}); err != nil {
+		t.Fatal(err)
+	}
+	env, err := userWindowsEnvironment(root)
+	if err != nil {
+		t.Fatalf("owned environment refused: %v", err)
+	}
+	var path string
+	for _, entry := range env {
+		if name, value, found := strings.Cut(entry, "="); found && name == "PATH" {
+			path = value
+		}
+	}
+	if !strings.Contains(path, filepath.Dir(goExe)) {
+		t.Fatalf("provision PATH lacks the system Go directory: %q", path)
+	}
+	if strings.Contains(path, filepath.Join(root, "runtime", "go", "bin")) {
+		t.Fatalf("provision PATH retains the pinned Go entry under reuse: %q", path)
 	}
 }
 
@@ -191,5 +300,49 @@ func TestUserWindowsMainExactSourceSet(t *testing.T) {
 				t.Fatalf("Main exact-set %s: %v", mutation, err)
 			}
 		})
+	}
+}
+
+// The post-publish verification must run on its own budget: the install
+// deadline is already spent when the stage is published, and an inherited
+// deadline would kill the verify and leave the installation "published ...
+// remains unqualified" (issue #5714).
+func TestUserWindowsVerifyContextSurvivesInheritedDeadline(t *testing.T) {
+	parent, cancelParent := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelParent()
+	verifyCtx, cancelVerify := userWindowsVerifyContext(parent)
+	defer cancelVerify()
+	deadline, ok := verifyCtx.Deadline()
+	if !ok {
+		t.Fatal("verify context carries no own deadline")
+	}
+	if remaining := time.Until(deadline); remaining > userWindowsVerifyBound {
+		t.Fatalf("verify budget %s exceeds its own bound %s", remaining, userWindowsVerifyBound)
+	}
+	time.Sleep(60 * time.Millisecond) // Let the inherited install deadline expire.
+	if err := parent.Err(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("parent deadline did not expire: %v", err)
+	}
+	if err := verifyCtx.Err(); err != nil {
+		t.Fatalf("post-publish verify was killed by the inherited deadline: %v", err)
+	}
+}
+
+// Dropping the inherited deadline must not drop the cooperative cancellation
+// channel: userWindowsCancelWatch cancels the worker context when the
+// supervisor signals GENTLE_SHELL_WINDOWS_CANCEL, and that stop request has
+// to reach the verify context as well.
+func TestUserWindowsVerifyContextRespectsCooperativeCancel(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	verifyCtx, cancelVerify := userWindowsVerifyContext(parent)
+	defer cancelVerify()
+	cancelParent() // What userWindowsCancelWatch does on the cooperative event.
+	select {
+	case <-verifyCtx.Done():
+		if cause := context.Cause(verifyCtx); !errors.Is(cause, context.Canceled) {
+			t.Fatalf("verify cancel cause: %v", cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cooperative cancellation did not reach the post-publish verify context")
 	}
 }

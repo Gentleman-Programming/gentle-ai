@@ -991,7 +991,6 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 		}},
 		{"S3 risk line", []string{
 			"**Risk line**: close every code change, small path or delegated, with `Risk: item N (reason)` or `Risk: none`",
-			"(1) data or irreversible effects: migrations, changing or deleting existing stored data, persisted format changes (not saving new records)",
 			"(3) contracts others consume: changing or removing public API, CLI flags, config formats, published exports, or mirrored prompts or contracts others already consume (not adding a flag, command, or optional field; requested changes are not high risk by themselves; unrequested breaks in shared code are)",
 			"Before writing `Risk: none`, check whether the diff changes code that existing behavior the request did not mention also uses",
 		}, []string{
@@ -1051,6 +1050,28 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// weak-model-economy S4 (Log L4 compact wording): high-risk item 1 covers only
+// data that cannot be rebuilt; a dev or test database a seed or backup rebuilds
+// is ordinary work, so it never fires the Verification trigger.
+func TestRenderRoutingHighRiskItemOneCoversOnlyUnrebuildableData(t *testing.T) {
+	t.Parallel()
+
+	const itemOne = "(1) data or irreversible effects that cannot be rebuilt: migrations, changing or deleting existing stored data, persisted format changes (not saving new records, nor a dev or test database a seed or backup rebuilds);"
+	const retired = "(1) data or irreversible effects: migrations, changing or deleting existing stored data, persisted format changes (not saving new records)"
+	for _, agent := range catalog.AllAgents() {
+		rendered, err := RenderRouting(agent.ID)
+		if err != nil {
+			t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+		}
+		if !strings.Contains(rendered, itemOne) {
+			t.Errorf("RenderRouting(%q) is missing high-risk item 1 %q", agent.ID, itemOne)
+		}
+		if strings.Contains(rendered, retired) {
+			t.Errorf("RenderRouting(%q) keeps retired high-risk item 1 %q", agent.ID, retired)
+		}
 	}
 }
 

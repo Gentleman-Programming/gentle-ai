@@ -15,6 +15,10 @@ import (
 
 func TestCopilotCLIAdapter_Detect(t *testing.T) {
 	boom := errors.New("boom")
+	// copilotconfig.Root joins with filepath semantics, so the expected config
+	// root must be built the same way: the POSIX literal below would not match
+	// the Windows-spelled stat path on Windows runners.
+	defaultCfg := filepath.Join("/home/u", ".copilot")
 	tests := []struct {
 		name        string
 		copilotHome string
@@ -26,9 +30,9 @@ func TestCopilotCLIAdapter_Detect(t *testing.T) {
 		wantFound   bool
 		wantErr     error
 	}{
-		{"found", "", func(string) (string, error) { return "/bin/copilot", nil }, statResult{isDir: true}, true, "/bin/copilot", "/home/u/.copilot", true, nil},
-		{"missing", "", func(string) (string, error) { return "", exec.ErrNotFound }, statResult{err: os.ErrNotExist}, false, "", "/home/u/.copilot", false, nil},
-		{"stat error", "", func(string) (string, error) { return "/bin/copilot", nil }, statResult{err: boom}, false, "", "/home/u/.copilot", false, boom},
+		{"found", "", func(string) (string, error) { return "/bin/copilot", nil }, statResult{isDir: true}, true, "/bin/copilot", defaultCfg, true, nil},
+		{"missing", "", func(string) (string, error) { return "", exec.ErrNotFound }, statResult{err: os.ErrNotExist}, false, "", defaultCfg, false, nil},
+		{"stat error", "", func(string) (string, error) { return "/bin/copilot", nil }, statResult{err: boom}, false, "", defaultCfg, false, boom},
 		{"custom COPILOT_HOME", filepath.Join(t.TempDir(), "custom-copilot"), func(string) (string, error) { return "/bin/copilot", nil }, statResult{isDir: true}, true, "/bin/copilot", "", true, nil},
 	}
 	for _, tt := range tests {
