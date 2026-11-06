@@ -27,3 +27,16 @@ func SetRARPrivateDirectoryPrimitivesForTest(
 		rarPrivateDirectoryMkdir, rarPrivateDirectoryChmod = previousMkdir, previousChmod
 	}
 }
+
+// SetRARPrivateModeProbeForTest swaps the filesystem-capability probe the
+// #5112 refusal refinement consults, so a test can reproduce a mount that
+// cannot represent private POSIX modes without hosting one. Same contract as
+// SetRARPrivateDirectoryPrimitivesForTest: test binaries only, restore not
+// optional.
+func SetRARPrivateModeProbeForTest(ineffective func(string) bool) func() {
+	previous := rarPOSIXPrivateModeIneffective
+	if ineffective != nil {
+		rarPOSIXPrivateModeIneffective = ineffective
+	}
+	return func() { rarPOSIXPrivateModeIneffective = previous }
+}

@@ -12,8 +12,9 @@ const codexLane = "codex"
 
 const codexModel = `#!/bin/sh
 set -eu
-log=${CROSSLANE_CODEX_LOG:?}; printf '%s\n' "$@" > "$log/argv"
-cat > "$log/stdin"
+log=${CROSSLANE_CODEX_LOG:?}
+argv=$(printf '%s\n' "$@")
+prompt=$(cat)
 scratch= output=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -22,6 +23,18 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
+# Deterministic severe claims are routed through the provider refuter, which
+# spawns this same binary: corroborate every supplied claim without touching
+# the reviewer boundary logs the lane asserts on.
+if printf '%s' "$prompt" | grep -q 'gentle-ai.review-provider-refuter-request/v1'; then
+  printf '%s\n' "$prompt" > "$log/refuter-stdin"
+  request_hash=$(printf '%s' "$prompt" | grep -o '"request_hash":"sha256:[0-9a-f]*"' | head -n 1 | sed 's/.*"\(sha256:[0-9a-f]*\)"/\1/')
+  results=$(printf '%s' "$prompt" | grep -o '"finding_id":"[^"]*"' | sort -u | sed 's/"finding_id":"\([^"]*\)"/{"finding_id":"\1","outcome":"corroborated","proof_refs":["src\/add.js:4-6"]}/' | paste -sd, -)
+  printf '{"refuter_request_hash":"%s","results":[%s]}\n' "$request_hash" "$results" | tee "$output" > "$log/refuter-raw"
+  exit 0
+fi
+printf '%s\n' "$argv" > "$log/argv"
+printf '%s\n' "$prompt" > "$log/stdin"
 [ "$scratch" = "$PWD" ] && [ -z "$(ls -A "$PWD")" ] && [ "$output" = "$PWD/result" ]
 hash=$(sed -n 's/.*"subject_hash"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$log/stdin" | head -n 1)
 [ -n "$hash" ]

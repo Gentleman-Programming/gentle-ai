@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
@@ -157,8 +159,8 @@ func TestRemoteAuthorizationPrimaryCarriers(t *testing.T) {
 			}
 		})
 	}
-	if covered != 15 {
-		t.Fatalf("covered %d non-Pi clients, want 15", covered)
+	if covered != 16 {
+		t.Fatalf("covered %d non-Pi clients, want 16", covered)
 	}
 }
 
@@ -234,7 +236,7 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 			if !strings.Contains(written, "<!-- /gentle-ai:"+RoutingSectionID+" -->") {
 				t.Fatalf("InjectRouting(%q) did not close the managed section:\n%s", agent.ID, written)
 			}
-			if !strings.Contains(written, "First establish whether the requested outcome explicitly authorizes a change.") {
+			if !strings.Contains(written, piStep(agent.ID, "First establish whether the requested outcome explicitly authorizes a change.")) {
 				t.Fatalf("InjectRouting(%q) did not deliver the outcome-authorization guard:\n%s", agent.ID, written)
 			}
 		})
@@ -753,6 +755,101 @@ func TestInjectRoutingIsIdempotentForEverySupportedAgent(t *testing.T) {
 	}
 }
 
+// Only the three policy evidence sizes are exempt; other token vocabulary
+// remains forbidden. Rune-aware boundaries reject word continuations, including
+// Unicode numbers/marks, and numeric prefixes such as 1.2k or -2k. This shared
+// test helper changes neither rendered guidance nor runtime behavior.
+func routingBlockWithoutEvidenceSizes(block string) string {
+	isContinuation := func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r) ||
+			(unicode.IsSymbol(r) && r != '`') || unicode.Is(unicode.Pc, r) || unicode.Is(unicode.Pd, r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError
+	}
+	for _, phrase := range []string{"10k tokens", "2k tokens", "150k parent-context tokens"} {
+		for offset := 0; offset < len(block); {
+			next := strings.Index(block[offset:], phrase)
+			if next < 0 {
+				break
+			}
+			start := offset + next
+			end := start + len(phrase)
+			left, right := true, true
+			if start > 0 {
+				r, _ := utf8.DecodeLastRuneInString(block[:start])
+				left = !isContinuation(r) && r != '.' && r != ',' && r != '+'
+			}
+			if end < len(block) {
+				r, _ := utf8.DecodeRuneInString(block[end:])
+				right = !isContinuation(r)
+			}
+			if left && right {
+				block = block[:start] + "evidence size" + block[end:]
+				offset = start + len("evidence size")
+			} else {
+				offset = end
+			}
+		}
+	}
+	return block
+}
+
+func TestInjectedRoutingTokenGuardSelectiveExceptions(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		block     string
+		forbidden bool
+	}{
+		{"inline budget", "approximately 10k tokens of evidence", false},
+		{"handoff budget", "at most approximately 2k tokens with path:line evidence", false},
+		{"context budget", "approximately 150k parent-context tokens, advisory", false},
+		{"combined budgets", "10k tokens; 2k tokens; 150k parent-context tokens", false},
+		{"repeated budget", "10k tokens and 10k tokens", false},
+		{"punctuated budgets", "(10k tokens), `2k tokens`; [150k parent-context tokens].", false},
+		{"authorization vocabulary", "authorization token", true},
+		{"budget does not hide other vocabulary", "10k tokens and access token", true},
+		{"unapproved evidence size", "20k tokens", true},
+		{"prefixed size", "110k tokens", true},
+		{"decimal prefix", "1.2k tokens", true},
+		{"decimal prefix inline", "1.10k tokens", true},
+		{"decimal prefix context", "1.150k parent-context tokens", true},
+		{"fraction without integer", ".2k tokens", true},
+		{"negative size", "-2k tokens", true},
+		{"positive sign", "+2k tokens", true},
+		{"Unicode minus", "−2k tokens", true},
+		{"comma prefix", "1,2k tokens", true},
+		{"Unicode letter prefix", "é2k tokens", true},
+		{"Unicode letter suffix", "10k tokensé", true},
+		{"Unicode number prefix", "٢2k tokens", true},
+		{"Unicode number suffix", "10k tokens٢", true},
+		{"Unicode combining prefix", "\u03012k tokens", true},
+		{"Unicode combining suffix", "10k tokens\u0301", true},
+		{"Unicode format continuation", "10k tokens\u200d", true},
+		{"embedded word", "budget2k tokens", true},
+		{"hyphenated continuation", "10k tokens-extra", true},
+		{"singular token", "10k token", true},
+		{"suffixed word", "10k tokens_extra", true},
+		{"other retired vocabulary", "10k tokens and work-start", true},
+	} {
+		for _, guard := range []struct {
+			name  string
+			check func(string, string) string
+		}{
+			{"injection", func(block, _ string) string { return routingBlockWithoutEvidenceSizes(block) }},
+			{"routing", routingVocabularyForGuard},
+		} {
+			t.Run(guard.name+"/"+test.name, func(t *testing.T) {
+				forbidden := false
+				for _, word := range retiredRemoteControlPlaneVocabulary {
+					checked := strings.ToLower(guard.check(test.block, word))
+					forbidden = forbidden || strings.Contains(checked, strings.ToLower(word))
+				}
+				if forbidden != test.forbidden {
+					t.Errorf("guard rejects %q = %t, want %t", test.block, forbidden, test.forbidden)
+				}
+			})
+		}
+	}
+}
+
 func TestInjectRoutingDeliversNoRetiredControlPlaneVocabulary(t *testing.T) {
 	t.Parallel()
 
@@ -774,7 +871,7 @@ func TestInjectRoutingDeliversNoRetiredControlPlaneVocabulary(t *testing.T) {
 			if strings.TrimSpace(block) == "" {
 				t.Fatalf("InjectRouting(%q) delivered no managed routing block", agent.ID)
 			}
-			lowered := strings.ToLower(block)
+			lowered := strings.ToLower(routingBlockWithoutEvidenceSizes(block))
 			for _, forbidden := range retiredRemoteControlPlaneVocabulary {
 				if strings.Contains(lowered, strings.ToLower(forbidden)) {
 					t.Fatalf("InjectRouting(%q) delivered retired vocabulary %q:\n%s", agent.ID, forbidden, block)
@@ -886,4 +983,129 @@ func readFile(t *testing.T, path string) string {
 		t.Fatalf("ReadFile(%q) error = %v", path, err)
 	}
 	return string(data)
+}
+
+// ─── JSONC settings documents keep comments and trailing commas ────────────
+//
+// Issue #5035 slice A: routing guidance is delivered into the managed
+// orchestrator agent of the OpenCode family's settings document. When that
+// document is JSONC (opencode.jsonc), the writer must reuse the
+// JSONC-preserving merge instead of normalizing the whole file: everything a
+// user wrote around the touched agent value survives verbatim, and a document
+// whose touched value cannot be safely rewritten fails closed without touching
+// a byte.
+func TestInjectRoutingPreservesJSONCCommentsAndTrailingCommas(t *testing.T) {
+	t.Parallel()
+
+	targetDir := t.TempDir()
+	settingsPath := filepath.Join(targetDir, "opencode.jsonc")
+
+	const before = `{
+  // user provider note
+  "provider": {
+    "local": {"models": {"m": {},},},
+  },
+  "theme": "default",
+  "agent": {
+    "gentle-orchestrator": {
+      "prompt": "# Existing orchestrator policy\n\nHand-written rules that must survive.\n"
+    },
+  },
+}
+`
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(before), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	first, err := InjectRoutingWithOptions(targetDir, model.AgentOpenCode, RoutingOptions{SettingsPath: settingsPath})
+	if err != nil {
+		t.Fatalf("InjectRouting error = %v", err)
+	}
+	if !first.Changed || len(first.Files) != 1 || first.Files[0] != settingsPath {
+		t.Fatalf("InjectRouting result = %+v, want a change to %q", first, settingsPath)
+	}
+
+	after := readFile(t, settingsPath)
+	for _, want := range []string{
+		"// user provider note",
+		`"m": {},`,
+		`"theme": "default",`,
+		",\n}", // trailing comma after the rewritten agent member
+	} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("JSONC comment or trailing comma %q was destroyed:\n%s", want, after)
+		}
+	}
+
+	settings, err := filemerge.UnmarshalJSONObject([]byte(after))
+	if err != nil {
+		t.Fatalf("merged JSONC no longer parses: %v\n%s", err, after)
+	}
+	agentsMap, ok := settings["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent member was dropped: %#v", settings)
+	}
+	prompt := agentsMap[opencodedefault.ManagedAgent].(map[string]any)["prompt"].(string)
+	if !strings.Contains(prompt, "<!-- gentle-ai:"+RoutingSectionID+" -->") {
+		t.Fatalf("routing guidance was not injected into the managed prompt:\n%s", prompt)
+	}
+	if provider, ok := settings["provider"].(map[string]any); !ok || provider["local"] == nil {
+		t.Fatalf("untouched provider member was altered: %#v", settings["provider"])
+	}
+
+	second, err := InjectRoutingWithOptions(targetDir, model.AgentOpenCode, RoutingOptions{SettingsPath: settingsPath})
+	if err != nil {
+		t.Fatalf("second InjectRouting error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("second identical InjectRouting reported a change: %+v", second)
+	}
+	if got := readFile(t, settingsPath); got != after {
+		t.Fatalf("second InjectRouting rewrote the JSONC document:\n%s", got)
+	}
+}
+
+func TestInjectRoutingFailsClosedOnUnsafeJSONCSettings(t *testing.T) {
+	t.Parallel()
+
+	seeded, err := json.Marshal(map[string]any{"prompt": "# Existing orchestrator policy\n\nRetired WorkRun ceremony\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, content string
+	}{
+		{"malformed document", "// interrupted user edit\n{\n  \"mcp\": {\n"},
+		{"escaped touched key", `{"\u0061gent": {"gentle-orchestrator": ` + string(seeded) + `}}`},
+		{"comment inside touched value", `{"agent": {/* user note */ "gentle-orchestrator": ` + string(seeded) + `}}`},
+		{"duplicate top-level keys", `{"agent": {"gentle-orchestrator": ` + string(seeded) + `}, "theme": 1, "theme": 2}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			targetDir := t.TempDir()
+			settingsPath := filepath.Join(targetDir, "opencode.jsonc")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll error = %v", err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("WriteFile error = %v", err)
+			}
+
+			result, err := InjectRoutingWithOptions(targetDir, model.AgentOpenCode, RoutingOptions{SettingsPath: settingsPath})
+			if err == nil {
+				t.Fatalf("InjectRouting accepted unsafe JSONC settings: %+v", result)
+			}
+			if result.Changed || len(result.Files) != 0 {
+				t.Fatalf("InjectRouting reported work for unsafe JSONC settings: %+v", result)
+			}
+			if got := readFile(t, settingsPath); got != tc.content {
+				t.Fatalf("InjectRouting clobbered unsafe JSONC settings:\n got: %s\nwant: %s", got, tc.content)
+			}
+		})
+	}
 }

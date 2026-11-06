@@ -47,7 +47,9 @@ func reviewProviderAdapter(role string, agent model.AgentID, lens ...string) (re
 		key = "validator"
 	}
 	if claude, ok := adapter.(*reviewerprovider.ClaudeAdapter); ok {
-		claude.Model = savedClaudeReviewModel(key)
+		assignment := savedClaudeReviewAssignment(key)
+		claude.Model = assignment.Model
+		claude.Effort = assignment.Effort
 	}
 	if codex, ok := adapter.(*reviewerprovider.CodexAdapter); ok {
 		codex.Model = savedCodexReviewModel(key)
@@ -76,20 +78,20 @@ func savedCodexReviewModel(role string) string {
 	return ""
 }
 
-// savedClaudeReviewModel never replaces the native transport's default for
-// missing or malformed assignments. A valid phase assignment takes priority
-// over the legacy model-only representation.
-func savedClaudeReviewModel(role string) model.ClaudeModelAlias {
+// savedClaudeReviewAssignment never replaces the native transport's defaults
+// for missing or malformed assignments. A valid phase assignment takes priority
+// over the legacy model-only representation, which inherits default effort.
+func savedClaudeReviewAssignment(role string) model.ClaudePhaseAssignment {
 	if role == "" {
-		return ""
+		return model.ClaudePhaseAssignment{}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return model.ClaudePhaseAssignment{}
 	}
 	installed, err := state.Read(home)
 	if err != nil {
-		return ""
+		return model.ClaudePhaseAssignment{}
 	}
 	if assignment, ok := installed.ClaudePhaseAssignments[role]; ok {
 		configured := model.ClaudePhaseAssignment{
@@ -97,14 +99,14 @@ func savedClaudeReviewModel(role string) model.ClaudeModelAlias {
 			Effort: model.ClaudeEffort(assignment.Effort),
 		}
 		if configured.Valid() {
-			return configured.Model
+			return configured
 		}
 	}
 	alias := model.ClaudeModelAlias(installed.ClaudeModelAssignments[role])
 	if alias.Valid() {
-		return alias
+		return model.ClaudePhaseAssignment{Model: alias}
 	}
-	return ""
+	return model.ClaudePhaseAssignment{}
 }
 
 var reviewProviderAdapterFor = func(contract reviewerprovider.Contract, agent model.AgentID) (reviewerprovider.Adapter, error) {

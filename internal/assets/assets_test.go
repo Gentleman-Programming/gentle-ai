@@ -125,9 +125,8 @@ func TestSharedReferencesDoNotAdvertiseSDD(t *testing.T) {
 
 func sharedReferenceInvitesSDD(line string) bool {
 	lower := strings.ToLower(line)
-	// Historical negative controls are evidence, not instructions. Section
-	// markers are stable composer bindings, not prose offered to the agent.
-	if strings.Contains(lower, "historical negative control:") || strings.HasPrefix(strings.TrimSpace(lower), "<!-- sdd-orchestrator-section:") {
+	// Historical negative controls are evidence, not instructions.
+	if strings.Contains(lower, "historical negative control:") {
 		return false
 	}
 	return regexp.MustCompile(`\bsdd\b|sdd[-/]|openspec|spec-driven`).MatchString(lower)
@@ -139,7 +138,8 @@ func TestSharedReferenceNegativeControls(t *testing.T) {
 		want bool
 	}{
 		{"Historical negative control: do not run sdd-apply or create OpenSpec files.", false},
-		{"<!-- sdd-orchestrator-section:Language Domain Contract:start -->", false},
+		{"<!-- odd-orchestrator-section:Language Domain Contract:start -->", false},
+		{"<!-- sdd-orchestrator-section:Language Domain Contract:start -->", true},
 		{"Run sdd-apply and persist in openspec/.", true},
 		{"Use spec-driven development for this task.", true},
 	} {
@@ -156,7 +156,7 @@ func TestClaudeODDOnlyOrchestrator(t *testing.T) {
 		"{{GENTLE_AI_ODD_SECTION:Language Domain Contract}}",
 		"{{GENTLE_AI_ODD_SECTION:Delegated Verification Gate (MANDATORY)}}",
 		"Lossless Blocking Prompts", "Gentle AI Provider Defect Handoff",
-		"Native Checking Contract", "Review Execution Contract", "Mandatory Delegation Triggers",
+		"Native Checking Contract", "Review Execution Contract", "#### Delegation Triggers", // S9 C4 renamed the heading
 	} {
 		if !strings.Contains(content, required) {
 			t.Errorf("Claude orchestrator missing %q", required)
@@ -191,7 +191,7 @@ func TestPrimaryODDOnlyOrchestrator(t *testing.T) {
 				"{{GENTLE_AI_ODD_SECTION:Organic Driven Development Is The Default Workflow (MANDATORY)}}",
 				"{{GENTLE_AI_ODD_SECTION:Delegated Verification Gate (MANDATORY)}}",
 				"Lossless Blocking Prompts", "Gentle AI Provider Defect Handoff",
-				"Mandatory Delegation Triggers", "Native Checking Contract", "Review Execution Contract",
+				"#### Delegation Triggers", "Native Checking Contract", "Review Execution Contract", // S9 C4 renamed the heading
 			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("missing %q", required)
@@ -236,7 +236,7 @@ func TestRemainingODDOnlyOrchestrators(t *testing.T) {
 				"{{GENTLE_AI_ODD_SECTION:Language Domain Contract}}",
 				"{{GENTLE_AI_ODD_SECTION:Delegated Verification Gate (MANDATORY)}}",
 				"Lossless Blocking Prompts", "Gentle AI Provider Defect Handoff",
-				"Mandatory Delegation Triggers", "Native Checking Contract", "Review Execution Contract",
+				"#### Delegation Triggers", "Native Checking Contract", "Review Execution Contract", // S9 C4 renamed the heading
 			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("missing %q", required)
@@ -377,18 +377,59 @@ func TestODDOrchestratorsCarryNoRetiredWorkRunCeremony(t *testing.T) {
 	}
 }
 
+// pain-point-iteration S9 C4: delegation triggers hold only when their
+// condition truly holds (none by default, inline when in doubt), and a writer
+// unit is one independent behavior with its code, tests, and docs and several
+// minutes of work, never a test/doc/code split or a dependent delivery.
+func TestOrchestratorsDelegateOnlyWhenATriggerTrulyHolds(t *testing.T) {
+	for _, path := range allODDOrchestratorAssetPaths(t) {
+		content := MustRead(path)
+		for _, required := range []string{
+			"#### Delegation Triggers",
+			"Each trigger holds only when its condition truly holds, and only then is it mandatory; no trigger holds by default, and when in doubt work inline.",
+			"parallel units launched together (two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work: several files or roughly 100+ changed lines, because a subagent spends one to two minutes reading before it writes) or the context backstop",
+			"A unit is one independent piece of behavior with its code, tests, and docs together: never split one behavior into test, docs, and code writers, and a delivery that depends on another is not independent; several small independent changes run inline, one after another.",
+		} {
+			if !strings.Contains(content, required) {
+				t.Errorf("%s missing delegation-trigger clause %q", path, required)
+			}
+		}
+		for _, retired := range []string{"Mandatory Delegation Trigger", "each clearly heavier than starting a subagent"} {
+			if strings.Contains(content, retired) {
+				t.Errorf("%s keeps retired %q", path, retired)
+			}
+		}
+	}
+	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
+	for _, required := range []string{
+		"only when a Delegation Trigger's condition truly holds and names a reason",
+		"A Delegation Trigger holds only when its condition truly holds; none holds by default, and when in doubt work inline. Once one holds, delegation is not optional",
+		"A writer reason is parallel units launched together (independent units of behavior, each with its code, tests, and docs and several minutes of work) or the context backstop",
+	} {
+		if !strings.Contains(shared, required) {
+			t.Errorf("shared orchestrator sections missing %q", required)
+		}
+	}
+	if strings.Contains(shared, "Mandatory Delegation Trigger") {
+		t.Error("shared orchestrator sections keep the retired Mandatory Delegation Trigger framing")
+	}
+}
+
 func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 	paths := allODDOrchestratorAssetPaths(t)
 
 	for _, path := range paths {
 		content := MustRead(path)
 		for _, required := range []string{
-			"Mandatory Delegation Triggers",
-			"Bounded read rule", "read 1–3 files inline",
-			"4-file rule", "understanding requires 4+ files",
-			"Write rule", "2+ non-trivial files",
+			// pain-point-iteration S9 C4 renamed the heading: triggers hold only
+			// when their condition truly holds, so they are no longer "Mandatory".
+			"#### Delegation Triggers",
+			"Evidence budget rule", "one parallel batch",
+			"Mapping rule", "one read-only explorer",
+			"Write rule", "delegate a writer only for a named reason",
+			"parallel writers follow the **Parallel writers** rule under `## Implementation Routing`",
 			"Context rule", "reading that prepares a write", "broad research",
-			"Mandatory Delegation Triggers", "delegated direct",
+			"delegated direct",
 		} {
 			if !strings.Contains(strings.ToLower(content), strings.ToLower(required)) {
 				t.Fatalf("%s missing organic routing/native authority contract %q", path, required)
@@ -402,13 +443,24 @@ func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 				t.Fatalf("%s retained prompt-owned review ceremony %q", path, retired)
 			}
 		}
+		// gentle-shell#1731: writers are delegated for a reason, and parallel
+		// writers follow one rule instead of a single-writer ban.
+		for _, retired := range []string{
+			"a large task delegates one writer per task", "one writer per task",
+			"Use a single writer thread", "Preserve one writer thread",
+			"Keep one writer and", "Keep one writer.", "Keep one writer;",
+		} {
+			if strings.Contains(content, retired) {
+				t.Fatalf("%s retained size-based or single-writer routing %q", path, retired)
+			}
+		}
 
 		delegationHeading := "### Delegation Rules"
 		if path == "codex/orchestrator.md" {
 			delegationHeading = "## General Delegation Rules (Always Active)"
 		}
 		start := strings.Index(content, delegationHeading)
-		end := strings.Index(content, "#### Mandatory Delegation Triggers")
+		end := strings.Index(content, "#### Delegation Triggers")
 		if start < 0 || end <= start {
 			t.Fatalf("%s missing bounded general delegation section", path)
 		}
@@ -1005,7 +1057,7 @@ func TestOpenCodeODDOrchestratorDelegationVisibility(t *testing.T) {
 	for _, required := range []string{
 		"<!-- gentle-ai:opencode-desktop-delegation-progress -->",
 		"#### Delegation Visibility (OpenCode Desktop)",
-		"`delegate` or `task`",
+		"For every native subagent launch",
 		"assistant-visible status line immediately before the call",
 		"When the call returns",
 		"⏳ Delegating {phase} to {agent}...",
@@ -1546,6 +1598,202 @@ func TestODDOrchestratorAssetsScopedToParent(t *testing.T) {
 			content := MustRead(assetPath)
 			if !strings.Contains(content, "Bind this to") || !strings.Contains(content, "Do NOT apply it to") {
 				t.Fatalf("%s must scope its orchestrator instructions away from workers", assetPath)
+			}
+		})
+	}
+}
+
+// Gentleman-Programming/gentle-shell#1731: the worker tests each requested
+// rule plus only the touched existing behavior, the verifier probes the spec
+// itself in a scratch copy with a fixed severity bar, and both bound
+// corrections instead of looping.
+func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
+	t.Parallel()
+
+	want := map[string][]string{
+		"opencode/agents/gentle-ai-worker.md": {
+			// S6: RED per requested rule, PRESERVE for touched behavior, no padding, docs.
+			"add behavior-level tests for each requested rule",
+			"covers the cases the rule itself names",
+			"through the public interface",
+			"update the help text and docs that describe it",
+			"3. PRESERVE",
+			"add one test proving its previous behavior still holds; add no other cases",
+			"counts as touched when it shares the code you changed",
+			"they need no RED run",
+			// pain-point-iteration S9 C8: PRESERVE ends with a differential
+			// run of the commands sharing the changed code, old vs new.
+			"Before finishing, run a differential check: for each existing command that shares the code you changed, run it with the new or changed input (for example a new option passed to a sibling subcommand) against the previous code (a copy of the base commit in a `mktemp -d` scratch directory, never committed as a test; committed tests never read git history or a fixed commit) and against your change, and compare stdout, stderr, and exit code; any difference nobody asked for is a regression to fix and pin with a test.",
+			// pain-point-iteration S9 C3: shared state goes through the
+			// existing function, keeping its invariants.
+			"Before you create or change shared state (a record, list entry, file, or setting that other commands also create or read), find the existing function that already does it and reuse it, keeping every invariant it enforces (ordering, uniqueness, validation, normalization). Never re-implement that step inline with a different shape.",
+			"PRESERVE/REFACTOR",
+			// S8: bounded self-correction.
+			"one correction attempt per failing check, and a second only if the same check still fails",
+			"return `status: partial` with the failing command and its output",
+		},
+		"opencode/agents/gentle-ai-verify.md": {
+			// S7: read-only scope, spec-derived probes, first-launch scratch copy.
+			"Read-only means no edits to the repository or its git state",
+			"## Spec-derived probes",
+			"Verify the request, not the writer's work",
+			"**Own probes.**", "**Invariants.**", "**Interactions.**", "**Build and scope.**", "**Every item.**", "**Durable probes.**",
+			"Probe on your first launch",
+			"`mktemp -d` under the system temp directory, never inside the workspace",
+			"leave no new file in the workspace (check `git status` before and after)",
+			"No network, no installs",
+			// S7: severity bar.
+			"## Severity",
+			"reproduce it at the baseline",
+			"pre-existing advisory, never a blocker",
+			"outside the realistic domain",
+			"Silently ignoring an option or value the user passed explicitly, with a success exit, is always a blocker",
+			"An unrequested change to the output, error text, or line numbering of a command that existed at the baseline is change-caused and a blocker",
+			// S8: one correction batch, one bounded recheck.
+			"one correction batch and one recheck limited to the reported blockers",
+			"a second correction only when the recheck shows the same blocker still failing, never for a new finding",
+			"never start a new full sweep",
+		},
+	}
+	for path, clauses := range want {
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		for _, clause := range clauses {
+			if !strings.Contains(string(body), clause) {
+				t.Errorf("%s is missing %q", path, clause)
+			}
+		}
+	}
+
+	// S9: Pi/Node-only scratch details and the retired TRIANGULATE step stay out.
+	retired := map[string][]string{
+		"opencode/agents/gentle-ai-worker.md": {"TRIANGULATE"},
+		"opencode/agents/gentle-ai-verify.md": {"NODE_COMPILE_CACHE", "NO_UPDATE_NOTIFIER", "--reflink"},
+	}
+	for path, phrases := range retired {
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		for _, phrase := range phrases {
+			if strings.Contains(string(body), phrase) {
+				t.Errorf("%s still contains %q", path, phrase)
+			}
+		}
+	}
+}
+
+// C7: the worker keeps test scratch and tool caches out of the delivered diff
+// and checks `git status --short` before it returns.
+func TestOpenCodeWorkerKeepsScratchOutOfTheDiff(t *testing.T) {
+	t.Parallel()
+
+	body, err := FS.ReadFile("opencode/agents/gentle-ai-worker.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, clause := range []string{
+		"Keep test scratch state (temporary directories, `HOME`, `TMPDIR`, tool caches) outside the worktree in a `mktemp -d` directory.",
+		"When it must live inside the worktree, use a path git excludes and remove it through the test's own cleanup before finishing.",
+		"Before returning, run `git status --short` and confirm it lists no tool cache or scratch path",
+	} {
+		if !strings.Contains(string(body), clause) {
+			t.Errorf("gentle-ai-worker.md is missing %q", clause)
+		}
+	}
+}
+
+// C7: scratch outside the worktree is cleaned up too. Child safety blocks
+// deletion in subagents, so the verifier and the worker never delete: tests
+// clean up in teardown and both report exact scratch paths the parent removes.
+func TestOpenCodeGenericAgentsRemoveTheirScratchAfterUse(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]string{
+		"opencode/agents/gentle-ai-verify.md": "Before returning, list every scratch directory you created by exact path in your result so the parent removes it; never delete it yourself.",
+		"opencode/agents/gentle-ai-worker.md": "Tests delete the temp directories they create in teardown; name any scratch directory you created outside the worktree in `risks` so the parent removes it.",
+	}
+	for path, clause := range want {
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		if !strings.Contains(string(body), clause) {
+			t.Errorf("%s is missing %q", path, clause)
+		}
+		if strings.Contains(string(body), "rm -rf") {
+			t.Errorf("%s instructs a deletion that child safety blocks", path)
+		}
+	}
+}
+
+// Gentleman-Programming/gentle-shell#1713: the generic workers read the ODD
+// feature document as the specification, by reference, instead of a
+// paraphrase of the user's request; verify grounds its verdict in each spec.
+func TestOpenCodeGenericAgentsReadTheFeatureSpecByReference(t *testing.T) {
+	t.Parallel()
+
+	want := map[string][]string{
+		"opencode/agents/gentle-ai-worker.md":  {"until `## Log`", "`## Specs` are authoritative over any summary in the handoff", "which `S#` the change covers"},
+		"opencode/agents/gentle-ai-verify.md":  {"execute only exact test, build, lint, or spec example commands explicitly authorized by the parent", "verbatim user entries in `## Log`", "verdict per `S#`", "compare the exact output and error text", "isolated state"},
+		"opencode/agents/gentle-ai-explore.md": {"until `## Log`"},
+	}
+	for path, clauses := range want {
+		body, err := FS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		for _, clause := range clauses {
+			if !strings.Contains(string(body), clause) {
+				t.Errorf("%s is missing %q", path, clause)
+			}
+		}
+	}
+}
+
+// #1731 parity: the Hermes delegation skill and the shared persistence contract
+// delegate for a named reason, never for file count, and forward the routing
+// block's test-first policy instead of a strict TDD mode.
+func TestDelegationSkillsDelegateForReasonAndForwardTestDiscipline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path     string
+		required []string
+		retired  []string
+	}{
+		{
+			path: "skills/hermes-ephemeral-delegation/SKILL.md",
+			required: []string{
+				"a named reason",
+				"the applicable test-first policy and runner from `## Implementation Routing`",
+				"Write one RED test per requested rule",
+				"the **Verify handoff** from the Delegated Verification Gate",
+			},
+			retired: []string{"4+ files", "multi-file reads", "TDD mode", "strict TDD"},
+		},
+		{
+			path:     "skills/_shared/persistence-contract.md",
+			required: []string{"the applicable test-first policy and runner from `## Implementation Routing`"},
+			retired:  []string{"TDD mode", "strict TDD"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+
+			body := MustRead(tt.path)
+			for _, want := range tt.required {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s is missing %q", tt.path, want)
+				}
+			}
+			for _, retired := range tt.retired {
+				if strings.Contains(body, retired) {
+					t.Errorf("%s keeps retired %q", tt.path, retired)
+				}
 			}
 		})
 	}

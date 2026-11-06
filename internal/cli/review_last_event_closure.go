@@ -215,7 +215,7 @@ func closeReviewOnLastCapturedLens(
 		return nil, err
 	}
 	input := compactReviewInputFromView(view)
-	claims, err := reviewProviderRefuterClaims(state.InitialSnapshot.Identity, input)
+	claims, err := reviewProviderRefuterClaims(state.InitialSnapshot.Identity, input, state.RuntimeAgent)
 	if errors.Is(err, errReviewProviderRefuterNotRequired) {
 		claims = nil
 	} else if err != nil {

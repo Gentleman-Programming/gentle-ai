@@ -1,5 +1,8 @@
 # RDD Ownership Inventory — Wave 0
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 **Snapshot:** `ece470dacd0041f394e7f6f3877a6a9fcb3482af` (`origin/main`, `fix(sdd): prefer approved authority over stale lineage (#2131)`).
 
 This inventory is **not live authority**. Every row was derived by read-only CodeGraph-first source tracing against the pinned snapshot above. A later commit can change any cited `path:line`; this document is a Wave 0 instrument, not a runtime source of truth. Re-deriving it at a new snapshot means re-running the enumeration in `docs/architecture/rdd-root-simplification-design.md` §"Enumerate from authoritative enumeration points, never from prose", not editing rows by hand.

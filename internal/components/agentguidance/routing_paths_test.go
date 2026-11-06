@@ -118,3 +118,8 @@ func samePathSet(got, want []string) bool {
 	}
 	return true
 }
+
+// RoutingPaths is the default-options routing path plan these tests assert.
+func RoutingPaths(targetDir string, agent model.AgentID) ([]string, error) {
+	return RoutingPathsWithOptions(targetDir, agent, RoutingOptions{})
+}

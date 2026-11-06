@@ -93,7 +93,25 @@
       }
     },
     "features": {
-      "$ref": "capabilities-v2.3.schema.json#/properties/features"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mandatory",
+        "optional"
+      ],
+      "properties": {
+        "mandatory": {
+          "$ref": "capabilities-v2.3.schema.json#/properties/features/properties/mandatory"
+        },
+        "optional": {
+          "type": "array",
+          "minItems": 15,
+          "maxItems": 19,
+          "items": {
+            "$ref": "capabilities-v2.3.schema.json#/$defs/feature"
+          }
+        }
+      }
     },
     "bootstrap": {
       "$ref": "capabilities-v2.3.schema.json#/properties/bootstrap"

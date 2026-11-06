@@ -45,6 +45,36 @@ func unsafeRARPathError(path string, directory bool) error {
 	return &UnsafeRARPathError{Path: path, Directory: directory, Cause: errUnsafeRARAuthorityPath}
 }
 
+// PrivateModeIneffectiveError reports a private RAR path whose validation
+// fails because the filesystem hosting it cannot represent private POSIX
+// modes at all: a successful chmod does not change the reported mode, so the
+// chmod repair the generic refusal prints can never take effect (#5112, WSL
+// DrvFS/9p without the metadata option being the reported instance). It wraps
+// the generic unsafe-path refusal, so every fail-closed caller matching that
+// sentinel keeps refusing exactly as before; only the operator-facing wording
+// changes, from a repair to a real continuation.
+type PrivateModeIneffectiveError struct {
+	Path      string
+	Directory bool
+	Cause     error
+}
+
+func (err *PrivateModeIneffectiveError) Error() string {
+	kind := "file"
+	if err.Directory {
+		kind = "directory"
+	}
+	return fmt.Sprintf(
+		"the filesystem hosting the private RAR %s %q cannot represent private POSIX modes: "+
+			"permissions stay world-accessible even after a successful chmod, so no chmod can repair it; "+
+			"remount the volume with POSIX metadata enabled (WSL DrvFS: add the metadata mount option), "+
+			"or move the repository to a filesystem that persists per-file permission modes",
+		kind, err.Path,
+	)
+}
+
+func (err *PrivateModeIneffectiveError) Unwrap() error { return err.Cause }
+
 func ensureRARRepositoryRoot(commonDir, root string, create bool) error {
 	want := filepath.Join(
 		"gentle-ai",

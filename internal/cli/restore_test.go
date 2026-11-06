@@ -280,6 +280,160 @@ func TestRunRestore_UnknownFlagReturnsError(t *testing.T) {
 	}
 }
 
+// TestRunRestore_BooleanFlagValues verifies explicit values and existing bare
+// forms through the public restore entry point without touching real config.
+func TestRunRestore_BooleanFlagValues(t *testing.T) {
+	label := "install — " + time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC).Local().Format("2006-01-02 15:04")
+	complete := "restore complete — restored backup backup-000 (" + label + ")\n"
+	prompt := "Restore backup backup-000 (" + label + ")?\nThis will overwrite your current configuration. Type 'yes' to confirm: "
+	const usage = "usage: gentle-ai restore [--list | latest | <id>] [--yes]"
+	listing := "Available backups (1):\n  [1] backup-000  " + label + "\n"
+	for _, test := range []struct {
+		name      string
+		args      []string
+		input     string
+		wantOut   string
+		wantErr   string
+		wantCalls int
+	}{
+		{name: "yes false without target", args: []string{"--yes=false"}, wantErr: usage},
+		{name: "list false without target", args: []string{"--list=false"}, wantErr: usage},
+		{name: "yes false requires confirmation", args: []string{"latest", "--yes=false"}, wantOut: prompt, wantErr: "confirmation: no confirmation provided (use --yes to skip prompt)"},
+		{name: "yes false accepts confirmation", args: []string{"--yes=false", "latest"}, input: "yes\n", wantOut: prompt + complete, wantCalls: 1},
+		{name: "yes false cancellation", args: []string{"latest", "--yes=false"}, input: "no\n", wantOut: prompt + "restore cancelled\n"},
+		{name: "yes true after target", args: []string{"latest", "--yes=true"}, wantOut: complete, wantCalls: 1},
+		{name: "yes true before target", args: []string{"--yes=true", "latest"}, wantOut: complete, wantCalls: 1},
+		{name: "list true", args: []string{"--list=true"}, wantOut: listing},
+		{name: "list false restores target", args: []string{"latest", "--list=false", "--yes"}, wantOut: complete, wantCalls: 1},
+		{name: "bare list", args: []string{"--list"}, wantOut: listing},
+		{name: "single dash list", args: []string{"-list"}, wantOut: listing},
+		{name: "bare yes", args: []string{"latest", "--yes"}, wantOut: complete, wantCalls: 1},
+		{name: "single dash yes", args: []string{"latest", "-yes"}, wantOut: complete, wantCalls: 1},
+		{name: "short yes", args: []string{"latest", "-y"}, wantOut: complete, wantCalls: 1},
+		{name: "last yes value wins", args: []string{"--yes", "latest", "--yes=false"}, input: "no\n", wantOut: prompt + "restore cancelled\n"},
+		{name: "last list value wins", args: []string{"--list", "--list=false"}, wantErr: usage},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := setupRestoreHome(t, 1)
+			restoreHomeDir(t, home)
+			calls := 0
+			restorer := func(m backup.Manifest) error {
+				calls++
+				if m.ID != "backup-000" {
+					t.Errorf("restored ID = %q, want backup-000", m.ID)
+				}
+				return nil
+			}
+			var out strings.Builder
+			err := RunRestoreWithFnAndInput(test.args, restorer, &out, strings.NewReader(test.input))
+			gotErr := ""
+			if err != nil {
+				gotErr = err.Error()
+			}
+			if gotErr != test.wantErr {
+				t.Errorf("error = %q, want %q", gotErr, test.wantErr)
+			}
+			if got := out.String(); got != test.wantOut {
+				t.Errorf("stdout = %q, want %q", got, test.wantOut)
+			}
+			if calls != test.wantCalls {
+				t.Errorf("restore calls = %d, want %d", calls, test.wantCalls)
+			}
+		})
+	}
+}
+
+func TestRunRestore_EndOfFlagsAndExtraArguments(t *testing.T) {
+	label := "install — " + time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC).Local().Format("2006-01-02 15:04")
+	prompt := "Restore backup backup-000 (" + label + ")?\nThis will overwrite your current configuration. Type 'yes' to confirm: "
+	const usage = "usage: gentle-ai restore [--list | latest | <id>] [--yes]"
+	for _, test := range []struct {
+		name    string
+		args    []string
+		wantOut string
+		wantErr string
+	}{
+		{name: "explicit yes after terminator", args: []string{"latest", "--", "--yes=true"}, wantErr: usage},
+		{name: "bare yes after terminator", args: []string{"latest", "--", "--yes"}, wantErr: usage},
+		{name: "short yes after terminator", args: []string{"latest", "--", "-y"}, wantErr: usage},
+		{name: "extra target without terminator", args: []string{"latest", "backup-000", "--yes"}, wantErr: usage},
+		{name: "extra targets in list mode", args: []string{"--list", "latest", "backup-000"}, wantErr: usage},
+		{name: "target after terminator requires confirmation", args: []string{"--", "latest"}, wantOut: prompt, wantErr: "confirmation: no confirmation provided (use --yes to skip prompt)"},
+		{name: "terminator after target requires confirmation", args: []string{"latest", "--"}, wantOut: prompt, wantErr: "confirmation: no confirmation provided (use --yes to skip prompt)"},
+		{name: "list after terminator is a target", args: []string{"--", "--list"}, wantErr: "backup \"--list\" not found — use `gentle-ai restore --list` to see available backups"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := setupRestoreHome(t, 1)
+			restoreHomeDir(t, home)
+			calls := 0
+			restorer := func(backup.Manifest) error { calls++; return nil }
+			var before, after, out strings.Builder
+			if err := RunRestore([]string{"--list"}, &before); err != nil {
+				t.Fatal(err)
+			}
+			err := RunRestoreWithFnAndInput(test.args, restorer, &out, strings.NewReader(""))
+			if err == nil || err.Error() != test.wantErr {
+				t.Errorf("error = %v, want %q", err, test.wantErr)
+			}
+			if out.String() != test.wantOut || calls != 0 {
+				t.Errorf("stdout = %q, want %q; restore calls = %d, want 0", out.String(), test.wantOut, calls)
+			}
+			if err := RunRestore([]string{"--list"}, &after); err != nil {
+				t.Fatal(err)
+			}
+			if after.String() != before.String() {
+				t.Errorf("backup listing changed: before %q, after %q", before.String(), after.String())
+			}
+		})
+	}
+}
+
+func TestRunRestore_InvalidFlagsDoNotRestore(t *testing.T) {
+	home := setupRestoreHome(t, 1)
+	restoreHomeDir(t, home)
+	var help strings.Builder
+	if err := RunRestore([]string{"--help"}, &help); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		flag string
+		err  string
+	}{
+		{flag: "--yes=invalid", err: `invalid boolean value "invalid" for -yes: parse error`},
+		{flag: "--list=invalid", err: `invalid boolean value "invalid" for -list: parse error`},
+		{flag: "--unknown", err: "flag provided but not defined: -unknown"},
+	} {
+		for _, afterTarget := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/afterTarget=%t", test.flag, afterTarget), func(t *testing.T) {
+				args := []string{test.flag, "latest", "--yes"}
+				if afterTarget {
+					args = []string{"latest", "--yes", test.flag}
+				}
+				calls := 0
+				restorer := func(backup.Manifest) error { calls++; return nil }
+				var before, after, out strings.Builder
+				if err := RunRestore([]string{"--list"}, &before); err != nil {
+					t.Fatal(err)
+				}
+				err := RunRestoreWithFnAndInput(args, restorer, &out, strings.NewReader("yes\n"))
+				wantErr := "parse restore flags: " + test.err + " — run `gentle-ai restore --help` for the supported flags:\n" + strings.TrimSuffix(help.String(), "\n")
+				if err == nil || err.Error() != wantErr {
+					t.Errorf("error = %v, want %q", err, wantErr)
+				}
+				if out.String() != "" || calls != 0 {
+					t.Errorf("rejected flag produced stdout %q and %d restore calls", out.String(), calls)
+				}
+				if err := RunRestore([]string{"--list"}, &after); err != nil {
+					t.Fatal(err)
+				}
+				if after.String() != before.String() {
+					t.Errorf("rejected flag changed backup listing: before %q, after %q", before.String(), after.String())
+				}
+			})
+		}
+	}
+}
+
 // --- helpers ---
 
 // restoreHomeDir sets HOME to dir for the duration of the test.

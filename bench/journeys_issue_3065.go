@@ -72,25 +72,37 @@ func startIssue3065Predecessor(r *journeyRun) error {
 
 func recoverIssue3065StagedCorrection(r *journeyRun) error {
 	selectors := []string{"--lineage", issue3065SourceLineage, "--base-ref", r.sandbox.Scratch["staged-recovery-base"], "--projection", "staged", "--workspace-overlay"}
-	probeObservation := r.run(productArgsFor(r, append([]string{"review", "status", "--contract", reviewContract, "--next-transition", "--action-eligibility"}, selectors...)...), false)
+	probeSelectors := append(append([]string{}, selectors...), "--recovery-successor-lineage", issue3065SuccessorLineage)
+	probeObservation := r.run(productArgsFor(r, append([]string{"review", "status", "--contract", reviewContract, "--next-transition", "--action-eligibility"}, probeSelectors...)...), false)
 	var probe waveCorrectionStatus
 	if err := decodeWaveObservation(probeObservation, &probe, "issue #3065 staged recovery probe"); err != nil {
 		return err
 	}
-	if probe.Authority == nil || probe.Authority.LineageID != issue3065SourceLineage || probe.Action != "recover" || probe.ActionDisposition != "escalated" || probe.NextTransition == nil || probe.NextTransition.Kind != "collect" {
+	if probe.Authority == nil || probe.Authority.LineageID != issue3065SourceLineage || probe.Action != "recover" || probe.ActionDisposition != "escalated" || probe.NextTransition == nil || (probe.NextTransition.Kind != "collect" && probe.NextTransition.Kind != "execute") {
 		reasonCode := ""
 		if probe.NextTransition != nil {
 			reasonCode = probe.NextTransition.ReasonCode
 		}
 		return fmt.Errorf("issue #3065 staged recovery was not negotiated: action=%q disposition=%q authority=%v reason=%q", probe.Action, probe.ActionDisposition, probe.Authority, reasonCode)
 	}
-	const actor, reason = "bench-maintainer", "authorize staged correction scope expansion"
-	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + issue3065SourceLineage +
-		"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
-		"\nsuccessor_lineage=" + issue3065SuccessorLineage + "\nactor=" + actor + "\nreason=" + reason
-	authorized := append(selectors, "--recovery-successor-lineage", issue3065SuccessorLineage, "--recovery-reason", reason,
-		"--recovery-actor", actor, "--recovery-authorization", authorization)
-	envelope, err := readStatusFor(r, authorized...)
+	var envelope statusEnvelope
+	var err error
+	if probe.NextTransition.Kind == "execute" {
+		// #1658: replay native STATUS, without authoring recovery credentials.
+		if probe.NextTransition.ReasonCode != "recovery_authorized" {
+			return fmt.Errorf("issue #3065 native recovery reason = %q", probe.NextTransition.ReasonCode)
+		}
+		err = json.Unmarshal([]byte(probeObservation.Stdout), &envelope)
+	} else {
+		// Older binaries still collect the seven-argument authorized fixture.
+		const actor, reason = "bench-maintainer", "authorize staged correction scope expansion"
+		authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + issue3065SourceLineage +
+			"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
+			"\nsuccessor_lineage=" + issue3065SuccessorLineage + "\nactor=" + actor + "\nreason=" + reason
+		authorized := append(selectors, "--recovery-successor-lineage", issue3065SuccessorLineage, "--recovery-reason", reason,
+			"--recovery-actor", actor, "--recovery-authorization", authorization)
+		envelope, err = readStatusFor(r, authorized...)
+	}
 	if err != nil || envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.recover" {
 		return fmt.Errorf("authorized issue #3065 staged recovery = %+v, %v", envelope.NextTransition, err)
 	}

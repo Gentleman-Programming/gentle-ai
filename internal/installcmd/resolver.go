@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,12 @@ import (
 var cmdLookPath = exec.LookPath
 var osStat = os.Stat
 var osGetenv = os.Getenv
+
+// cmdBrewHelpTrust probes capability without changing Homebrew's trust state.
+var cmdBrewHelpTrust = func(brew string) error {
+	return exec.Command(brew, "help", "trust").Run()
+}
+
 var cmdGoVersion = func() ([]byte, error) {
 	return exec.Command("go", "version").Output()
 }
@@ -276,15 +283,12 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 }
 
 // resolveGGAInstall returns the correct install command sequence for GGA per platform.
-// - darwin: brew tap + brew install (via Gentleman-Programming/homebrew-tap)
+// - Homebrew: tap + scoped formula trust (when supported) + reinstall
 // - linux: git clone + install.sh (GGA is a pure Bash project, NOT a Go module)
 func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) {
 	switch profile.PackageManager {
 	case "brew":
-		return CommandSequence{
-			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
-			{"brew", "reinstall", "gga"},
-		}, nil
+		return resolveHomebrewComponentInstall("gga", "reinstall"), nil
 	case "winget":
 		// On Windows, use Git Bash explicitly to avoid bare "bash" resolving to
 		// C:\Windows\System32\bash.exe (WSL), which cannot run the script.
@@ -319,6 +323,32 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			profile.OS, profile.LinuxDistro, profile.PackageManager,
 		)
 	}
+}
+
+// resolveHomebrewExecutable mirrors the CLI runner fallback so the capability
+// probe can find Homebrew even when the inherited PATH omits its standard prefix.
+func resolveHomebrewExecutable() string {
+	if path, err := cmdLookPath("brew"); err == nil {
+		return path
+	}
+	for _, binDir := range []string{"/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"} {
+		path := filepath.Join(binDir, "brew")
+		info, err := osStat(path)
+		if err == nil && info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0) {
+			return path
+		}
+	}
+	return "brew"
+}
+
+// resolveHomebrewComponentInstall trusts only the selected formula, never the
+// whole tap. Older Homebrew versions without `trust` keep their existing flow.
+func resolveHomebrewComponentInstall(formula, action string) CommandSequence {
+	commands := CommandSequence{{"brew", "tap", "Gentleman-Programming/homebrew-tap"}}
+	if cmdBrewHelpTrust(resolveHomebrewExecutable()) == nil {
+		commands = append(commands, []string{"brew", "trust", "--formula", "gentleman-programming/tap/" + formula})
+	}
+	return append(commands, []string{"brew", action, formula})
 }
 
 func bashScriptPath(profile system.PlatformProfile, path string) string {
@@ -421,7 +451,7 @@ func validateGoForModuleInstall(profile system.PlatformProfile) error {
 }
 
 // resolveEngramInstall returns the correct install command sequence for Engram per platform.
-// - darwin (brew): brew tap + brew install (via Gentleman-Programming/homebrew-tap)
+// - Homebrew: tap + scoped formula trust (when supported) + install
 // - linux/windows: returns an error — callers must use engram.DownloadLatestBinary() instead.
 //
 // The go install method has been removed because it required Go 1.24+ which most
@@ -431,10 +461,7 @@ func resolveEngramInstall(profile system.PlatformProfile) (CommandSequence, erro
 	switch profile.PackageManager {
 	case "brew":
 		// macOS (or Linux with Homebrew): brew manages Go transitively — no preflight needed.
-		return CommandSequence{
-			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
-			{"brew", "install", "engram"},
-		}, nil
+		return resolveHomebrewComponentInstall("engram", "install"), nil
 	default:
 		return nil, fmt.Errorf(
 			"engram on %q/%q uses direct binary download — use engram.DownloadLatestBinary() instead of CommandSequence",

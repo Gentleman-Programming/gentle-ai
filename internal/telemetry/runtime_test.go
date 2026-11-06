@@ -266,8 +266,8 @@ func TestRuntimeSchemaParity(t *testing.T) {
 	}
 	for provider, names := range map[string]string{
 		"anthropic":    "claude-opus-5 claude-haiku-4-5 claude-haiku-4-5-20251001 claude-sonnet-5",
-		"openai":       "gpt-6-astra gpt-5.6-sol gpt-5.6-terra gpt-5.6-luna gpt-5.3-codex-spark gpt-5.5 gpt-5.4 gpt-5.4-mini gpt-5.2 gpt-5.3-codex gpt-5.6",
-		"openai-codex": "gpt-6-astra gpt-5.6-sol gpt-5.6-terra gpt-5.6-luna gpt-5.3-codex-spark gpt-5.5 gpt-5.4 gpt-5.4-mini gpt-5.2 gpt-5.3-codex gpt-5.6",
+		"openai":       "gpt-6.1-astra gpt-5.6-sol gpt-5.6-terra gpt-5.6-luna gpt-5.3-codex-spark gpt-5.5 gpt-5.4 gpt-5.4-mini gpt-5.2 gpt-5.3-codex gpt-5.6",
+		"openai-codex": "gpt-6.1-astra gpt-5.6-sol gpt-5.6-terra gpt-5.6-luna gpt-5.3-codex-spark gpt-5.5 gpt-5.4 gpt-5.4-mini gpt-5.2 gpt-5.3-codex gpt-5.6",
 		"unknown":      "unknown", "custom": "custom",
 	} {
 		for _, id := range strings.Fields(names) {

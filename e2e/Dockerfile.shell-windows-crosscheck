@@ -1,0 +1,8 @@
+FROM --platform=linux/amd64 golang@sha256:966278043a40889499db9b0cd196fc789c37c385d41bd9a10cb1e7764af60cdc
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs && apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY source.tar /source.tar
+COPY source-commit.txt /source-commit.txt
+COPY shell-windows-crosscheck-guest.sh /guest.sh
+RUN chmod 0444 /source.tar && chmod 0555 /guest.sh
+WORKDIR /
+ENTRYPOINT ["/bin/sh", "-c", "exec /usr/bin/env -i PATH=/usr/local/go/bin:/usr/bin:/bin HOME=/tmp HOST_NETNS=\"$HOST_NETNS\" HOST_MNTNS=\"$HOST_MNTNS\" /usr/bin/timeout --kill-after=5 850 /bin/sh /guest.sh"]

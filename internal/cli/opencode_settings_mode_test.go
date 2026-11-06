@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
@@ -30,6 +31,7 @@ func TestOpenCodeFamilySettingsWritersPreservePrivateMode(t *testing.T) {
 				"agent": map[string]any{
 					opencodedefault.ManagedAgent: map[string]any{"prompt": prompt},
 					"sdd-apply":                  map[string]any{"__managed_by": "gentle-ai/sdd"},
+					"general":                    map[string]any{"__managed_by": "gentle-ai/sdd"},
 				},
 			})
 			if err != nil {
@@ -49,6 +51,10 @@ func TestOpenCodeFamilySettingsWritersPreservePrivateMode(t *testing.T) {
 			}{
 				{"strip legacy trigger rules", func() (bool, error) {
 					result, err := stripLegacyTriggerRulesFromOrchestrator(settingsPath)
+					return result.Changed, err
+				}},
+				{"retire SDD settings", func() (bool, error) {
+					result, err := legacyassets.RetireOpenCodeSDDSettings(settingsPath)
 					return result.Changed, err
 				}},
 				{"migrate legacy agents", func() (bool, error) {

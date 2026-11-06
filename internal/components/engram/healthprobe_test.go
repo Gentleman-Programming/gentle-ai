@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,6 +145,24 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 		fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}\n", req.ID.String(), result)
 		if mode == "healthy" {
 			// Stay alive until the probe tears the process down.
+			select {}
+		}
+	case "garbage-before-write", "exit-before-write", "silent-before-write", "healthy-before-write":
+		if err := os.Stdin.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		switch mode {
+		case "garbage-before-write":
+			fmt.Println("this is not a JSON-RPC message")
+		case "healthy-before-write":
+			fmt.Println(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"fake-engram","version":"0"}}}`)
+		}
+		if err := os.WriteFile(os.Getenv("GO_ENGRAM_READY_FILE"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		if mode == "silent-before-write" {
 			select {}
 		}
 	case "garbage":
@@ -440,6 +459,48 @@ func TestStdioHandshake_GarbageOutput(t *testing.T) {
 	err := stdioHandshake(context.Background(), stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 	if err == nil || !strings.Contains(err.Error(), "invalid MCP stdout") {
 		t.Fatalf("stdioHandshake() error = %v, want invalid stdout error", err)
+	}
+}
+
+func TestStdioHandshake_StdoutAfterInitializeWriteFailure(t *testing.T) {
+	for _, tt := range []struct {
+		mode string
+		want string
+	}{
+		{mode: "garbage-before-write", want: "invalid MCP stdout"},
+		{mode: "exit-before-write", want: "exited without answering initialize"},
+		{mode: "silent-before-write", want: "context deadline exceeded"},
+		{mode: "healthy-before-write", want: "write engram mcp initialize request"},
+	} {
+		t.Run(tt.mode, func(t *testing.T) {
+			readyPath := filepath.Join(t.TempDir(), "ready.pid")
+			setStdioHelperProcess(t, tt.mode, "GO_ENGRAM_READY_FILE="+readyPath)
+			originalWrite := writeStdioInitializeRequest
+			var writeErr error
+			writeStdioInitializeRequest = func(w io.Writer, request string) (int, error) {
+				// The child closes stdin before publishing readiness, so the
+				// real pipe write must fail regardless of process scheduling.
+				waitForHelperPID(t, readyPath)
+				n, err := originalWrite(w, request)
+				writeErr = err
+				return n, err
+			}
+			t.Cleanup(func() { writeStdioInitializeRequest = originalWrite })
+
+			err := stdioHandshake(context.Background(), 2*time.Second, "engram", "mcp", "--tools=agent")
+			if writeErr == nil {
+				t.Fatal("initialize write succeeded, want closed child stdin")
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("stdioHandshake() error = %v, want %q", err, tt.want)
+			}
+			if tt.mode == "silent-before-write" && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("stdioHandshake() error = %v, want deadline cause", err)
+			}
+			if tt.mode == "healthy-before-write" && !errors.Is(err, writeErr) {
+				t.Fatalf("stdioHandshake() error = %v, want original write error %v", err, writeErr)
+			}
+		})
 	}
 }
 

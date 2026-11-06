@@ -280,7 +280,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 			want: []expectedSkill{
 				{scope: "user", path: ".gemini/antigravity-cli/skills/cli-only/SKILL.md", name: "cli-only", description: "CLI only"},
 			},
-			activeVariant: ".gemini/antigravity-cli/skills",
+			activeVariant: ".gemini/config/skills",
 		},
 		{
 			name: "Desktop only",
@@ -290,7 +290,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 			want: []expectedSkill{
 				{scope: "user", path: ".gemini/antigravity-desktop/skills/desktop-only/SKILL.md", name: "desktop-only", description: "Desktop only"},
 			},
-			activeVariant: ".gemini/antigravity-desktop/skills",
+			activeVariant: ".gemini/config/skills",
 		},
 		{
 			name: "both variants preserve compatibility roots and precedence",
@@ -312,7 +312,21 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 				{scope: "project", path: "skills/project-wins/SKILL.md", name: "project-wins", description: "Project copy"},
 				{scope: "user", path: ".gemini/skills/shared-only/SKILL.md", name: "shared-only", description: "Shared only"},
 			},
-			activeVariant: ".gemini/antigravity-desktop/skills",
+			activeVariant: ".gemini/config/skills",
+		},
+		{
+			name: "shared config root is discovered and wins over variant copies",
+			skills: []fixtureSkill{
+				{scope: "user", path: ".gemini/config/skills/shared-config/SKILL.md", name: "shared-config", description: "Shared config"},
+				{scope: "user", path: ".gemini/config/skills/duplicate/SKILL.md", name: "duplicate", description: "Shared config duplicate"},
+				{scope: "user", path: ".gemini/antigravity-desktop/skills/duplicate/SKILL.md", name: "duplicate", description: "Desktop duplicate"},
+				{scope: "user", path: ".gemini/antigravity-cli/skills/duplicate/SKILL.md", name: "duplicate", description: "CLI duplicate"},
+			},
+			want: []expectedSkill{
+				{scope: "user", path: ".gemini/config/skills/duplicate/SKILL.md", name: "duplicate", description: "Shared config duplicate"},
+				{scope: "user", path: ".gemini/config/skills/shared-config/SKILL.md", name: "shared-config", description: "Shared config"},
+			},
+			activeVariant: ".gemini/config/skills",
 		},
 		{
 			name: "missing variant directories preserve shared and legacy roots",
@@ -324,7 +338,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 				{scope: "user", path: ".gemini/antigravity/skills/legacy-only/SKILL.md", name: "legacy-only", description: "Legacy only"},
 				{scope: "user", path: ".gemini/skills/shared-only/SKILL.md", name: "shared-only", description: "Shared only"},
 			},
-			activeVariant: ".gemini/antigravity-cli/skills",
+			activeVariant: ".gemini/config/skills",
 		},
 	}
 

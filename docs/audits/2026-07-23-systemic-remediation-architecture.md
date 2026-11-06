@@ -1,5 +1,8 @@
 # Systemic Remediation Architecture for Gentle AI
 
+> [!WARNING]
+> **Historical record.** This document is a point-in-time snapshot kept for traceability. It is not maintained and may not describe current behavior.
+
 **Decision date:** 2026-07-23
 
 **Status:** Proposed for maintainer approval

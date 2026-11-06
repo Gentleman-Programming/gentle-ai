@@ -81,7 +81,7 @@ func TestRejectedTargetedValidatorCaptureRoutesEscalatedRecovery(t *testing.T) {
 			decodeStrictReviewJSON(t, output.Bytes(), &status)
 			if status.Schema != tt.schema || status.Action != reviewtransaction.TargetStatusActionRecover ||
 				status.ActionDisposition != reviewtransaction.RecoveryEscalated || status.NextTransition == nil ||
-				status.NextTransition.ReasonCode != "recovery_authorization_required" {
+				status.NextTransition.Kind != reviewNextTransitionExecute || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.recover" {
 				t.Fatalf("escalated status = %#v", status)
 			}
 			if err := status.Validate(); err != nil {

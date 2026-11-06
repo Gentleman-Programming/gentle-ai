@@ -33,7 +33,12 @@ func NewCodexAdapter() *CodexAdapter {
 }
 
 // Review runs Codex in an empty temporary directory. The prompt is delivered
-// through stdin so command arguments never carry provider material.
+// through stdin so command arguments never carry provider material. When the
+// invocation offers a probe workspace (the S11 refuter), Codex instead runs in
+// a candidate copy inside that temporary directory with workspace-write
+// confined to it and no network; a temp dir that resolves inside the reviewed
+// source root is refused before anything is created. The whole directory is
+// removed on return, including on error and timeout.
 func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) ([]byte, error) {
 	lookPath := adapter.LookPath
 	if lookPath == nil {
@@ -44,18 +49,35 @@ func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) 
 		return nil, fmt.Errorf("codex reviewer transport unavailable: %w", err)
 	}
 
-	scratch, err := os.MkdirTemp("", "gentle-ai-codex-reviewer-*")
+	probe := invocation.ProbeWorkspace()
+	scratchParent := ""
+	if probe != nil {
+		if scratchParent, err = probeScratchParent(invocation.ProbeSourceRoot()); err != nil {
+			return nil, fmt.Errorf("codex reviewer transport unavailable: %w", err)
+		}
+	}
+	scratch, err := os.MkdirTemp(scratchParent, "gentle-ai-codex-reviewer-*")
 	if err != nil {
 		return nil, fmt.Errorf("codex reviewer transport unavailable: create scratch directory: %w", err)
 	}
-	defer os.RemoveAll(scratch)
+	defer removeProbeScratch(scratch)
 
 	outputPath := filepath.Join(scratch, "result")
+	workdir := scratch
+	if probe != nil {
+		workdir = filepath.Join(scratch, "candidate")
+		if err := os.Mkdir(workdir, 0o700); err != nil {
+			return nil, fmt.Errorf("codex reviewer transport unavailable: create probe workspace: %w", err)
+		}
+		if err := probe(ctx, workdir); err != nil {
+			return nil, fmt.Errorf("codex reviewer transport unavailable: materialize probe workspace: %w", err)
+		}
+	}
 	commandContext := adapter.commandContext
 	if commandContext == nil {
 		commandContext = exec.CommandContext
 	}
-	arguments, err := codexReviewerArguments(scratch, outputPath)
+	arguments, err := codexReviewerArguments(workdir, outputPath, probe != nil)
 	if err != nil {
 		return nil, fmt.Errorf("codex reviewer transport unavailable: %w", err)
 	}
@@ -63,7 +85,7 @@ func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) 
 		arguments = append(arguments, "--model", adapter.Model)
 	}
 	command := commandContext(ctx, binary, arguments...)
-	command.Dir = scratch
+	command.Dir = workdir
 	command.Stdin = bytes.NewReader(invocation.Prompt())
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
@@ -78,11 +100,27 @@ func (adapter *CodexAdapter) Review(ctx context.Context, invocation Invocation) 
 	return raw, nil
 }
 
-func codexReviewerArguments(scratch, outputPath string) ([]string, error) {
+// codexReviewerArguments keeps every reviewer read-only except the probing
+// refuter, whose sandbox may write only its candidate copy: network access is
+// disabled explicitly rather than trusted to a default, and the temp-dir
+// writable roots workspace-write would otherwise add are excluded. The final
+// message path stays outside the writable copy.
+func codexReviewerArguments(workdir, outputPath string, probe bool) ([]string, error) {
+	sandbox := "read-only"
+	if probe {
+		sandbox = "workspace-write"
+	}
 	arguments := []string{
 		"exec", "--skip-git-repo-check", "--ignore-user-config",
-		"--sandbox", "read-only", "-C", scratch,
+		"--sandbox", sandbox, "-C", workdir,
 		"--output-last-message", outputPath,
+	}
+	if probe {
+		arguments = append(arguments,
+			"--config", "sandbox_workspace_write.network_access=false",
+			"--config", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+			"--config", "sandbox_workspace_write.exclude_slash_tmp=true",
+		)
 	}
 
 	baseURL, enabled, err := codexReviewerLoopbackBaseURL(os.Getenv(codexReviewerLoopbackBaseURLEnvironment))

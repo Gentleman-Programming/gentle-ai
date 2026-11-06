@@ -80,11 +80,7 @@ func buildTargetedValidationRequest(ctx context.Context, repo string, state Comp
 	}
 	var fix Snapshot
 	if captured == nil {
-		fix, err = (SnapshotBuilder{Repo: repo}).Build(ctx, Target{
-			Kind: TargetFixDiff, Projection: projection,
-			BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked,
-			LedgerIDs: state.FixFindingIDs,
-		})
+		fix, err = BuildTargetedValidationCorrection(ctx, repo, state)
 	} else {
 		fix, err = targetedValidationFixFromSnapshot(ctx, repo, state, projection, *captured)
 	}
@@ -98,6 +94,37 @@ func buildTargetedValidationRequest(ctx context.Context, repo string, state Comp
 		return TargetedValidationRequest{}, err
 	}
 	return targetedValidationRequestForCorrection(state, revision, fix)
+}
+
+// BuildTargetedValidationCorrection preserves the selector frozen at START.
+// A committed base-diff correction (HEAD moved past the frozen candidate)
+// reads HEAD plus the declared intended paths, not unrelated tracked worktree
+// changes. An uncommitted correction, and every other target, retains the
+// original workspace/staged fix behavior. Provider and repository-context
+// consumers use this same derivation as STATUS's snapshot-bound validation
+// request.
+func BuildTargetedValidationCorrection(ctx context.Context, repo string, state CompactState) (Snapshot, error) {
+	projection := state.InitialSnapshot.Projection
+	if projection == "" {
+		projection = ProjectionWorkspace
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	if state.InitialSnapshot.Kind == TargetBaseDiff {
+		live, err := builder.Build(ctx, Target{
+			Kind: TargetBaseDiff, Projection: projection, BaseRef: state.InitialSnapshot.BaseTree,
+			IntendedUntracked: state.InitialSnapshot.IntendedUntracked,
+		})
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if live.CandidateTree != state.CurrentSnapshot.CandidateTree {
+			return targetedValidationFixFromSnapshot(ctx, repo, state, projection, live)
+		}
+	}
+	return builder.Build(ctx, Target{
+		Kind: TargetFixDiff, Projection: projection, BaseRef: state.CurrentSnapshot.CandidateTree,
+		IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs,
+	})
 }
 
 // targetedValidationRequestForCorrection binds a repository-validated fix
@@ -157,7 +184,7 @@ func targetedValidationFixFromSnapshot(ctx context.Context, repo string, state C
 		return Snapshot{}, err
 	}
 	pathsDigest := digestPaths(paths)
-	intended := append([]string(nil), state.InitialSnapshot.IntendedUntracked...)
+	intended := append([]string{}, state.InitialSnapshot.IntendedUntracked...)
 	ledgerIDs := append([]string(nil), state.FixFindingIDs...)
 	fix := Snapshot{
 		Kind: TargetFixDiff, Projection: snapshotProjection, UnbornHead: live.UnbornHead,

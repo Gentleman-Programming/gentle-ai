@@ -168,6 +168,7 @@ func stubOpenCodeV1ReviewRuntime(t *testing.T) {
 	t.Helper()
 	old := opencode.VersionRunnerOverride
 	t.Cleanup(func() { opencode.VersionRunnerOverride = old })
+	freshOpenCodeRuntimeProbe(t)
 	t.Setenv("GENTLE_AI_OPENCODE_RELAY_CONTRACT", "")
 	opencode.VersionRunnerOverride = func(context.Context, opencode.Command) (opencode.CommandOutput, error) {
 		return opencode.CommandOutput{Stdout: []byte("1.18.30")}, nil

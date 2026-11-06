@@ -44,9 +44,9 @@ func TestRenderUninstallReportDistinguishesRetainedPiResourcesAndCommands(t *tes
 		OptionalPiPackageCleanupCommands: []string{
 			"pi remove npm:gentle-pi",
 			"pi remove npm:gentle-engram",
-			"pi remove npm:pi-mcp-adapter",
 			"pi remove npm:pi-web-access",
 			"pi remove npm:pi-btw",
+			"pi remove npm:pi-mcp-adapter",
 		},
 	})
 	header := strings.SplitN(report, "\n", 2)[0]

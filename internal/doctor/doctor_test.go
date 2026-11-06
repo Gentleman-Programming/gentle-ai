@@ -55,6 +55,7 @@ func TestNewRemedyClassifiesCurrentRemedies(t *testing.T) {
 		{RemedyRemoveDuplicates, RemedyCategoryEnvironment, ActionManualOnly, false},
 		{RemedyInstall, RemedyCategoryInstall, ActionManualOnly, false},
 		{RemedyRepairState, RemedyCategoryConfiguration, ActionManualOnly, false},
+		{RemedyID("inspect-state-access"), RemedyCategoryConfiguration, ActionManualOnly, false},
 		{RemedySync, RemedyCategoryConfiguration, ActionConfirmation, true},
 		{RemedyStartEngram, RemedyCategoryService, ActionManualOnly, false},
 		{RemedyInspectEngram, RemedyCategoryService, ActionManualOnly, false},

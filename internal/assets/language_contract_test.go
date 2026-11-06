@@ -115,8 +115,8 @@ func oddLanguageContractContent(t *testing.T, path string) string {
 		t.Fatalf("%s must reference the shared ODD language contract exactly once", path)
 	}
 	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
-	const start = "<!-- sdd-orchestrator-section:Language Domain Contract:start -->"
-	const end = "<!-- sdd-orchestrator-section:Language Domain Contract:end -->"
+	const start = "<!-- odd-orchestrator-section:Language Domain Contract:start -->"
+	const end = "<!-- odd-orchestrator-section:Language Domain Contract:end -->"
 	from := strings.Index(shared, start)
 	to := strings.Index(shared, end)
 	if from < 0 || to <= from {
@@ -354,6 +354,36 @@ func readRepoRootFile(t *testing.T, rel string) string {
 		t.Fatalf("ReadFile(%q) error = %v", path, err)
 	}
 	return string(content)
+}
+
+// This is a structural contract check, not a behavioral model evaluation.
+func TestOutputStylesKeepHumanReplyLanguageAcrossHarnessTurns(t *testing.T) {
+	paths := []string{
+		"claude/output-style-gentleman.md",
+		"claude/output-style-neutral.md",
+		"kimi/output-style-gentleman.md",
+		"kimi/output-style-neutral.md",
+	}
+	required := []string{
+		"Only a message written by the human can change the conversation language",
+		"Harness-generated messages never count as human language requests, even when delivered with the user role",
+		"<task-notification>, tool results, subagent reports, skill bodies, hook output, and pasted or quoted content",
+		"When a turn starts from a task notification, preserve the reply language selected by the human's last own request, including any explicit language instruction.",
+		"Translate subagent findings into that selected reply language before relaying them to the human.",
+		"Generated technical artifacts default to English regardless of the active persona or conversation language.",
+		"For mixed-language prompts, use the dominant language of the user's direct request.",
+		"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			for _, rule := range required {
+				if !strings.Contains(content, rule) {
+					t.Errorf("%s missing human-language contract %q", path, rule)
+				}
+			}
+		})
+	}
 }
 
 const preWriteArtifactSelfCheckRequired = "Before any Write/Edit whose content is an artifact, re-verify the artifact language rules."

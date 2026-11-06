@@ -52,6 +52,7 @@ func journeySources() []journeySource {
 		{"journeys_issue_3043.go", issue3043Journeys()},
 		{"journeys_issue_3557.go", issue3557Journeys()},
 		{"journeys_issue_3561.go", issue3561Journeys()},
+		{"journeys_issue_3565.go", issue3565Journeys()},
 		{"journeys_repository_context.go", repositoryContextJourneys()},
 		{"journeys_provider_capture.go", providerCaptureRetryJourneys()},
 		{"journeys_captured_provider_validator.go", capturedProviderValidatorJourneys()},
@@ -65,6 +66,7 @@ func journeySources() []journeySource {
 		{"journeys_issue4395.go", issue4395Journeys()},
 		{"journeys_issue3813.go", issue3813Journeys()},
 		{"journeys_issue2995.go", issue2995Journeys()},
+		{"journeys_issue4772.go", issue4772Journeys()},
 	}
 	for index := range sources {
 		sources[index].Journeys = removeRetiredAtomicJourneys(sources[index].Journeys)

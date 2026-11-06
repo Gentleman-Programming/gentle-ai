@@ -1,5 +1,8 @@
 # Telemetry Collector
 
+> [!NOTE]
+> These docs track `main`, which may include unreleased changes. For the latest release, see the [v4.0.0 docs](https://github.com/Gentleman-Programming/gentle-ai/tree/v4.0.0/docs).
+
 ← [Back to README](../README.md)
 
 `cmd/gentle-telemetry` is the self-hosted collector for gentle-ai's anonymous
