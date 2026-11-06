@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -589,4 +590,78 @@ func TestStagedProjectionOmitsEligibleUntrackedInventoryKey(t *testing.T) {
 	if _, ok := fields["eligible_untracked_inventory"]; ok {
 		t.Fatalf("staged STATUS carries eligible_untracked_inventory, want the key structurally absent: %s", output.String())
 	}
+}
+
+// Issue #4311: the published v1 schema asked a host for changed-path OBJECTS
+// (start.schema.json#/$defs/changed_path) while the sole implementation
+// authority decodes intended_untracked as []string and every
+// --intended-untracked flag carries one repo-relative path. A host that
+// followed the published representation therefore got the preflight refusal
+// `--intended-untracked-selection must be exact ...` for the exact envelope
+// the schema told it to send. The schema now publishes the string
+// representation, and the object representation stays refused.
+func TestIntendedUntrackedSelectionPublishedSchemaMatchesDecoderRepresentation(t *testing.T) {
+	const inventory = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	envelope := func(entries string) []byte {
+		return []byte(`{"schema":"` + reviewIntendedUntrackedSelectionSchema + `","untracked_scope":"select","expected_untracked_inventory":"` + inventory + `","intended_untracked":` + entries + `}`)
+	}
+	objectEnvelope := envelope(`[{"path":"docs/chosen.md","status":"A","old_mode":"000000","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":true}]`)
+	schema := compileWholeNativeStatusSchema(t, "intended-untracked-selection.schema.json")
+
+	t.Run("published schema accepts the decoder's string entries", func(t *testing.T) {
+		validatePublishedReviewSchema(t, schema, envelope(`["docs/chosen.md"]`))
+	})
+	t.Run("published schema rejects the retired object entries", func(t *testing.T) {
+		var document any
+		if err := json.Unmarshal(objectEnvelope, &document); err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(document); err == nil {
+			t.Fatal("published intended-untracked-selection schema accepted a changed-path object entry; the decoder accepts []string entries only")
+		}
+	})
+	t.Run("published schema rejects empty path entries", func(t *testing.T) {
+		var document any
+		if err := json.Unmarshal(envelope(`[""]`), &document); err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(document); err == nil {
+			t.Fatal("published intended-untracked-selection schema accepted an empty path entry; every --intended-untracked flag carries one repo-relative path")
+		}
+	})
+	t.Run("object representation is refused at preflight", func(t *testing.T) {
+		t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+		reviewEnabledHome(t)
+		repo := initReviewCLIRepo(t)
+		writeUndeclaredWorkspaceFile(t, repo, "docs/chosen.md", "# Chosen\n", 0o644)
+		writeReviewStartCandidate(t, repo, "docs/tracked.md", "# Tracked\n", 0o644)
+
+		status := intendedUntrackedStatus(t, repo, "--agent", "opencode")
+		submission := status.NextTransition.Collect.Inputs[0].Submission
+		if submission == nil || submission.Value == nil || submission.Value.Schema != reviewIntendedUntrackedSelectionSchema {
+			t.Fatalf("selection submission = %#v", submission)
+		}
+		tokens := append([]string{submission.OperationToken, "--cwd", repo}, submission.ArgumentTokens...)
+		for index := range tokens {
+			tokens[index] = strings.ReplaceAll(tokens[index], reviewSubmissionValuePlaceholder, string(objectEnvelope))
+		}
+		var output bytes.Buffer
+		err := RunReview(tokens, &output)
+		if err == nil {
+			t.Fatalf("object representation was accepted; output=%s", output.String())
+		}
+		var typed *ReviewIntegrationFailureError
+		if !errors.As(err, &typed) {
+			t.Fatalf("object representation refusal = %v, want a negotiated failure", err)
+		}
+		var emitted ReviewIntegrationFailure
+		decodeStrictReviewJSON(t, output.Bytes(), &emitted)
+		for name, failure := range map[string]ReviewIntegrationFailure{"stdout": emitted, "typed": typed.Failure} {
+			if failure.Schema != ReviewIntegrationFailureSchemaV2 || failure.Contract != ReviewIntegrationContractV2 ||
+				failure.Phase != "preflight" || failure.Code != "invalid_request" || failure.MutationOutcome != ReviewMutationNotStarted {
+				t.Fatalf("%s refusal envelope = %#v", name, failure)
+			}
+		}
+		assertNoUntrackedSelectionAuthority(t, repo)
+	})
 }
