@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -290,6 +291,10 @@ type OpenCodeSettingsResult struct {
 	Commented []string
 	// Unsupported is set when the settings path is not a regular file.
 	Unsupported bool
+	// RetainedPromptRefs lists, as cleaned paths, the {file:...} prompts the
+	// entries this retirement kept still load. Prompt retirement must not
+	// delete a file a kept entry depends on (#5623).
+	RetainedPromptRefs []string
 }
 
 // RetireOpenCodeSDDSettings removes from an OpenCode-family settings file the
@@ -327,6 +332,7 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 	}
 	updated := raw
 	remaining := map[string]bool{}
+	retained := map[string]bool{}
 	for _, section := range []string{"agent", "agents"} {
 		agents, _ := root[section].(map[string]any)
 		var owned []string
@@ -342,8 +348,10 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 			case retired:
 				result.Preserved = append(result.Preserved, section+"."+name)
 				remaining[name] = true
+				retained[section+"."+name] = true
 			default:
 				remaining[name] = true
+				retained[section+"."+name] = true
 			}
 		}
 		next, kept, err := filemerge.RemoveJSONCMembers(updated, []string{section}, owned, section == "agents")
@@ -355,11 +363,13 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 			if slices.Contains(kept, name) {
 				result.Commented = append(result.Commented, section+"."+name)
 				remaining[name] = true
+				retained[section+"."+name] = true
 			} else {
 				result.Removed = append(result.Removed, section+"."+name)
 			}
 		}
 	}
+	result.RetainedPromptRefs = retainedPromptRefs(root, retained, settingsPath)
 	agents, _ := root["agent"].(map[string]any)
 	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
 	permission, _ := orchestrator["permission"].(map[string]any)
@@ -428,6 +438,61 @@ func sddAgentRemains(remaining map[string]bool, settingsPath string, agentDirs [
 	return false, nil
 }
 
+// retainedPromptRefs resolves the {file:...} prompts the entries a retirement
+// kept still load, so prompt retirement never deletes a file those entries
+// depend on (#5623).
+func retainedPromptRefs(root map[string]any, retained map[string]bool, settingsPath string) []string {
+	var refs []string
+	for _, section := range []string{"agent", "agents"} {
+		agents, _ := root[section].(map[string]any)
+		for _, name := range sortedKeys(agents) {
+			if !retained[section+"."+name] {
+				continue
+			}
+			entry, _ := agents[name].(map[string]any)
+			resolved, ok := openCodePromptRefPath(entryPrompt(entry), settingsPath)
+			if !ok || slices.Contains(refs, resolved) {
+				continue
+			}
+			refs = append(refs, resolved)
+		}
+	}
+	return refs
+}
+
+// entryPrompt is the prompt an entry loads: releases wrote `prompt`, and the
+// native shape may carry `system` instead.
+func entryPrompt(entry map[string]any) string {
+	if prompt, ok := entry["prompt"].(string); ok {
+		return prompt
+	}
+	system, _ := entry["system"].(string)
+	return system
+}
+
+// openCodePromptRefPath resolves a {file:...} reference to the path it names,
+// relative references against the settings document that holds them.
+func openCodePromptRefPath(prompt, settingsPath string) (string, bool) {
+	match := promptFileRef.FindStringSubmatch(prompt)
+	if match == nil {
+		return "", false
+	}
+	resolved := filepath.FromSlash(strings.ReplaceAll(match[1], `\`, "/"))
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(filepath.Dir(settingsPath), resolved)
+	}
+	return filepath.Clean(resolved), true
+}
+
+// openCodePromptPathKey compares prompt paths the way the host resolves them:
+// Windows paths are case-insensitive.
+func openCodePromptPathKey(path string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(filepath.Clean(path))
+	}
+	return filepath.Clean(path)
+}
+
 func sortedKeys(values map[string]any) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -458,22 +523,26 @@ func (r OpenCodeSettingsResult) ManualActions() []string {
 	return actions
 }
 
-// PromptRetireResult lists the shared SDD prompt files a retirement removed
-// and the ones it preserved because no release rendered their bytes.
-// UnsupportedDir is set when the prompt directory is not a real directory.
+// PromptRetireResult lists the shared SDD prompt files a retirement removed,
+// the ones it preserved because no release rendered their bytes, and the ones
+// it kept because a kept settings entry still loads them.
 type PromptRetireResult struct {
 	Dir            string
 	Removed        []string
 	Preserved      []string
+	Retained       []string
 	UnsupportedDir bool
 }
 
 // RetireOpenCodeSDDPrompts removes the shared SDD prompt files in dir whose
 // normalized bytes some release rendered, then the directory once empty.
-// Symlinks, non-regular files, and edited files are preserved and reported.
-// A dir that is itself a symlink (or not a directory) is the user's: nothing
-// in or through it is touched, as with a symlinked plugins directory.
-func RetireOpenCodeSDDPrompts(dir string) (PromptRetireResult, error) {
+// Files named by retained, the prompts a kept settings entry still loads, are
+// kept: sync retires settings first in the same step, so deleting one would
+// leave a {file:} reference the runtime refuses and an unloadable config
+// (#5623). Symlinks, non-regular files, and edited files are preserved and
+// reported. A dir that is itself a symlink (or not a directory) is the user's:
+// nothing in or through it is touched, as with a symlinked plugins directory.
+func RetireOpenCodeSDDPrompts(dir string, retained ...string) (PromptRetireResult, error) {
 	result := PromptRetireResult{Dir: dir}
 	info, err := os.Lstat(dir)
 	if os.IsNotExist(err) {
@@ -486,6 +555,10 @@ func RetireOpenCodeSDDPrompts(dir string) (PromptRetireResult, error) {
 		result.UnsupportedDir = true
 		return result, nil
 	}
+	keep := make(map[string]bool, len(retained))
+	for _, path := range retained {
+		keep[openCodePromptPathKey(path)] = true
+	}
 	for _, phase := range promptPhases {
 		file := filepath.Join(dir, phase+".md")
 		info, err := os.Lstat(file)
@@ -494,6 +567,10 @@ func RetireOpenCodeSDDPrompts(dir string) (PromptRetireResult, error) {
 		}
 		if err != nil {
 			return result, fmt.Errorf("inspect retired SDD prompt %s: %w", file, err)
+		}
+		if keep[openCodePromptPathKey(file)] {
+			result.Retained = append(result.Retained, file)
+			continue
 		}
 		owned := false
 		if info.Mode().IsRegular() {
@@ -527,6 +604,9 @@ func (r PromptRetireResult) ManualActions() []string {
 	}
 	for _, file := range r.Preserved {
 		actions = append(actions, fmt.Sprintf("Retired SDD prompt %s was preserved: Gentle AI cannot prove it wrote this file (its content differs from every released version, or it is not a regular file), so it may contain your changes. SDD was retired in v4.0.0 and no agent loads it anymore; if you no longer need it, move or delete it.", file))
+	}
+	for _, file := range r.Retained {
+		actions = append(actions, fmt.Sprintf("Retired SDD prompt %s was kept because an agent this run kept still loads it, and the runtime refuses a configuration whose {file:} reference resolves to nothing. SDD was retired in v4.0.0: if you no longer need that agent, move or delete its settings entry, then rerun `gentle-ai sync`.", file))
 	}
 	return actions
 }

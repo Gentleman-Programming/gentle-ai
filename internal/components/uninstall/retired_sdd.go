@@ -60,7 +60,7 @@ func (s *Service) retiredSDDOperation(adapter agents.Adapter) (operation, []stri
 		}
 	}
 
-	var removed, rewritten, actions []string
+	var removed, rewritten, actions, retainedPrompts []string
 	op := operation{typeID: opRetireSDD, path: adapter.GlobalConfigDir(s.homeDir), agents: []model.AgentID{agent}}
 	op.apply = func(string) (bool, bool, error) {
 		res, err := inventory.Retire()
@@ -75,6 +75,7 @@ func (s *Service) retiredSDDOperation(adapter agents.Adapter) (operation, []stri
 		}
 		for _, path := range settings {
 			res, err := legacyassets.RetireOpenCodeSDDSettings(path, agentDirs...)
+			retainedPrompts = append(retainedPrompts, res.RetainedPromptRefs...)
 			if res.Changed {
 				rewritten = append(rewritten, path)
 			}
@@ -84,7 +85,7 @@ func (s *Service) retiredSDDOperation(adapter agents.Adapter) (operation, []stri
 			actions = append(actions, res.ManualActions()...)
 		}
 		if prompts != "" {
-			res, err := legacyassets.RetireOpenCodeSDDPrompts(prompts)
+			res, err := legacyassets.RetireOpenCodeSDDPrompts(prompts, retainedPrompts...)
 			removed = append(removed, res.Removed...)
 			if err != nil {
 				return false, false, fmt.Errorf("retire SDD prompts for %q: %w", agent, err)
