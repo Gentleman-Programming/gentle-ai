@@ -151,6 +151,7 @@ func Install(homeDir string, adapter agents.Adapter, settingsPath string) (Resul
 		return result, err
 	}
 	ledgerChanged := false
+	skippedNames := make(map[string]bool)
 	for _, name := range Manifest {
 		path := filepath.Join(dir, name+".md")
 		if err := journal.Validate(path); err != nil {
@@ -167,6 +168,7 @@ func Install(homeDir string, adapter agents.Adapter, settingsPath string) (Resul
 		owned := !exists || (known && managedownership.Hash(data) == expected)
 		if exists && !owned {
 			result.Skipped = append(result.Skipped, path)
+			skippedNames[name] = true
 			continue
 		}
 		desired := []byte(rendered[name])
@@ -210,7 +212,7 @@ func Install(homeDir string, adapter agents.Adapter, settingsPath string) (Resul
 		result.Changed = true
 		result.Files = append(result.Files, ledgerFile)
 	}
-	settingsChanged, err := RemoveManagedAgentsFromSettings(settingsPath)
+	settingsChanged, err := RemoveManagedAgentsFromSettings(settingsPath, skippedNames)
 	if err != nil {
 		return result, err
 	}
@@ -221,10 +223,13 @@ func Install(homeDir string, adapter agents.Adapter, settingsPath string) (Resul
 
 // RemoveManagedAgentsFromSettings migrates the settings document to the
 // file-based layout by removing the managed subagent entries from the native
-// `agents` map. A document without any managed entry is left untouched, and
-// an unparseable document is skipped (the settings writers fail closed on it
-// elsewhere).
-func RemoveManagedAgentsFromSettings(settingsPath string) (bool, error) {
+// `agents` map. Removal is ownership-gated: an entry is removed only when it
+// carries a managed shape (the hidden + prompt/permission or
+// system/permissions forms the installers write) and its name was not skipped
+// on the file side because a user-authored file owns that name. A document
+// without any managed entry is left untouched, and an unparseable document is
+// skipped (the settings writers fail closed on it elsewhere).
+func RemoveManagedAgentsFromSettings(settingsPath string, skipNames map[string]bool) (bool, error) {
 	raw, err := os.ReadFile(settingsPath)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -237,22 +242,51 @@ func RemoveManagedAgentsFromSettings(settingsPath string) (bool, error) {
 		return false, nil
 	}
 	agents, _ := root["agents"].(map[string]any)
-	present := false
+	namesToRemove := []string{}
 	for _, name := range Manifest {
-		if _, ok := agents[name]; ok {
-			present = true
-			break
+		entry, ok := agents[name]
+		if !ok {
+			continue
 		}
+		if skipNames[name] {
+			// A user-authored agent file owns this name: the settings entry
+			// survives alongside it.
+			continue
+		}
+		if entryMap, valid := entry.(map[string]any); !valid || !isManagedAgentEntry(entryMap) {
+			// User-authored settings entry: survive.
+			continue
+		}
+		namesToRemove = append(namesToRemove, name)
 	}
-	if !present {
+	if len(namesToRemove) == 0 {
 		return false, nil
 	}
-	updated, _, err := filemerge.RemoveJSONCMembers(raw, []string{"agents"}, Manifest, true)
+	updated, _, err := filemerge.RemoveJSONCMembers(raw, []string{"agents"}, namesToRemove, true)
 	if err != nil {
 		return false, err
 	}
 	result, err := filemerge.WriteFileAtomic(settingsPath, updated, filemerge.ExistingFileMode(settingsPath, 0o644))
 	return result.Changed, err
+}
+
+// isManagedAgentEntry recognizes the agent shapes the installers write, in
+// both the native (system/permissions) and legacy (prompt/permission) forms.
+// Anything else is treated as user-authored and never removed.
+func isManagedAgentEntry(entry map[string]any) bool {
+	hidden, _ := entry["hidden"].(bool)
+	if !hidden {
+		return false
+	}
+	if system, ok := entry["system"].(string); ok && system != "" {
+		_, hasRules := entry["permissions"].([]any)
+		return hasRules
+	}
+	if prompt, ok := entry["prompt"].(string); ok && prompt != "" {
+		_, hasRules := entry["permission"].(map[string]any)
+		return hasRules
+	}
+	return false
 }
 
 // OwnedFiles inspects the OpenCode global agents directory and reports which
