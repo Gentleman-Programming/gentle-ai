@@ -54,11 +54,9 @@ TOOL_PINS = {
     'rg': ('3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4', 1764284, 'ripgrep-15.2.0-aarch64-apple-darwin/rg', 'ripgrep 15.2.0'),
 }
 NODE_VERSION = 'v24.18.0'
-# Stable installs gentle-pi at the newest release of the reviewed supplier
-# list (S19), not a frozen version: the expected version is read live from the
-# repository's list copy so a newly reviewed release needs no harness change.
-REVIEWED_SUPPLIERS = json.loads((pathlib.Path(__file__).resolve().parents[1] / 'scripts/gentle-pi-suppliers.json').read_text())['releases']
-GENTLE_PI_VERSION = max(REVIEWED_SUPPLIERS, key=lambda version: tuple(int(part) for part in version.split('.')))
+# Stable installs gentle-pi at whatever npm's `latest` resolves — the channel
+# is the contract (#5994) — so the expected version is the one the install's
+# own manifest records (sdk_version), never a repository-side pin.
 CODING_AGENT = 'lib/node_modules/@earendil-works/pi-coding-agent/package.json'
 MEMBER_ROW = re.compile(r'"darwin/arm64": asset\("gentle-ai_(\d+\.\d+\.\d+)_darwin_arm64\.tar\.gz", "([0-9a-f]{64})", "([0-9a-f]{64})", "gentle-ai"\)')
 RESIDUE_PREFIXES = ('.gentle-node-stage.', '.gentle-shell-stage.', '.gentle-user-', '.gentle-go-', '.gentle-native-', '.gentle-unit-')
@@ -482,13 +480,15 @@ def qualify(context):
     checkpoint('separate-artifacts')
     prefix, agent = manifest['Prefix'], manifest['Agent']
     with open(os.path.join(prefix, 'lib/node_modules/gentle-pi/package.json'), 'rb') as handle:
-        require(json.loads(handle.read()).get('version') == GENTLE_PI_VERSION, 'Gentle package version differs')
+        # The channel is the contract: the installed package must be exactly
+        # the version the install flow provisioned and recorded.
+        require(json.loads(handle.read()).get('version') == manifest['sdk_version'], 'Gentle package version differs')
     artifacts = {
         'node': pinned(os.path.join(separate, 'runtime/node/bin/node'), NODE_PIN),
         'gentleAi': pinned_member(prefix),
     }
     artifacts.update(tool_evidence(context, separate, agent, 'separate'))
-    RECEIPT['separate'] = {'versions': dict(versions, gentlePi=GENTLE_PI_VERSION), 'artifacts': artifacts}
+    RECEIPT['separate'] = {'versions': dict(versions, gentlePi=manifest['sdk_version']), 'artifacts': artifacts}
     reached('separate-artifacts')
 
     checkpoint('shared-fixture')
