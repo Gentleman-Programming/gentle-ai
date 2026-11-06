@@ -5,6 +5,7 @@ package shellinstaller
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
@@ -24,6 +25,25 @@ func userWindowsSDKLockSHA() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(helper)), nil
+}
+
+// userWindowsLockGentlePiVersion parses the exact gentle-pi version a
+// generated lock resolved: the installed stable SDK version recorded in the
+// manifest for the update check.
+func userWindowsLockGentlePiVersion(lock []byte) (string, error) {
+	var record struct {
+		Packages map[string]struct {
+			Version string `json:"version"`
+		} `json:"packages"`
+	}
+	if err := json.Unmarshal(lock, &record); err != nil {
+		return "", err
+	}
+	version := record.Packages["node_modules/gentle-pi"].Version
+	if !userReviewedListSemver(version) {
+		return "", errors.New("generated lock pins no exact gentle-pi version")
+	}
+	return version, nil
 }
 
 // userWindowsToolsPinSHA digests the pinned fd/rg artifacts of this build.

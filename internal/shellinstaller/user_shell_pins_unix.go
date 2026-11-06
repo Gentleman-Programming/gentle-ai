@@ -48,11 +48,10 @@ func userSDKLockSHA() (string, error) {
 }
 
 // userFrozenLockGentlePiVersion parses the exact gentle-pi version the
-// embedded modern lock installs: the version this build's stable SDK
-// provisioning produces. It is recorded in the manifest at install time and
-// compared at update check time; until the live listed release replaces the
-// frozen lock, it is also the stable update target, so the check can never
-// report an endless update for the version it just installed.
+// embedded modern lock installs. The Stable SDK is provisioned from the
+// selected reviewed list's newest release (T4), so this is no longer the
+// update target; it remains the installed version of record for component
+// updates that reuse the SDK of a manifest predating the recorded version.
 func userFrozenLockGentlePiVersion() (string, error) {
 	files, err := userReadUserAssets()
 	if err != nil {

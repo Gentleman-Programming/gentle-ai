@@ -14,6 +14,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type InjectionResult struct {
@@ -133,6 +134,11 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	// Custom persona does nothing — user keeps their own config.
 	if persona == model.PersonaCustom {
 		return InjectionResult{}, nil
+	}
+	if adapter.Agent() == model.AgentCodex {
+		if err := system.ValidateCodexHome(homeDir); err != nil {
+			return InjectionResult{}, err
+		}
 	}
 	if adapter.Agent() == model.AgentOpenCode {
 		settingsPath := adapter.SettingsPath(homeDir)
@@ -918,7 +924,16 @@ func preserveManagedSections(existing, newPersona string, persona model.PersonaI
 		return "", false
 	}
 
+	// The new persona is written as the leading body, so a marked persona
+	// section in the preserved tail is a second copy. Releases that appended
+	// Antigravity sections to the shared ~/.gemini/GEMINI.md left one (#5608).
 	managedSuffix := existing[idx:]
+	if strings.Contains(managedSuffix, "<!-- /gentle-ai:persona -->") {
+		managedSuffix = strings.TrimLeft(filemerge.InjectMarkdownSection(managedSuffix, "persona", ""), "\n")
+		if managedSuffix == "" {
+			return newPersona, true
+		}
+	}
 	updated := newPersona
 	if !strings.HasSuffix(updated, "\n") {
 		updated += "\n"

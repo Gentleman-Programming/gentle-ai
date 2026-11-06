@@ -1,8 +1,9 @@
 // Portable VM fixtures for the Windows provisioner's version policy: latest
-// dist-tag resolution with dynamic lock pinning, the reviewed-supplier table
-// with its single fallback re-resolution, and a discovered native bundle
-// directory. They prove the validation helper logic, not an installed Windows
-// runtime. Adapted from the windows-provision-copy VM region pattern.
+// dist-tag resolution installed exactly as resolved, the reviewed-supplier
+// table demoted to advisory warnings that never gate the channel, and a
+// discovered native bundle directory. They prove the validation helper logic,
+// not an installed Windows runtime. Adapted from the windows-provision-copy
+// VM region pattern.
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -10,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const provision = process.argv[2] ?? fileURLToPath(new URL('./provision-gentle-shell-windows.mjs', import.meta.url));
 const source = fs.readFileSync(provision, 'utf8');
@@ -18,17 +19,22 @@ const refusal = message => { throw Error(`Windows provision refused: ${message}`
 
 // Static contract: no static root version survives in the provisioner; install
 // declares every root at npm's `latest` dist-tag (rootDeclaration, tested below)
-// and only gentle-pi is bound to the reviewed-supplier table.
+// and the channel resolution is final — the reviewed-supplier table is advisory
+// data that warns and never gates.
 assert.ok(!source.includes('4.0.0'), 'static gentle-pi 4.0.0 pin removed');
 assert.ok(!source.includes("'gentle-pi': ["), 'no pinned [version, integrity] root entries remain');
 assert.ok(!source.includes('.gentle-ai/v'), 'hardcoded native version path removed');
 assert.ok(source.includes("exclusive(path.join(source, 'package.json'), rootDeclaration(pins));"), 'install declares the roots through rootDeclaration');
+assert.ok(!source.includes('supplierFallbackVersion') && !source.includes('provision-supplier-fallback'), 'no fallback re-resolution remains');
+assert.ok(!source.includes('reviewedSupplierLock') && !source.includes('reviewedSupplierEntry'), 'the reviewed table never gates the channel');
+assert.ok(source.includes('reviewedSupplierAdvisory'), 'the reviewed table reports advisories only');
 
 function extract(name) {
   const begin = `function ${name}(`;
-  const start = source.indexOf(begin);
+  const found = source.indexOf(begin);
+  const start = source.slice(found - 6, found) === 'async ' ? found - 6 : found;
   assert.ok(start >= 0, `${name} helper present`);
-  assert.equal(source.indexOf(begin, start + 1), -1, `${name} helper unique`);
+  assert.equal(source.indexOf(begin, found + 1), -1, `${name} helper unique`);
   const end = source.indexOf('\n}', start);
   assert.ok(end > start, `${name} helper terminated`);
   return source.slice(start, end + 2);
@@ -43,11 +49,21 @@ const listPath = path.join(listFixtureRoot, 'gentle-pi-suppliers.json');
 fs.copyFileSync(fileURLToPath(new URL('./gentle-pi-suppliers.json', import.meta.url)), listPath);
 sandbox.root = listFixtureRoot;
 sandbox.digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+Object.assign(sandbox, { crypto, pathToFileURL, companionName: 'gentle-engram' });
 vm.createContext(sandbox);
-for (const name of ['exclusive', 'rootDeclaration', 'rewriteSupplierDeclaration', 'rootAuthorities', 'reviewedSuppliers', 'newestReviewedSupplier', 'supplierFallbackVersion', 'reviewedSupplierEntry', 'reviewedSupplierLock', 'stockNativeDirectory', 'stockNativeIntegrity', 'reviewedSupplierSources']) {
-  vm.runInContext(extract(name), sandbox, { filename: `${name}.vm.js` });
+for (const name of ['absent', 'companionPin', 'companionDeclaration', 'publishEngramCore', 'exclusive', 'rootDeclaration', 'rewriteSupplierDeclaration', 'rootAuthorities', 'reviewedSuppliers', 'reviewedSupplierAdvisory', 'reviewedSupplierAdvisorySources', 'stockNativeDirectory', 'stockNativeIntegrity']) {
+  vm.runInContext(extract(name), sandbox, { filename: `${name}.vm.js`, importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER });
 }
 const run = (code, ...args) => vm.runInContext(code, sandbox, { filename: 'call.vm.js' })(...args);
+// Advisory capture: the sandbox shares the host console object, so overriding
+// console.error here records the provisioner's advisory lines.
+const capture = body => {
+  const errors = [], original = console.error;
+  console.error = message => errors.push(String(message));
+  try { return { errors, result: body() }; } finally { console.error = original; }
+};
+const advisory = '(action, mainOverlay, version, integrity, table) => reviewedSupplierAdvisory(action, mainOverlay, version, integrity, table)';
+const sources = '(gentle, version, table) => reviewedSupplierAdvisorySources(gentle, version, table)';
 
 const names = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
 const sri = bytes => `sha512-${crypto.createHash('sha512').update(bytes).digest('base64')}`;
@@ -136,7 +152,7 @@ for (const [name, integrity] of [
 // reviewed version, and every listed-version deviation fails closed.
 scenario('reviewed-table-shape', () => {
   const table = run('() => reviewedSuppliers()');
-  assert.ok(table['4.3.0'] && table['4.4.0'] && table['4.5.0'], 'reviewed 4.3.0/4.4.0/4.5.0 listed');
+  assert.ok(Object.keys(table).length >= 1, 'the shipped list binds at least one reviewed release');
   for (const [version, entry] of Object.entries(table)) {
     assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, 'exact reviewed version');
     assert.match(entry.integrity, /^sha512-[A-Za-z0-9+/]{86}==$/, 'entry binds the npm tarball SRI');
@@ -145,20 +161,18 @@ scenario('reviewed-table-shape', () => {
   }
 });
 
-scenario('reviewed-list-values', () => {
-  // Independent literals: the staged list must carry exactly the reviewed
-  // 4.3.0/4.4.0/4.5.0 supplier bindings.
+scenario('reviewed-list-roundtrips', () => {
+  // The provisioner invents nothing and drops nothing: the parsed advisory
+  // table is exactly the shipped list, whatever releases it currently binds.
+  const file = JSON.parse(fs.readFileSync(fileURLToPath(new URL('./gentle-pi-suppliers.json', import.meta.url)), 'utf8'));
   const table = run('() => reviewedSuppliers()');
-  assert.deepEqual(JSON.parse(JSON.stringify(table)), {
-    '4.3.0': { integrity: 'sha512-xXBEZaGqden4bblEPagQEnkF12L0JHhsPr1REBGvhSeDy6mbHDQmEvUU5ATr9lvWb7xsTOXV7gwnfq4U+z7lpA==', installer: '8679f49d3675323bf7ff5c24321f08016bb0f8e79ded307b5900c37648f52470', binary: '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80' },
-    '4.4.0': { integrity: 'sha512-NlBlDil1sNeoEXqpmT4DkgTCLv/KCZiGYG4ukzx2Z0PQm1+X8FZEtoFnb0eeO5mmgTkWly7vItgAhc9ApGVF0A==', installer: '37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed', binary: '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80' },
-    '4.5.0': { integrity: 'sha512-hw4W2hBvyGWPbPEpvAIgx4F+5IgQjZ1Yzhj159DRcbrvFBde3H8Jh9qKQF2EYTH7WcI+ixJqTXFF92pykOuXIg==', installer: '37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed', binary: '61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80' },
-  }, 'staged list binds the reviewed 4.3.0/4.4.0/4.5.0 supplier values');
+  assert.deepEqual(JSON.parse(JSON.stringify(table)), file.releases, 'the parsed table is exactly the shipped list');
 });
 
-// The provisioner re-validates the staged list strictly: a foreign schema, a
-// non-semver key, a malformed SRI or digest, an unknown entry field, an empty
-// release set or a non-object shape all fail closed.
+// The provisioner still parses the staged list strictly, but the list is
+// advisory data: a foreign schema, a non-semver key, a malformed SRI or
+// digest, an unknown entry field, an empty release set or a non-object shape
+// all degrade to no supplier advisories instead of refusing the install.
 const listMutations = {
   'foreign-schema': list => { list.schema = 'other/v1'; },
   'missing-schema': list => { delete list.schema; },
@@ -176,19 +190,24 @@ const listMutations = {
   'unknown-top-level-field': list => { list.foreign = 'x'; },
   'array-entry': list => { list.releases['4.5.0'] = []; },
 };
-scenario('reviewed-list-refusals', () => {
+// The staged list is advisory data: an unreadable, malformed or empty list
+// degrades to no supplier advisories instead of refusing the channel install.
+scenario('reviewed-list-degrades-to-no-advisories', () => {
   const original = fs.readFileSync(listPath);
   try {
     for (const [name, mutate] of Object.entries(listMutations)) {
       const list = JSON.parse(original);
       mutate(list);
       fs.writeFileSync(listPath, JSON.stringify(list));
-      assert.throws(() => run('() => reviewedSuppliers()'), /Windows provision refused: reviewed supplier list/, `${name} staged list refused`);
+      const { errors, result } = capture(() => run('() => reviewedSuppliers()'));
+      assert.deepEqual({ ...result }, {}, `${name} staged list degrades to no advisories`);
+      assert.equal(errors.length, 1, `${name} staged list warns once`);
+      assert.match(errors[0], /reviewed supplier list is unusable/, `${name} staged list names the advisory`);
     }
     fs.writeFileSync(listPath, 'not json');
-    assert.throws(() => run('() => reviewedSuppliers()'), /Windows provision refused|Unexpected token/, 'malformed staged list refused');
+    assert.deepEqual({ ...capture(() => run('() => reviewedSuppliers()')).result }, {}, 'malformed staged list degrades');
     fs.rmSync(listPath);
-    assert.throws(() => run('() => reviewedSuppliers()'), /ENOENT/, 'absent staged list refused');
+    assert.deepEqual({ ...capture(() => run('() => reviewedSuppliers()')).result }, {}, 'absent staged list degrades');
   } finally {
     fs.writeFileSync(listPath, original);
   }
@@ -196,59 +215,61 @@ scenario('reviewed-list-refusals', () => {
 
 // The staged list read is bounded at 256 KiB like the Go loader: trailing
 // whitespace keeps the JSON valid, so only the byte bound refuses it.
-scenario('reviewed-list-oversize-refused', () => {
+scenario('reviewed-list-oversize-degrades', () => {
   const original = fs.readFileSync(listPath);
   try {
     fs.writeFileSync(listPath, Buffer.concat([original, Buffer.from(' '.repeat(262145))]));
-    assert.throws(() => run('() => reviewedSuppliers()'), /Windows provision refused: reviewed supplier list/, 'oversized staged list refused');
+    const { errors, result } = capture(() => run('() => reviewedSuppliers()'));
+    assert.deepEqual({ ...result }, {}, 'oversized staged list degrades to no advisories');
+    assert.match(errors[0], /reviewed supplier list is unusable/, 'oversized staged list warns once');
   } finally {
     fs.writeFileSync(listPath, original);
   }
 });
 
-scenario('reviewed-latest-kept', () => {
+scenario('unreviewed-latest-advisory', () => {
   const table = run('() => reviewedSuppliers()');
-  assert.deepEqual({ ...run('(version, integrity, table) => reviewedSupplierEntry(version, integrity, table)', '4.5.0', table['4.5.0'].integrity, table) }, { ...table['4.5.0'] }, 'reviewed version with matching integrity accepted');
-  assert.equal(run('(version, integrity, table) => supplierFallbackVersion(version, integrity, table)', '4.5.0', table['4.5.0'].integrity, table), null, 'no fallback when latest resolves a reviewed version');
+  const { errors } = capture(() => run(advisory, 'install', false, '4.6.0', sri('unreviewed'), table));
+  assert.deepEqual(errors, ['Windows provision advisory: gentle-pi@4.6.0 is outside the reviewed supplier table; installing the channel resolution'],
+    'unreviewed latest installs the channel resolution and says so');
 });
 
-scenario('unreviewed-latest-falls-back', () => {
+scenario('listed-wrong-integrity-advisory', () => {
   const table = run('() => reviewedSuppliers()');
-  assert.equal(run('(version, integrity, table) => supplierFallbackVersion(version, integrity, table)', '4.6.0', sri('unreviewed'), table), '4.5.0', 'unreviewed latest falls back to the newest reviewed version');
+  const { errors } = capture(() => run(advisory, 'install', false, '4.3.0', sri('tampered'), table));
+  assert.deepEqual(errors, ['Windows provision advisory: gentle-pi@4.3.0 lock SRI differs from its reviewed entry; installing the channel resolution'],
+    'a listed version whose lock SRI differs installs anyway and says so');
 });
 
-scenario('listed-wrong-integrity-refused-no-fallback', () => {
+scenario('supplier-advisory-keeps-main-overlay-exemption', () => {
   const table = run('() => reviewedSuppliers()');
-  assert.equal(run('(version, integrity, table) => reviewedSupplierEntry(version, integrity, table)', '4.3.0', sri('tampered'), table), null, 'listed version with wrong lock integrity refused');
-  assert.equal(run('(version, integrity, table) => supplierFallbackVersion(version, integrity, table)', '4.3.0', sri('tampered'), table), null, 'listed version never falls back on an integrity deviation');
-});
-
-scenario('lock-gate-keeps-main-overlay-exemption', () => {
-  const table = run('() => reviewedSuppliers()');
-  const gate = '(action, mainOverlay, version, integrity, table) => reviewedSupplierLock(action, mainOverlay, version, integrity, table)';
-  // Main overlay/verify gentle-pi source is bound by the frozen Main ZIP, so an
-  // older stock lock (installed before its version was reviewed) stays verifiable.
+  // Main overlay/verify gentle-pi source is bound by the frozen Main ZIP, so
+  // the stock lock advisory stays silent there.
   for (const action of ['overlay', 'verify']) {
-    assert.doesNotThrow(() => run(gate, action, true, '4.2.0', sri('older'), table), `Main ${action} ignores the stock lock version`);
+    assert.deepEqual(capture(() => run(advisory, action, true, '4.2.0', sri('older'), table)).errors, [], `Main ${action} stays silent about the stock lock version`);
   }
-  assert.throws(() => run(gate, 'verify', false, '4.2.0', sri('older'), table),
-    /Windows provision refused: stock native supplier source pin/, 'stable verify of an unreviewed lock refused');
-  assert.throws(() => run(gate, 'install', false, '4.3.0', sri('tampered'), table),
-    /Windows provision refused: stock native supplier source pin/, 'install of a listed version with a different SRI refused');
-  assert.doesNotThrow(() => run(gate, 'verify', false, '4.3.0', table['4.3.0'].integrity, table), 'stable verify of a reviewed 4.3.0 lock accepted');
+  assert.deepEqual(capture(() => run(advisory, 'verify', false, '4.2.0', sri('older'), table)).errors,
+    ['Windows provision advisory: gentle-pi@4.2.0 is outside the reviewed supplier table; installing the channel resolution'],
+    'stable verify of an unreviewed lock advises');
+  assert.deepEqual(capture(() => run(advisory, 'install', false, '4.3.0', sri('tampered'), table)).errors,
+    ['Windows provision advisory: gentle-pi@4.3.0 lock SRI differs from its reviewed entry; installing the channel resolution'],
+    'install of a listed version with a different SRI advises');
+  assert.deepEqual(capture(() => run(advisory, 'verify', false, '4.3.0', table['4.3.0'].integrity, table)).errors, [], 'stable verify of a reviewed 4.3.0 lock stays silent');
 });
 
-scenario('supplier-digest-mismatch-refused', () => {
+scenario('supplier-digest-mismatch-advisory', () => {
   const gentle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-')), 'gentle-pi');
   fs.mkdirSync(path.join(gentle, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(gentle, 'runtime'), { recursive: true });
   fs.writeFileSync(path.join(gentle, 'scripts/gentle-ai-installer.mjs'), 'installer');
   fs.writeFileSync(path.join(gentle, 'runtime/gentle-ai-binary.mjs'), 'binary');
   const table = { '4.5.0': { integrity: sri('tarball'), installer: '0'.repeat(64), binary: '0'.repeat(64) } };
-  assert.throws(() => run('(gentle, version, table) => reviewedSupplierSources(gentle, version, table)', gentle, '4.5.0', table),
-    /Windows provision refused: stock native supplier source pin/, 'supplier digest mismatch refused');
-  assert.throws(() => run('(gentle, version, table) => reviewedSupplierSources(gentle, version, table)', gentle, '4.6.0', table),
-    /Windows provision refused: stock native supplier source pin/, 'unlisted version at the supplier check refused');
+  assert.deepEqual(capture(() => run(sources, gentle, '4.5.0', table)).errors,
+    ['Windows provision advisory: gentle-pi@4.5.0 supplier file scripts/gentle-ai-installer.mjs differs from its reviewed entry'],
+    'supplier digest mismatch advises');
+  assert.deepEqual(capture(() => run(sources, gentle, '4.6.0', table)).errors,
+    ['Windows provision advisory: gentle-pi@4.6.0 is outside the reviewed supplier table; supplier file digests unchecked'],
+    'unlisted version at the supplier check advises');
 });
 
 scenario('root-declaration-latest', () => {
@@ -257,18 +278,64 @@ scenario('root-declaration-latest', () => {
   assert.deepEqual(manifest.dependencies, Object.fromEntries(names.map(name => [name, 'latest'])), 'every root resolves the latest dist-tag');
 });
 
-scenario('fallback-rewrite-pins-gentle-pi-and-discards-lock', () => {
+scenario('companion-rewrite-pins-gentle-pi-and-discards-lock', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-'));
   fs.writeFileSync(path.join(directory, 'package.json'), run('(names) => rootDeclaration(names)', names));
   fs.writeFileSync(path.join(directory, 'package-lock.json'), '{"lockfileVersion":3}');
   run('(directory, names, fallback) => rewriteSupplierDeclaration(directory, names, fallback)', directory, names, '4.5.0');
   const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'));
   assert.deepEqual(manifest.dependencies, Object.fromEntries(names.map(name => [name, name === 'gentle-pi' ? '4.5.0' : 'latest'])),
-    'gentle-pi pinned to the reviewed fallback, the other roots stay latest');
+    'gentle-pi pinned to the companion re-resolution, the other roots stay latest');
   assert.equal(fs.existsSync(path.join(directory, 'package-lock.json')), false, 'generated lock discarded before re-resolution');
 });
 
-scenario('installer-mismatch-with-matching-binary-refused', () => {
+scenario('companion-declared-at-exact-pin', () => {
+  const manifest = JSON.parse(run('(names, gentlePi, companion) => rootDeclaration(names, gentlePi, companion)', names, '4.5.1', '0.4.2'));
+  assert.deepEqual(manifest.dependencies, { ...Object.fromEntries(names.map(name => [name, name === 'gentle-pi' ? '4.5.1' : 'latest'])), 'gentle-engram': '0.4.2' },
+    'the companion is pinned to the gentle-pi pin, never latest');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-'));
+  fs.writeFileSync(path.join(directory, 'package.json'), run('(names) => rootDeclaration(names)', names));
+  fs.writeFileSync(path.join(directory, 'package-lock.json'), '{"lockfileVersion":3}');
+  run('(directory, names, version, companion) => rewriteSupplierDeclaration(directory, names, version, companion)', directory, names, '4.5.1', '0.4.2');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8')).dependencies, manifest.dependencies);
+  assert.equal(fs.existsSync(path.join(directory, 'package-lock.json')), false, 'companion re-resolution discards the first lock');
+  // The companion root joins the closed root set only as the sixth root.
+  const lock = lockFixture({}, { 'node_modules/gentle-engram': record('gentle-engram', '0.4.2', sri('gentle-engram')) });
+  lock.packages[''].dependencies['gentle-engram'] = '0.4.2';
+  assert.equal(run('(lock, list) => rootAuthorities(lock, list)', lock, [...names, 'gentle-engram'])['gentle-engram'], '0.4.2');
+  assert.throws(() => run('(lock, list) => rootAuthorities(lock, list)', lock, names), /Windows provision refused: root package set/, 'an undeclared extra root stays refused');
+  assert.ok(source.includes("const roots = Object.hasOwn(lock?.packages?.['']?.dependencies ?? {}, companionName) ? [...pins, companionName] : pins;"), 'root set admits only the companion');
+});
+
+scenario('companion-pin-exact-only', () => {
+  assert.equal(run('text => companionPin(text)', 'x\nexport const ENGRAM_COMPANION_SOURCE = "npm:gentle-engram@0.4.2";\ny'), '0.4.2');
+  for (const text of ['export const ENGRAM_COMPANION_SOURCE = "npm:gentle-engram@latest";', 'export const ENGRAM_COMPANION_SOURCE = "npm:gentle-engram@~0.4.2";', '']) {
+    assert.equal(run('text => companionPin(text)', text), null, `${text} refused as a pin`);
+  }
+});
+
+scenario('companion-gate-agreement', () => {
+  const errors = [], original = console.error;
+  console.error = message => errors.push(message);
+  try {
+    const gate = (...args) => run('(pin, locked, installed) => companionDeclaration(pin, locked, installed)', ...args);
+    assert.equal(gate('0.4.2', '0.4.2', '0.4.2'), 'npm:gentle-engram@0.4.2');
+    // A lock/pin mismatch declares nothing and never refuses the install.
+    assert.equal(gate('0.5.0', '0.4.2', '0.4.2'), null);
+    assert.equal(gate('0.4.2', '0.4.2', '0.5.0'), null);
+    // A gentle-pi that pins none (4.0.0) and a lock without the root: no companion, no note.
+    assert.equal(gate(null, undefined, undefined), null);
+  } finally { console.error = original; }
+  assert.equal(errors.length, 2);
+  assert.match(errors[0], /^Engram companion not declared: gentle-pi pins 0\.5\.0, lock 0\.4\.2, installed 0\.4\.2; Shell stays usable without memory$/);
+  // Memory is the companion and the core together: the core follows the gate.
+  assert.ok(source.includes("if (action === 'install' && declaredCompanion) await publishEngramCore(gentle, path.join(agent, 'bin'), 'engram.exe', 'win32', 'x64');"), 'core published only for a declared companion');
+  assert.ok(!source.includes("if (action === 'install') await publishEngramCore("), 'no ungated core publication');
+  // Verify admits the owned declaration with or without exactly the locked companion.
+  assert.ok(source.includes("if (lockedCompanion && JSON.stringify(observedSettings?.packages) === JSON.stringify([...settings.packages, lockedCompanion])) settings.packages.push(lockedCompanion);"));
+});
+
+scenario('installer-mismatch-with-matching-binary-advisory', () => {
   const gentle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-')), 'gentle-pi');
   fs.mkdirSync(path.join(gentle, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(gentle, 'runtime'), { recursive: true });
@@ -276,11 +343,12 @@ scenario('installer-mismatch-with-matching-binary-refused', () => {
   fs.writeFileSync(path.join(gentle, 'runtime/gentle-ai-binary.mjs'), 'binary');
   const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
   const table = { '4.5.0': { integrity: sri('tarball'), installer: sha256('installer'), binary: sha256('binary') } };
-  assert.throws(() => run('(gentle, version, table) => reviewedSupplierSources(gentle, version, table)', gentle, '4.5.0', table),
-    /Windows provision refused: stock native supplier source pin/, 'installer digest mismatch refused even when the binary matches');
+  assert.deepEqual(capture(() => run(sources, gentle, '4.5.0', table)).errors,
+    ['Windows provision advisory: gentle-pi@4.5.0 supplier file scripts/gentle-ai-installer.mjs differs from its reviewed entry'],
+    'installer digest mismatch advises even when the binary matches');
 });
 
-scenario('supplier-digest-match-accepted', () => {
+scenario('supplier-digest-match-stays-silent', () => {
   const gentle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-')), 'gentle-pi');
   fs.mkdirSync(path.join(gentle, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(gentle, 'runtime'), { recursive: true });
@@ -288,12 +356,7 @@ scenario('supplier-digest-match-accepted', () => {
   fs.writeFileSync(path.join(gentle, 'runtime/gentle-ai-binary.mjs'), 'binary');
   const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
   const table = { '4.5.0': { integrity: sri('tarball'), installer: sha256('installer'), binary: sha256('binary') } };
-  assert.doesNotThrow(() => run('(gentle, version, table) => reviewedSupplierSources(gentle, version, table)', gentle, '4.5.0', table), 'matching reviewed supplier digests accepted');
-});
-
-scenario('semver-ordering', () => {
-  assert.equal(run('(table) => newestReviewedSupplier(table)', { '4.9.0': {}, '4.10.0': {}, '4.2.0': {} }), '4.10.0', '4.10.0 sorts above 4.9.0');
-  assert.equal(run('(table) => newestReviewedSupplier(table)', run('() => reviewedSuppliers()')), '4.5.0', 'newest reviewed table entry selected');
+  assert.deepEqual(capture(() => run(sources, gentle, '4.5.0', table)).errors, [], 'matching reviewed supplier digests stay silent');
 });
 
 function nativeFixture(version) {
@@ -387,6 +450,53 @@ scenario('latest-resolution-live', () => {
     assert.match(resolved[name], /^\d+\.\d+\.\d+$/, `${name} resolved to an exact version`);
     assert.notEqual(resolved[name], name === 'gentle-pi' ? '4.0.0' : '1.0.0', `${name} is not the retired static pin`);
   }
+});
+
+// The Engram core at the contract path <agent>\\bin\\engram.exe, published
+// from a stand-in gentle-pi with the stock export names through injected
+// adapters: no network, no Windows host required.
+const scenarioAsync = async (name, body) => {
+  total++;
+  try { await body(); } catch (error) { failures.push(`${name}: ${error.message}`); }
+};
+function standInGentlePi(exports = true) {
+  const gentle = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'provision-pins-')), 'gentle-pi');
+  fs.mkdirSync(path.join(gentle, 'scripts'), { recursive: true });
+  if (exports) {
+    fs.writeFileSync(path.join(gentle, 'scripts/installer-downloads.mjs'), `
+export function artifactFor(name, platform, arch) { return { name, platform, arch, url: 'https://example.invalid/engram_' + platform + '_' + arch + '.zip' }; }
+export async function verifiedDownload(name, adapters = {}, platform, arch) {
+  const bytes = await adapters.download((adapters.artifact ?? artifactFor)(name, platform, arch));
+  if (!bytes.toString().startsWith('pinned:')) throw new Error('Download integrity mismatch');
+  return bytes;
+}`);
+    fs.writeFileSync(path.join(gentle, 'scripts/bundled-install.mjs'), `
+export function engramExecutable(bytes, descriptor) { return Buffer.from('exe<' + bytes + '>' + descriptor.url); }`);
+  }
+  return gentle;
+}
+const publish = (...args) => run('(...args) => publishEngramCore(...args)', ...args);
+await scenarioAsync('engram-core-published', async () => {
+  const gentle = standInGentlePi(), bin = path.join(path.dirname(gentle), 'agent/bin');
+  fs.mkdirSync(bin, { recursive: true });
+  assert.equal(await publish(gentle, bin, 'engram.exe', 'win32', 'x64', { download: async () => Buffer.from('pinned:zip') }), true);
+  assert.equal(fs.readFileSync(path.join(bin, 'engram.exe'), 'utf8'), 'exe<pinned:zip>https://example.invalid/engram_win32_x64.zip');
+  assert.deepEqual(fs.readdirSync(bin), ['engram.exe'], 'atomic publication leaves no stage file');
+});
+await scenarioAsync('engram-core-skipped-without-exports-or-verification', async () => {
+  const errors = [], original = console.error;
+  console.error = message => errors.push(message);
+  try {
+    const bare = standInGentlePi(false), bin = path.join(path.dirname(bare), 'agent/bin');
+    assert.equal(await publish(bare, bin, 'engram.exe', 'win32', 'x64', {}), false);
+    assert.equal(fs.existsSync(bin), false);
+    const gentle = standInGentlePi(), verifiedBin = path.join(path.dirname(gentle), 'agent/bin');
+    fs.mkdirSync(verifiedBin, { recursive: true });
+    assert.equal(await publish(gentle, verifiedBin, 'engram.exe', 'win32', 'x64', { download: async () => Buffer.from('tampered') }), false);
+    assert.deepEqual(fs.readdirSync(verifiedBin), []);
+  } finally { console.error = original; }
+  assert.deepEqual(errors, ['Engram core skipped: the installed gentle-pi pins no Engram core; Shell stays usable without memory',
+    'Engram core skipped: Download integrity mismatch; Shell stays usable without memory']);
 });
 
 console.log(`windows-provision-pins: ${total - failures.length}/${total} scenarios passed`);

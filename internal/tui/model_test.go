@@ -2912,19 +2912,19 @@ func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
 	}
 }
 
-// TestModelConfig_BackNavigation verifies that selecting cursor 4 (Back) from
+// TestModelConfig_BackNavigation verifies that selecting cursor 5 (Back) from
 // ScreenModelConfig returns to ScreenWelcome.
-// Index 3 is now "Configure Codex models"; Back moved to index 4.
+// Index 4 is now "Configure Antigravity models"; Back moved to index 5.
 func TestModelConfig_BackNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelConfig
-	m.Cursor = 4 // Back is now at index 4
+	m.Cursor = 5 // Back is now at index 5
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenWelcome {
-		t.Fatalf("ModelConfig cursor=4 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+		t.Fatalf("ModelConfig cursor=5 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
 	}
 }
 
@@ -7733,5 +7733,149 @@ func TestMarkPendingSyncUnderLockReReadsLatestStateAfterLockContention(t *testin
 	}
 	if got.RDDMode != string(reviewtransaction.RDDModeOn) {
 		t.Fatalf("concurrent RDDMode clobbered: got %q, want %q", got.RDDMode, reviewtransaction.RDDModeOn)
+	}
+}
+
+func TestCompletionViewOmitsGGAInstalledWhenInstallDeferred(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenComplete
+	m.Selection.Components = []model.ComponentID{model.ComponentGGA}
+
+	if view := m.View(); !strings.Contains(view, "GGA was installed globally") {
+		t.Fatalf("view without a deferred install should report GGA as installed:\n%s", view)
+	}
+
+	m.Execution.DeferredComponents = []model.ComponentID{model.ComponentGGA}
+	m.Execution.ManualActions = []string{cli.GGAHomebrewDeferredAction}
+	view := m.View()
+	if strings.Contains(view, "GGA was installed globally") {
+		t.Fatalf("view reports GGA as installed although its install was deferred:\n%s", view)
+	}
+	if !strings.Contains(view, "Install Homebrew") {
+		t.Fatalf("view is missing the Homebrew manual action:\n%s", view)
+	}
+}
+
+func TestInstalledComponentCountExcludesDeferredComponents(t *testing.T) {
+	selected := []model.ComponentID{model.ComponentPersona, model.ComponentGGA}
+
+	if got := installedComponentCount(selected, nil); got != 2 {
+		t.Fatalf("installedComponentCount() without deferrals = %d, want 2", got)
+	}
+	if got := installedComponentCount(selected, []model.ComponentID{model.ComponentGGA}); got != 1 {
+		t.Fatalf("installedComponentCount() with GGA deferred = %d, want 1", got)
+	}
+}
+
+func TestInstallerShowsAntigravityModelPickerOnlyWhenAntigravitySelected(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		agents []model.AgentID
+		want   Screen
+	}{
+		{"Antigravity", []model.AgentID{model.AgentAntigravity}, ScreenAntigravityModelPicker},
+		{"Antigravity with Claude", []model.AgentID{model.AgentClaudeCode, model.AgentAntigravity}, ScreenAntigravityModelPicker},
+		{"Claude only", []model.AgentID{model.AgentClaudeCode}, ScreenDependencyTree},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenPreset
+			m.Selection.Agents = tt.agents
+			m.Cursor = presetCursor(t, model.PresetFullGentleman)
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if got := updated.(Model).Screen; got != tt.want {
+				t.Fatalf("Preset confirm: screen = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInstallerAntigravityPickerConfirmContinuesInstallFlow(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPreset
+	m.InstallFlowActive = true
+	m.Selection.Agents = []model.AgentID{model.AgentAntigravity}
+	m.Cursor = presetCursor(t, model.PresetFullGentleman)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	m.Cursor = 1 // performance
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenCommunityTools || m.PendingSyncOverrides != nil {
+		t.Fatalf("picker confirm: screen = %v, overrides %+v; want community tools without sync", m.Screen, m.PendingSyncOverrides)
+	}
+	if !reflect.DeepEqual(m.Selection.AntigravityModelAssignments, model.AntigravityModelPresetPerformance()) {
+		t.Fatalf("Selection.AntigravityModelAssignments = %v", m.Selection.AntigravityModelAssignments)
+	}
+	if back := m.goBackFromCommunityTools(); back.Screen != ScreenAntigravityModelPicker {
+		t.Fatalf("community tools back: screen = %v, want Antigravity picker", back.Screen)
+	}
+	m.Screen = ScreenAntigravityModelPicker
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if got := updated.(Model).Screen; got != ScreenPreset {
+		t.Fatalf("picker Esc: screen = %v, want Preset", got)
+	}
+}
+
+func TestInstallerCustomPresetRoutesThroughAntigravityPicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenDependencyTree
+	m.Selection.Preset = model.PresetCustom
+	m.Selection.Agents = []model.AgentID{model.AgentAntigravity}
+	m.Cursor = len(screens.AllComponents())
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenAntigravityModelPicker {
+		t.Fatalf("custom continue: screen = %v, want Antigravity picker", m.Screen)
+	}
+	m.Cursor = 0
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := updated.(Model).Screen; got == ScreenAntigravityModelPicker || got == ScreenSync {
+		t.Fatalf("custom picker confirm stayed or synced: screen = %v", got)
+	}
+}
+
+func TestInstallerAntigravityPickerPreloadsPersistedTiers(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{
+		AntigravityModelAssignments: map[string]string{"jd-judge-a": "pro", "jd-judge-b": "ultra"},
+	})
+	m.Screen = ScreenPreset
+	m.Selection.Agents = []model.AgentID{model.AgentAntigravity}
+	m.Cursor = presetCursor(t, model.PresetFullGentleman)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	picker := updated.(Model).AntigravityModelPicker
+	if want := map[string]model.AntigravityModelTier{"jd-judge-a": model.AntigravityModelPro}; picker.Preset != screens.AntigravityPresetCustom || !reflect.DeepEqual(picker.CustomAssignments, want) {
+		t.Fatalf("picker = %+v, want custom %v (unknown tiers dropped)", picker, want)
+	}
+}
+
+func TestModelConfigAntigravityPickerSyncsSelectedTiers(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev", state.InstallState{
+		AntigravityModelAssignments: map[string]string{"jd-fix-agent": "flash"},
+	})
+	m.Screen = ScreenModelConfig
+	m.Cursor = 4
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenAntigravityModelPicker || !m.ModelConfigMode || m.AntigravityModelPicker.CustomAssignments["jd-fix-agent"] != model.AntigravityModelFlash {
+		t.Fatalf("ModelConfig cursor=4: screen = %v, mode %t, picker %+v", m.Screen, m.ModelConfigMode, m.AntigravityModelPicker)
+	}
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, {Type: tea.KeyEnter}} {
+		back := m
+		back.Cursor = screens.AntigravityModelPickerOptionCount(back.AntigravityModelPicker) - 1
+		updated, _ = back.Update(key)
+		if got := updated.(Model); got.Screen != ScreenModelConfig || got.ModelConfigMode {
+			t.Fatalf("%s from picker: screen = %v, mode %t; want ModelConfig", key, got.Screen, got.ModelConfigMode)
+		}
+	}
+	m.Cursor = 1 // performance
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	want := &model.SyncOverrides{
+		TargetAgents:                []model.AgentID{model.AgentAntigravity},
+		AntigravityModelAssignments: model.AntigravityModelPresetPerformance(),
+	}
+	if m.Screen != ScreenSync || !reflect.DeepEqual(m.PendingSyncOverrides, want) {
+		t.Fatalf("picker confirm: screen = %v, overrides %+v; want sync with %+v", m.Screen, m.PendingSyncOverrides, want)
 	}
 }

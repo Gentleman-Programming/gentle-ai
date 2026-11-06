@@ -63,9 +63,12 @@ func TestUserPinParity(t *testing.T) {
 	if len(job) != 2 {
 		t.Fatal("live user-vm-laboratory job absent")
 	}
-	installerSHA, resolverSHA, pinsErr := userStableSupplierPins()
+	installerSHA, resolverSHA, pinsErr := reviewedSupplierPinsForTest()
 	if pinsErr != nil {
 		t.Fatal(pinsErr)
+	}
+	if installerSHA == "" || resolverSHA == "" {
+		t.Fatal("reviewed supplier pins absent")
 	}
 	cases := []struct {
 		name    string
@@ -77,10 +80,10 @@ func TestUserPinParity(t *testing.T) {
 		{"guest/archive", python, `(?m)^NODE_SHA = '([a-f0-9]{64})'$`, []string{privateColdSHA}},
 		{"guest/archive-check", python, `(?m)^                require\(len\(raw\) == 57224421 and hashlib.sha256\(raw\).hexdigest\(\) == NODE_SHA, 'independent fixture Node pin'\)$`, nil},
 		{"workflow/user-archive", job[1], `(?m)^          printf '%s  %s\\n' ([a-f0-9]{64}) "\$RUNNER_TEMP/node.data" \| sha256sum -c -$`, []string{privateColdSHA}},
-		{"provision/suppliers", files["provision.mjs"], `(?m)^  for \(const \[relative, expected\] of \[\n    \['scripts/gentle-ai-installer.mjs', '([a-f0-9]{64})'\],\n    \['runtime/gentle-ai-binary.mjs', '([a-f0-9]{64})'\],\n  \]\) \{\n    if \(digest\(read\(path.join\(supplier, relative\)\)\) !== expected\) reject\('stock supplier pin'\);$`, []string{installerSHA, resolverSHA}},
+		{"provision/suppliers", files["provision.mjs"], `(?m)^    const entry = reviewed\[pins\['gentle-pi'\]\[0\]\];\n    if \(!entry\) reject\('stock supplier pin'\);\n    for \(const \[relative, expected\] of \[\n      \['scripts/gentle-ai-installer.mjs', entry.installer\],\n      \['runtime/gentle-ai-binary.mjs', entry.binary\],\n    \]\) \{\n      if \(digest\(read\(path.join\(supplier, relative\)\)\) !== expected\) reject\('stock supplier pin'\);\n    \}$`, nil},
 		{"provision/native-layout", files["provision.mjs"], `(?m)^    if \(entries.length !== 1 \|\| !versionPattern.test\(entries\[0\].slice\(1\)\) \|\| !entries\[0\].startsWith\('v'\)\) reject\('foreign native recovery state'\);$`, nil},
 		{"provision/native-digest", files["provision.mjs"], `(?m)^    if \(digest\(binary\) !== manifest.binarySha256\) reject\('native independent readback'\);$`, nil},
-		{"guest/native", python, `(?m)^    require\(hashlib.sha256\(native.read_bytes\(\)\).hexdigest\(\) == '([a-f0-9]{64})', 'authenticated native bytes differ'\)$`, []string{userBinarySHA}},
+		{"guest/native", python, `(?m)^    require\(native_manifest.get\('version'\) == bundles\[0\].name\[1:\] and\n            hashlib.sha256\(native.read_bytes\(\)\).hexdigest\(\) == native_manifest.get\('binarySha256'\),\n            'authenticated native bytes differ'\)$`, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,6 +105,16 @@ func TestUserPinParity(t *testing.T) {
 			}
 		})
 	}
+}
+
+// reviewedSupplierPinsForTest returns the reviewed supplier digests of the
+// newest listed release: the version the Unix Stable install pins.
+func reviewedSupplierPinsForTest() (string, string, error) {
+	list, _, err := userEmbeddedReviewedList()
+	if err != nil {
+		return "", "", err
+	}
+	return userStableSupplierPins(list, list.newestReviewedRelease())
 }
 
 func TestUserFrozenRootPinParity(t *testing.T) {

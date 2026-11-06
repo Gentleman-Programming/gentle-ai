@@ -79,17 +79,17 @@ func userTreeStamp(root string) (string, error) {
 			}
 			target, err := filepath.EvalSymlinks(path)
 			if err != nil || !strings.HasPrefix(target, root+"/") {
-				return errors.New("selection symlink escapes physical tree")
+				return fmt.Errorf("selection symlink escapes physical tree: path=%q", path)
 			}
 			content = link
 		case info.IsDir():
 			if info.Mode().Perm()&0022 != 0 {
-				return errors.New("selection directory is writable by others")
+				return fmt.Errorf("selection directory is writable by others: path=%q", path)
 			}
 		case info.Mode().IsRegular():
 			total += info.Size()
 			if info.Mode().Perm()&0022 != 0 || info.Size() > 32<<20 || total > 1024<<20 {
-				return errors.New("selection file permissions or byte bound")
+				return fmt.Errorf("selection file permissions or byte bound: path=%q", path)
 			}
 			fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 			if err != nil {
@@ -107,7 +107,7 @@ func userTreeStamp(root string) (string, error) {
 			}
 			content = fmt.Sprintf("%x", bytesHash.Sum(nil))
 		default:
-			return errors.New("selection contains nonregular object")
+			return fmt.Errorf("selection contains nonregular object: path=%q", path)
 		}
 		after, err := os.Lstat(path)
 		if err != nil {

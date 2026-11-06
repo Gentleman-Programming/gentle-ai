@@ -134,6 +134,19 @@ func TestRefuterPromptAppliesSeverityRules(t *testing.T) {
 	}
 }
 
+// TestRefuterPromptEchoesRequestHash pins #5597/#5415: the request carries
+// request_hash while the result schema requires refuter_request_hash and
+// admission compares the two exactly, so the prompt must name the mapping.
+func TestRefuterPromptEchoesRequestHash(t *testing.T) {
+	contract, err := ContractFor(RoleRefuter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Echo the input request_hash as refuter_request_hash."; !strings.Contains(contract.PromptInstruction, want) {
+		t.Fatalf("refuter prompt omits %q:\n%s", want, contract.PromptInstruction)
+	}
+}
+
 // TestRefuterProbeInstructionIsRuntimeConditional pins S11: only a runtime
 // whose adapter isolates a probe (Codex: a fresh scratch copy under the system
 // temp dir, workspace-write confined to it, no network) is told it may run one

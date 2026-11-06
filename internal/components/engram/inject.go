@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 type InjectionResult struct {
@@ -240,19 +241,45 @@ const antigravityEngramPluginJSON = `{
 
 const antigravityEngramToolsMessage = "CRITICAL FIRST ACTION — Ensure these Engram MCP tools are available before responding: mem_save, mem_search, mem_context, mem_session_summary, mem_session_start, mem_session_end, mem_get_observation, mem_suggest_topic_key, mem_capture_passive, mem_save_prompt, mem_update, mem_current_project, mem_judge. When available, also load/select optional mem_review for memory lifecycle review; if mem_review is unavailable, continue with the required tools above. If Antigravity defers MCP tools, load/select these tools from the engram MCP server first. Loading tools never resolves the project: before any initial mem_context, follow the Engram startup protocol (call mem_current_project and apply its workspace, ambiguous, and no-project checks), then pass only the resolved project to mem_context when the user asks about prior work or the session needs project memory."
 
+// antigravityEngramHookTimeout is the explicit handler timeout in agy's hook
+// shape {type, command, timeout}; the hook only prints a static message.
+const antigravityEngramHookTimeout = 10
+
+// antigravityEngramHooksJSON registers the Engram guidance as a SessionStart
+// hook, so agy injects it once per session instead of before every model call
+// (#5895).
 func antigravityEngramHooksJSON() []byte {
+	return antigravityEngramHooksJSONFor("SessionStart", antigravityEngramHookTimeout)
+}
+
+// legacyAntigravityEngramHooksJSON lists hooks.json bytes earlier gentle-ai
+// builds wrote: the per-invocation hook and the SessionStart hook without an
+// explicit timeout. They stay recognized as managed so migration and
+// uninstall can remove them.
+func legacyAntigravityEngramHooksJSON() [][]byte {
+	return [][]byte{
+		antigravityEngramHooksJSONFor("PreInvocation", 0),
+		antigravityEngramHooksJSONFor("SessionStart", 0),
+	}
+}
+
+// antigravityEngramHooksJSONFor renders the hook for event; a zero timeout
+// omits the field, reproducing the legacy handler shape.
+func antigravityEngramHooksJSONFor(event string, timeout int) []byte {
+	handler := map[string]any{
+		"type": "command",
+		"command": "printf '%s\\n' '" + mustJSONString(map[string]any{
+			"injectSteps": []any{
+				map[string]any{"ephemeralMessage": antigravityEngramToolsMessage},
+			},
+		}) + "'",
+	}
+	if timeout > 0 {
+		handler["timeout"] = timeout
+	}
 	cfg := map[string]any{
 		"gentle-ai-engram-tools": map[string]any{
-			"PreInvocation": []any{
-				map[string]any{
-					"type": "command",
-					"command": "printf '%s\\n' '" + mustJSONString(map[string]any{
-						"injectSteps": []any{
-							map[string]any{"ephemeralMessage": antigravityEngramToolsMessage},
-						},
-					}) + "'",
-				},
-			},
+			event: []any{handler},
 		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
@@ -680,7 +707,21 @@ func injectAntigravityMutationsUnderLock(configHomeDir, settingsPath, mcpPath st
 	if removalErr != nil {
 		return changed, files, classifyAntigravityOwnershipTransferFailure(mcpPath, transfer, removalErr)
 	}
-	return changed, files, nil
+	// #5930: the legacy plugin under antigravity-cli/plugins is retired only
+	// once the new registration is read back from disk exactly as installed.
+	for _, asset := range transfer.expected {
+		current, err := readAntigravityPluginAsset(asset.path)
+		if err != nil {
+			return changed, files, fmt.Errorf("verify Antigravity plugin asset %q before retiring the legacy plugin: %w", asset.path, err)
+		}
+		if !current.existed || !bytes.Equal(current.content, asset.content) {
+			return changed, files, fmt.Errorf("Antigravity plugin asset %q on disk does not match the state it was installed with; the legacy plugin was not retired", asset.path)
+		}
+	}
+	legacyRemoved, legacyErr := removeLegacyAntigravityPlugin(configHomeDir)
+	changed = changed || len(legacyRemoved) > 0
+	files = append(files, legacyRemoved...)
+	return changed, files, legacyErr
 }
 
 // injectAntigravityOwnership runs every managed Antigravity mutation under
@@ -706,6 +747,11 @@ func injectAntigravityOwnership(configHomeDir, settingsPath, mcpPath string) (bo
 }
 
 func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions, userScope bool) (InjectionResult, error) {
+	if adapter.Agent() == model.AgentCodex {
+		if err := system.ValidateCodexHome(configHomeDir); err != nil {
+			return InjectionResult{}, err
+		}
+	}
 	if provisioner, ok := adapter.(piEngramProvisioner); ok {
 		changed, files, err := provisioner.ProvisionEngramMCP(configHomeDir)
 		if err != nil {
@@ -783,8 +829,8 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		engramCommand := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
 		if adapter.Agent() == model.AgentAntigravity {
 			// #797: Engram registration for Antigravity is plugin-owned only.
-			// The global ~/.gemini/antigravity-cli/mcp_config.json is shared
-			// with other MCP servers (e.g. Context7), so gentle-ai never
+			// The global ~/.gemini/config/mcp_config.json is shared with
+			// other MCP servers (e.g. Context7), so gentle-ai never
 			// writes it for Engram and removes only its own exact managed
 			// duplicate entry left behind by older versions.
 			//
@@ -1179,18 +1225,36 @@ func stableEngramCommandForExisting(cmd string, _ model.AgentID) string {
 func stableAntigravityEngramCommand(homeDir, globalPath string) string {
 	paths := []string{
 		globalPath,
-		filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json"),
+		filepath.Join(AntigravityPluginDir(homeDir), "mcp_config.json"),
+		filepath.Join(AntigravityLegacyPluginDir(homeDir), "mcp_config.json"),
 	}
 	for _, path := range paths {
 		raw, err := osReadFile(path)
 		if err != nil {
 			continue
 		}
-		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) {
+		// #5930: a preserved command that no longer resolves leaves agy with a
+		// disconnected Engram, so it falls through to the fresh-install command.
+		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) && engramCommandResolves(cmd) {
 			return stableEngramCommandForExisting(cmd, model.AgentAntigravity)
 		}
 	}
 	return preferredStableEngramCommand()
+}
+
+// engramCommandResolves reports whether cmd can still be launched: a bare name
+// must be on PATH, and a path must name an existing executable file. It is a
+// variable so ownership-transfer tests can keep their fixed fixture commands.
+var engramCommandResolves = func(cmd string) bool {
+	if filepath.Base(cmd) == cmd {
+		p, err := EngramLookPath(cmd)
+		return err == nil && p != ""
+	}
+	info, err := os.Stat(cmd)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0
 }
 
 func preferredStableEngramCommand() string {

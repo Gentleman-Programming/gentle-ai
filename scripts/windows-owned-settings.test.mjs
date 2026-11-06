@@ -47,7 +47,7 @@ for (const fixture of cases) {
   let actual = fixture.value, observed = 'accept', infrastructure = false;
   try {
     vm.runInNewContext(body, {
-      root, finalRoot: root, agent, path, action: fixture.action ?? 'verify',
+      root, finalRoot: root, agent, path, action: fixture.action ?? 'verify', declaredCompanion: null, lockedCompanion: null,
       read(file) {
         if (file === path.join(root, 'selection.json')) return Buffer.from(JSON.stringify({ Destination: root }));
         assert.equal(file, path.join(agent, 'settings.json'), 'only virtual settings and selection reads permitted');
@@ -97,7 +97,7 @@ for (const [name, value, want] of [
   try { assert.equal(observed, want, name); } catch (error) { assertionCode = error.code; }
   outcomes.push({ name, expected: want, observed, infrastructure: observed === 'infrastructure', assertionCode });
 }
-const supplierStart = source.indexOf('// Stock supplier pins authorize installation; Main source is bound by the frozen ZIP.');
+const supplierStart = source.indexOf('// Supplier digests are advisory; Main source stays bound by the frozen ZIP.');
 assert.ok(supplierStart >= 0 && supplierStart < configStart, 'native authority region must exist');
 const tableBegin = 'function reviewedSuppliers(', tableAt = source.indexOf(tableBegin);
 assert.ok(tableAt >= 0, 'reviewedSuppliers helper present');
@@ -113,16 +113,15 @@ const reviewedTable = vm.runInNewContext(`(${source.slice(tableAt, source.indexO
   reject(message) { throw Error(`Windows provision refused: ${message}`); },
 });
 const supplierBody = `${source.match(/^const mainOverlay = .*$/m)[0]}
-${['reviewedSuppliers', 'stockNativeDirectory', 'stockNativeIntegrity', 'reviewedSupplierSources'].map(name => {
+${['reviewedSuppliers', 'stockNativeDirectory', 'stockNativeIntegrity', 'reviewedSupplierAdvisorySources'].map(name => {
   const begin = `function ${name}(`, at = source.indexOf(begin);
   assert.ok(at >= 0, `${name} helper present`);
   return `${source.slice(at, source.indexOf('\n}', at) + 2)}\n`;
 }).join('')}${source.slice(supplierStart, configStart)}`;
 for (const [name, action, channel, want, resolvedVersion] of [
-  ['main-stock-install', 'install', 'main', 'reject', fixtureNativeVersion],
-  ['stable-stock-verify', 'verify', 'stable', 'reject', fixtureNativeVersion],
-  ['stock-runtime', 'verify', 'stable', 'reject', fixtureNativeVersion],
-  ['stable-reviewed-installer-digest', 'verify', 'stable', 'reject', '4.3.0'],
+  ['stable-stock-verify', 'verify', 'stable', 'accept', fixtureNativeVersion],
+  ['stock-runtime', 'verify', 'stable', 'accept', fixtureNativeVersion],
+  ['stable-reviewed-installer-digest', 'verify', 'stable', 'accept', '4.3.0'],
   ['main-overlay', 'overlay', 'main', 'accept', fixtureNativeVersion],
   ['main-verify', 'verify', 'main', 'accept', fixtureNativeVersion],
   ['main-native-version', 'verify', 'main', 'reject', fixtureNativeVersion],
@@ -133,13 +132,16 @@ for (const [name, action, channel, want, resolvedVersion] of [
   let supplierReads = 0, imports = 0, observed = 'accept';
   // The native layout is discovered dynamically from the resolved gentle-pi
   // version; the fixture supplies an unreviewed version to prove the supplier
-  // check binds the resolved dynamic value, plus one listed version whose
-  // installer digest matches its reviewed entry before the binary differs.
+  // advisory binds the resolved dynamic value without refusing, plus one
+  // listed version whose installer digest matches its reviewed entry before
+  // the binary differs. Install rows are not exercised here: the channel
+  // contract admits the unreviewed resolution into the native API, which this
+  // fixture refuses to simulate.
   const nativeManifest = { version: name === 'main-native-version' ? '4.3.0' : fixtureNativeVersion, method: name === 'main-native-method' ? 'signed-release-asset' : 'go-sumdb-source-build', moduleChecksum: name === 'main-native-checksum' ? 'changed' : `h1:${'A'.repeat(43)}=`, binarySha256: 'owned-native' };
   try {
     await vm.runInNewContext(`(async () => {${supplierBody}})()`, {
       gentle: path.join(root, 'prefix/node_modules/gentle-pi'), selection: { Channel: channel }, action, path,
-      root: stageRoot, Buffer, resolved: { 'gentle-pi': resolvedVersion },
+      root: stageRoot, Buffer, resolved: { 'gentle-pi': resolvedVersion }, console: { error() {} },
       fs: { readdirSync: () => [`v${fixtureNativeVersion}`], lstatSync: () => ({ isDirectory: () => true }), existsSync: () => true },
       read(file) {
         if (file === listPath) return listBytes;

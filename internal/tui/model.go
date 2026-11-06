@@ -110,6 +110,13 @@ var execCommandFn = exec.Command
 var communityToolInstallFn = communitytool.Install
 var communityToolStatusFn = communitytool.DetectStatus
 
+// agentBuilderEngineAvailableFn reports whether an agent-builder engine binary
+// is on PATH. Tests may override it to count or fake PATH probes.
+var agentBuilderEngineAvailableFn = func(id model.AgentID) bool {
+	engine := agentbuilder.NewEngine(id)
+	return engine != nil && engine.Available()
+}
+
 // readCurrentAssignmentsFn reads OpenCode agent assignments for Configure models.
 // Tests may override it without touching user settings.
 var readCurrentAssignmentsFn = func(settingsPath string) (map[string]model.ModelAssignment, error) {
@@ -636,9 +643,13 @@ const (
 	// ScreenReviewMode displays and changes the global review-mode switch.
 	ScreenReviewMode
 	ScreenShellInstall
+	ScreenAntigravityModelPicker
 )
 
 type Model struct {
+	// agentBuilderEngines is detected once in NewModel so View and optionCount
+	// never probe PATH per frame (#268).
+	agentBuilderEngines   []model.AgentID
 	shellExperience       *shellExperienceConfig
 	shellDetected         []shellinstaller.UserShellInstall
 	shellDetectedProfiles []shellinstaller.UserExperience
@@ -679,6 +690,7 @@ type Model struct {
 	runtimeCatalogDiscoveryRequest uint64
 	ClaudeModelPicker              screens.ClaudeModelPickerState
 	KiroModelPicker                screens.KiroModelPickerState
+	AntigravityModelPicker         screens.AntigravityModelPickerState
 	CodexModelPicker               screens.CodexModelPickerState
 	SkillPicker                    []model.SkillID
 	Err                            error
@@ -912,20 +924,22 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 	}
 
 	selection := model.Selection{
-		Agents:                 agents,
-		Persona:                model.PersonaGentleman,
-		Preset:                 model.PresetFullGentleman,
-		Components:             components,
-		ClaudeModelAssignments: installStateClaudeAssignments(s.ClaudeModelAssignments),
-		ClaudePhaseAssignments: installStateClaudePhaseAssignments(s.ClaudePhaseAssignments),
-		KiroModelAssignments:   installStateKiroAssignments(s.KiroModelAssignments),
-		ModelAssignments:       installStateModelAssignments(s.ModelAssignments),
+		Agents:                      agents,
+		Persona:                     model.PersonaGentleman,
+		Preset:                      model.PresetFullGentleman,
+		Components:                  components,
+		ClaudeModelAssignments:      installStateClaudeAssignments(s.ClaudeModelAssignments),
+		ClaudePhaseAssignments:      installStateClaudePhaseAssignments(s.ClaudePhaseAssignments),
+		KiroModelAssignments:        installStateKiroAssignments(s.KiroModelAssignments),
+		AntigravityModelAssignments: model.AntigravityModelTiersFromStrings(s.AntigravityModelAssignments),
+		ModelAssignments:            installStateModelAssignments(s.ModelAssignments),
 		// The persisted tier is both the pre-selection and what Gentle manages.
 		CodexServiceTier:        validCodexServiceTier(s.CodexServiceTier),
 		CodexManagedServiceTier: validCodexServiceTier(s.CodexServiceTier),
 	}
 
 	return Model{
+		agentBuilderEngines:   detectAgentBuilderEngines(),
 		Screen:                ScreenWelcome,
 		Version:               version,
 		Selection:             selection,
@@ -1546,6 +1560,8 @@ func (m Model) View() string {
 		return screens.RenderClaudeModelPicker(m.ClaudeModelPicker, m.Cursor, m.Height)
 	case ScreenKiroModelPicker:
 		return screens.RenderKiroModelPicker(m.KiroModelPicker, m.Cursor)
+	case ScreenAntigravityModelPicker:
+		return screens.RenderAntigravityModelPicker(m.AntigravityModelPicker, m.Cursor)
 	case ScreenCodexModelPicker:
 		return screens.RenderCodexModelPicker(m.CodexModelPicker, m.Cursor, m.Height)
 	case ScreenCommunityTools:
@@ -1587,8 +1603,8 @@ func (m Model) View() string {
 	case ScreenComplete:
 		return screens.RenderComplete(screens.CompletePayload{
 			ConfiguredAgents:    len(m.Selection.Agents),
-			InstalledComponents: len(m.Selection.Components),
-			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA),
+			InstalledComponents: installedComponentCount(m.Selection.Components, m.Execution.DeferredComponents),
+			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA) && !slices.Contains(m.Execution.DeferredComponents, model.ComponentGGA),
 			FailedSteps:         extractFailedSteps(m.Execution),
 			RollbackPerformed:   len(m.Execution.Rollback.Steps) > 0,
 			RollbackComplete:    m.Execution.Rollback.Success,
@@ -1716,6 +1732,40 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else if next, ok := m.pickerNextScreen(); ok {
 					return m, m.advanceToNextPickerScreen(next)
 				}
+			}
+			return m, nil
+		}
+	}
+
+	if m.Screen == ScreenAntigravityModelPicker {
+		wasInCustomMode := m.AntigravityModelPicker.InCustomMode
+		handled, updated := screens.HandleAntigravityModelPickerNav(keyStr, &m.AntigravityModelPicker, m.Cursor)
+		if handled {
+			if wasInCustomMode != m.AntigravityModelPicker.InCustomMode {
+				m.Cursor = 0
+			}
+			if updated != nil {
+				m.Selection.AntigravityModelAssignments = updated
+				if m.ModelConfigMode {
+					m.ModelConfigMode = false
+					m.PendingSyncOverrides = &model.SyncOverrides{
+						TargetAgents:                []model.AgentID{model.AgentAntigravity},
+						AntigravityModelAssignments: updated,
+					}
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
+					return m, nil
+				}
+				if next, ok := m.pickerNextScreen(); ok {
+					return m, m.advanceToNextPickerScreen(next)
+				}
+				// Custom preset: the Antigravity picker is the last installer step
+				// before optional community tools, skills, and review.
+				if m.shouldShowCommunityToolsScreen() {
+					m.setScreen(ScreenCommunityTools)
+					return m, nil
+				}
+				return m.continueAfterCommunityTools()
 			}
 			return m, nil
 		}
@@ -2348,7 +2398,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			discoveryCmd := m.enterCodexModelPicker()
 			m.setScreen(ScreenCodexModelPicker)
 			return m, discoveryCmd
-		case 4: // Back
+		case 4: // Configure Antigravity models
+			m.ModelConfigMode = true
+			m.AntigravityModelPicker = screens.NewAntigravityModelPickerStateFromAssignments(m.Selection.AntigravityModelAssignments)
+			m.setScreen(ScreenAntigravityModelPicker)
+		case 5: // Back
 			m.setScreen(ScreenWelcome)
 		}
 		return m, nil
@@ -2362,11 +2416,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			m.setScreen(ScreenCustomAgentDelete)
 		case m.Cursor == agentCount:
+			m.agentBuilderEngines = detectAgentBuilderEngines()
 			if !m.hasAgentBuilderEngines() {
 				return m, nil
 			}
 			m.AgentBuilder = AgentBuilderState{}
-			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
+			m.AgentBuilder.AvailableEngines = m.agentBuilderEngines
 			ta := textarea.New()
 			ta.Placeholder = "Describe what you want your agent to do..."
 			ta.Focus()
@@ -2481,6 +2536,18 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 	case ScreenKiroModelPicker:
 		if !m.KiroModelPicker.InCustomMode && m.Cursor == screens.KiroModelPickerOptionCount(m.KiroModelPicker)-1 {
+			if m.ModelConfigMode {
+				m.ModelConfigMode = false
+				m.setScreen(ScreenModelConfig)
+				return m, nil
+			}
+			if prev, ok := m.pickerPreviousScreen(); ok {
+				m.applyPickerEntry(prev)
+			}
+			return m, nil
+		}
+	case ScreenAntigravityModelPicker:
+		if !m.AntigravityModelPicker.InCustomMode && m.Cursor == screens.AntigravityModelPickerOptionCount(m.AntigravityModelPicker)-1 {
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
 				m.setScreen(ScreenModelConfig)
@@ -2629,7 +2696,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		default:
 			// "Back" — in custom preset, return to the screen that preceded SkillPicker.
 			if m.Selection.Preset == model.PresetCustom {
-				if m.shouldShowClaudeModelPickerScreen() {
+				if m.shouldShowAntigravityModelPickerScreen() {
+					m.setScreen(ScreenAntigravityModelPicker)
+				} else if m.shouldShowClaudeModelPickerScreen() {
 					m.setScreen(ScreenClaudeModelPicker)
 				} else {
 					m.setScreen(ScreenDependencyTree)
@@ -3725,7 +3794,7 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	}
 
 	// ModelConfigMode: pickers reached via Model Config shortcut return to ScreenModelConfig.
-	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenCodexModelPicker || m.Screen == ScreenModelPicker) {
+	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenCodexModelPicker || m.Screen == ScreenAntigravityModelPicker || m.Screen == ScreenModelPicker) {
 		m.ModelConfigMode = false
 		m.setScreen(ScreenModelConfig)
 		return m
@@ -3735,7 +3804,9 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 	// In custom preset, agent pickers precede SkillPicker.
 	if m.Screen == ScreenSkillPicker {
 		if m.Selection.Preset == model.PresetCustom {
-			if m.shouldShowKiroModelPickerScreen() {
+			if m.shouldShowAntigravityModelPickerScreen() {
+				m.setScreen(ScreenAntigravityModelPicker)
+			} else if m.shouldShowKiroModelPickerScreen() {
 				m.setScreen(ScreenKiroModelPicker)
 			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
@@ -3787,7 +3858,7 @@ func (m Model) goBack(cmd *tea.Cmd) Model {
 		}
 	}
 
-	if m.Screen == ScreenCodexModelPicker {
+	if m.Screen == ScreenCodexModelPicker || m.Screen == ScreenAntigravityModelPicker {
 		if prev, ok := m.pickerPreviousScreen(); ok {
 			m.applyPickerEntry(prev)
 			return m
@@ -3960,6 +4031,8 @@ func (m Model) optionCount() int {
 		return screens.ClaudeModelPickerOptionCount(m.ClaudeModelPicker)
 	case ScreenKiroModelPicker:
 		return screens.KiroModelPickerOptionCount(m.KiroModelPicker)
+	case ScreenAntigravityModelPicker:
+		return screens.AntigravityModelPickerOptionCount(m.AntigravityModelPicker)
 	case ScreenCodexModelPicker:
 		return screens.CodexModelPickerOptionCount(m.CodexModelPicker)
 	case ScreenCommunityTools:
@@ -4238,6 +4311,10 @@ func (m Model) goBackFromCommunityTools() Model {
 		m.setScreen(ScreenWelcome)
 		return m
 	}
+	if m.shouldShowAntigravityModelPickerScreen() {
+		m.setScreen(ScreenAntigravityModelPicker)
+		return m
+	}
 	if m.shouldShowCodexModelPickerScreen() {
 		m.setScreen(ScreenCodexModelPicker)
 		return m
@@ -4460,6 +4537,13 @@ func (m Model) shouldShowCodexModelPickerScreen() bool {
 	return m.ModelConfigMode
 }
 
+// shouldShowAntigravityModelPickerScreen is the only phase picker kept in the
+// installer route: agy agent tiers are chosen when Antigravity is installed.
+// Configure models opens it directly instead of through this chain.
+func (m Model) shouldShowAntigravityModelPickerScreen() bool {
+	return m.Selection.HasAgent(model.AgentAntigravity)
+}
+
 // pickerFlowSlice returns the ordered conditional picker chain for the current
 // Selection, filtered by shouldShow* predicates. ScreenPreset is always the
 // first anchor. In non-custom mode ScreenDependencyTree is always the last
@@ -4483,6 +4567,9 @@ func (m Model) pickerFlowSlice() []Screen {
 	}
 	if m.shouldShowCodexModelPickerScreen() {
 		s = append(s, ScreenCodexModelPicker)
+	}
+	if m.shouldShowAntigravityModelPickerScreen() {
+		s = append(s, ScreenAntigravityModelPicker)
 	}
 	if !custom {
 		// Non-custom: DependencyTree is the last anchor.
@@ -4542,6 +4629,8 @@ func (m *Model) applyPickerEntry(next Screen) tea.Cmd {
 		)
 	case ScreenKiroModelPicker:
 		m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
+	case ScreenAntigravityModelPicker:
+		m.AntigravityModelPicker = screens.NewAntigravityModelPickerStateFromAssignments(m.Selection.AntigravityModelAssignments)
 	case ScreenCodexModelPicker:
 		discoveryCmd = m.enterCodexModelPicker()
 	case ScreenModelPicker:
@@ -4594,6 +4683,18 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 	return false
 }
 
+// installedComponentCount counts the selected components whose install was not
+// deferred for a missing prerequisite.
+func installedComponentCount(selected, deferred []model.ComponentID) int {
+	count := 0
+	for _, c := range selected {
+		if !slices.Contains(deferred, c) {
+			count++
+		}
+	}
+	return count
+}
+
 func (m Model) shouldShowUninstallEngramScopeSelection() bool {
 	if !hasSelectedComponent(m.UninstallComponents, model.ComponentEngram) {
 		return false
@@ -4610,7 +4711,7 @@ func (m Model) isScrollableScreen() bool {
 
 // detectAgentBuilderEngines scans for supported AI agent binaries on PATH and
 // returns the list of available AgentIDs.
-func (m Model) detectAgentBuilderEngines() []model.AgentID {
+func detectAgentBuilderEngines() []model.AgentID {
 	candidateIDs := []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
@@ -4619,17 +4720,17 @@ func (m Model) detectAgentBuilderEngines() []model.AgentID {
 	}
 	var available []model.AgentID
 	for _, id := range candidateIDs {
-		engine := agentbuilder.NewEngine(id)
-		if engine != nil && engine.Available() {
+		if agentBuilderEngineAvailableFn(id) {
 			available = append(available, id)
 		}
 	}
 	return available
 }
 
-// hasAgentBuilderEngines reports whether any supported AI agent binary is installed.
+// hasAgentBuilderEngines reports whether any supported AI agent binary was
+// detected; it reads the stored result and never probes PATH.
 func (m Model) hasAgentBuilderEngines() bool {
-	return len(m.detectAgentBuilderEngines()) > 0
+	return len(m.agentBuilderEngines) > 0
 }
 
 // agentBuilderInstallTargets returns the list of install target paths for the preview screen.
@@ -4821,6 +4922,15 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		_ = ctx // timeout enforced; Install itself is synchronous
+
+		// Validate before any adapter writes, including earlier non-Codex targets.
+		for _, adapter := range adapters {
+			if adapter.AgentID == model.AgentCodex {
+				if err := system.ValidateCodexHome(homeDir()); err != nil {
+					return AgentBuilderInstallDoneMsg{Err: err}
+				}
+			}
+		}
 
 		// Resolve agent name, applying conflict suffix if needed.
 		installAgent := agent

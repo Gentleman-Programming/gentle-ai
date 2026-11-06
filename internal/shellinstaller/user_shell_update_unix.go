@@ -51,7 +51,7 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 			changed[UserComponentSDK] = true
 			update.Detail = "Main SDK is not installed in this tree yet"
 		} else {
-			latest, _, err := userMainSnapshot(ctx)
+			latest, _, err := userMainSnapshotFunc(ctx)
 			if err != nil {
 				return update, err
 			}
@@ -71,19 +71,6 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 			update.Detail = "Main SDK is installed; the stable channel preference wants the stock composition"
 			return update, nil
 		}
-		// userExecutable names the physical executable spelling on darwin; the
-		// supervisor provenance guard requires the canonical path.
-		self, err := userExecutable()
-		if err != nil {
-			return update, err
-		}
-		supervisor, err := userSupervisorSHA(ctx, self)
-		if err != nil {
-			return update, err
-		}
-		if supervisor != manifest.SupervisorSHA {
-			changed[UserComponentSupervisor] = true
-		}
 		if manifest.NodeSHA != privateNativeNodeSHA {
 			changed[UserComponentNode] = true
 		}
@@ -94,6 +81,41 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 		if manifest.SDKLockSHA != lock {
 			changed[UserComponentSDK] = true
 		}
+		// The manifest's recorded gentle-pi version is the S14 detection input:
+		// a manifest without the field is a pre-feature install reported
+		// outdated once. S19 detection: the Stable update targets the newest
+		// listed release of the selected reviewed list — the exact version the
+		// generated lock installs — like Windows. A recorded version is
+		// outdated only when strictly older (or unrecorded); a newer recorded
+		// version — e.g. after a fallback to an older embedded list — never
+		// offers a downgrade (S17(c)), so a fresh install can never report an
+		// endless "update available" loop for the version it just installed.
+		// PNPM route manifests keep their current behaviour.
+		if manifest.PNPM == nil {
+			list, _, err := userSelectedReviewedListFunc(ctx)
+			if err != nil {
+				return update, err
+			}
+			if userReviewedVersionOlder(manifest.SDKVersion, list.newestReviewedRelease()) {
+				changed[UserComponentSDK] = true
+			}
+		}
+	}
+	// The supervisor is checked on every channel: a Main preview install runs
+	// the same stock supervisor, so a newer build is offered there too instead
+	// of keeping an older supervisor until another component updates.
+	// userExecutable names the physical executable spelling on darwin; the
+	// supervisor provenance guard requires the canonical path.
+	self, err := userExecutable()
+	if err != nil {
+		return update, err
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		return update, err
+	}
+	if supervisor != manifest.SupervisorSHA {
+		changed[UserComponentSupervisor] = true
 	}
 	// The pinned agent tools are part of the SDK component on every channel:
 	// a reused agent whose bound binaries no longer match this build would

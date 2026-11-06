@@ -1499,12 +1499,21 @@ func (submission ReviewTransitionSubmission) Validate() error {
 
 func (submission ReviewTransitionSubmission) validateIntendedUntrackedSelection() error {
 	value, tokens := submission.Value, submission.ArgumentTokens
-	agent, hasAgent := "", false
-	if len(tokens) == 5 {
+	agent, hasAgent, selectorValid := "", false, false
+	if len(tokens) == 5 || len(tokens) == 6 {
 		agent, hasAgent = strings.CutPrefix(tokens[2], "--agent=")
+		// The selector replays the STATUS target: workspace current-changes,
+		// or an exact base tree with its committed-only or overlay scope.
+		selector := tokens[3 : len(tokens)-1]
+		baseTree, hasBase := "", false
+		if len(selector) == 2 {
+			baseTree, hasBase = strings.CutPrefix(selector[0], "--base-ref=")
+		}
+		selectorValid = len(selector) == 1 && selector[0] == "--projection=workspace" ||
+			hasBase && reviewTargetEvidenceTreePattern.MatchString(baseTree) && (selector[1] == "--committed-only=true" || selector[1] == "--workspace-overlay=true")
 	}
-	if value == nil || len(submission.Values) != 0 || value.Slot != "intended_untracked_selection" || value.Domain != "schema_bound_json" || value.Schema != reviewIntendedUntrackedSelectionSchema || value.SubstitutionLocation != 4 || len(value.AllowedValues) != 0 || value.Minimum != 0 || value.Maximum != 0 ||
-		len(tokens) != 5 || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !hasAgent || tokens[3] != "--projection=workspace" || tokens[4] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
+	if value == nil || len(submission.Values) != 0 || value.Slot != "intended_untracked_selection" || value.Domain != "schema_bound_json" || value.Schema != reviewIntendedUntrackedSelectionSchema || value.SubstitutionLocation != len(tokens)-1 || len(value.AllowedValues) != 0 || value.Minimum != 0 || value.Maximum != 0 ||
+		!selectorValid || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !hasAgent || tokens[len(tokens)-1] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
 		// refusal:by-design world-action: the provider-generated intended-untracked submission descriptor requires a provider code fix.
 		return errors.New("intended-untracked submission descriptor is invalid")
 	}

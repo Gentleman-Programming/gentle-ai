@@ -195,7 +195,7 @@ func userWindowsLaunch(ctx context.Context, root, product string, args []string,
 	if cause != nil {
 		return cause
 	}
-	env, err := userWindowsEnvironment(root)
+	env, err := userWindowsLaunchEnvironment(root)
 	if err != nil {
 		return err
 	}
@@ -303,6 +303,17 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 				command.Env = append(command.Env, userWindowsSystemGoCandidateEnv+"="+candidate)
 			}
 		}
+		if args[0] == "launch" {
+			// The single caller context item for Git: the absolute git.exe
+			// resolved on the original process PATH, revalidated by the worker
+			// on every launch before only its directory joins the owned PATH.
+			if candidate := userWindowsSystemGitCandidate(); candidate != "" {
+				command.Env = append(command.Env, userWindowsSystemGitCandidateEnv+"="+candidate)
+			}
+			// Shared memory is decided here, outside the owned Job Object
+			// the worker enters: a server started inside it dies with it.
+			command.Env = append(command.Env, userEngramWindowsWorkerEnv(ctx, args)...)
+		}
 		grace := 2 * time.Second
 		if args[0] == "install" {
 			grace = 120 * time.Second // Quiesce owned descendants and remove the owned stage.
@@ -337,7 +348,9 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		if err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(stdout, "Installed %s (%s); owned commands %s and %s (personal PATH unchanged)\nCurrent CMD only: set \"PATH=%s;%%PATH%%\"\n", result.Destination, req.Channel, filepath.Join(result.Destination, "bin/gentle-shell.cmd"), filepath.Join(result.Destination, "bin/pi.cmd"), filepath.Join(result.Destination, "bin"))
+		if _, err = fmt.Fprintf(stdout, "Installed %s (%s); owned commands %s and %s (personal PATH unchanged)\nCurrent CMD only: set \"PATH=%s;%%PATH%%\"\n", result.Destination, req.Channel, filepath.Join(result.Destination, "bin/gentle-shell.cmd"), filepath.Join(result.Destination, "bin/pi.cmd"), filepath.Join(result.Destination, "bin")); err == nil && result.LauncherNote != "" {
+			_, err = fmt.Fprintln(stdout, result.LauncherNote)
+		}
 		return err
 	case "launch":
 		if len(args) < 3 || (args[2] != "pi" && args[2] != "gentle-shell") {

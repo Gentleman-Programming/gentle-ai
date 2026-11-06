@@ -115,9 +115,20 @@ func InspectUserInstall(req UserInstallRequest) (string, error) {
 	return userInspectInstall(req)
 }
 
+// userRuntimeDirEnv returns XDG_RUNTIME_DIR without one trailing slash, the
+// form WSL2 exports ("/run/user/UID/"). Every other spelling is kept as given,
+// so callers still refuse anything but the exact runtime directory.
+func userRuntimeDirEnv() string {
+	value := os.Getenv("XDG_RUNTIME_DIR")
+	if len(value) > 1 {
+		value = strings.TrimSuffix(value, "/")
+	}
+	return value
+}
+
 func userBusEnvironment() ([]string, error) {
 	runtimeDir := "/run/user/" + strconv.Itoa(os.Getuid())
-	if os.Getenv("XDG_RUNTIME_DIR") != runtimeDir {
+	if userRuntimeDirEnv() != runtimeDir {
 		return nil, errors.New("set XDG_RUNTIME_DIR to your existing /run/user/UID; delegated user manager required")
 	}
 	if _, err := privateDirectory(runtimeDir); err != nil {
@@ -240,6 +251,9 @@ func userServiceWithPlan(ctx context.Context, self string, args []string, stdin 
 	// The unit sees only this list: forward the registry, reconfigure and
 	// Main fallback intents explicitly or the worker silently loses them.
 	env = append(env, userServiceIntentEnvironment(os.Getenv("HOME"))...)
+	// A launch also carries its shared-memory decision, made here outside the
+	// unit: a server started inside it would die with the unit.
+	env = append(env, userEngramContextEnv(ctx)...)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -486,7 +500,7 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 			// no user manager to inherit and none is created.
 			return rootSystemService(ctx, self, forward, stdin, stdout, stderr)
 		}
-		return userService(ctx, self, forward, stdin, stdout, stderr)
+		return userService(userEngramLaunchContext(ctx, args), self, forward, stdin, stdout, stderr)
 	}
 	if err := userRecordUnit(); err != nil {
 		return err

@@ -15,7 +15,7 @@ var userMainSDKAction = userVerifyMainBindingsAction
 
 // The real worker owns this action; qualification aliases remain in tests.
 func userVerifyMainBindingsAction(ctx context.Context, root, finalRoot, prefix, agent string, artifact userSnapshotArtifact, action string) error {
-	if err := userCompareMainSource(ctx, root, artifact); err != nil {
+	if err := userCompareMainSourceCached(ctx, root, artifact); err != nil {
 		return err
 	}
 	mode := "separate"
@@ -26,7 +26,17 @@ func userVerifyMainBindingsAction(ctx context.Context, root, finalRoot, prefix, 
 		filepath.Join(finalRoot, "prefix"), finalRoot, mode, action); err != nil {
 		return err
 	}
-	return userCompareMainSource(ctx, root, artifact)
+	// The post-provisioner compare keeps proving the provisioner left the
+	// retained Main source untouched; the stamp cache makes it cheap.
+	return userCompareMainSourceCached(ctx, root, artifact)
+}
+
+// userMainPreviewRequest reports whether the request selects the Main preview
+// SDK channel — the only channel that keeps the frozen modern lock's stock
+// base and never takes the generated reviewed-list route (S23/M4). It mirrors
+// userInstallMainSDK's channel condition.
+func userMainPreviewRequest(req UserInstallRequest) bool {
+	return req.Experience != nil && req.Experience.SDKSource == "main-preview"
 }
 
 // The confirmed worker owns acquisition and partial-stage cleanup. Stock stays

@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const packagePath = /^(?:node_modules\/(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)(?:\/node_modules\/(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)*$/;
-const rootPins = new Set(['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'].map(name => `node_modules/${name}`));
+// gentle-engram is the optional companion root (provisioner lockRoots).
+const rootPins = new Set(['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox', 'gentle-engram'].map(name => `node_modules/${name}`));
 function reject(message) { throw Error(message); }
 function matches(rule, value) {
   if (rule === undefined) return true;

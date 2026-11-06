@@ -42,14 +42,19 @@ func privateCgroupPath(membership, mounts string) (string, error) {
 				separator = i
 			}
 		}
-		if separator < 6 || len(fields) != separator+4 {
-			return "", privateError("unavailable", fmt.Errorf("mountinfo line %q has %d fields with the '-' separator at %d, want one '-' and four trailing fields", line, len(fields), separator))
+		// Super options are free text and may contain spaces (#5818), so only
+		// a minimum count is required; just the fstype after '-' is consumed.
+		if separator < 6 || len(fields) < separator+4 {
+			return "", privateError("unavailable", fmt.Errorf("mountinfo line %q has %d fields with the '-' separator at %d, want one '-' and at least four trailing fields", line, len(fields), separator))
 		}
-		// Only the mountpoint is consumed for every line: it classifies the
-		// entry against the trusted cgroup2 hierarchy. The root field is
-		// consumed solely by the trusted cgroup2 mount itself; unrelated
-		// mounts such as snapd's nsfs entries carry namespace identifiers
-		// like "mnt:[4026532518]" there (#5733), so their roots stay unread.
+		// The raw mountpoint classifies the entry against the trusted cgroup2
+		// hierarchy; kernel escapes start with '\', so the raw prefix is exact.
+		// Unrelated mounts are never decoded: their mountpoints may carry other
+		// escapes (#5854) and their roots namespace identifiers like
+		// "mnt:[4026532518]" (#5733).
+		if fields[4] != trusted && !strings.HasPrefix(fields[4], trusted+"/") {
+			continue
+		}
 		mountpoint, pointOK := privateMountPath(fields[4])
 		if !pointOK {
 			return "", privateError("unavailable", fmt.Errorf("mountinfo mountpoint %q is not canonical", fields[4]))
@@ -82,15 +87,15 @@ func privateKernelData(membership, mounts string, limits []string) error {
 	if _, err := privateCgroupPath(membership, mounts); err != nil {
 		return err
 	}
-	const want = "3221225472\n0\n100000 100000\n64"
+	want := fmt.Sprintf("%d\n0\n100000 100000\n%d", userUnitMemoryMaxBytes, userUnitTasksMax)
 	if len(limits) != 4 || strings.Join(limits, "\n") != want {
 		observed := append([]string(nil), limits...)
 		for len(observed) < 4 {
 			observed = append(observed, "")
 		}
 		return privateError("unavailable", fmt.Errorf(
-			"leaf limits differ: memory.max=%q memory.swap.max=%q cpu.max=%q pids.max=%q want 3221225472/0/\"100000 100000\"/64",
-			observed[0], observed[1], observed[2], observed[3]))
+			"leaf limits differ: memory.max=%q memory.swap.max=%q cpu.max=%q pids.max=%q want %d/0/\"100000 100000\"/%d",
+			observed[0], observed[1], observed[2], observed[3], userUnitMemoryMaxBytes, userUnitTasksMax))
 	}
 	return nil
 }

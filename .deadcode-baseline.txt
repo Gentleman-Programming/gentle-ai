@@ -66,9 +66,11 @@ internal/filecoord/lock.go	UnsupportedError.Error
 internal/filecoord/lock.go	UnsupportedError.Unwrap
 internal/installcmd/resolver.go	GitBashPath
 internal/installcmd/resolver.go	validateGoForModuleInstall
+internal/installcmd/testhelper.go	OverrideBrewHelpTrust
 internal/installcmd/testhelper.go	OverrideGetenv
 internal/installcmd/testhelper.go	OverrideGoVersion
 internal/installcmd/testhelper.go	OverrideLookPath
+internal/installcmd/testhelper.go	OverrideStat
 internal/reviewerprovider/runtimes.go	RegisteredRuntimeIdentities
 internal/reviewerprovider/windows_batch_cmdline.go	isWindowsBatchFile
 internal/reviewerprovider/windows_batch_cmdline.go	quoteWindowsArgument
@@ -205,9 +207,6 @@ internal/reviewtransaction/verification_contract.go	verificationSVGIsPassive
 internal/reviewtransaction/verification_convergence.go	ResnapshotVerificationSubject
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Error
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
-internal/shellinstaller/user_reviewed_suppliers.go	userReviewedList.newestReviewedRelease
-internal/shellinstaller/user_reviewed_suppliers.go	userReviewedListVersionLess
-internal/shellinstaller/user_reviewed_suppliers.go	userReviewedVersionOlder
 internal/state/manifest.go	AppendJournal
 internal/state/manifest.go	ComputeBundleDigest
 internal/state/manifest.go	JournalPath

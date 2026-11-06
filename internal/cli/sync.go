@@ -562,6 +562,8 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	if r.piBackgroundProjection != nil {
 		apply = append(apply, piBackgroundProjectionStep{id: "sync:pi:background-projection", plan: r.piBackgroundProjection})
 	}
+	// Before every prompt writer.
+	apply = append(apply, geminiLegacyRootSteps("sync:agent:gemini-legacy-root", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles)...)
 
 	for _, component := range installOrderedComponents(r.selection.Components) {
 		apply = append(apply, componentSyncStep{
@@ -682,6 +684,10 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, piCodeGraphSyncStep{id: "sync:community-tool:pi-codegraph", homeDir: r.homeDir, workspaceDir: r.workspaceDir, changedFiles: &r.changedFiles})
 	}
 
+	// After every prompt writer, including CodeGraph guidance.
+	apply = append(apply, geminiModulesSteps("sync:agent:gemini-modules", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles)...)
+	apply = append(apply, antigravityRulesSteps("sync:agent:antigravity-rules", r.homeDir, r.workspaceDir, r.scope, r.agentIDs, &r.changedFiles)...)
+
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
 }
 
@@ -720,6 +726,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 			}
 		}
 		if component == model.ComponentEngram {
+			for _, path := range antigravityLegacyEngramPluginPaths(homeDir, workspaceDir, scope, componentAdapters) {
+				paths[path] = struct{}{}
+			}
 			for _, adapter := range componentAdapters {
 				if adapter.Agent() == model.AgentClaudeCode {
 					// Scope the declared engram MCP target like the sync step
@@ -884,6 +893,12 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 			paths[path] = struct{}{}
 		}
+	}
+	for _, path := range antigravityRulesBackupPaths(homeDir, workspaceDir, scope, selection.Agents) {
+		paths[path] = struct{}{}
+	}
+	for _, path := range geminiModulesBackupPaths(homeDir, workspaceDir, scope, selection.Agents) {
+		paths[path] = struct{}{}
 	}
 	if !workspace && containsAgent(selection.Agents, model.AgentOpenCode) {
 		for _, path := range opencodeactivation.LauncherPaths(homeDir, runtime.GOOS) {
@@ -2321,6 +2336,9 @@ func RunSync(args []string) (SyncResult, error) {
 			m[k] = model.KiroModelAlias(v)
 		}
 		selection.KiroModelAssignments = m
+	}
+	if len(selection.AntigravityModelAssignments) == 0 {
+		selection.AntigravityModelAssignments = model.AntigravityModelTiersFromStrings(persistedState.AntigravityModelAssignments)
 	}
 	if len(selection.ModelAssignments) == 0 && len(persistedState.ModelAssignments) > 0 {
 		workspaceDir, _ := os.Getwd()

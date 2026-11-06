@@ -21,7 +21,7 @@ func TestRootServiceArgsMirrorUserSandbox(t *testing.T) {
 	}
 	joined := strings.Join(root, " ")
 	for _, want := range []string{
-		"MemoryMax=3221225472", "MemorySwapMax=0", "TasksMax=64", "NoNewPrivileges=yes",
+		"MemoryMax=3221225472", "MemorySwapMax=0", "TasksMax=512", "NoNewPrivileges=yes",
 		"/usr/bin/setpriv", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all",
 		"/bin/self", "shell", "internal-check",
 	} {

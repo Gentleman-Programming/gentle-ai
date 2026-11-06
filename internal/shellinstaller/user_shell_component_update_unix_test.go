@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -63,9 +66,152 @@ func TestUserContext7EntrySHA(t *testing.T) {
 	}
 }
 
-// An installation whose manifest records every current pin is up to date even
-// though older manifests never carried the component SHAs.
+// An installation whose manifest records every current pin and the newest
+// listed gentle-pi release is up to date: the version the Stable install just
+// recorded never reports an endless "update available" loop (S17(c)).
 func TestCheckUserShellUpdateAllPinsCurrent(t *testing.T) {
+	list := userStubSelectedList(t)
+	ctx := context.Background()
+	self, err := userExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := userSDKLockSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := userToolsPinSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := userUnixTempRoot(t)
+	writeInstallFixture(t, target, userManifest{
+		Schema: userSchema, Destination: target,
+		Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"),
+		Mode: "separate", SupervisorSHA: supervisor, NodeSHA: privateNativeNodeSHA,
+		SDKLockSHA: lock, SDKVersion: list.newestReviewedRelease(), ToolsSHA: tools,
+	})
+	update, err := CheckUserShellUpdate(ctx, UserShellInstall{Target: target, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if update.Available {
+		t.Fatalf("expected up to date, got: %+v", update)
+	}
+	if len(update.Scope) != 0 {
+		t.Fatalf("expected empty scope, got %v", update.Scope)
+	}
+}
+
+// A Main preview install runs the same stock supervisor: the check reports it
+// when this build's supervisor differs from the recorded one, and stays quiet
+// when it matches. The Main snapshot authority is stubbed, so the detection
+// never touches the network.
+func TestCheckUserShellUpdateMainPreviewReportsSupervisor(t *testing.T) {
+	previous := userMainSnapshotFunc
+	userMainSnapshotFunc = func(context.Context) (userSnapshotArtifact, []byte, error) {
+		return userSnapshotArtifact{URL: "x", SHA: "main-sha", Archive: "main.zip"}, nil, nil
+	}
+	t.Cleanup(func() { userMainSnapshotFunc = previous })
+	ctx := context.Background()
+	self, err := userExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := userToolsPinSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := userUnixTempRoot(t)
+	writeInstallFixture(t, target, userManifest{
+		Schema: userSchema, Destination: target,
+		Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"),
+		Mode: "separate", SupervisorSHA: supervisor, NodeSHA: privateNativeNodeSHA,
+		ToolsSHA: tools, MainSDK: &userSnapshotArtifact{URL: "x", SHA: "main-sha"},
+	})
+	update, err := CheckUserShellUpdate(ctx, UserShellInstall{Target: target, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if update.Available || len(update.Scope) != 0 {
+		t.Fatalf("expected an up-to-date Main preview tree, got: %+v", update)
+	}
+	outdated := userUnixTempRoot(t)
+	writeInstallFixture(t, outdated, userManifest{
+		Schema: userSchema, Destination: outdated,
+		Prefix: filepath.Join(outdated, "prefix"), Agent: filepath.Join(outdated, "agent"),
+		Mode: "separate", SupervisorSHA: strings.Repeat("a", 64), NodeSHA: privateNativeNodeSHA,
+		ToolsSHA: tools, MainSDK: &userSnapshotArtifact{URL: "x", SHA: "main-sha"},
+	})
+	update, err = CheckUserShellUpdate(ctx, UserShellInstall{Target: outdated, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !update.Available || !slices.Equal(update.Scope, []string{UserComponentSupervisor}) {
+		t.Fatalf("expected the supervisor reported on a Main preview tree, got: %+v", update)
+	}
+}
+
+// S19 detection: the Stable sdk is outdated when the recorded gentle-pi is
+// strictly older than the newest listed release — including a version that
+// matches the frozen lock but not the selected list, which an existing build
+// detects without being rebuilt.
+func TestCheckUserShellUpdateFrozenVersionReportsSDKOutdated(t *testing.T) {
+	list := userStubSelectedList(t)
+	frozen, err := userFrozenLockGentlePiVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frozen == list.newestReviewedRelease() {
+		t.Skip("frozen lock already pins the newest listed release")
+	}
+	ctx := context.Background()
+	self, err := userExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := userSDKLockSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := userToolsPinSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := userUnixTempRoot(t)
+	writeInstallFixture(t, target, userManifest{
+		Schema: userSchema, Destination: target,
+		Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"),
+		Mode: "separate", SupervisorSHA: supervisor, NodeSHA: privateNativeNodeSHA,
+		SDKLockSHA: lock, SDKVersion: frozen, ToolsSHA: tools,
+	})
+	update, err := CheckUserShellUpdate(ctx, UserShellInstall{Target: target, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !update.Available || !slices.Equal(update.Scope, []string{UserComponentSDK}) {
+		t.Fatalf("expected the SDK outdated for the frozen-lock version, got: %+v", update)
+	}
+}
+
+// S14 legacy detection: a manifest that records every current pin but predates
+// the recorded gentle-pi version has no version field, so the stable SDK is
+// reported outdated once; the next update installs and records the version,
+// and the check converges (no endless "update available" loop).
+func TestCheckUserShellUpdateLegacyVersionReportsSDKOnce(t *testing.T) {
+	userStubSelectedList(t)
 	ctx := context.Background()
 	self, err := userExecutable()
 	if err != nil {
@@ -94,17 +240,94 @@ func TestCheckUserShellUpdateAllPinsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !update.Available || !slices.Equal(update.Scope, []string{UserComponentSDK}) {
+		t.Fatalf("expected the SDK outdated once for a pre-version manifest, got: %+v", update)
+	}
+}
+
+// S17(c): a recorded version strictly newer than this build's stable target
+// (the frozen lock's gentle-pi until the live listed release replaces it) —
+// e.g. after a fallback to an older embedded list — never offers a downgrade.
+func TestCheckUserShellUpdateNewerSDKVersionSkipsDowngrade(t *testing.T) {
+	userStubSelectedList(t)
+	ctx := context.Background()
+	self, err := userExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := userSDKLockSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := userToolsPinSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := userUnixTempRoot(t)
+	writeInstallFixture(t, target, userManifest{
+		Schema: userSchema, Destination: target,
+		Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"),
+		Mode: "separate", SupervisorSHA: supervisor, NodeSHA: privateNativeNodeSHA,
+		SDKLockSHA: lock, SDKVersion: "9.9.9", ToolsSHA: tools,
+	})
+	update, err := CheckUserShellUpdate(ctx, UserShellInstall{Target: target, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if update.Available {
-		t.Fatalf("expected up to date, got: %+v", update)
+		t.Fatalf("expected no downgrade offer for a newer recorded version, got: %+v", update)
 	}
 	if len(update.Scope) != 0 {
 		t.Fatalf("expected empty scope, got %v", update.Scope)
 	}
 }
 
+// A recorded version that differs from this build's stable target (the frozen
+// lock's gentle-pi until the live listed release replaces it) reports the SDK
+// outdated.
+func TestCheckUserShellUpdateChangedSDKVersionReportsSDK(t *testing.T) {
+	userStubSelectedList(t)
+	ctx := context.Background()
+	self, err := userExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := userSDKLockSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := userToolsPinSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := userUnixTempRoot(t)
+	writeInstallFixture(t, target, userManifest{
+		Schema: userSchema, Destination: target,
+		Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"),
+		Mode: "separate", SupervisorSHA: supervisor, NodeSHA: privateNativeNodeSHA,
+		SDKLockSHA: lock, SDKVersion: "0.0.1", ToolsSHA: tools,
+	})
+	update, err := CheckUserShellUpdate(ctx, UserShellInstall{Target: target, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !update.Available || !slices.Equal(update.Scope, []string{UserComponentSDK}) {
+		t.Fatalf("expected the SDK outdated for a differing recorded version, got: %+v", update)
+	}
+}
+
 // A manifest written by an older build without the component SHA fields reports
 // the missing components as changed, with canonical scope names for the update.
 func TestCheckUserShellUpdateLegacyManifestReportsComponents(t *testing.T) {
+	userStubSelectedList(t)
 	ctx := context.Background()
 	self, err := userExecutable()
 	if err != nil {
@@ -154,6 +377,89 @@ func TestCheckUserShellUpdateLegacyManifestReportsComponents(t *testing.T) {
 	}
 }
 
+// A newly reviewed release is detected by an already-built consumer without a
+// gentle-ai rebuild: a list holding a newer release reports the recorded
+// version outdated, and an install that recorded that same version converges
+// (no endless loop).
+func TestCheckUserShellUpdateNewerListedReleaseReportsSDK(t *testing.T) {
+	list, _, err := userEmbeddedReviewedList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := list.newestReviewedRelease()
+	newer := newerListedReleaseForTest(t, list)
+	list.Releases[newer] = userReviewedSupplier{
+		Integrity: list.Releases[list.newestReviewedRelease()].Integrity,
+		Installer: list.Releases[list.newestReviewedRelease()].Installer,
+		Binary:    list.Releases[list.newestReviewedRelease()].Binary,
+	}
+	previous := userSelectedReviewedListFunc
+	userSelectedReviewedListFunc = func(context.Context) (userReviewedList, []byte, error) { return list, nil, nil }
+	t.Cleanup(func() { userSelectedReviewedListFunc = previous })
+	ctx := context.Background()
+	self, err := userExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor, err := userSupervisorSHA(ctx, self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := userSDKLockSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := userToolsPinSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := userUnixTempRoot(t)
+	writeInstallFixture(t, target, userManifest{
+		Schema: userSchema, Destination: target,
+		Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"),
+		Mode: "separate", SupervisorSHA: supervisor, NodeSHA: privateNativeNodeSHA,
+		SDKLockSHA: lock, SDKVersion: recorded, ToolsSHA: tools,
+	})
+	update, err := CheckUserShellUpdate(ctx, UserShellInstall{Target: target, Mode: "separate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !update.Available || !slices.Equal(update.Scope, []string{UserComponentSDK}) {
+		t.Fatalf("expected the SDK outdated for a newer listed release, got: %+v", update)
+	}
+	// The version that update would record satisfies the same list: no loop.
+	if userReviewedVersionOlder(newer, list.newestReviewedRelease()) {
+		t.Fatalf("recorded newest listed release %q would report outdated again", newer)
+	}
+}
+
+// newerListedReleaseForTest returns an exact semver strictly newer than every
+// release of the given list.
+func newerListedReleaseForTest(t *testing.T, list userReviewedList) string {
+	t.Helper()
+	newest := list.newestReviewedRelease()
+	parts := strings.Split(newest, ".")
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("%d.%s.%s", major+1, parts[1], parts[2])
+}
+
 func fmtSHA256(data []byte) string {
 	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
+// userStubSelectedList pins the update check's list authority to the embedded
+// copy, so the detection tests never touch the network.
+func userStubSelectedList(t *testing.T) userReviewedList {
+	t.Helper()
+	list, _, err := userEmbeddedReviewedList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := userSelectedReviewedListFunc
+	userSelectedReviewedListFunc = func(context.Context) (userReviewedList, []byte, error) { return list, nil, nil }
+	t.Cleanup(func() { userSelectedReviewedListFunc = previous })
+	return list
 }

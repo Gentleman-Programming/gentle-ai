@@ -20,6 +20,16 @@ func writeChannelManifest(t *testing.T, target string, mainSDK *userSnapshotArti
 		t.Fatal(err)
 	}
 	manifest := userManifest{Schema: userSchema, Destination: target, Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent"), Mode: "separate", MainSDK: mainSDK}
+	// The channel tests assert routing, not component drift: record this
+	// build's own supervisor so the every-channel supervisor check stays quiet
+	// unless a test wants it reported.
+	if self, err := userExecutable(); err != nil {
+		t.Fatal(err)
+	} else if supervisor, err := userSupervisorSHA(context.Background(), self); err != nil {
+		t.Fatal(err)
+	} else {
+		manifest.SupervisorSHA = supervisor
+	}
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)

@@ -50,6 +50,20 @@ var userWindowsCodeGraphSources = []struct {
 	},
 }
 
+// userWindowsCodeGraphAcquire fills the stage's CodeGraph runtime. A scoped
+// update reuses the installed library: the component-reuse phase already
+// copied it without its generated command (userWindowsReuseCodeGraphTree), so
+// only the bin\codegraph.cmd launcher must be regenerated here. Anything else
+// downloads and extracts the pinned packages. The launcher is written with an
+// exclusive create: a reused copy carried into the stage would fail it with
+// "file exists" (issue #5847), which is why no reuse path may copy bin.
+func userWindowsCodeGraphAcquire(ctx context.Context, stage string, req UserInstallRequest, scope userInstallScope) error {
+	if scope.reused[UserComponentCodeGraph] && req.Experience != nil && req.Experience.CodeGraph == "on" {
+		return userWindowsCodeGraphCommand(ctx, stage)
+	}
+	return userWindowsCodeGraphProvision(ctx, stage, req.Experience)
+}
+
 func userWindowsCodeGraphProvision(ctx context.Context, root string, profile *UserExperience) error {
 	if profile == nil || profile.CodeGraph != "on" {
 		return nil

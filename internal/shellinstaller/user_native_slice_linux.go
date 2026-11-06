@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -36,7 +37,7 @@ func userNativeSliceName(name string) bool {
 }
 
 func userNativeSliceCreateArgs(name string) []string {
-	return []string{"--user", "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit", "ssa(sv)a(sa(sv))", name, "fail", "5", "MemoryMax", "t", "3221225472", "MemorySwapMax", "t", "0", "CPUQuotaPerSecUSec", "t", "1000000", "CPUQuotaPeriodUSec", "t", "100000", "TasksMax", "t", "64", "0"}
+	return []string{"--user", "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit", "ssa(sv)a(sa(sv))", name, "fail", "5", "MemoryMax", "t", strconv.FormatUint(userUnitMemoryMaxBytes, 10), "MemorySwapMax", "t", "0", "CPUQuotaPerSecUSec", "t", "1000000", "CPUQuotaPeriodUSec", "t", "100000", "TasksMax", "t", strconv.FormatUint(userUnitTasksMax, 10), "0"}
 }
 
 func newUserNativeSlice(ctx context.Context) (*userNativeSlice, error) {
@@ -57,11 +58,11 @@ func newUserNativeSlice(ctx context.Context) (*userNativeSlice, error) {
 		return nil, err
 	}
 	s := &userNativeSlice{env: env, tools: map[string]string{}}
-	s.runtimeIdentity, err = userIdentity(os.Getenv("XDG_RUNTIME_DIR"))
+	s.runtimeIdentity, err = userIdentity(userRuntimeDirEnv())
 	if err != nil {
 		return nil, err
 	}
-	socket, err := os.Lstat(filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "bus"))
+	socket, err := os.Lstat(filepath.Join(userRuntimeDirEnv(), "bus"))
 	if err != nil {
 		return nil, err
 	}
@@ -126,11 +127,11 @@ func (s *userNativeSlice) run(ctx context.Context, tool string, args ...string) 
 	if err != nil || !reflect.DeepEqual(env, s.env) {
 		return "", privateError("preimage", err)
 	}
-	identity, err := userIdentity(os.Getenv("XDG_RUNTIME_DIR"))
+	identity, err := userIdentity(userRuntimeDirEnv())
 	if err != nil || identity != s.runtimeIdentity {
 		return "", privateError("preimage", err)
 	}
-	socket, err := os.Lstat(filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "bus"))
+	socket, err := os.Lstat(filepath.Join(userRuntimeDirEnv(), "bus"))
 	if err != nil || privateStamp(socket) != s.busStamp {
 		return "", privateError("preimage", err)
 	}

@@ -15,6 +15,11 @@
       "integrity": "sha512-hw4W2hBvyGWPbPEpvAIgx4F+5IgQjZ1Yzhj159DRcbrvFBde3H8Jh9qKQF2EYTH7WcI+ixJqTXFF92pykOuXIg==",
       "installer": "37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed",
       "binary": "61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80"
+    },
+    "4.5.1": {
+      "integrity": "sha512-yJvj3GdkAYao0w1qvmbMXugR5s/IjgedTavRsT8212M9mk7dko/p8v4t2x09IvRClP94arXaMTK2/3WkNXkxqg==",
+      "installer": "37be34091b5050e6837ec9b3727cc49a738c98331d73c3dd549453b05c6e77ed",
+      "binary": "61bb8e7e23864a15243882fc029f25f64118d593088cd7f64c3bb519dcf80b80"
     }
   }
 }

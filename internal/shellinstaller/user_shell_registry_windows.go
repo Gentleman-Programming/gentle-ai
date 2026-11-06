@@ -3,7 +3,6 @@
 package shellinstaller
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -364,25 +363,6 @@ func userWindowsRemoveDownloadCache() error {
 	return nil
 }
 
-func userWindowsRemoveLauncher(target string) error {
-	local, err := userWindowsLocalAppData()
-	if err != nil {
-		return err
-	}
-	link := filepath.Join(local, "Microsoft", "WindowsApps", "gentle-shell.cmd")
-	data, readErr := os.ReadFile(link)
-	if os.IsNotExist(readErr) {
-		return nil
-	}
-	if readErr != nil {
-		return readErr
-	}
-	if !bytes.Contains(data, []byte(target)) {
-		return nil
-	}
-	return os.Remove(link)
-}
-
 // CheckUserShellUpdate routes at the persisted SDK source channel: Stable
 // compares the installed stable components with this build, Main compares the
 // installed Main descriptor with the latest Main snapshot. It never installs
@@ -460,6 +440,16 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 	// missing components once, so the next update records them.
 	legacy := manifest.SDKLockSHA == ""
 	if lock, err := userWindowsSDKLockSHA(); err == nil && manifest.SDKLockSHA != lock {
+		changed[UserComponentSDK] = true
+	}
+	// S14: the installed gentle-pi version is outdated only when it is strictly
+	// older than the newest reviewed release of the selected list (live
+	// repository copy with the embedded fallback — the same authority the
+	// update installs), or unrecorded. A newer recorded version — e.g. after a
+	// fallback to an older embedded list — never offers a downgrade (S17(c)).
+	// A manifest without the version field is a pre-feature install reported
+	// outdated once; the next update records the version it installs.
+	if list, _, err := userSelectedReviewedListFunc(ctx); err == nil && userReviewedVersionOlder(manifest.SDKVersion, list.newestReviewedRelease()) {
 		changed[UserComponentSDK] = true
 	}
 	if tools, err := userWindowsToolsPinSHA(); err == nil && manifest.ToolsSHA != tools {

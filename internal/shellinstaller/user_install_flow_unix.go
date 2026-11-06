@@ -253,6 +253,9 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		if err = userVerifyInstalledGlobal(ctx, req.Destination, manifest); err != nil {
 			return result, userGraphRepairError(req.Destination, req.Mode, err)
 		}
+		if err = userVerifyRecordedSuppliers(ctx, req.Destination, manifest); err != nil {
+			return result, err
+		}
 		if err = userNativeReadback(ctx, filepath.Join(manifest.Prefix, "lib/node_modules/gentle-pi/.gentle-ai")); err != nil {
 			return result, err
 		}
@@ -402,7 +405,17 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, fmt.Errorf("agent rollback image: %w", err)
 		}
 	}
+	var list userReviewedList
 	if !scope.reused[UserComponentSDK] {
+		// Only Stable takes the generated reviewed-list route (S23/M4): the
+		// selected list is resolved once and written into the stage so the
+		// provisioner and the supplier check below verify exactly this list;
+		// its newest release is the version the generated lock pins. A Main
+		// preview request stages no list and keeps the frozen modern lock's
+		// stock base, exactly as before the route existed.
+		if list, err = userStageSDKReviewedList(ctx, root, req); err != nil {
+			return result, err
+		}
 		userShellDetail(ctx, 3, 5, "Installing the global runtime")
 		cmd := exec.CommandContext(ctx, node, helperPath, root, prefix, agent, finalPrefix, req.Destination, req.Mode, "install")
 		cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, prefix, agent)
@@ -410,16 +423,57 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, fmt.Errorf("global provisioning: %w; bounded output: %s", err, output)
 		}
 	} else {
+		// A reused SDK runs no supplier; its recorded version — or the frozen
+		// lock's for a manifest predating the field (S23/M3) — resolves the
+		// supplier authority below.
 		userShellDetail(ctx, 3, 5, "Reusing the installed global runtime")
 	}
 	pkg := filepath.Join(prefix, "lib/node_modules/gentle-pi")
-	installerSHA, resolverSHA, pinsErr := userStableSupplierPins()
-	if pinsErr != nil {
-		return result, pinsErr
+	// The supplier files are authenticated against the reviewed list entry for
+	// the gentle-pi version this stage carries. A rebuilt Stable SDK carries
+	// the newest listed release, authenticated against the staged selected
+	// list. A rebuilt Main preview SDK keeps the frozen lock's stock base,
+	// authenticated against the embedded entry like every pre-list install
+	// (S23/M4). A reused SDK carries its recorded version — or the frozen
+	// lock's version for a manifest predating the field (S23/M3) — and runs no
+	// supplier, so an entry is required only when one exists: the selected
+	// list first, then the embedded copy (S23/L1).
+	version := ""
+	var installerSHA, resolverSHA string
+	authenticate := true
+	if scope.reused[UserComponentSDK] {
+		if existing != nil {
+			version = existing.SDKVersion
+		}
+		if version == "" {
+			if version, err = userFrozenLockGentlePiVersion(); err != nil {
+				return result, err
+			}
+		}
+		if installerSHA, resolverSHA, authenticate, err = userReusedSupplierPins(ctx, version); err != nil {
+			return result, err
+		}
+	} else if userMainPreviewRequest(req) {
+		if version, err = userFrozenLockGentlePiVersion(); err != nil {
+			return result, err
+		}
+		if list, _, err = userEmbeddedReviewedList(); err != nil {
+			return result, err
+		}
+		if installerSHA, resolverSHA, err = userStableSupplierPins(list, version); err != nil {
+			return result, err
+		}
+	} else {
+		version = list.newestReviewedRelease()
+		if installerSHA, resolverSHA, err = userStableSupplierPins(list, version); err != nil {
+			return result, err
+		}
 	}
-	for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", installerSHA}, {"runtime/gentle-ai-binary.mjs", resolverSHA}} {
-		if _, err = userSourceFile(ctx, filepath.Join(pkg, source.name), -1, source.pin); err != nil {
-			return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, err)
+	if authenticate {
+		for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", installerSHA}, {"runtime/gentle-ai-binary.mjs", resolverSHA}} {
+			if _, err = userSourceFile(ctx, filepath.Join(pkg, source.name), -1, source.pin); err != nil {
+				return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, err)
+			}
 		}
 	}
 	if !scope.reused[UserComponentSDK] {
@@ -433,7 +487,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err = userNativeReadback(ctx, filepath.Join(pkg, ".gentle-ai")); err != nil {
 		return result, fmt.Errorf("native supplier readback: %w", err)
 	}
-	if err = userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode); err != nil {
+	if err = userPostNativeReadback(ctx, root, prefix, agent, finalPrefix, req.Destination, req.Mode, scope, existing); err != nil {
 		return result, fmt.Errorf("post-native global readback: %w", err)
 	}
 	if req.Mode == "shared" && req.Experience != nil && !scope.reused[UserComponentContext7] {
@@ -502,6 +556,16 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	// Context7 pins are the deterministic derivations of this build.
 	if mainSDK == nil {
 		if manifest.SDKLockSHA, err = userSDKLockSHA(); err != nil {
+			return result, err
+		}
+		// Record the exact installed gentle-pi version: the stable update check
+		// compares it against the newest listed release of the selected
+		// reviewed list, which is the version the generated lock just pinned.
+		// A reused-SDK stage never reads a lock, because it may not carry one:
+		// it records the version the supplier check above authenticated — the
+		// recorded manifest's, or the frozen lock's for a manifest predating
+		// the field (S23/M3).
+		if manifest.SDKVersion, err = userRecordedSDKVersion(root, scope.reused[UserComponentSDK], version); err != nil {
 			return result, err
 		}
 	}
@@ -705,21 +769,13 @@ func userRecover(ctx context.Context, args []string, stdout io.Writer) error {
 
 const privateNativeInvoke = `import {installGentleAi} from './scripts/gentle-ai-installer.mjs'; const packageRoot=process.cwd(); await installGentleAi({packageRoot});`
 
-// userStableSupplierPins returns the reviewed supplier file digests of the
-// frozen lock's gentle-pi version, read from the embedded reviewed supplier
-// list — the repository's only copy of the reviewed table.
-func userStableSupplierPins() (installer, resolver string, err error) {
-	version, err := userFrozenLockGentlePiVersion()
-	if err != nil {
-		return "", "", err
-	}
-	list, _, err := userEmbeddedReviewedList()
-	if err != nil {
-		return "", "", err
-	}
+// userStableSupplierPins returns the reviewed supplier file digests for the
+// given gentle-pi version from the selected reviewed supplier list — the
+// repository's only copy of the reviewed table.
+func userStableSupplierPins(list userReviewedList, version string) (installer, resolver string, err error) {
 	entry, ok := list.Releases[version]
 	if !ok {
-		return "", "", fmt.Errorf("reviewed supplier list has no entry for the frozen lock's gentle-pi %s", version)
+		return "", "", fmt.Errorf("reviewed supplier list has no entry for gentle-pi %s", version)
 	}
 	return entry.Installer, entry.Binary, nil
 }
@@ -934,6 +990,18 @@ func userProvisionAssets(ctx context.Context, root string, stage bool) error {
 		}
 	}
 	return nil
+}
+
+// userPostNativeReadback verifies the staged global tree after the native
+// supplier step. A reused Main preview SDK carries an agent that already
+// selects runtime/main-sdk, so it verifies that selection exactly as a fresh
+// Main composition does; the stock verify would refuse it with "selected
+// settings bindings changed". Every other stage verifies the stock package.
+func userPostNativeReadback(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string, scope userInstallScope, existing *userManifest) error {
+	if scope.reused[UserComponentSDK] && existing != nil && existing.MainSDK != nil {
+		return userMainSDKAction(ctx, root, finalRoot, prefix, agent, *existing.MainSDK, userMainSDKSelectedAction)
+	}
+	return userVerifyGlobal(ctx, root, prefix, agent, finalPrefix, finalRoot, mode)
 }
 
 func userVerifyGlobal(ctx context.Context, root, prefix, agent, finalPrefix, finalRoot, mode string) error {
@@ -1170,7 +1238,10 @@ func userRecordedPin(ctx context.Context, root, relative, pin string) error {
 	if len(pin) != 64 {
 		return privateError("source", nil)
 	}
-	_, err := privateNativeFile(ctx, filepath.Join(root, relative), 0700, -1, pin)
+	// The pinned supervisor and node binaries are large; the stamp cache keeps
+	// the full privateNativeFile hash for starts where ctime proves the bytes
+	// unchanged (user_launch_pin_cache_unix.go).
+	_, err := userPinnedFileCached(ctx, root, relative, 0700, pin)
 	return err
 }
 
@@ -1208,6 +1279,9 @@ func userLaunchCommand(ctx context.Context, root string, manifest userManifest, 
 	// Read-only stock Git probes must not refresh the caller's index. Explicit
 	// Git writes still take their mandatory locks.
 	cmd.Env = append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0")
+	// Shared memory: only the outer entry's Engram decision, never caller env;
+	// a Separate launch without one runs with memory disabled.
+	cmd.Env = append(cmd.Env, userEngramSeparateLaunch(manifest.Mode, userEngramContextEnv(ctx))...)
 	// GGA is retired from the shell installer: no runtime PATH is extended.
 	userCodeGraphLaunchEnv(root, manifest, cmd)
 	return cmd // Empty Dir inherits the caller's project, not the installer stage.
@@ -1228,6 +1302,7 @@ func userRootRiskBannerUID(stderr io.Writer, uid int) {
 
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	userRootRiskBanner(stderr)
+	ctx = userEngramLaunchScope(ctx, root, args)
 	manifest, err := userReadManifest(ctx, root)
 	if err != nil {
 		return err
@@ -1236,8 +1311,21 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	if _, err := userSourceFile(ctx, cli, -1, ""); err != nil {
 		return userGraphRepairError(root, manifest.Mode, err)
 	}
-	if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
-		return userGraphRepairError(root, manifest.Mode, err)
+	// userReadManifest already proved the Main SDK graph for this exact launch
+	// (its reuse==nil path runs userVerifyInstalledGlobal for MainSDK) and only
+	// stat/read operations ran since; re-running the provisioner here doubled
+	// every launch's verification cost while leaving the unverified window at
+	// least as wide as the one it closed. Stock-only installs keep their single
+	// pre-exec verification, which only this call performs.
+	if manifest.MainSDK == nil {
+		if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
+			return userGraphRepairError(root, manifest.Mode, err)
+		}
+	}
+	// S23/M1: a tree without a staged reviewed list keeps its supplier files
+	// authenticated against the embedded entry on every launch.
+	if err := userVerifyRecordedSuppliers(ctx, root, manifest); err != nil {
+		return err
 	}
 	if err := userNativeReadback(ctx, filepath.Join(manifest.Prefix, "lib/node_modules/gentle-pi/.gentle-ai")); err != nil {
 		return err
@@ -1265,6 +1353,11 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 		}
 		if readbackErr := userVerifyInstalledGlobal(context.Background(), root, manifest); readbackErr != nil {
 			failure := privateError("uncertain", errors.Join(err, readbackErr))
+			failure.Workspace, failure.Destination = root, manifest.Prefix
+			return failure
+		}
+		if supplierErr := userVerifyRecordedSuppliers(context.Background(), root, manifest); supplierErr != nil {
+			failure := privateError("uncertain", errors.Join(err, supplierErr))
 			failure.Workspace, failure.Destination = root, manifest.Prefix
 			return failure
 		}

@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -180,7 +181,7 @@ func TestUserServiceLiteral(t *testing.T) {
 	for _, literal := range []string{
 		"--user", "--wait", "--collect", "--service-type=exec", "--expand-environment=no", "--pipe", "--working-directory=/caller/project with spaces",
 		"--property=MemoryMax=3221225472", "--property=MemorySwapMax=0", "--property=CPUQuota=100%",
-		"--property=CPUQuotaPeriodSec=100ms", "--property=TasksMax=64", "--property=NoNewPrivileges=yes",
+		"--property=CPUQuotaPeriodSec=100ms", "--property=TasksMax=512", "--property=NoNewPrivileges=yes",
 		"--property=UMask=0077", "--property=KillMode=control-group", "--property=TimeoutStopSec=2s",
 		"--property=UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT NODE_OPTIONS NODE_PATH",
 		"/usr/bin/env\n-i\nHOME=/owned/home\n/usr/bin/setpriv\n--inh-caps=-all\n--ambient-caps=-all\n--no-new-privs\n--\n/owned/supervisor\nshell\ninternal-install",
@@ -756,7 +757,7 @@ func TestUserKernelMarker(t *testing.T) {
 
 func TestUserUnitReadbackKernelMarkerCause(t *testing.T) {
 	dir := t.TempDir()
-	cause := `leaf limits differ: memory.max="max" want 3221225472/0/"100000 100000"/64`
+	cause := `leaf limits differ: memory.max="max" want 3221225472/0/"100000 100000"/512`
 	privateMust(t, os.WriteFile(filepath.Join(dir, userKernelMarker), []byte(cause), 0600))
 	err := userUnitReadback(filepath.Join(dir, "kernel.json"))
 	if err == nil || !strings.Contains(err.Error(), `memory.max="max"`) || !strings.Contains(err.Error(), "unit kernel check failed") {
@@ -771,5 +772,35 @@ func TestUserUnitReadbackKernelMarkerCause(t *testing.T) {
 func TestUserLaunchProbeUnitCheckArgs(t *testing.T) {
 	if args := userLaunchProbeArgs(); !reflect.DeepEqual(args, []string{"internal-check"}) {
 		t.Fatalf("launch probe does not recheck the kernel inside a unit: %v", args)
+	}
+}
+
+// WSL2 exports XDG_RUNTIME_DIR with a trailing slash; the same directory must
+// pass the runtime-dir clause (#5798, #5807).
+func TestUserBusEnvironmentAcceptsTrailingSlashRuntimeDir(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/"+strconv.Itoa(os.Getuid())+"/")
+	if _, err := userBusEnvironment(); err != nil && strings.Contains(err.Error(), "set XDG_RUNTIME_DIR") {
+		t.Fatalf("trailing slash refused as a different runtime dir: %v", err)
+	}
+	if got, want := userRuntimeDirEnv(), "/run/user/"+strconv.Itoa(os.Getuid()); got != want {
+		t.Fatalf("userRuntimeDirEnv() = %q, want %q", got, want)
+	}
+	uid := strconv.Itoa(os.Getuid())
+	for _, value := range []string{
+		"/run/user/" + strconv.Itoa(os.Getuid()+1),
+		"/run/user/" + strconv.Itoa(os.Getuid()+1) + "/",
+		"/run/user/" + uid + "//",
+		"/run/user/" + uid + "/.",
+		"//run/user/" + uid,
+		"/run/user/../user/" + uid,
+		"/run/user/" + uid + "/x/..",
+		"/run/user/" + strconv.Itoa(os.Getuid()+1) + "/../" + uid,
+		"run/user/" + uid,
+		"",
+	} {
+		t.Setenv("XDG_RUNTIME_DIR", value)
+		if _, err := userBusEnvironment(); err == nil || !strings.Contains(err.Error(), "set XDG_RUNTIME_DIR") {
+			t.Fatalf("XDG_RUNTIME_DIR=%q accepted: %v", value, err)
+		}
 	}
 }

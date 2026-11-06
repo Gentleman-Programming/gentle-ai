@@ -16,7 +16,11 @@ import (
 
 func TestPrivateNativeControls(t *testing.T) {
 	privateGuest(t)
-	_, resolverSHA, pinsErr := userStableSupplierPins()
+	list, _, listErr := userEmbeddedReviewedList()
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	_, resolverSHA, pinsErr := userStableSupplierPins(list, list.newestReviewedRelease())
 	if pinsErr != nil {
 		t.Fatal(pinsErr)
 	}

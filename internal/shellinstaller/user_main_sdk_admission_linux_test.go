@@ -67,7 +67,13 @@ func TestUserMainSDKPreviewAdmission(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatal(err, string(output))
 	}
-	installerSHA, resolverSHA, pinsErr := userStableSupplierPins()
+	// The frozen fixture tarball is a listed reviewed release: its supplier
+	// files must match the list entry for the fixture's own version.
+	list, _, listErr := userEmbeddedReviewedList()
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	installerSHA, resolverSHA, pinsErr := userStableSupplierPins(list, pin.Version)
 	if pinsErr != nil {
 		t.Fatal(pinsErr)
 	}
