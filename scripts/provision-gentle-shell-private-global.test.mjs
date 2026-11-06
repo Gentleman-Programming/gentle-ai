@@ -57,7 +57,8 @@ test('Main dependency link mode matches this host under the pinned umask', t => 
 // cannot forge), and any malformed or drifting record falls back to the full
 // audit, which alone may rewrite the receipt.
 test('Main graph receipt fast path stays bounded to the launch verify action', () => {
-  assert.match(source, /if \(verifyingSelectedSDK\) graphFast = graphFastPath\(\);/);
+  assert.match(source, /const launchVerify = action === 'verify' \|\| verifyingSelectedSDK;/);
+  assert.match(source, /if \(launchVerify\) graphFast = graphFastPath\(\);/);
   assert.match(source, /schema: 'gentle-shell-main-graph-verify-receipt\/v1'/);
   assert.match(source, /installation: digest\(read\(installationPath\)\)/);
   assert.match(source, /lock: digest\(lockBytes\)/);
@@ -66,7 +67,7 @@ test('Main graph receipt fast path stays bounded to the launch verify action', (
   // rewritten file can never match a record of the bytes it replaced.
   assert.match(source, /const stamp = `\$\{info\.dev\}:\$\{info\.ino\}:\$\{info\.uid\}:\$\{info\.mode\}:\$\{info\.size\}:\$\{info\.mtimeMs\}:\$\{info\.ctimeMs\}`;/);
   // The full audit stays the only receipt writer, after every check passed.
-  assert.match(source, /if \(verifyingSelectedSDK\) \{\s*\n\s*graphReceiptCandidate = \{/);
+  assert.match(source, /if \(launchVerify\) \{\s*\n\s*graphReceiptCandidate = \{/);
   assert.match(source, /writeExclusive\(stage, `\$\{JSON\.stringify\(graphReceiptCandidate\)\}\\n`\);/);
   // The observed records the fast path reuses come from the receipt, and the
   // full walk stays the fallback branch.

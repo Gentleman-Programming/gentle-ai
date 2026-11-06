@@ -14,6 +14,7 @@ import (
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
@@ -903,6 +904,10 @@ func TestComponentPathsContext7ClaudeUsesUserRegistry(t *testing.T) {
 	}
 }
 
+// TestComponentPathsContext7ClaudeRespectsWorkspaceScope pins workspace-scoped
+// Claude Context7 to <workspace>/.mcp.json, the project-scoped file Claude Code
+// loads MCP servers from (issue #2213). The inert settings.json merge is never
+// written, so verifying it would fail on a healthy install.
 func TestComponentPathsContext7ClaudeRespectsWorkspaceScope(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -910,9 +915,6 @@ func TestComponentPathsContext7ClaudeRespectsWorkspaceScope(t *testing.T) {
 
 	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentContext7)
 
-	// Workspace scope writes <project-root>/.mcp.json, the file Claude Code
-	// loads project-scoped MCP servers from (issue #2213). The legacy
-	// .claude/settings.json key is inert for MCP discovery and is not declared.
 	want := filepath.Join(workspace, ".mcp.json")
 	if !containsPath(paths, want) {
 		t.Fatalf("componentPathsWithWorkspaceScoped(context7,claude) with ScopeWorkspace missing %q\npaths=%v", want, paths)
@@ -1788,6 +1790,33 @@ func TestComponentPathsOpenCodeGentleLogoMatchesSelectedAdapter(t *testing.T) {
 	}
 }
 
+// TestBackupTargetsEngramAntigravityIncludePluginStagingFiles pins that the
+// Antigravity Engram plugin assets Engram injection writes stay install backup
+// targets, so a failed install or sync can restore the plugin staging files
+// (PR #1643). Plugin staging lives under the shared ~/.gemini/config root agy
+// 1.4 loads (#5930).
+func TestBackupTargetsEngramAntigravityIncludePluginStagingFiles(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentAntigravity}, Components: []model.ComponentID{model.ComponentEngram}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
+	pluginDir := engram.AntigravityPluginDir(home)
+	for _, want := range []string{
+		filepath.Join(pluginDir, "mcp_config.json"),
+		filepath.Join(pluginDir, "hooks.json"),
+		filepath.Join(pluginDir, "plugin.json"),
+		filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"),
+	} {
+		if !containsPath(targets, want) {
+			t.Fatalf("backupTargets missing Antigravity plugin staging path %q; targets=%v", want, targets)
+		}
+	}
+}
+
 func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	home := t.TempDir()
 	agentIDs := []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi}
@@ -2080,4 +2109,39 @@ func TestInstallPrepareValidationScopesRefusalsToSelectedWriters(t *testing.T) {
 // installBackupTargets without the Claude module opt-in.
 func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
 	return installBackupTargets(homeDir, workspaceDir, scope, selection, resolved, false)
+}
+
+// TestComponentPathsAntigravityUsesSharedConfigRoot pins agy 1.4's shared
+// ~/.gemini/config root for backup and verification paths, and proves the
+// Gemini CLI and Claude Code paths that share these helpers are unchanged.
+func TestComponentPathsAntigravityUsesSharedConfigRoot(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentAntigravity, model.AgentGeminiCLI, model.AgentClaudeCode})
+	selection := model.Selection{Skills: []model.SkillID{model.SkillGoTesting}}
+
+	context7 := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, adapters, model.ComponentContext7)
+	skills := componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, adapters, model.ComponentSkills)
+
+	for _, tc := range []struct {
+		paths []string
+		want  string
+	}{
+		{context7, filepath.Join(home, ".gemini", "config", "mcp_config.json")},
+		{context7, filepath.Join(home, ".gemini", "settings.json")},
+		{skills, filepath.Join(home, ".gemini", "config", "skills", "go-testing", "SKILL.md")},
+		{skills, filepath.Join(home, ".gemini", "skills", "go-testing", "SKILL.md")},
+		{skills, filepath.Join(home, ".claude", "skills", "go-testing", "SKILL.md")},
+	} {
+		if !containsPath(tc.paths, tc.want) {
+			t.Errorf("component paths missing %q\npaths=%v", tc.want, tc.paths)
+		}
+	}
+	for _, unwanted := range []string{
+		filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json"),
+		filepath.Join(home, ".gemini", "antigravity-cli", "skills", "go-testing", "SKILL.md"),
+	} {
+		if containsPath(context7, unwanted) || containsPath(skills, unwanted) {
+			t.Errorf("component paths must not target the variant directory %q", unwanted)
+		}
+	}
 }

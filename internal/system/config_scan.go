@@ -26,6 +26,9 @@ type ConfigState struct {
 // Most entries mirror Adapter.GlobalConfigDir(). Kiro is an intentional
 // exception: we scan `~/.kiro` (managed artifacts root) instead of
 // `%APPDATA%/kiro/User` (settings root) due to Kiro's split-root layout.
+// Antigravity is another exception: we scan the CLI variant directory
+// `~/.gemini/antigravity-cli` as presence evidence, while GlobalConfigDir is
+// the shared customization root `~/.gemini/config`.
 // Kimi is resolved through kimiConfigState: it prefers the current
 // kimi-code v0.11+ root `~/.kimi-code` when it exists as a directory and
 // falls back to the legacy `~/.kimi` root.
@@ -41,7 +44,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "gemini-cli", Path: filepath.Join(homeDir, ".gemini")},
 		{Agent: "cursor", Path: filepath.Join(homeDir, ".cursor")},
 		{Agent: "vscode-copilot", Path: vscodeCopilotGlobalConfigDir(homeDir)},
-		{Agent: "codex", Path: filepath.Join(homeDir, ".codex")},
+		{Agent: "codex", Path: CodexConfigDir(homeDir)},
 		{Agent: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity-cli")},
 		{Agent: "windsurf", Path: filepath.Join(homeDir, ".codeium", "windsurf")},
 		{Agent: "kimi", Path: kimiConfigDir(homeDir)},

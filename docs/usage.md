@@ -239,6 +239,8 @@ gentle-ai sync --agent openclaw
 
 Sync is safe and idempotent — running it twice produces no changes the second time. When files change, the summary reports the changed file count and lists the changed file paths.
 
+OpenCode sync keeps retired SDD prompt files while remaining settings entries still reference them, including customized agents. It validates `{file:...}` references in the selected settings document and, for global sync, both global `opencode.json` and `opencode.jsonc` files. Relative paths resolve beside their settings document; `~/` resolves under your home directory. An empty `{file:}` stays literal text, not a file reference. Windows UNC, device-namespace (`\\.\`, `\\?\`), and NT object-manager (`\??\`) paths are rejected before their targets are inspected. A missing target or rejected reference fails sync and rolls back its managed changes. Restore the named file or correct its reference, then rerun `gentle-ai sync --agent opencode`.
+
 `sync` refreshes the managed component set for the selected agents. It does not support `--component`; use `--include-permissions` or `--include-theme` for the opt-in components that are excluded from the default sync scope.
 
 After upgrading the binary, `gentle-ai sync --dry-run` previews the selected targets; `gentle-ai sync` refreshes their primary remote-authorization guidance. To select a specific managed client, use e.g. `gentle-ai sync --agent opencode`. This behavioral section is delivered with unconditional routing guidance, without requiring persona or `--include-permissions`. It requires explicit destination, operation, and credential/session authorization before remote work or ambient access discovery/reuse.
@@ -339,12 +341,16 @@ For Claude Code, the Custom picker offers `default`, `low`, `medium`, `high`, `x
 For Codex, efforts and speed come from the installed runtime (`codex debug models`):
 
 - **Effort.** The Custom picker offers only the reasoning efforts each model advertises. `max` and `ultra` appear only on models that list them. Without discovery, the picker falls back to `low`–`xhigh`.
-- **Speed.** After you choose a preset, the picker asks for speed only when the runtime advertises a service tier for that preset's orchestrator model. Fast is a service tier, not a reasoning effort. Gentle AI writes it once as the top-level `service_tier` in `~/.codex/config.toml`, and Codex workers inherit it.
+- **Speed.** After you choose a preset, the picker asks for speed only when the runtime advertises a service tier for that preset's orchestrator model. Fast is a service tier, not a reasoning effort. Gentle AI writes it once as the top-level `service_tier` in the Codex `config.toml` (under a valid `CODEX_HOME` for the real user home, or `<home>/.codex` for an isolated home or an unset/empty override), and Codex workers inherit that setting.
 - **Standard.** Choosing Standard removes only the `service_tier` value Gentle AI wrote, and only while the config still holds that exact value. A `service_tier` you set yourself is never changed.
+
+For Antigravity, you choose the agy model tier of each Judgment Day agent: `inherit` (the session model, agy's default), `flash_lite`, `flash`, or `pro`. The picker appears in the installer whenever Antigravity is selected, and later under **Configure Models → Configure Antigravity models**. Presets: **inherit**, **performance** (`pro` for every role), **economy** (`flash` judges, `flash_lite` fix agent), and **custom**. Gentle AI writes the tier to the `model:` frontmatter of `~/.gemini/config/agents/jd-*.md` and stores it in `state.json`, so `gentle-ai sync` keeps it. An unknown or missing tier renders `inherit`. agy has no per-agent effort setting, and ODD delegation keeps the session model.
 
 ### Codex configuration root
 
 For the real user home, a non-empty `CODEX_HOME` must point to an existing directory. Relative values resolve against the process working directory. Codex mutations reject invalid overrides instead of creating them. Isolated or sandbox homes ignore the ambient override and keep their own `<home>/.codex` configuration.
+
+Keep the same `CODEX_HOME` when installing, syncing, and uninstalling. Changing it selects a different root; it does not migrate managed files or remove assets from the previous root. Those old assets can remain orphaned. To remove them through uninstall, select the previous root again and verify it before running the uninstall; do not assume an uninstall under the new value cleans both roots.
 
 ### doctor
 

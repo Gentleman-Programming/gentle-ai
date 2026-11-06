@@ -13,7 +13,10 @@ import (
 // home: the CLI plugin directory, deliberately independent of the desktop/CLI
 // variant that stat selects for the MCP config path. Desktop and CLI users of
 // one physical home therefore share a single lock key instead of splitting a
-// shared resource across two locks.
+// shared resource across two locks. The key deliberately stays the legacy CLI
+// plugin directory after the plugin moved to the shared config root (#5930):
+// it is only hashed into the lock root, and keeping it stable keeps writers of
+// older gentle-ai versions serialized with the migration.
 func antigravityLockTarget(configHome string) (string, error) {
 	canonical, err := canonicalAntigravityConfigHome(configHome)
 	if err != nil {

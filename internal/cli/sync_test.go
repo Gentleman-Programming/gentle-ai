@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -2213,6 +2214,114 @@ func TestSyncBackupTargetsOpenClawSkillsUseGlobalRoot(t *testing.T) {
 	}
 }
 
+func TestCodeGraphGuidanceSyncStepNativePreservation(t *testing.T) {
+	for _, tt := range []struct {
+		name, entry string
+		wantError   bool
+	}{
+		{"no watch", `{"type":"local","command":["codegraph","serve","--mcp","--no-watch"]}`, false},
+		{"invalid native", `{"type":"local","command":["wrong-program","serve","--mcp"]}`, true},
+		{"disabled native", `{"type":"local","command":["codegraph","serve","--mcp"],"disabled":true}`, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", "")
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+			agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+			settingsBefore := "{\n// keep native comment\n\"userMetadata\":\"keep\",\"mcp\":{\"codegraph\":{\"type\":\"local\",\"command\":[\"codegraph\",\"serve\",\"--mcp\"]},\"servers\":{\"codegraph\":" + tt.entry + "}}}\n"
+			guidanceBefore := "custom notes\n<!-- gentle-ai:codegraph-guidance -->\nstale\n<!-- /gentle-ai:codegraph-guidance -->\n"
+			mustWriteFile(t, settingsPath, []byte(settingsBefore))
+			mustWriteFile(t, agentsPath, []byte(guidanceBefore))
+			restoreLookPath := cmdLookPath
+			t.Cleanup(func() { cmdLookPath = restoreLookPath })
+			cmdLookPath = func(string) (string, error) { return "/bin/codegraph", nil }
+			calls := 0
+			var changed []string
+			step := codeGraphGuidanceSyncStep{
+				id:      "sync:community-tool:codegraph-guidance",
+				homeDir: home,
+				runner: communitytool.RunnerFunc(func(string, ...string) error {
+					calls++
+					return nil
+				}),
+				changedFiles: &changed,
+			}
+			err := step.Run()
+			if tt.wantError {
+				if err == nil {
+					t.Error("Run() must refuse unmet native wiring")
+				} else {
+					for _, want := range []string{settingsPath, "mcp.servers.codegraph"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("Run() diagnostic %q missing %q", err, want)
+						}
+					}
+				}
+				if len(changed) != 0 {
+					t.Errorf("failed native reconcile reported changes: %v", changed)
+				}
+				body, readErr := os.ReadFile(agentsPath)
+				if readErr != nil || string(body) != guidanceBefore {
+					t.Errorf("failed Run() did not preserve guidance: %q, error=%v", body, readErr)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Run() valid no-watch native wiring: %v", err)
+				}
+				if !reflect.DeepEqual(changed, []string{agentsPath}) {
+					t.Errorf("changed files = %v, want only guidance %q", changed, agentsPath)
+				}
+			}
+			if calls != 0 {
+				t.Errorf("native sync called installer %d times, want zero", calls)
+			}
+			body, readErr := os.ReadFile(settingsPath)
+			if readErr != nil || string(body) != settingsBefore {
+				t.Fatalf("Run() changed native config bytes: %q, error=%v", body, readErr)
+			}
+			if err := step.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+			for path, want := range map[string]string{settingsPath: settingsBefore, agentsPath: guidanceBefore} {
+				body, readErr := os.ReadFile(path)
+				if readErr != nil || string(body) != want {
+					t.Errorf("Rollback() did not restore %q: %q, error=%v", path, body, readErr)
+				}
+			}
+		})
+	}
+}
+
+func TestCodeGraphGuidanceSyncStepSkipsPinnedNativePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	settingsBefore := "{\n// pinned project stays user-owned\n\"mcp\":{\"servers\":{\"codegraph\":{\"type\":\"local\",\"command\":[\"codegraph\",\"serve\",\"--mcp\",\"--path\",\"/other\"]}}}}\n"
+	mustWriteFile(t, settingsPath, []byte(settingsBefore))
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+	cmdLookPath = func(string) (string, error) { return "/bin/codegraph", nil }
+	calls := 0
+	step := codeGraphGuidanceSyncStep{
+		id:      "sync:community-tool:codegraph-guidance",
+		homeDir: home,
+		runner: communitytool.RunnerFunc(func(string, ...string) error {
+			calls++
+			return nil
+		}),
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() with pinned native path: %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("pinned native path called installer %d times, want zero", calls)
+	}
+	body, err := os.ReadFile(settingsPath)
+	if err != nil || string(body) != settingsBefore {
+		t.Fatalf("Run() changed pinned native config bytes: %q, error=%v", body, err)
+	}
+}
+
 func TestCodeGraphGuidanceSyncStepRefreshesOldMarkerWhenConfigured(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -2966,6 +3075,39 @@ func TestRunSyncReleasesRetiredPiSDDAgentsFromCodeGraphManifest(t *testing.T) {
 	}
 	if text := readTextFile(t, manifestPath); strings.Contains(text, "sdd-apply.md") || strings.Contains(text, "sdd-verify.md") {
 		t.Fatalf("manifest still owns retired Pi SDD agents:\n%s", text)
+	}
+}
+
+// TestRunSyncSurfacesPiCodeGraphManualActions pins issue #2146's second half:
+// converting an incomplete probe into a non-fatal pending action is only useful
+// if sync actually reports that action. The step previously forwarded changed
+// files and dropped ManualActions, so the user saw a clean sync with no reason
+// and no instruction to retry.
+func TestRunSyncSurfacesPiCodeGraphManualActions(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}); err != nil {
+		t.Fatal(err)
+	}
+	writeManagedPiCodeGraphManifest(t, home)
+
+	pending := "Pi CodeGraph integration remains pending: the MCP capability probe did not complete."
+	previousRefresh := refreshPiCodeGraphIfConfigured
+	refreshPiCodeGraphIfConfigured = func(string, string) (communitytool.PiCodeGraphResult, bool, error) {
+		return communitytool.PiCodeGraphResult{ManualActions: []string{pending}}, true, nil
+	}
+	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
+
+	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if !slices.Contains(result.ManualActions, pending) {
+		t.Fatalf("sync manual actions = %v, want the Pi CodeGraph pending action", result.ManualActions)
+	}
+	var rendered strings.Builder
+	renderSyncManualActions(&rendered, result.ManualActions)
+	if !strings.Contains(rendered.String(), pending) {
+		t.Fatalf("rendered manual actions = %q, want the Pi CodeGraph pending action", rendered.String())
 	}
 }
 
@@ -4607,6 +4749,7 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 			"review-risk": "glm",
 			"default":     "auto",
 		},
+		AntigravityModelAssignments: map[string]string{"jd-fix-agent": "flash_lite", "jd-judge-a": "ultra"},
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"review-risk": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
@@ -4635,6 +4778,9 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	}
 	if got := result.Selection.KiroModelAssignments["default"]; got != model.KiroModelAuto {
 		t.Errorf("KiroModelAssignments[default] = %q, want %q", got, model.KiroModelAuto)
+	}
+	if got, want := result.Selection.AntigravityModelAssignments, (map[string]model.AntigravityModelTier{"jd-fix-agent": model.AntigravityModelFlashLite}); !reflect.DeepEqual(got, want) {
+		t.Errorf("AntigravityModelAssignments = %v, want %v (unknown tiers dropped)", got, want)
 	}
 
 	// OpenCode assignments must be loaded.

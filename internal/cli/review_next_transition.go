@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -922,6 +923,11 @@ func reviewStatusTargetEvidenceToken(status ReviewTargetStatusResult) string {
 	return token
 }
 
+// reviewBaseRefCommitIDHexLength is the 40-character width of a hexadecimal
+// git object id. It is only a spelling width: the guard below asks whether the
+// caller's spelling could be an object id, never which object type it names.
+const reviewBaseRefCommitIDHexLength = 40
+
 func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID, intended reviewIntendedUntrackedScope) []ReviewTransitionArgument {
 	contract := status.Contract
 	if contract == "" {
@@ -945,6 +951,32 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 	switch status.Projection.Kind {
 	case reviewtransaction.TargetBaseDiff:
 		baseRef := status.Projection.BaseTree
+		// Preserve a caller's immutable commit object, but keep symbolic refs
+		// pinned to the frozen tree so moving branches cannot change START scope.
+		// This is a commit id spelling guard, not an object-type check:
+		// hex.DecodeString accepts any 40-hex value, so a tree id spelled here is
+		// echoed exactly like a commit id. An explicit symbolic selector
+		// (origin/main, a branch, HEAD~1) therefore still emits
+		// Projection.BaseTree, which is the same frozen tree.
+		//
+		// This deliberately diverges from the REVIEWING re-entry echo, where
+		// reviewStartStatusContinuation replays the frozen
+		// InitialSnapshot.BaseTree even for a 40-hex selector, because that
+		// continuation must rebind the exact scope the reviewer artifacts were
+		// captured against (pinned by review_committed_correction_test.go).
+		//
+		// decision.Selector.BaseRef reaches this point already rebound to the
+		// caller's own spelling by bindTargetStatusDecisionBaseRef
+		// (reviewtransaction/target_status.go) for every base-diff or overlay
+		// STATUS that requested one; without that rebinding it is the frozen
+		// base tree seeded by projectTargetStatusDecision, so this guard is a
+		// no-op there.
+		selectorRef := status.decision.Selector.BaseRef
+		if len(selectorRef) == reviewBaseRefCommitIDHexLength {
+			if _, err := hex.DecodeString(selectorRef); err == nil {
+				baseRef = selectorRef
+			}
+		}
 		// Issue #4412: a selectorless STATUS that derived a committed range
 		// discloses the exact merge-base commit it resolved, not the tree
 		// object the derived snapshot froze, so the caller can see and
