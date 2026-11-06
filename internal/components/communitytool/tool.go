@@ -118,11 +118,35 @@ func DefinitionFor(id model.CommunityToolID) (Definition, bool) {
 	return Definition{}, false
 }
 
-func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Result, error) {
-	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath))
+// InstallOptions carries the per-run knobs of a community-tool install.
+type InstallOptions struct {
+	// HomeDir is the user home that owns the agent configuration.
+	HomeDir string
+	// ForceCommunityTools is the user's opt-in to reinstall the tool at
+	// @latest and re-run the reconcile even when the installed CLI is
+	// available and already meets codeGraphUpstreamVersion. It is never
+	// derived: only `gentle-ai install --force-community-tools` sets it.
+	ForceCommunityTools bool
 }
 
+// Install is the legacy entry point: default home directory, no force opt-in.
+func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Result, error) {
+	return InstallWithOptions(id, workspaceDir, InstallOptions{HomeDir: defaultHomeDir()}, runner, DetectorFunc(exec.LookPath))
+}
+
+// InstallWithHome keeps the unforced signature used by callers that have no
+// opt-in for --force-community-tools; it installs with the given home and
+// never forces.
 func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
+	return InstallWithOptions(id, workspaceDir, InstallOptions{HomeDir: homeDir}, runner, detector)
+}
+
+// InstallWithOptions is the version-aware installer. An explicit
+// ForceCommunityTools opt-in bypasses the CodeGraphReconcileSatisfied() /
+// codeGraphCanRepairWithoutFullInstall short-circuit unconditionally and
+// re-installs the package at @latest before the reconcile commands run.
+func InstallWithOptions(id model.CommunityToolID, workspaceDir string, options InstallOptions, runner Runner, detector Detector) (Result, error) {
+	homeDir := options.HomeDir
 	if runner == nil {
 		return Result{}, fmt.Errorf("community tool runner is not configured")
 	}
@@ -173,8 +197,10 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	// contract and reject them. Bypass the short-circuit in that one case so
 	// the upgrade command runs. A CLI whose version cannot be determined, or
 	// that is already at or above the contract, keeps today's no-reinstall
-	// behaviour.
-	if (before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before)) && !installedVersionIsStale {
+	// behaviour. The explicit --force-community-tools opt-in bypasses the gate
+	// unconditionally: the user asked for a fresh @latest install even when the
+	// existing CLI is current and reconciled.
+	if (before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before)) && !installedVersionIsStale && !options.ForceCommunityTools {
 		if NeedsOpenCodeCodeGraphReconcile(homeDir) {
 			result.CommandsRun = append(result.CommandsRun, "codegraph install --target opencode --location global --yes")
 		}
@@ -248,8 +274,10 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	// CodeGraphCommandsForDetectorAndTargets helper that a missing CLI does,
 	// re-using its package-manager resolution (npm → pnpm) and target-keep
 	// behaviour. Today only `before.CLI == AvailabilityMissing` enters this
-	// branch; R1 makes the stale but available case also enter.
-	if before.CLI != AvailabilityAvailable || installedVersionIsStale {
+	// branch; R1 makes the stale but available case also enter, and the
+	// --force-community-tools opt-in enters it for a current, available CLI so
+	// the package is reinstalled at @latest before the reconcile commands.
+	if before.CLI != AvailabilityAvailable || installedVersionIsStale || options.ForceCommunityTools {
 		var err error
 		commands, err = CodeGraphCommandsForDetectorAndTargets(DetectorFunc(codeGraphPackageLookPath), targets)
 		if err != nil {
@@ -261,7 +289,10 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		// Stale-but-available keeps both the package install AND
 		// `codegraph install` so the freshly-upgraded CLI re-resolves its
 		// agents. Truncating to the package install (the missing-CLI
-		// behaviour) would leave us upgraded but unwired.
+		// behaviour) would leave us upgraded but unwired. A forced run over a
+		// current CLI keeps the reconcile command the same way; with no
+		// detected target there is nothing to reconcile and the @latest
+		// package install stands alone.
 		staleButAvailable := before.CLI == AvailabilityAvailable && installedVersionIsStale
 		if !staleButAvailable && len(targets) == 0 {
 			commands = commands[:1]
