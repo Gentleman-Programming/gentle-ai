@@ -154,7 +154,14 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	if err != nil {
 		return result, err
 	}
+	// versionGapHint carries the stale-CLI install hint so it reaches the user
+	// only when the upgrade did not complete; a successful run reports the
+	// completed upgrade instead of asking for it again.
+	versionGapHint := ""
 	rollback := func(cause error) (Result, error) {
+		if versionGapHint != "" {
+			result.ManualActions = append(result.ManualActions, versionGapHint)
+		}
 		if restoreErr := restoreCodeGraphPaths(snapshots); restoreErr != nil {
 			return result, fmt.Errorf("%w; rollback CodeGraph configuration: %v", cause, restoreErr)
 		}
@@ -222,9 +229,9 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	if before.CLI == AvailabilityAvailable && len(targets) > 0 && installedVersionIsStale {
 		targets = nil
 		droppedBlindTargets = true
-		result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+		versionGapHint = fmt.Sprintf(
 			"CodeGraph %s is older than the %s target contract Gentle AI is written against, so agent targets were left to CodeGraph's own detection. Run `npm install -g @colbymchenry/codegraph@latest` (or `pnpm add -g @colbymchenry/codegraph@latest`) and rerun Gentle AI to get explicit target selection.",
-			installedVersion, codeGraphUpstreamVersion))
+			installedVersion, codeGraphUpstreamVersion)
 	}
 	commands := make([][]string, 0, 2)
 	switch {
@@ -246,15 +253,17 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		var err error
 		commands, err = CodeGraphCommandsForDetectorAndTargets(DetectorFunc(codeGraphPackageLookPath), targets)
 		if err != nil {
+			if versionGapHint != "" {
+				result.ManualActions = append(result.ManualActions, versionGapHint)
+			}
 			return result, err
 		}
-		if before.CLI == AvailabilityAvailable && installedVersionIsStale {
-			// Stale-but-available: keep both package install AND
-			// `codegraph install` so the freshly-upgraded CLI re-resolves
-			// its agents. Truncating to the package install (the missing-CLI
-			// behaviour) would leave us upgraded but unwired.
-			_ = targets
-		} else if len(targets) == 0 {
+		// Stale-but-available keeps both the package install AND
+		// `codegraph install` so the freshly-upgraded CLI re-resolves its
+		// agents. Truncating to the package install (the missing-CLI
+		// behaviour) would leave us upgraded but unwired.
+		staleButAvailable := before.CLI == AvailabilityAvailable && installedVersionIsStale
+		if !staleButAvailable && len(targets) == 0 {
 			commands = commands[:1]
 		}
 	}
@@ -292,6 +301,11 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	result.StatusAfter = &after
 	if err := validateCodeGraphInstallStatus(after); err != nil {
 		return rollback(err)
+	}
+	if droppedBlindTargets {
+		result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+			"CodeGraph was upgraded from %s, which is older than the %s target contract Gentle AI is written against, so agent targets were left to CodeGraph's own detection on this run; rerun Gentle AI to restore explicit target selection.",
+			installedVersion, codeGraphUpstreamVersion))
 	}
 	result.ManualActions = append(result.ManualActions, "CodeGraph CLI was installed and supported agents were connected. Project indexes will be created automatically when an enabled agent opens inside a project.")
 	return result, nil

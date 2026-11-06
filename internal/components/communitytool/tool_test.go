@@ -1669,7 +1669,7 @@ func TestInstallReinstallsWhenReconcileSatisfiedButCodeGraphIsOlderThanContract(
 	stubCodeGraphVersion(t, "0.9.3", true)
 
 	var commands []string
-	_, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(name string, args ...string) error {
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(name string, args ...string) error {
 		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
 		return nil
 	}), DetectorFunc(func(string) (string, error) {
@@ -1690,6 +1690,41 @@ func TestInstallReinstallsWhenReconcileSatisfiedButCodeGraphIsOlderThanContract(
 	}
 	if !foundAtLatest {
 		t.Fatalf("commands = %#v, want the @latest package install so the older CodeGraph is upgraded", commands)
+	}
+	want := []string{"npm install -g @colbymchenry/codegraph@latest", "codegraph install --yes"}
+	if !reflect.DeepEqual(result.CommandsRun, want) {
+		t.Fatalf("CommandsRun = %#v, want %#v", result.CommandsRun, want)
+	}
+	if !reflect.DeepEqual(commands, result.CommandsRun) {
+		t.Fatalf("runner calls = %#v, want them to match CommandsRun %#v", commands, result.CommandsRun)
+	}
+}
+
+// TestInstallSuccessfulStaleUpgradeDoesNotAskForTheUpgradeAgain pins the
+// success wording of the version-gap advisory: the installer already ran the
+// @latest package install, so the note must not tell the user to run it
+// again. The rollback path keeps the install hint (see
+// TestInstallPreservesVersionGapAdvisoryAcrossUpgradeAttempt).
+func TestInstallSuccessfulStaleUpgradeDoesNotAskForTheUpgradeAgain(t *testing.T) {
+	home := installHomeWithTwoNativeTargets(t)
+	stubCodeGraphVersion(t, "0.9.3", true)
+
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
+		mustWrite(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+		mustWrite(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil {
+		t.Fatalf("InstallWithHome() error = %v", err)
+	}
+	if hasManualActionContaining(result.ManualActions, "npm install") || hasManualActionContaining(result.ManualActions, "pnpm add") {
+		t.Fatalf("ManualActions = %#v, want no install hint after a successful upgrade", result.ManualActions)
+	}
+	if !hasManualActionContaining(result.ManualActions, "CodeGraph was upgraded from 0.9.3") {
+		t.Fatalf("ManualActions = %#v, want the completed upgrade named", result.ManualActions)
+	}
+	if !hasManualActionContaining(result.ManualActions, "rerun Gentle AI to restore explicit target selection") {
+		t.Fatalf("ManualActions = %#v, want the rerun guidance", result.ManualActions)
 	}
 }
 

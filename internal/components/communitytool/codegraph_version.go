@@ -37,7 +37,12 @@ func defaultCodeGraphInstalledVersion(cliPath string) (string, bool) {
 	// unknown-version fallback verbatim.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, cliPath, "--version").CombinedOutput()
+	cmd := exec.CommandContext(ctx, cliPath, "--version")
+	// npm shims spawn the real CLI as a child that can keep the output pipes
+	// open after the shim is killed; WaitDelay bounds that wait so the probe
+	// still returns once the context expires.
+	cmd.WaitDelay = 2 * time.Second
+	output, err := cmd.CombinedOutput()
 	if err != nil && len(output) == 0 {
 		return "", false
 	}
