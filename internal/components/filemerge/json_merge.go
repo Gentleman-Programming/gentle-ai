@@ -106,8 +106,9 @@ func MarshalJSONPreservingPermissions(base []byte, value any) ([]byte, error) {
 }
 
 // MergeJSONDefaultsForPath fills missing values without overriding user policy.
-// New rules precede existing rules, except an initial catch-all allow remains
-// the fallback before new defaults. Existing rule order and scalar values win.
+// New rules precede existing rules, except that an existing catch-all allow
+// stays in place as the fallback and new defaults follow it. Existing rule
+// order and scalar values win.
 func MergeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte) ([]byte, error) {
 	return mergeJSONDefaultsForPath(path, baseJSON, defaultsJSON, false)
 }
@@ -188,12 +189,30 @@ func marshalPermissionOrder(base []byte, value any, ordered bool) ([]byte, error
 		}
 	}
 	sort.Strings(added)
+	// Permission rules resolve last-match-wins, so an added catch-all "*" must
+	// precede every added rule: keys starting with a quote or another byte below
+	// '*' would otherwise sort ahead of it and be overridden by it.
+	if ordered {
+		for i, key := range added {
+			if key == "*" {
+				added = append([]string{"*"}, append(added[:i:i], added[i+1:]...)...)
+				break
+			}
+		}
+	}
 	keys := append(append([]string{}, existing...), added...)
 	// Newly introduced rules must not override existing custom rules.
 	if ordered {
 		keys = append(append([]string{}, added...), existing...)
-		if len(existing) > 0 && existing[0] == "*" && string(raw["*"]) == `"allow"` {
-			keys = append([]string{"*"}, append(added, existing[1:]...)...)
+		// An existing catch-all allow would override every added rule placed
+		// before it, wherever the user put it. Insert the added rules right after
+		// it and keep every user rule in place: rules before the catch-all were
+		// already overridden by it, and rules after it still win.
+		for i, key := range existing {
+			if key == "*" && string(raw["*"]) == `"allow"` {
+				keys = append(append(append([]string{}, existing[:i+1]...), added...), existing[i+1:]...)
+				break
+			}
 		}
 	}
 	var compact bytes.Buffer
