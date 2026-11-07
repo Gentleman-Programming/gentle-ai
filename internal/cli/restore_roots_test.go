@@ -125,3 +125,45 @@ func TestStandaloneRestoreRootsNonWindowsMatchesBase(t *testing.T) {
 		t.Fatalf("StandaloneRestoreRoots() = %v, want %v", roots, want)
 	}
 }
+
+// TestRestoreManagedBackupRefusesConfigSymlinkedOutsideHome: off Windows a
+// ~/.config symlinked outside the home stays refused, as before #6024, and
+// nothing is written through the link.
+func TestRestoreManagedBackupRefusesConfigSymlinkedOutsideHome(t *testing.T) {
+	_, _ = redirectedAppDataCLIHome(t, "darwin")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	outside := filepath.Join(base, "outside", "config")
+	for _, dir := range []string{home, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(home, ".config")); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Chdir(home)
+	target := filepath.Join(home, ".config", "opencode", "opencode.json")
+	writeCLIRestoreFile(t, target, "original")
+	manifest, err := backup.NewSnapshotter().Create(filepath.Join(t.TempDir(), "snapshot"), []string{target})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeCLIRestoreFile(t, target, "changed")
+
+	roots, err := StandaloneRestoreRoots(manifest)
+	if err != nil {
+		t.Fatalf("StandaloneRestoreRoots() error = %v", err)
+	}
+	if want := []string{home}; !slices.Equal(roots, want) {
+		t.Fatalf("StandaloneRestoreRoots() = %v, want %v", roots, want)
+	}
+	err = RestoreManagedBackup(manifest)
+	if err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") {
+		t.Fatalf("RestoreManagedBackup() error = %v, want an invalid OriginalPath refusal", err)
+	}
+	if got := readCLIRestoreFile(t, filepath.Join(outside, "opencode", "opencode.json")); got != "changed" {
+		t.Fatalf("file behind the link = %q, want it untouched", got)
+	}
+}

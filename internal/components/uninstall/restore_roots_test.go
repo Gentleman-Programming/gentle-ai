@@ -134,3 +134,62 @@ func TestRestoreRootsForPlanNonWindowsMatchesBase(t *testing.T) {
 		t.Fatalf("restoreRootsForPlan(workspace) = %v, want %v", got, want)
 	}
 }
+
+// TestRestoreRootsForPlanNonWindowsConfigSymlinkedOutside: a ~/.config
+// symlinked outside the home adds no root, matching the historical set.
+func TestRestoreRootsForPlanNonWindowsConfigSymlinkedOutside(t *testing.T) {
+	original := backup.ConfigRootsGOOS
+	backup.ConfigRootsGOOS = "linux"
+	t.Cleanup(func() { backup.ConfigRootsGOOS = original })
+	base := t.TempDir()
+	homeDir := filepath.Join(base, "home")
+	outside := filepath.Join(base, "outside")
+	for _, dir := range []string{homeDir, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(homeDir, ".config")); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	got := restoreRootsForPlan(homeDir, "", []string{filepath.Join(homeDir, ".config", "opencode", "opencode.json")})
+	if want := []string{homeDir}; !slices.Equal(got, want) {
+		t.Fatalf("restoreRootsForPlan() = %v, want %v", got, want)
+	}
+}
+
+// TestRestoreRootsForPlanRefusesAppDataSymlinkedOutsideHome: %APPDATA% spelled
+// inside the profile but linked outside it (a junction on Windows) is not a new
+// root, so the restore is refused exactly like a home-only restore.
+func TestRestoreRootsForPlanRefusesAppDataSymlinkedOutsideHome(t *testing.T) {
+	homeDir, _ := redirectedAppDataFixture(t, "windows")
+	outside := t.TempDir()
+	appData := filepath.Join(homeDir, "AppData", "Roaming")
+	if err := os.MkdirAll(filepath.Dir(appData), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, appData); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	t.Setenv("APPDATA", appData)
+	ggaAgents := filepath.Join(appData, "gga", "AGENTS.md")
+	writeRestoreRootsFile(t, ggaAgents, "gga original")
+	targets := []string{ggaAgents}
+	manifest, err := backup.NewSnapshotter().Create(filepath.Join(t.TempDir(), "snapshot"), targets)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeRestoreRootsFile(t, ggaAgents, "gga uninstalled")
+
+	roots := restoreRootsForPlan(homeDir, "", targets)
+	if want := []string{homeDir}; !slices.Equal(roots, want) {
+		t.Fatalf("restoreRootsForPlan() = %v, want %v", roots, want)
+	}
+	err = (backup.RestoreService{Roots: roots}).Restore(manifest)
+	if err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") {
+		t.Fatalf("Restore() error = %v, want an invalid OriginalPath refusal", err)
+	}
+	if got := readRestoreRootsFile(t, filepath.Join(outside, "gga", "AGENTS.md")); got != "gga uninstalled" {
+		t.Fatalf("file behind the link = %q, want it untouched", got)
+	}
+}

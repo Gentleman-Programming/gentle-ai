@@ -875,6 +875,18 @@ func TestWithConfigRootsWindows(t *testing.T) {
 	}
 	appDataLink := filepath.Join(outside, "roaming-link")
 	symlinkErr := os.Symlink(homeAppData, appDataLink)
+	// A profile AppData spelled inside the home but linked outside it.
+	escapedAppData := filepath.Join(outside, "escaped-roaming")
+	if err := os.MkdirAll(escapedAppData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	homeLinkedAppData := filepath.Join(home, "Linked", "Roaming")
+	if err := os.MkdirAll(filepath.Dir(homeLinkedAppData), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if symlinkErr == nil {
+		symlinkErr = os.Symlink(escapedAppData, homeLinkedAppData)
+	}
 
 	tests := []struct {
 		name         string
@@ -941,6 +953,14 @@ func TestWithConfigRootsWindows(t *testing.T) {
 			want:         []string{home},
 			needsSymlink: true,
 		},
+		{
+			name:         "APPDATA under the home symlinked outside",
+			roots:        []string{home},
+			appData:      homeLinkedAppData,
+			targets:      []string{filepath.Join(homeLinkedAppData, "gga", "AGENTS.md")},
+			want:         []string{home},
+			needsSymlink: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -977,5 +997,89 @@ func TestWithConfigRootsNonWindowsUnchanged(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestWithConfigRootsNonWindowsConfigSymlinkedOutside: a dotfile manager's
+// ~/.config symlinked outside the home adds no root, so the ancestor-symlink
+// guard still refuses targets beneath it exactly as before.
+func TestWithConfigRootsNonWindowsConfigSymlinkedOutside(t *testing.T) {
+	useConfigRootsGOOS(t, "darwin")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	dotfiles := filepath.Join(base, "dotfiles", "config")
+	for _, dir := range []string{home, dotfiles} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(dotfiles, filepath.Join(home, ".config")); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	target := filepath.Join(home, ".config", "opencode", "opencode.json")
+	got := WithConfigRoots([]string{home}, home, []string{target})
+	if !slices.Equal(got, []string{home}) {
+		t.Fatalf("WithConfigRoots() = %v, want only the home root", got)
+	}
+	if isPathUnderRoots(target, got) {
+		t.Fatalf("target %q through the ~/.config symlink is accepted under %v", target, got)
+	}
+}
+
+// TestWithConfigRootsTargetsCannotWidenRoots: targets only select among the
+// environment's config roots; a target beside, above, or outside %APPDATA%
+// never adds a root.
+func TestWithConfigRootsTargetsCannotWidenRoots(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	appData := filepath.Join(base, "redirected", "Roaming")
+	t.Setenv("APPDATA", appData)
+	t.Setenv("LOCALAPPDATA", "")
+	for name, target := range map[string]string{
+		"parent of APPDATA":      filepath.Join(base, "redirected", "file"),
+		"sibling sharing prefix": appData + "X" + string(filepath.Separator) + "file",
+		"APPDATA itself":         appData,
+		"dot-dot escape":         appData + string(filepath.Separator) + ".." + string(filepath.Separator) + "evil",
+		"relative":               filepath.Join("Roaming", "file"),
+		"empty":                  "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := WithConfigRoots([]string{home}, home, []string{target}); !slices.Equal(got, []string{home}) {
+				t.Fatalf("WithConfigRoots(%q) = %v, want only the home root", target, got)
+			}
+		})
+	}
+}
+
+// TestWithConfigRootsKeepsSymlinkEscapeRefused: a link inside an admitted
+// %APPDATA% that points elsewhere neither selects the root nor passes the
+// per-entry guard once a legitimate target admitted it.
+func TestWithConfigRootsKeepsSymlinkEscapeRefused(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	elsewhere := filepath.Join(base, "elsewhere")
+	appData := filepath.Join(base, "redirected", "Roaming")
+	for _, dir := range []string{home, elsewhere, appData} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(appData, "escape")); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	t.Setenv("APPDATA", appData)
+	t.Setenv("LOCALAPPDATA", "")
+	escape := filepath.Join(appData, "escape", "file")
+	if got := WithConfigRoots([]string{home}, home, []string{escape}); !slices.Equal(got, []string{home}) {
+		t.Fatalf("WithConfigRoots(escape only) = %v, want only the home root", got)
+	}
+	got := WithConfigRoots([]string{home}, home, []string{escape, filepath.Join(appData, "gga", "config")})
+	if !slices.Equal(got, []string{home, appData}) {
+		t.Fatalf("WithConfigRoots(escape + gga) = %v, want [%s %s]", got, home, appData)
+	}
+	if isPathUnderRoots(escape, got) {
+		t.Fatalf("symlink escape %q accepted under %v", escape, got)
 	}
 }
