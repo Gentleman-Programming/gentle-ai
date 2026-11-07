@@ -33,8 +33,14 @@ func TestRollbackRestoresEngramFilesUnderExternalCodexHome(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("CODEX_HOME", override)
+	// The Codex home is canonicalized (symlinks, Windows 8.3 short names), so
+	// expect targets under the canonical spelling of the override.
+	canonical, err := filepath.EvalSymlinks(override)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	selected := filepath.Join(override, "engram-instructions.md")
+	selected := filepath.Join(canonical, "engram-instructions.md")
 	before := []byte("user-owned instructions\n")
 	if err := os.WriteFile(selected, before, 0o644); err != nil {
 		t.Fatal(err)
@@ -81,6 +87,10 @@ func TestBackupTargetsSnapshotEngramFilesOnlyUnderCodexHome(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("CODEX_HOME", override)
+	canonical, err := filepath.EvalSymlinks(override)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	selection := model.Selection{Agents: []model.AgentID{model.AgentCodex}, Components: []model.ComponentID{model.ComponentEngram}}
 	targets, err := backupTargets(home, workspace, ScopeGlobal, selection, planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components})
@@ -88,7 +98,7 @@ func TestBackupTargetsSnapshotEngramFilesOnlyUnderCodexHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"engram-instructions.md", "engram-compact-prompt.md"} {
-		if want := filepath.Join(override, name); !slices.Contains(targets, want) {
+		if want := filepath.Join(canonical, name); !slices.Contains(targets, want) {
 			t.Errorf("snapshot targets = %v; want %q", targets, want)
 		}
 		if stale := filepath.Join(home, ".codex", name); slices.Contains(targets, stale) {
