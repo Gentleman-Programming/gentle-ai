@@ -36,23 +36,23 @@ func TestHandleAntigravityModelPickerNavCustomCyclesTiers(t *testing.T) {
 		t.Fatalf("custom preset must open role rows without confirming: %+v", state)
 	}
 	out := RenderAntigravityModelPicker(state, 0)
-	for _, want := range []string{"JD Judge A", "JD Judge B", "JD Fix Agent"} {
+	for _, want := range []string{"ODD Explorer", "ODD Worker", "ODD Verify", "JD Judge A", "JD Judge B", "JD Fix Agent"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing role %q in:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "ODD") || strings.Contains(out, "RDD") {
-		t.Fatalf("Antigravity custom picker lists roles without native agents:\n%s", out)
+	if strings.Contains(out, "RDD") {
+		t.Fatalf("Antigravity custom picker lists RDD roles without native agents:\n%s", out)
 	}
 	for _, want := range []model.AntigravityModelTier{model.AntigravityModelFlashLite, model.AntigravityModelFlash, model.AntigravityModelPro, model.AntigravityModelInherit} {
 		HandleAntigravityModelPickerNav("enter", &state, 0)
-		if got := state.CustomAssignments["jd-judge-a"]; got != want {
+		if got := state.CustomAssignments["gentle-ai-explore"]; got != want {
 			t.Fatalf("cycled tier = %q, want %q", got, want)
 		}
 	}
 	HandleAntigravityModelPickerNav("enter", &state, 0)
 	_, assignments := HandleAntigravityModelPickerNav("enter", &state, len(model.AntigravityModelRoles))
-	if assignments["jd-judge-a"] != model.AntigravityModelFlashLite || assignments["jd-fix-agent"] != model.AntigravityModelInherit {
+	if assignments["gentle-ai-explore"] != model.AntigravityModelFlashLite || assignments["jd-fix-agent"] != model.AntigravityModelInherit {
 		t.Fatalf("confirmed custom assignments = %v", assignments)
 	}
 }
