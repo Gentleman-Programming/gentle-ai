@@ -78,7 +78,31 @@ Kiro Judgment Day agents are generated with YAML frontmatter including:
 - `model`
 - `includeMcpJson: true`
 
-The `model` value is injected during sync from Kiro model assignments, keyed by agent name or `default` (`auto|opus|sonnet|haiku|minimax|glm|deepseek|qwen`) to Kiro-native model IDs.
+The `model` value is injected during sync from Kiro model assignments, keyed by agent name or `default`, and resolved to a Kiro-native model ID:
+
+| Alias | Kiro model ID |
+|-------|---------------|
+| `auto` | `auto` |
+| `opus` | `claude-opus-5.5` |
+| `sonnet` | `claude-sonnet-5.5` |
+| `haiku` | `claude-haiku-5.5` |
+| `minimax` | `minimax-m2.5` |
+| `glm` | `glm-5` |
+| `deepseek` | `deepseek-3.2` |
+| `qwen` | `qwen3-coder-next` |
+
+Every model ID in this table comes from `kiro-cli chat --list-models`. Kiro does not fall back when an agent pins a model that is unknown or unavailable: the agent's prompt fails. Unknown aliases therefore resolve to `auto`, and the picker marks a saved alias it does not know as `[unrecognized: auto]`.
+
+The aliases cover only the strongest model per credit tier. GPT-5.6 Sol (4.40x credits) and Terra (2.20x) cost more than Claude Opus 5.5 (2.00x), and Claude Haiku 5.5 (0.06x) is cheaper and stronger than GPT-5.6 Luna (0.60x) and the open-weight models. Older Claude 4.x and 5 models are not offered.
+
+| Preset | Judgment Day judges A / B | Fix agent | Default |
+|--------|---------------------------|-----------|---------|
+| `balanced` | Sonnet 5.5 / Haiku 5.5 | Sonnet 5.5 | Auto |
+| `performance` | Opus 5.5 / Opus 5.5 | Sonnet 5.5 | Sonnet 5.5 |
+| `economy` | Haiku 5.5 / Haiku 5.5 | Haiku 5.5 | Haiku 5.5 |
+| `open-weight` | GLM-5 / Qwen3 Coder Next | Qwen3 Coder Next | Qwen3 Coder Next |
+
+`balanced`, `performance`, and `economy` pin Claude 5.5 models, which Kiro lists only for paid plans. On Kiro Free, use `open-weight`, or use `custom` with Free-plan models (`auto`, `minimax`, `glm`, `deepseek`, `qwen`). See [Kiro models](https://kiro.dev/docs/models/) for current plan availability.
 
 ---
 

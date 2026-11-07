@@ -92,7 +92,7 @@ func TestNativeAgentOwnedModelUpdates(t *testing.T) {
 	}{
 		{model.AgentClaudeCode, "jd-judge-a.md", reviewassets.InstallOptions{ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{"jd-judge-a": {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortHigh}}}, "effort: high"},
 		{model.AgentClaudeCode, "jd-judge-a.md", reviewassets.InstallOptions{ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{"jd-judge-a": {Model: model.ClaudeModelSonnet, Effort: model.ClaudeEffortXHigh}}}, "effort: xhigh"},
-		{model.AgentKiroIDE, "jd-judge-a.md", reviewassets.InstallOptions{KiroModelAssignments: map[string]model.KiroModelAlias{"jd-judge-a": model.KiroModelOpus}}, "model: claude-opus"},
+		{model.AgentKiroIDE, "jd-judge-a.md", reviewassets.InstallOptions{KiroModelAssignments: map[string]model.KiroModelAlias{"jd-judge-a": model.KiroModelGLM}}, "model: glm-5"},
 		{model.AgentAntigravity, "jd-judge-a.md", reviewassets.InstallOptions{AntigravityModelAssignments: map[string]model.AntigravityModelTier{"jd-judge-a": model.AntigravityModelPro}}, "\nmodel: pro\n"},
 		{model.AgentAntigravity, "jd-fix-agent.md", reviewassets.InstallOptions{AntigravityModelAssignments: map[string]model.AntigravityModelTier{"jd-fix-agent": model.AntigravityModelFlashLite}}, "\nmodel: flash_lite\n"},
 	} {
@@ -327,7 +327,7 @@ func TestNativeAgentModelsAndUnrelatedFiles(t *testing.T) {
 		name, want string
 	}{
 		{model.AgentClaudeCode, reviewassets.InstallOptions{ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{"jd-judge-a": {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortHigh}}}, "jd-judge-a.md", "model: opus"},
-		{model.AgentKiroIDE, reviewassets.InstallOptions{KiroModelAssignments: map[string]model.KiroModelAlias{"jd-judge-a": model.KiroModelOpus}}, "jd-judge-a.md", "model: claude-opus"},
+		{model.AgentKiroIDE, reviewassets.InstallOptions{KiroModelAssignments: map[string]model.KiroModelAlias{"jd-judge-a": model.KiroModelGLM}}, "jd-judge-a.md", "model: glm-5"},
 	} {
 		t.Run(string(tc.agent), func(t *testing.T) {
 			adapter, err := agents.NewAdapter(tc.agent)

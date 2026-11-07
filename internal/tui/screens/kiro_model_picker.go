@@ -20,10 +20,10 @@ const (
 )
 
 var kiroPresetDescriptions = map[KiroModelPreset]string{
-	KiroPresetBalanced:    "Kiro Auto for ODD delegation and review roles",
-	KiroPresetPerformance: "Frontier Claude-family models for delegation and review roles",
-	KiroPresetEconomy:     "Low-credit Kiro options: Qwen, DeepSeek, and MiniMax for budget-conscious runs",
-	KiroPresetOpenWeight:  "Kiro open-weight families: MiniMax, GLM, DeepSeek, and Qwen",
+	KiroPresetBalanced:    "Claude Sonnet 5.5 and Haiku 5.5 mix for near-Auto cost",
+	KiroPresetPerformance: "Claude Opus 5.5 and Sonnet 5.5 for delegation and review roles",
+	KiroPresetEconomy:     "Claude Haiku 5.5 for every role in budget-conscious runs",
+	KiroPresetOpenWeight:  "Kiro open-weight families for Kiro Free: MiniMax, GLM, DeepSeek, and Qwen",
 	KiroPresetCustom:      "Pick the Kiro model for ODD, JD, RDD, and general delegation roles individually",
 }
 
@@ -219,7 +219,7 @@ func renderKiroCustomPhaseList(state KiroModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Custom Kiro Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Press enter on a role to cycle: auto → opus → sonnet → haiku → minimax → glm → deepseek → qwen"))
+	b.WriteString(styles.SubtextStyle.Render("Press enter on a role to cycle: " + kiroAliasCycle()))
 	b.WriteString("\n\n")
 
 	for idx, phase := range claudePhases {
@@ -247,23 +247,28 @@ func renderKiroCustomPhaseList(state KiroModelPickerState, cursor int) string {
 	return b.String()
 }
 
+func kiroAliasCycle() string {
+	names := make([]string, len(kiroAliasOrder))
+	for i, alias := range kiroAliasOrder {
+		names[i] = string(alias)
+	}
+	return strings.Join(names, " → ")
+}
+
+// kiroAliasTag shows the Kiro model ID the alias resolves to, highlighting
+// the highest-credit model. A saved alias the picker does not know resolves
+// to auto at install time and is labeled as unrecognized.
 func kiroAliasTag(alias model.KiroModelAlias) string {
+	if !alias.Valid() {
+		return styles.WarningStyle.Render("[unrecognized: auto]")
+	}
+	tag := "[" + model.KiroModelID(alias) + "]"
 	switch alias {
-	case model.KiroModelAuto:
-		return styles.SuccessStyle.Render("[auto]")
 	case model.KiroModelOpus:
-		return styles.WarningStyle.Render("[opus]")
-	case model.KiroModelHaiku:
-		return styles.SubtextStyle.Render("[haiku]")
-	case model.KiroModelMiniMax:
-		return styles.SuccessStyle.Render("[minimax]")
-	case model.KiroModelGLM:
-		return styles.SuccessStyle.Render("[glm]")
-	case model.KiroModelDeepSeek:
-		return styles.SuccessStyle.Render("[deepseek]")
-	case model.KiroModelQwen:
-		return styles.SubtextStyle.Render("[qwen]")
+		return styles.WarningStyle.Render(tag)
+	case model.KiroModelHaiku, model.KiroModelQwen:
+		return styles.SubtextStyle.Render(tag)
 	default:
-		return styles.SuccessStyle.Render("[sonnet]")
+		return styles.SuccessStyle.Render(tag)
 	}
 }
