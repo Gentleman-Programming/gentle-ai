@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 )
 
 // UserHomeDirFn is the function used to resolve the user's home directory.
@@ -74,6 +77,105 @@ func isPathUnderRoot(path, root string) bool {
 	}
 
 	return strings.HasPrefix(resolvedClean, resolvedRoot+string(filepath.Separator))
+}
+
+// ConfigRootsGOOS selects the platform WithConfigRoots derives product config
+// directories for. Package-level var for testability — tests set "windows" to
+// cover %APPDATA% on any host.
+var ConfigRootsGOOS = runtime.GOOS
+
+// WithConfigRoots returns roots extended by each product config directory that
+// a target lies strictly inside and that no admitted root already covers.
+//
+// Windows folder redirection can move %APPDATA% outside the user profile, so
+// targets such as the gga config (issue #6024) fall outside the home root and
+// the restore refused the whole manifest. Only the exact product directories
+// are candidates, never the whole %APPDATA% or %LOCALAPPDATA%: those also hold
+// the temp directory and other applications' data. Each directory comes from
+// the resolver that builds the targets, with this process's environment, never
+// from the manifest; targets only select which of them apply, so a tampered
+// manifest cannot widen the roots.
+//
+// A candidate already covered by an admitted root, lexically or canonically
+// (symlinks, 8.3 short names), is never added: a directory spelled inside the
+// home but linked elsewhere must stay refused by isPathUnderRoot's
+// ancestor-symlink check, as before. The appended root keeps the spelling the
+// targets were recorded with. Both uninstall and standalone restore derive
+// their roots through this helper.
+func WithConfigRoots(roots []string, homeDir string, targets []string) []string {
+	for _, configRoot := range productConfigDirs(homeDir) {
+		if !filepath.IsAbs(configRoot) {
+			continue
+		}
+		canonicalRoot := canonicalPath(configRoot)
+		covered := slices.ContainsFunc(roots, func(root string) bool {
+			return sameOrWithin(configRoot, filepath.Clean(root)) || sameOrWithin(canonicalRoot, canonicalPath(root))
+		})
+		if covered {
+			continue
+		}
+		if slices.ContainsFunc(targets, func(target string) bool {
+			return filepath.IsAbs(target) && canonicalWithin(canonicalPath(target), canonicalRoot)
+		}) {
+			roots = append(roots, configRoot)
+		}
+	}
+	return roots
+}
+
+// productConfigDirs returns the product-owned directories Windows backup
+// targets resolve to outside the profile. Only directories whose resolver is
+// GOOS-injectable and tested are listed, so today that is %APPDATA%\gga
+// (globalBackupTargets records it in every uninstall manifest). The kiro,
+// Windsurf, VS Code and Trae User folders under %APPDATA% stay refused until
+// their resolvers can be injected. Elsewhere every target lives under the home
+// root, so there are none and the restore roots stay exactly the caller's.
+func productConfigDirs(homeDir string) []string {
+	if ConfigRootsGOOS != "windows" {
+		return nil
+	}
+	return []string{filepath.Clean(gga.ConfigDir(homeDir, ConfigRootsGOOS))}
+}
+
+// canonicalPath resolves symlinks and, on Windows, 8.3 short names in the
+// deepest existing ancestor of path and rejoins the rest, so a path that does
+// not exist yet still compares against its real location.
+func canonicalPath(path string) string {
+	clean := filepath.Clean(path)
+	existing := clean
+	for {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return clean
+		}
+		existing = parent
+	}
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return clean
+	}
+	rest, err := filepath.Rel(existing, clean)
+	if err != nil {
+		return clean
+	}
+	return filepath.Join(resolved, rest)
+}
+
+// sameOrWithin reports whether path is dir or lies inside it. Rel is
+// case-insensitive on Windows, unlike ==.
+func sameOrWithin(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return (err == nil && rel == ".") || canonicalWithin(path, dir)
+}
+
+// canonicalWithin reports strict lexical containment of path inside dir; callers
+// pass both spellings either as recorded or canonicalized.
+func canonicalWithin(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // isPathUnderRoots reports whether path resides under at least one of roots.
