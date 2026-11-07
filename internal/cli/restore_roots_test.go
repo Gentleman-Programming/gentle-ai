@@ -204,3 +204,101 @@ func TestRestoreManagedBackupRefusesConfigSymlinkedOutsideHome(t *testing.T) {
 		t.Fatalf("file behind the link = %q, want it untouched", got)
 	}
 }
+
+// TestRestoreManagedBackupRestoresAdapterUserDirs: `gentle-ai restore` of a
+// manifest whose kiro, Windsurf, VS Code and Trae entries live in their User
+// folders under a redirected %APPDATA% restores them, adding exactly those
+// folders (issue #6029).
+func TestRestoreManagedBackupRestoresAdapterUserDirs(t *testing.T) {
+	home, appData := redirectedAppDataCLIHome(t, "windows")
+	userDir := func(app string) string { return filepath.Join(appData, app, "User") }
+	targets := []string{
+		filepath.Join(userDir("kiro"), "settings.json"),
+		filepath.Join(userDir("Windsurf"), "settings.json"),
+		filepath.Join(userDir("Code"), "prompts", "gentle-ai.instructions.md"),
+		filepath.Join(userDir("Trae"), "mcp.json"),
+	}
+	for _, target := range targets {
+		writeCLIRestoreFile(t, target, "original")
+	}
+	manifest, err := backup.NewSnapshotter().Create(filepath.Join(t.TempDir(), "snapshot"), targets)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, target := range targets {
+		writeCLIRestoreFile(t, target, "changed")
+	}
+
+	if err := RestoreManagedBackup(manifest); err != nil {
+		t.Fatalf("RestoreManagedBackup() error = %v", err)
+	}
+	roots, err := StandaloneRestoreRoots(manifest)
+	if err != nil {
+		t.Fatalf("StandaloneRestoreRoots() error = %v", err)
+	}
+	if want := []string{home, userDir("kiro"), userDir("Windsurf"), userDir("Code"), userDir("Trae")}; !slices.Equal(roots, want) {
+		t.Fatalf("StandaloneRestoreRoots() = %v, want %v", roots, want)
+	}
+	for _, target := range targets {
+		if got := readCLIRestoreFile(t, target); got != "original" {
+			t.Fatalf("%s = %q, want %q", target, got, "original")
+		}
+	}
+}
+
+// TestRestoreManagedBackupRefusesAdapterUserDirSiblings: an entry beside an
+// admitted User folder, elsewhere in %APPDATA% or under %LOCALAPPDATA% is
+// refused, and nothing is written.
+func TestRestoreManagedBackupRefusesAdapterUserDirSiblings(t *testing.T) {
+	for name, refused := range map[string]func(appData, localAppData string) string{
+		"Code UserX":     func(appData, _ string) string { return filepath.Join(appData, "Code", "UserX", "settings.json") },
+		"Code other":     func(appData, _ string) string { return filepath.Join(appData, "Code", "other", "settings.json") },
+		"Kiro Other":     func(appData, _ string) string { return filepath.Join(appData, "Kiro", "Other", "settings.json") },
+		"Windsurf Cache": func(appData, _ string) string { return filepath.Join(appData, "Windsurf", "Cache", "data") },
+		"temp dir under LOCALAPPDATA": func(_, localAppData string) string {
+			return filepath.Join(localAppData, "Temp", "Code", "User", "settings.json")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, appData := redirectedAppDataCLIHome(t, "windows")
+			legit := filepath.Join(appData, "Code", "User", "settings.json")
+			outside := refused(appData, os.Getenv("LOCALAPPDATA"))
+			writeCLIRestoreFile(t, legit, "legit original")
+			writeCLIRestoreFile(t, outside, "outside original")
+			manifest, err := backup.NewSnapshotter().Create(filepath.Join(t.TempDir(), "snapshot"), []string{outside, legit})
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			writeCLIRestoreFile(t, legit, "legit changed")
+			writeCLIRestoreFile(t, outside, "outside changed")
+
+			err = RestoreManagedBackup(manifest)
+			if err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") {
+				t.Fatalf("RestoreManagedBackup() error = %v, want an invalid OriginalPath refusal for %q", err, outside)
+			}
+			if got := readCLIRestoreFile(t, outside); got != "outside changed" {
+				t.Fatalf("refused entry = %q, want it untouched", got)
+			}
+			if got := readCLIRestoreFile(t, legit); got != "legit changed" {
+				t.Fatalf("VS Code entry = %q, want it untouched by the refused restore", got)
+			}
+		})
+	}
+}
+
+// TestStandaloneRestoreRootsNonWindowsIgnoresAdapterUserDirs: off Windows a
+// stray %APPDATA% holding the User folders never extends the standalone roots.
+func TestStandaloneRestoreRootsNonWindowsIgnoresAdapterUserDirs(t *testing.T) {
+	home, appData := redirectedAppDataCLIHome(t, "darwin")
+	var entries []backup.ManifestEntry
+	for _, app := range []string{"kiro", "Windsurf", "Code", "Trae"} {
+		entries = append(entries, backup.ManifestEntry{OriginalPath: filepath.Join(appData, app, "User", "settings.json")})
+	}
+	roots, err := StandaloneRestoreRoots(backup.Manifest{Entries: entries})
+	if err != nil {
+		t.Fatalf("StandaloneRestoreRoots() error = %v", err)
+	}
+	if want := []string{home}; !slices.Equal(roots, want) {
+		t.Fatalf("StandaloneRestoreRoots() = %v, want %v", roots, want)
+	}
+}

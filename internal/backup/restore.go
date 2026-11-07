@@ -10,6 +10,10 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kiro"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/trae"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 )
@@ -88,8 +92,9 @@ var ConfigRootsGOOS = runtime.GOOS
 // a target lies strictly inside and that no admitted root already covers.
 //
 // Windows folder redirection can move %APPDATA% outside the user profile, so
-// targets such as the gga config (issue #6024) fall outside the home root and
-// the restore refused the whole manifest. Only the exact product directories
+// targets such as the gga config (issue #6024) or an editor's User folder
+// (issue #6029) fall outside the home root and the restore refused the whole
+// manifest. Only the exact product directories
 // are candidates, never the whole %APPDATA% or %LOCALAPPDATA%: those also hold
 // the temp directory and other applications' data. Each directory comes from
 // the resolver that builds the targets, with this process's environment, never
@@ -124,17 +129,28 @@ func WithConfigRoots(roots []string, homeDir string, targets []string) []string 
 }
 
 // productConfigDirs returns the product-owned directories Windows backup
-// targets resolve to outside the profile. Only directories whose resolver is
-// GOOS-injectable and tested are listed, so today that is %APPDATA%\gga
-// (globalBackupTargets records it in every uninstall manifest). The kiro,
-// Windsurf, VS Code and Trae User folders under %APPDATA% stay refused until
-// their resolvers can be injected. Elsewhere every target lives under the home
-// root, so there are none and the restore roots stay exactly the caller's.
+// targets resolve to outside the profile: %APPDATA%\gga (globalBackupTargets
+// records it in every uninstall manifest) and the kiro, Windsurf, VS Code and
+// Trae User folders, each from the GOOS-injectable resolver its adapter writes
+// through. VS Code and Trae honor %APPDATA% only for the real user home, so for
+// any other home their folder resolves inside it and WithConfigRoots skips it.
+// Elsewhere every target lives under the home root, so there are none and the
+// restore roots stay exactly the caller's.
 func productConfigDirs(homeDir string) []string {
 	if ConfigRootsGOOS != "windows" {
 		return nil
 	}
-	return []string{filepath.Clean(gga.ConfigDir(homeDir, ConfigRootsGOOS))}
+	dirs := []string{
+		gga.ConfigDir(homeDir, ConfigRootsGOOS),
+		kiro.UserDir(homeDir, ConfigRootsGOOS),
+		windsurf.UserDir(homeDir, ConfigRootsGOOS),
+		vscode.UserDir(homeDir, ConfigRootsGOOS),
+		trae.UserDir(homeDir, ConfigRootsGOOS),
+	}
+	for i, dir := range dirs {
+		dirs[i] = filepath.Clean(dir)
+	}
+	return dirs
 }
 
 // canonicalPath resolves symlinks and, on Windows, 8.3 short names in the

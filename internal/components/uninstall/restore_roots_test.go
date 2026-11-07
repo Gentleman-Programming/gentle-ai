@@ -231,3 +231,115 @@ func TestRestoreRootsForPlanRefusesAppDataSymlinkedOutsideHome(t *testing.T) {
 		t.Fatalf("file behind the link = %q, want it untouched", got)
 	}
 }
+
+// adapterUserDirTargets lists, per adapter, its User folder under appData and
+// a file the uninstall rewrites there (issue #6029).
+func adapterUserDirTargets(appData string) map[string][2]string {
+	userDir := func(app string) string { return filepath.Join(appData, app, "User") }
+	return map[string][2]string{
+		"kiro":     {userDir("kiro"), filepath.Join(userDir("kiro"), "settings.json")},
+		"Windsurf": {userDir("Windsurf"), filepath.Join(userDir("Windsurf"), "settings.json")},
+		"VS Code":  {userDir("Code"), filepath.Join(userDir("Code"), "prompts", "gentle-ai.instructions.md")},
+		"Trae":     {userDir("Trae"), filepath.Join(userDir("Trae"), "mcp.json")},
+	}
+}
+
+// TestRestoreRootsForPlanRestoresAdapterUserDirs: each adapter's User folder
+// under a redirected %APPDATA% restores through the uninstall's own roots, and
+// only that exact folder is added.
+func TestRestoreRootsForPlanRestoresAdapterUserDirs(t *testing.T) {
+	for _, name := range []string{"kiro", "Windsurf", "VS Code", "Trae"} {
+		t.Run(name, func(t *testing.T) {
+			homeDir, appData := redirectedAppDataFixture(t, "windows")
+			t.Setenv("HOME", homeDir)
+			t.Setenv("USERPROFILE", homeDir)
+			paths := adapterUserDirTargets(appData)[name]
+			userDir, target := paths[0], paths[1]
+			writeRestoreRootsFile(t, target, "original")
+			targets := []string{target}
+			manifest, err := backup.NewSnapshotter().Create(filepath.Join(t.TempDir(), "snapshot"), targets)
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			writeRestoreRootsFile(t, target, "uninstalled")
+
+			roots := restoreRootsForPlan(homeDir, "", targets)
+			if want := []string{homeDir, userDir}; !slices.Equal(roots, want) {
+				t.Fatalf("restoreRootsForPlan() = %v, want %v", roots, want)
+			}
+			if err := (backup.RestoreService{Roots: roots}).Restore(manifest); err != nil {
+				t.Fatalf("Restore() error = %v", err)
+			}
+			if got := readRestoreRootsFile(t, target); got != "original" {
+				t.Fatalf("%s = %q, want %q", target, got, "original")
+			}
+		})
+	}
+}
+
+// TestRestoreRootsForPlanRefusesAdapterUserDirSiblings: admitting the User
+// folders does not reach their siblings, the rest of %APPDATA%, or the temp
+// directory under %LOCALAPPDATA%; the refused restore writes nothing.
+func TestRestoreRootsForPlanRefusesAdapterUserDirSiblings(t *testing.T) {
+	for name, refused := range map[string]func(appData, localAppData string) string{
+		"Code UserX":       func(appData, _ string) string { return filepath.Join(appData, "Code", "UserX", "settings.json") },
+		"Code other":       func(appData, _ string) string { return filepath.Join(appData, "Code", "other", "settings.json") },
+		"Kiro Other":       func(appData, _ string) string { return filepath.Join(appData, "Kiro", "Other", "settings.json") },
+		"Windsurf Cache":   func(appData, _ string) string { return filepath.Join(appData, "Windsurf", "Cache", "data") },
+		"Trae folder root": func(appData, _ string) string { return filepath.Join(appData, "Trae", "settings.json") },
+		"temp dir under LOCALAPPDATA": func(_, localAppData string) string {
+			return filepath.Join(localAppData, "Temp", "Code", "User", "settings.json")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			homeDir, appData := redirectedAppDataFixture(t, "windows")
+			t.Setenv("HOME", homeDir)
+			t.Setenv("USERPROFILE", homeDir)
+			legit := adapterUserDirTargets(appData)["VS Code"][1]
+			outside := refused(appData, os.Getenv("LOCALAPPDATA"))
+			writeRestoreRootsFile(t, legit, "legit original")
+			writeRestoreRootsFile(t, outside, "outside original")
+			targets := []string{outside, legit}
+			manifest, err := backup.NewSnapshotter().Create(filepath.Join(t.TempDir(), "snapshot"), targets)
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			writeRestoreRootsFile(t, legit, "legit uninstalled")
+			writeRestoreRootsFile(t, outside, "outside changed")
+
+			roots := restoreRootsForPlan(homeDir, "", targets)
+			if want := []string{homeDir, filepath.Join(appData, "Code", "User")}; !slices.Equal(roots, want) {
+				t.Fatalf("restoreRootsForPlan() = %v, want %v", roots, want)
+			}
+			err = (backup.RestoreService{Roots: roots}).Restore(manifest)
+			if err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") {
+				t.Fatalf("Restore() error = %v, want an invalid OriginalPath refusal for %q", err, outside)
+			}
+			if got := readRestoreRootsFile(t, outside); got != "outside changed" {
+				t.Fatalf("refused entry = %q, want it untouched", got)
+			}
+			if got := readRestoreRootsFile(t, legit); got != "legit uninstalled" {
+				t.Fatalf("VS Code entry = %q, want it untouched by the refused restore", got)
+			}
+		})
+	}
+}
+
+// TestRestoreRootsForPlanNonWindowsIgnoresAdapterUserDirs: off Windows a stray
+// %APPDATA% holding the User folders never extends the roots.
+func TestRestoreRootsForPlanNonWindowsIgnoresAdapterUserDirs(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			homeDir, appData := redirectedAppDataFixture(t, goos)
+			t.Setenv("HOME", homeDir)
+			t.Setenv("USERPROFILE", homeDir)
+			var targets []string
+			for _, target := range adapterUserDirTargets(appData) {
+				targets = append(targets, target[1])
+			}
+			if got, want := restoreRootsForPlan(homeDir, "", targets), []string{homeDir}; !slices.Equal(got, want) {
+				t.Fatalf("restoreRootsForPlan() = %v, want %v", got, want)
+			}
+		})
+	}
+}
