@@ -16,7 +16,14 @@ import (
 // publish the Judgment Day agents where agy 1.4 discovers custom agents, and
 // that both flows snapshot those files before writing them.
 func TestAntigravityInstallAndSyncWriteJudgmentDayAgents(t *testing.T) {
-	names := reviewassets.NativeAgentManifest[model.AgentAntigravity]
+	names := []string{
+		"gentle-ai-explore.md",
+		"gentle-ai-verify.md",
+		"gentle-ai-worker.md",
+		"jd-fix-agent.md",
+		"jd-judge-a.md",
+		"jd-judge-b.md",
+	}
 	for _, flow := range []string{"install", "sync"} {
 		t.Run(flow, func(t *testing.T) {
 			home := t.TempDir()
