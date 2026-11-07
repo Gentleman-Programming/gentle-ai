@@ -133,3 +133,112 @@ func TestRemoveJSONAgentToolsKeepsBOM(t *testing.T) {
 		t.Fatalf("BOM output %q, plain %q", got, plain)
 	}
 }
+
+// Repeated install/sync runs over a BOM file must neither stack BOMs nor lose
+// user keys, whatever precedes the root object.
+func TestBOMSurvivesRepeatedMergesWithoutStacking(t *testing.T) {
+	for _, tc := range []struct{ name, path, body string }{
+		{"json", "settings.json", `{"user":"kept"}`},
+		{"json leading whitespace", "settings.json", "\n\t {\"user\":\"kept\"}\n"},
+		{"json leading comment", "settings.json", "// note\n{\"user\":\"kept\",}\n"},
+		{"json empty body", "settings.json", ""},
+		{"jsonc", "opencode.jsonc", `{"user":"kept"}`},
+		{"jsonc leading whitespace", "opencode.jsonc", "\n\t {\"user\":\"kept\"}\n"},
+		{"jsonc leading comment", "opencode.jsonc", "// note\n{\"user\":\"kept\",}\n"},
+		{"jsonc empty body", "opencode.jsonc", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := []byte(utf8BOM + tc.body)
+			for run := 1; run <= 3; run++ {
+				merged, err := MergeJSONObjectsForPath(tc.path, current, []byte(`{"theme":"gentleman"}`))
+				if err != nil {
+					t.Fatalf("run %d merge: %v", run, err)
+				}
+				current, err = MergeJSONDefaultsForPath(tc.path, merged, []byte(`{"share":"disabled"}`))
+				if err != nil {
+					t.Fatalf("run %d defaults: %v", run, err)
+				}
+				if !bytes.HasPrefix(current, []byte(utf8BOM)) || bytes.Count(current, []byte(utf8BOM)) != 1 {
+					t.Fatalf("run %d: want exactly one leading BOM:\n%q", run, current)
+				}
+				root, err := UnmarshalJSONObject(current)
+				if err != nil {
+					t.Fatalf("run %d: output does not parse: %v\n%q", run, err, current)
+				}
+				if tc.body != "" && root["user"] != "kept" {
+					t.Fatalf("run %d: user key lost:\n%q", run, current)
+				}
+				if root["theme"] != "gentleman" || root["share"] != "disabled" {
+					t.Fatalf("run %d: managed keys missing:\n%q", run, current)
+				}
+			}
+		})
+	}
+}
+
+// Writers prepend the BOM to a fresh slice: mutating their output must never
+// reach the caller's base, even when the base has spare capacity, nor the
+// package BOM.
+func TestBOMOutputDoesNotAliasBaseOrBOM(t *testing.T) {
+	body := `{"user":"kept"}`
+	spare := make([]byte, 0, 4096)
+	spare = append(spare, utf8BOM+body...)
+	for _, tc := range []struct {
+		name string
+		base []byte
+		run  func([]byte) ([]byte, error)
+	}{
+		{"json", []byte(utf8BOM + body), func(b []byte) ([]byte, error) {
+			return MergeJSONObjectsForPath("settings.json", b, []byte(`{"theme":"x"}`))
+		}},
+		{"json spare capacity", spare, func(b []byte) ([]byte, error) {
+			return MergeJSONObjectsForPath("settings.json", b, []byte(`{"theme":"x"}`))
+		}},
+		{"jsonc spare capacity", spare, func(b []byte) ([]byte, error) {
+			return MergeJSONObjectsForPath("opencode.jsonc", b, []byte(`{"theme":"x"}`))
+		}},
+		{"defaults", []byte(utf8BOM + body), func(b []byte) ([]byte, error) {
+			return MergeJSONDefaultsForPath("settings.json", b, []byte(`{"theme":"x"}`))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := append([]byte{}, tc.base...)
+			got, err := tc.run(tc.base)
+			if err != nil {
+				t.Fatalf("merge: %v", err)
+			}
+			for i := range got {
+				got[i] = 'X'
+			}
+			_ = append(got[:0], "overwrite"...)
+			if !bytes.Equal(tc.base, before) {
+				t.Fatalf("base changed through output:\n%q", tc.base)
+			}
+			if string(jsonBOM) != utf8BOM {
+				t.Fatalf("package BOM changed through output: %q", jsonBOM)
+			}
+		})
+	}
+}
+
+// Every JSONC refusal returns the original document, BOM included, so a
+// caller that writes the returned bytes leaves the user's file unchanged.
+func TestMergeOpenCodeJSONCObjectsRefusalReturnsBOMBase(t *testing.T) {
+	for _, tc := range []struct{ name, body, overlay string }{
+		{"duplicate keys", "{\"a\":1,\"a\":2}", `{"theme":"x"}`},
+		{"malformed", "{\"a\":", `{"theme":"x"}`},
+		{"nested comments", "{\"theme\":{// note\n\"a\":1}}", `{"theme":{"b":2}}`},
+		{"escaped key", "{\"\\u0074heme\":\"old\"}", `{"theme":"x"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := []byte(utf8BOM + tc.body)
+			got, err := MergeOpenCodeJSONCObjects(base, []byte(tc.overlay))
+			if err == nil {
+				t.Fatalf("want refusal, got %q", got)
+			}
+			if !bytes.Equal(got, []byte(utf8BOM+tc.body)) {
+				t.Fatalf("refusal returned %q, want original %q", got, utf8BOM+tc.body)
+			}
+		})
+	}
+}
