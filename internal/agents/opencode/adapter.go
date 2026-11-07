@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -170,13 +171,15 @@ func (a *Adapter) PinnedCodeGraphPath(homeDir string) (string, bool) {
 
 // codeGraphEntry returns the authoritative CodeGraph entry: the first settings
 // file with one wins, and lower-priority files are never consulted after it.
+// A leading UTF-8 BOM is ignored, as the upstream installer's parser does, so a
+// BOM-prefixed file is not mistaken for missing wiring (#5545).
 func (a *Adapter) codeGraphEntry(homeDir string) (string, map[string]any, bool) {
 	for _, path := range a.codeGraphSettingsPaths(homeDir) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		root, err := filemerge.UnmarshalJSONObject(data)
+		root, err := filemerge.UnmarshalJSONObject(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")))
 		if err != nil {
 			continue
 		}
