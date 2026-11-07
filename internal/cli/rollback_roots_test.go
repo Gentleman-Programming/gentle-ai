@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -78,7 +79,7 @@ func TestRollbackRefusesAppDataEntriesOutsideGGA(t *testing.T) {
 			writeCLIRestoreFile(t, ggaAgents, "gga original")
 
 			result := executeRollbackAfterOverwrite(t, home, t.TempDir(), []string{outside, ggaAgents})
-			if result.Rollback.Success || result.Rollback.Err == nil || !strings.Contains(result.Rollback.Err.Error(), "invalid OriginalPath") || !strings.Contains(result.Rollback.Err.Error(), outside) {
+			if result.Rollback.Success || result.Rollback.Err == nil || !strings.Contains(result.Rollback.Err.Error(), "invalid OriginalPath") || !errorNamesPath(t, result.Rollback.Err, outside) {
 				t.Fatalf("rollback = %#v, want an invalid OriginalPath refusal for %q", result.Rollback, outside)
 			}
 			if got := readCLIRestoreFile(t, outside); got != overwrittenContent {
@@ -89,6 +90,23 @@ func TestRollbackRefusesAppDataEntriesOutsideGGA(t *testing.T) {
 			}
 		})
 	}
+}
+
+// errorNamesPath reports whether err names path as the restore formats it: %q
+// doubles Windows backslashes, and the guard may report the canonical spelling
+// (8.3 short names such as RUNNER~1 expanded), so either form is accepted.
+func errorNamesPath(t *testing.T, err error, path string) bool {
+	t.Helper()
+	forms := []string{path}
+	if canonical, evalErr := filepath.EvalSymlinks(path); evalErr == nil {
+		forms = append(forms, canonical)
+	}
+	for _, form := range forms {
+		if strings.Contains(err.Error(), strings.Trim(strconv.Quote(form), `"`)) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestRollbackRootsAddOnlyGGAOnWindows pins the derived roots: on Windows a gga
