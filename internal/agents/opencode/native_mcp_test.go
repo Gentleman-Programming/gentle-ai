@@ -115,3 +115,45 @@ func TestNativeCodeGraphWiring(t *testing.T) {
 		})
 	}
 }
+
+// A leading UTF-8 BOM must not hide the CodeGraph entry (#5545).
+func TestCodeGraphWiringToleratesUTF8BOM(t *testing.T) {
+	const bom = "\xef\xbb\xbf"
+	for _, ext := range []string{".json", ".jsonc"} {
+		for _, tt := range []struct {
+			name, body        string
+			effective, pinned bool
+			diagnostic        bool
+		}{
+			{"legacy canonical", `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`, true, false, false},
+			{"native canonical", `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"]}}}}`, true, false, false},
+			{"native no watch", `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp","--no-watch"]}}}}`, true, false, false},
+			// Callers check PinnedCodeGraphPath before the native diagnostic.
+			{"native pinned", `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp","-p","/x"]}}}}`, false, true, true},
+			{"native disabled", `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"disabled":true}}}}`, false, false, true},
+		} {
+			t.Run(ext+"/"+tt.name, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("XDG_CONFIG_HOME", "")
+				a := NewAdapter()
+				path := filepath.Join(home, ".config", "opencode", "opencode"+ext)
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(bom+tt.body), 0600); err != nil {
+					t.Fatal(err)
+				}
+				gotPath, got := a.EffectiveCodeGraphWiring(home)
+				if got != tt.effective || (got && gotPath != path) {
+					t.Errorf("EffectiveCodeGraphWiring() = (%q, %v), want %v at %q", gotPath, got, tt.effective, path)
+				}
+				if pinPath, pinned := a.PinnedCodeGraphPath(home); pinned != tt.pinned || (pinned && pinPath != path) {
+					t.Errorf("PinnedCodeGraphPath() = (%q, %v), want %v at %q", pinPath, pinned, tt.pinned, path)
+				}
+				if err := a.NativeCodeGraphWiringError(home); (err != nil) != tt.diagnostic {
+					t.Errorf("NativeCodeGraphWiringError() = %v, want error=%v", err, tt.diagnostic)
+				}
+			})
+		}
+	}
+}

@@ -250,3 +250,64 @@ func TestReconcileOpenCodeCodeGraphNativePinnedPathIsUserConfig(t *testing.T) {
 		}
 	}
 }
+
+// A BOM-prefixed config must be read like any other (#5545): effective wiring
+// skips the installer, and a missing entry is satisfied by the installer's
+// write, without either path rewriting the file afterwards.
+func TestReconcileOpenCodeCodeGraphUTF8BOM(t *testing.T) {
+	const bom = "\xef\xbb\xbf"
+	legacy := `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`
+	for _, tt := range []struct{ name, ext, content string }{
+		{"legacy canonical", ".json", bom + legacy},
+		{"legacy canonical JSONC", ".jsonc", bom + "// keep\n" + legacy},
+		{"native canonical", ".json", bom + `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"]}}}}`},
+		{"native no watch", ".jsonc", bom + `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp","--no-watch"]}}}}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", "")
+			path := filepath.Join(home, ".config", "opencode", "opencode"+tt.ext)
+			mustWrite(t, path, tt.content)
+			calls := 0
+			runner := RunnerFunc(func(string, ...string) error { calls++; return nil })
+			for attempt := 0; attempt < 2; attempt++ {
+				if NeedsOpenCodeCodeGraphReconcile(home) {
+					t.Errorf("attempt %d: BOM-prefixed effective wiring needs reconciliation", attempt)
+				}
+				result, err := ReconcileOpenCodeCodeGraph(home, runner)
+				if err != nil || result.Changed || len(result.Files) != 0 {
+					t.Errorf("attempt %d: reconcile = (%#v, %v), want unchanged success", attempt, result, err)
+				}
+				if after, err := os.ReadFile(path); err != nil || string(after) != tt.content {
+					t.Fatalf("attempt %d: config bytes changed: %q, error=%v", attempt, after, err)
+				}
+			}
+			if calls != 0 {
+				t.Errorf("installer calls = %d, want zero", calls)
+			}
+		})
+	}
+
+	t.Run("missing entry", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", "")
+		path := filepath.Join(home, ".config", "opencode", "opencode.json")
+		mustWrite(t, path, bom+`{"mcp":{}}`)
+		calls := 0
+		// Upstream's jsonc-parser tolerates the BOM and keeps it when writing.
+		runner := RunnerFunc(func(string, ...string) error {
+			calls++
+			mustWrite(t, path, bom+legacy)
+			return nil
+		})
+		if !NeedsOpenCodeCodeGraphReconcile(home) {
+			t.Fatal("missing entry must need reconciliation")
+		}
+		if _, err := ReconcileOpenCodeCodeGraph(home, runner); err != nil {
+			t.Fatalf("reconcile error = %v, want installer write accepted", err)
+		}
+		if NeedsOpenCodeCodeGraphReconcile(home) || calls != 1 {
+			t.Errorf("after install: needs=%v calls=%d, want false and 1", NeedsOpenCodeCodeGraphReconcile(home), calls)
+		}
+	})
+}
