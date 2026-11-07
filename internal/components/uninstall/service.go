@@ -824,7 +824,8 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 // uninstall rewrites (<workspace>/.mcp.json and .claude/settings.json, issue
 // #2213) validate on restore, and it is skipped whenever the workspace is
 // unset or is the home directory itself. The product config directories a target
-// lives under (%APPDATA%\gga redirected outside the profile, issue #6024) come
+// lives under (%APPDATA%\gga and the kiro, Windsurf, VS Code and Trae User
+// folders redirected outside the profile, issues #6024 and #6029) come
 // from backup.WithConfigRoots, shared with the standalone restore. Everything is
 // derived from the plan's inputs and targets rather than from the manifest, so
 // the restore guard keeps refusing arbitrary paths.

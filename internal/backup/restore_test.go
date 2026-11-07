@@ -1133,17 +1133,28 @@ func restoreThroughConfigRoots(t *testing.T, home string, targets ...string) ([]
 	return contents, restoreErr
 }
 
-// TestRestoreThroughConfigRootsAdmitsOnlyGGADirectory: with %APPDATA% and
-// %LOCALAPPDATA% redirected outside the home, only entries strictly inside
-// %APPDATA%\gga restore; every other product or neighbouring path is refused
-// and left untouched.
-func TestRestoreThroughConfigRootsAdmitsOnlyGGADirectory(t *testing.T) {
+// useRealUserHome makes home the current user's home for os.UserHomeDir on
+// every host, so the VS Code and Trae resolvers honor %APPDATA% for it.
+func useRealUserHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
+// TestRestoreThroughConfigRootsAdmitsOnlyProductConfigDirectories: with
+// %APPDATA% and %LOCALAPPDATA% redirected outside the home, only entries
+// strictly inside %APPDATA%\gga and the kiro, Windsurf, VS Code and Trae User
+// folders restore; every other neighbouring path is refused and left untouched.
+// Refused siblings differ from the product folders case-insensitively too, so
+// the cases hold on Windows, where path comparison ignores case.
+func TestRestoreThroughConfigRootsAdmitsOnlyProductConfigDirectories(t *testing.T) {
 	useConfigRootsGOOS(t, "windows")
 	base := t.TempDir()
 	home := filepath.Join(base, "home")
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	useRealUserHome(t, home)
 	appData := filepath.Join(base, "redirected", "Roaming")
 	localAppData := filepath.Join(base, "redirected", "Local")
 	t.Setenv("APPDATA", appData)
@@ -1158,8 +1169,16 @@ func TestRestoreThroughConfigRootsAdmitsOnlyGGADirectory(t *testing.T) {
 		{name: "nested under gga", target: filepath.Join(appData, "gga", "sub", "AGENTS.md"), restored: true},
 		{name: "sibling sharing the gga prefix", target: filepath.Join(appData, "gga-evil", "file")},
 		{name: "gga prefix without separator", target: filepath.Join(appData, "ggax")},
-		{name: "VS Code User folder", target: filepath.Join(appData, "Code", "User", "settings.json")},
-		{name: "Kiro User folder", target: filepath.Join(appData, "Kiro", "User", "settings.json")},
+		{name: "VS Code User folder", target: filepath.Join(appData, "Code", "User", "settings.json"), restored: true},
+		{name: "Kiro User folder", target: filepath.Join(appData, "kiro", "User", "settings.json"), restored: true},
+		{name: "Windsurf User folder", target: filepath.Join(appData, "Windsurf", "User", "settings.json"), restored: true},
+		{name: "Trae User folder", target: filepath.Join(appData, "Trae", "User", "mcp.json"), restored: true},
+		{name: "VS Code sibling sharing the User prefix", target: filepath.Join(appData, "Code", "UserX", "settings.json")},
+		{name: "VS Code folder outside User", target: filepath.Join(appData, "Code", "other", "settings.json")},
+		{name: "Kiro folder outside User", target: filepath.Join(appData, "Kiro", "Other", "settings.json")},
+		{name: "Windsurf cache", target: filepath.Join(appData, "Windsurf", "Cache", "data")},
+		{name: "Trae folder root", target: filepath.Join(appData, "Trae", "settings.json")},
+		{name: "User folder under LOCALAPPDATA", target: filepath.Join(localAppData, "Code", "User", "settings.json")},
 		{name: "temp under LOCALAPPDATA", target: filepath.Join(localAppData, "Temp", "outside.json")},
 		{name: "gga under LOCALAPPDATA", target: filepath.Join(localAppData, "gga", "config")},
 		{name: "file at the APPDATA root", target: filepath.Join(appData, "file.json")},
@@ -1332,4 +1351,71 @@ func TestWithConfigRootsSymlinkedGGADirectory(t *testing.T) {
 			t.Fatalf("restore = %q, %v; want a refusal leaving the file untouched", contents[0], err)
 		}
 	})
+}
+
+// TestWithConfigRootsAdapterUserDirs pins issue #6029: each adapter's User
+// folder under a redirected %APPDATA% is admitted exactly, from the adapter's
+// own resolver, only when a target lies strictly inside it. VS Code and Trae
+// honor %APPDATA% only for the real user home, so for any other home their
+// folder resolves inside it and adds no root.
+func TestWithConfigRootsAdapterUserDirs(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	otherHome := filepath.Join(base, "other-home")
+	appData := filepath.Join(base, "redirected", "Roaming")
+	t.Setenv("APPDATA", appData)
+	t.Setenv("LOCALAPPDATA", filepath.Join(base, "redirected", "Local"))
+	useRealUserHome(t, home)
+	userDir := func(app string) string { return filepath.Join(appData, app, "User") }
+
+	tests := []struct {
+		name    string
+		home    string
+		targets []string
+		want    []string
+	}{
+		{name: "kiro", home: home, targets: []string{filepath.Join(userDir("kiro"), "settings.json")}, want: []string{home, userDir("kiro")}},
+		{name: "Windsurf", home: home, targets: []string{filepath.Join(userDir("Windsurf"), "settings.json")}, want: []string{home, userDir("Windsurf")}},
+		{name: "VS Code", home: home, targets: []string{filepath.Join(userDir("Code"), "prompts", "gentle-ai.instructions.md")}, want: []string{home, userDir("Code")}},
+		{name: "Trae", home: home, targets: []string{filepath.Join(userDir("Trae"), "user_rules.md")}, want: []string{home, userDir("Trae")}},
+		{
+			name: "every product folder",
+			home: home,
+			targets: []string{
+				filepath.Join(userDir("Trae"), "mcp.json"),
+				filepath.Join(userDir("Code"), "mcp.json"),
+				filepath.Join(userDir("Windsurf"), "settings.json"),
+				filepath.Join(userDir("kiro"), "settings.json"),
+				filepath.Join(appData, "gga", "config"),
+			},
+			want: []string{home, filepath.Join(appData, "gga"), userDir("kiro"), userDir("Windsurf"), userDir("Code"), userDir("Trae")},
+		},
+		{
+			name:    "VS Code and Trae for another home",
+			home:    otherHome,
+			targets: []string{filepath.Join(userDir("Code"), "settings.json"), filepath.Join(userDir("Trae"), "mcp.json")},
+			want:    []string{otherHome},
+		},
+		{
+			name: "siblings of the User folders",
+			home: home,
+			targets: []string{
+				filepath.Join(appData, "Code", "UserX", "settings.json"),
+				filepath.Join(appData, "Code", "other", "settings.json"),
+				filepath.Join(appData, "Kiro", "Other", "settings.json"),
+				filepath.Join(appData, "Windsurf", "Cache", "data"),
+				filepath.Join(appData, "Trae", "settings.json"),
+				userDir("Code"),
+			},
+			want: []string{home},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := WithConfigRoots([]string{tt.home}, tt.home, tt.targets); !slices.Equal(got, tt.want) {
+				t.Fatalf("WithConfigRoots() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
