@@ -190,6 +190,10 @@ func TestInstalledOrchestratorHasGentleShellParity(t *testing.T) {
 			}
 
 			for _, forbidden := range gentleShellOnlyContent {
+				if agent == model.AgentAntigravity && forbidden == "subagent_run" {
+					// Antigravity specifies subagent_run on pi-bridge when running in Gentle Shell (#6011).
+					continue
+				}
 				if strings.Contains(prompt, forbidden) {
 					t.Errorf("installed prompt carries Gentle Shell-only content %q", forbidden)
 				}

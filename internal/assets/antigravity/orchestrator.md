@@ -55,7 +55,7 @@ When it is ours, never offer to switch to, inspect, modify, or directly repair t
 
 ### Dynamic Delegation Protocol (MANDATORY)
 
-For bounded ODD work, call `define_subagent` to create a general-purpose worker with a scoped mission, then `invoke_subagent` with the defined name. Pass approved edit surfaces, constraints, relevant context, exact skill paths and validation expectations. Enable configured MCP tools only when needed for the authorized task. Read the child result, verify claimed changes, and synthesize decisions, outcomes, and risks. Dynamic delegation MUST NOT exceed 10 levels deep.
+When session context confirms the current session is a Gentle Shell turn (such as Pi session instructions or active Gentle Shell harness context), route all subagent delegation to `subagent_run` on `pi-bridge` (governed by models in `~/.pi/gentle-ai/models.json`). Do not use `pi-bridge` availability or activity alone to determine the session type. For eager MCP tools, call the registered direct `mcp_<serverName>_<toolName>` tool (e.g. `mcp_pi-bridge_subagent_run` or direct `subagent_run`); for lazy MCP tools, call `call_mcp_tool` with server `pi-bridge` and tool `subagent_run`. In Gentle Shell bridge mode, do NOT call `define_subagent` or `invoke_subagent`. Otherwise, for native standalone Antigravity bounded ODD work without Gentle Shell turn context, call `define_subagent` to create a general-purpose worker with a scoped mission, then `invoke_subagent` with the defined name. Pass approved edit surfaces, constraints, relevant context, exact skill paths and validation expectations. Enable configured MCP tools only when needed for the authorized task. Read the child result, verify claimed changes, and synthesize decisions, outcomes, and risks. Dynamic delegation MUST NOT exceed 10 levels deep.
 
 ### Language Domain Contract
 
@@ -127,14 +127,14 @@ The canonical native bounded-review contract is injected from the shared provide
 
 ### Dynamic Subagent Launch Deduplication (MANDATORY)
 
-Before invoking any dynamic bounded worker via `invoke_subagent`, check your in-session launch log:
+Before launching any dynamic bounded worker across both delegation paths—through `pi-bridge` (`subagent_run`) in bridge mode or native `invoke_subagent` in standalone mode (remembering that `invoke_subagent` is strictly prohibited in bridge mode)—check your in-session launch log. The one-writer rule does not replace this check:
 
-- Maintain a session-scoped list of `(role, task-fingerprint)` pairs already invoked this turn.
+- Maintain a session-scoped list of `(role, task-fingerprint)` pairs already launched this turn.
 - The task fingerprint is a short hash or normalized summary of the task instruction text.
-- If the same `(role, task-fingerprint)` already appears in the list, **do NOT invoke again**. Emit exactly one invocation per distinct task.
-- After invoking, append the pair to the list.
+- If the same `(role, task-fingerprint)` already appears in the list, **do NOT launch again**. Emit exactly one launch per distinct task.
+- After launching, append the pair to the list.
 
-This prevents duplicate dynamic subagent invocations that cause "File X has been modified since it was last read" conflicts and waste tokens.
+This prevents duplicate dynamic subagent launches that cause "File X has been modified since it was last read" conflicts and waste tokens.
 
 ### Skill Resolver Protocol
 
