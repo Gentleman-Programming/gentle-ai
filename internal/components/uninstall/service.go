@@ -823,20 +823,22 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 // The workspace root is added so the workspace files a workspace-scoped
 // uninstall rewrites (<workspace>/.mcp.json and .claude/settings.json, issue
 // #2213) validate on restore, and it is skipped whenever the workspace is
-// unset or is the home directory itself. Everything is derived from the plan's
-// inputs and targets rather than from the manifest, so the restore guard keeps
-// refusing arbitrary paths.
+// unset or is the home directory itself. The per-user config roots a target
+// lives under (%APPDATA% redirected outside the profile, issue #6024) come from
+// backup.WithConfigRoots, shared with the standalone restore. Everything is
+// derived from the plan's inputs and targets rather than from the manifest, so
+// the restore guard keeps refusing arbitrary paths.
 func restoreRootsForPlan(homeDir, workspaceDir string, backupTargets []string) []string {
 	roots := []string{homeDir}
-	if workspaceDir == "" || filepath.Clean(workspaceDir) == filepath.Clean(homeDir) {
-		return roots
-	}
-	for _, target := range backupTargets {
-		if isPathWithinDir(workspaceDir, target) {
-			return append(roots, workspaceDir)
+	if workspaceDir != "" && filepath.Clean(workspaceDir) != filepath.Clean(homeDir) {
+		for _, target := range backupTargets {
+			if isPathWithinDir(workspaceDir, target) {
+				roots = append(roots, workspaceDir)
+				break
+			}
 		}
 	}
-	return roots
+	return backup.WithConfigRoots(roots, homeDir, backupTargets)
 }
 
 // isPathWithinDir reports lexical containment: path must sit strictly inside

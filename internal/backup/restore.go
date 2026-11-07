@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -74,6 +76,99 @@ func isPathUnderRoot(path, root string) bool {
 	}
 
 	return strings.HasPrefix(resolvedClean, resolvedRoot+string(filepath.Separator))
+}
+
+// ConfigRootsGOOS selects the platform WithConfigRoots derives per-user config
+// roots for. Package-level var for testability — tests set "windows" to cover
+// %APPDATA% and %LOCALAPPDATA% on any host.
+var ConfigRootsGOOS = runtime.GOOS
+
+// WithConfigRoots returns roots extended by each per-user config root that a
+// target lies strictly inside and that no admitted root already covers.
+//
+// Windows folder redirection can move %APPDATA% and %LOCALAPPDATA% outside the
+// user profile, so targets such as the gga config (issue #6024) fall outside
+// the home root and the restore refused the whole manifest. The config roots
+// come from this process's environment, resolved the way the targets resolve
+// them, never from the manifest; targets only select which of them apply, so a
+// tampered manifest cannot widen the roots. Containment is compared on
+// canonical paths (symlinks, 8.3 short names), while the appended root keeps
+// the spelling the targets were recorded with. Both uninstall and standalone
+// restore derive their roots through this helper.
+func WithConfigRoots(roots []string, homeDir string, targets []string) []string {
+	for _, configRoot := range userConfigRoots(homeDir) {
+		if !filepath.IsAbs(configRoot) || slices.Contains(roots, configRoot) {
+			continue
+		}
+		canonicalRoot := canonicalPath(configRoot)
+		covered := slices.ContainsFunc(roots, func(root string) bool {
+			canonical := canonicalPath(root)
+			// Rel is case-insensitive on Windows, unlike ==.
+			rel, err := filepath.Rel(canonical, canonicalRoot)
+			return (err == nil && rel == ".") || canonicalWithin(canonicalRoot, canonical)
+		})
+		if covered {
+			continue
+		}
+		if slices.ContainsFunc(targets, func(target string) bool {
+			return filepath.IsAbs(target) && canonicalWithin(canonicalPath(target), canonicalRoot)
+		}) {
+			roots = append(roots, configRoot)
+		}
+	}
+	return roots
+}
+
+// userConfigRoots returns the per-user config directories gentle-ai's own
+// targets live under. On Windows these are %APPDATA% (the gga config, see
+// gga.ggaConfigDir) and %LOCALAPPDATA%, with the same profile fallbacks the
+// targets use; elsewhere the targets use ~/.config, inside the home root.
+func userConfigRoots(homeDir string) []string {
+	if ConfigRootsGOOS != "windows" {
+		return []string{filepath.Clean(filepath.Join(homeDir, ".config"))}
+	}
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		appData = filepath.Join(homeDir, "AppData", "Roaming")
+	}
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		localAppData = filepath.Join(homeDir, "AppData", "Local")
+	}
+	return []string{filepath.Clean(appData), filepath.Clean(localAppData)}
+}
+
+// canonicalPath resolves symlinks and, on Windows, 8.3 short names in the
+// deepest existing ancestor of path and rejoins the rest, so a path that does
+// not exist yet still compares against its real location.
+func canonicalPath(path string) string {
+	clean := filepath.Clean(path)
+	existing := clean
+	for {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return clean
+		}
+		existing = parent
+	}
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return clean
+	}
+	rest, err := filepath.Rel(existing, clean)
+	if err != nil {
+		return clean
+	}
+	return filepath.Join(resolved, rest)
+}
+
+// canonicalWithin reports strict lexical containment of two canonical paths.
+func canonicalWithin(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // isPathUnderRoots reports whether path resides under at least one of roots.

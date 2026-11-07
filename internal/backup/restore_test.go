@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -847,5 +848,134 @@ func TestRestoreCompressedMixedEntries(t *testing.T) {
 	// 4. !Existed entry removed from disk.
 	if _, statErr := os.Lstat(createdBySync); !os.IsNotExist(statErr) {
 		t.Errorf("created_by_sync should have been removed by !Existed branch, but stat err = %v", statErr)
+	}
+}
+
+// useConfigRootsGOOS selects the platform WithConfigRoots derives config roots
+// for and restores the host value when the test ends.
+func useConfigRootsGOOS(t *testing.T, goos string) {
+	t.Helper()
+	original := ConfigRootsGOOS
+	ConfigRootsGOOS = goos
+	t.Cleanup(func() { ConfigRootsGOOS = original })
+}
+
+// TestWithConfigRootsWindows pins issue #6024: a per-user config root a target
+// lives under is admitted only when it is absolute and outside every admitted
+// root, compared by canonical path.
+func TestWithConfigRootsWindows(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	appData := filepath.Join(outside, "Roaming")
+	localAppData := filepath.Join(outside, "Local")
+	homeAppData := filepath.Join(home, "AppData", "Roaming")
+	if err := os.MkdirAll(homeAppData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appDataLink := filepath.Join(outside, "roaming-link")
+	symlinkErr := os.Symlink(homeAppData, appDataLink)
+
+	tests := []struct {
+		name         string
+		roots        []string
+		appData      string
+		localAppData string
+		targets      []string
+		want         []string
+		needsSymlink bool
+	}{
+		{
+			name:    "redirected APPDATA with a target",
+			roots:   []string{home},
+			appData: appData, localAppData: localAppData,
+			targets: []string{filepath.Join(home, ".claude", "CLAUDE.md"), filepath.Join(appData, "gga", "AGENTS.md")},
+			want:    []string{home, appData},
+		},
+		{
+			name:    "redirected LOCALAPPDATA with a target",
+			roots:   []string{home},
+			appData: appData, localAppData: localAppData,
+			targets: []string{filepath.Join(localAppData, "gentle-ai", "state.json")},
+			want:    []string{home, localAppData},
+		},
+		{
+			name:    "redirected roots without a target there",
+			roots:   []string{home},
+			appData: appData, localAppData: localAppData,
+			targets: []string{filepath.Join(home, ".claude", "CLAUDE.md"), filepath.Join(outside, "Other", "file")},
+			want:    []string{home},
+		},
+		{
+			name:    "APPDATA inside the home",
+			roots:   []string{home},
+			appData: homeAppData, localAppData: filepath.Join(home, "AppData", "Local"),
+			targets: []string{filepath.Join(homeAppData, "gga", "AGENTS.md")},
+			want:    []string{home},
+		},
+		{
+			name:    "unset APPDATA falls back into the profile",
+			roots:   []string{home},
+			targets: []string{filepath.Join(home, "AppData", "Roaming", "gga", "AGENTS.md")},
+			want:    []string{home},
+		},
+		{
+			name:    "relative APPDATA is ignored",
+			roots:   []string{home},
+			appData: filepath.Join("relative", "Roaming"),
+			targets: []string{filepath.Join("relative", "Roaming", "gga", "AGENTS.md")},
+			want:    []string{home},
+		},
+		{
+			name:    "APPDATA under an admitted workspace",
+			roots:   []string{home, workspace},
+			appData: filepath.Join(workspace, "Roaming"),
+			targets: []string{filepath.Join(workspace, "Roaming", "gga", "AGENTS.md")},
+			want:    []string{home, workspace},
+		},
+		{
+			name:         "APPDATA symlinked into the home",
+			roots:        []string{home},
+			appData:      appDataLink,
+			targets:      []string{filepath.Join(appDataLink, "gga", "AGENTS.md")},
+			want:         []string{home},
+			needsSymlink: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.needsSymlink && symlinkErr != nil {
+				t.Skipf("directory symlinks unavailable: %v", symlinkErr)
+			}
+			useConfigRootsGOOS(t, "windows")
+			t.Setenv("APPDATA", tt.appData)
+			t.Setenv("LOCALAPPDATA", tt.localAppData)
+			got := WithConfigRoots(slices.Clone(tt.roots), home, tt.targets)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("WithConfigRoots() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWithConfigRootsNonWindowsUnchanged proves the admitted root set equals
+// the base set off Windows, even with a stray %APPDATA% outside the home that
+// a target reaches: the config roots there resolve under the home.
+func TestWithConfigRootsNonWindowsUnchanged(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			useConfigRootsGOOS(t, goos)
+			home := t.TempDir()
+			workspace := t.TempDir()
+			appData := filepath.Join(t.TempDir(), "Roaming")
+			t.Setenv("APPDATA", appData)
+			t.Setenv("LOCALAPPDATA", appData)
+			targets := []string{filepath.Join(appData, "gga", "AGENTS.md"), filepath.Join(home, ".config", "gga", "AGENTS.md")}
+			for _, base := range [][]string{{home}, {home, workspace}} {
+				if got := WithConfigRoots(slices.Clone(base), home, targets); !slices.Equal(got, base) {
+					t.Fatalf("WithConfigRoots(%v) = %v, want the base roots unchanged", base, got)
+				}
+			}
+		})
 	}
 }
