@@ -233,3 +233,40 @@ func TestSettingsPathMultiplatform(t *testing.T) {
 		})
 	}
 }
+
+// TestUserDirPerGOOS pins the injectable resolver behind SettingsPath, which
+// backup.WithConfigRoots reuses to admit a redirected %APPDATA%\Windsurf\User.
+func TestUserDirPerGOOS(t *testing.T) {
+	home := t.TempDir()
+	appData := filepath.Join(t.TempDir(), "Roaming")
+	xdg := filepath.Join(t.TempDir(), "xdg")
+	tests := []struct {
+		name    string
+		goos    string
+		appData string
+		xdg     string
+		want    string
+	}{
+		{name: "windows APPDATA", goos: "windows", appData: appData, want: filepath.Join(appData, "Windsurf", "User")},
+		{name: "windows unset APPDATA", goos: "windows", want: filepath.Join(home, "AppData", "Roaming", "Windsurf", "User")},
+		{name: "darwin", goos: "darwin", appData: appData, xdg: xdg, want: filepath.Join(home, "Library", "Application Support", "Windsurf", "User")},
+		{name: "linux XDG_CONFIG_HOME", goos: "linux", appData: appData, xdg: xdg, want: filepath.Join(xdg, "Windsurf", "User")},
+		{name: "linux unset XDG_CONFIG_HOME", goos: "linux", appData: appData, want: filepath.Join(home, ".config", "Windsurf", "User")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("APPDATA", tt.appData)
+			t.Setenv("XDG_CONFIG_HOME", tt.xdg)
+			if got := UserDir(home, tt.goos); got != tt.want {
+				t.Fatalf("UserDir(%q) = %q, want %q", tt.goos, got, tt.want)
+			}
+		})
+	}
+	t.Run("SettingsPath uses the host GOOS", func(t *testing.T) {
+		t.Setenv("APPDATA", appData)
+		t.Setenv("XDG_CONFIG_HOME", xdg)
+		if got, want := NewAdapter().SettingsPath(home), filepath.Join(UserDir(home, runtime.GOOS), "settings.json"); got != want {
+			t.Fatalf("SettingsPath() = %q, want %q", got, want)
+		}
+	})
+}
