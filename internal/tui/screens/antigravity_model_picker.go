@@ -9,6 +9,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
+// AntigravityModelPreset represents a named tier configuration preset for Antigravity subagents.
 type AntigravityModelPreset string
 
 const (
@@ -20,7 +21,7 @@ const (
 
 var antigravityPresetDescriptions = map[AntigravityModelPreset]string{
 	AntigravityPresetInherit:     "Subagents use the session model (agy default)",
-	AntigravityPresetPerformance: "pro tier for workers, verifiers, and judges; flash for explorer",
+	AntigravityPresetPerformance: "pro tier for workers, verifiers, judges, and fix agents; flash for explorer",
 	AntigravityPresetEconomy:     "flash workers, verifiers, and judges; flash_lite for explorer and fixes",
 	AntigravityPresetCustom:      "Pick the agy tier for each ODD and Judgment Day role individually",
 }
@@ -61,6 +62,7 @@ type AntigravityModelPickerState struct {
 	InCustomMode      bool
 }
 
+// NewAntigravityModelPickerState returns an initial picker state with the inherit preset selected.
 func NewAntigravityModelPickerState() AntigravityModelPickerState {
 	return AntigravityModelPickerState{
 		Preset:            AntigravityPresetInherit,
@@ -68,6 +70,7 @@ func NewAntigravityModelPickerState() AntigravityModelPickerState {
 	}
 }
 
+// NewAntigravityModelPickerStateFromAssignments restores picker state from previously saved custom assignments.
 func NewAntigravityModelPickerStateFromAssignments(assignments map[string]model.AntigravityModelTier) AntigravityModelPickerState {
 	if len(assignments) == 0 {
 		return NewAntigravityModelPickerState()
@@ -81,6 +84,7 @@ func NewAntigravityModelPickerStateFromAssignments(assignments map[string]model.
 	return state
 }
 
+// HandleAntigravityModelPickerNav handles navigation keys (up/down/enter/esc) for the Antigravity model picker.
 func HandleAntigravityModelPickerNav(
 	key string,
 	state *AntigravityModelPickerState,
@@ -127,6 +131,7 @@ func nextAntigravityTier(current model.AntigravityModelTier) model.AntigravityMo
 	return antigravityTierOrder[1]
 }
 
+// AntigravityModelPickerOptionCount returns the number of selectable options for the current picker state.
 func AntigravityModelPickerOptionCount(state AntigravityModelPickerState) int {
 	if state.InCustomMode {
 		return len(model.AntigravityModelRoles) + 2 // role rows + Confirm + Back
@@ -134,6 +139,7 @@ func AntigravityModelPickerOptionCount(state AntigravityModelPickerState) int {
 	return len(antigravityPresetOrder) + 1 // presets + Back
 }
 
+// RenderAntigravityModelPicker renders the Antigravity model picker screen for the given state and cursor index.
 func RenderAntigravityModelPicker(state AntigravityModelPickerState, cursor int) string {
 	var b strings.Builder
 	if !state.InCustomMode {

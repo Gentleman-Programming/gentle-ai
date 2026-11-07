@@ -71,6 +71,18 @@ func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 							t.Errorf("%s missing fix contract %q", name, want)
 						}
 					}
+				} else if name == "gentle-ai-explore.md" {
+					for _, want := range []string{"Read and search only. Do not edit, write, run commands, or mutate state.", "Do not fix findings, delegate to child agents, commit, or push."} {
+						if !strings.Contains(text, want) {
+							t.Errorf("%s missing explorer read-only contract %q", name, want)
+						}
+					}
+				} else if name == "gentle-ai-verify.md" {
+					for _, want := range []string{"Read-only means no edits to the repository or its git state", "Do not edit, write, or fix findings."} {
+						if !strings.Contains(text, want) {
+							t.Errorf("%s missing verifier read-only contract %q", name, want)
+						}
+					}
 				}
 				if flow != "fresh" && strings.HasPrefix(name, "jd-") && !strings.Contains(text, opts.CodeGraphGuidanceMarkdown) {
 					t.Errorf("%s was not refreshed", name)
