@@ -265,3 +265,81 @@ func TestReviewOperationTimeoutClassificationUnchangedOutsideReadOnlyStatus(t *t
 		}
 	}
 }
+
+// Pins the independent verifier's end-to-end probes for gentle-shell#213: the
+// real STATUS route, with exclusive maintenance held so every request reaches
+// the aggregate deadline. Read-only selectors stay retryable; any repair-* or
+// recovery-* authorization input, or an argument outside the STATUS flag
+// shape, keeps the stop route; argument forms that only look like
+// authorization inputs are refused at preflight, never classified as a
+// retryable timeout.
+func TestNegotiatedStatusDeadlineRetryTruthUnderMaintenanceLock(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started := startFacadeReview(t, repo)
+	lockContext, cancelLock := context.WithTimeout(context.Background(), time.Second)
+	defer cancelLock()
+	exclusive, err := reviewtransaction.AcquireReviewMaintenanceExclusive(lockContext, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer exclusive.Release()
+
+	originalTimeout := reviewFacadeOperationTimeout
+	t.Cleanup(func() { reviewFacadeOperationTimeout = originalTimeout })
+	reviewFacadeOperationTimeout = 50 * time.Millisecond
+
+	base := []string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID}
+	retry := func(extra ...string) []string { return extra }
+	for _, tt := range []struct {
+		name  string
+		extra []string
+		code  string
+		retry bool
+		next  string
+	}{
+		{name: "plain", extra: retry(), code: "operation_timeout", retry: true, next: "retry"},
+		{name: "gate", extra: retry("--gate", "pre-commit"), code: "operation_timeout", retry: true, next: "retry"},
+		{name: "action eligibility", extra: retry("--action-eligibility"), code: "operation_timeout", retry: true, next: "retry"},
+		{name: "next transition", extra: retry("--next-transition"), code: "operation_timeout", retry: true, next: "retry"},
+		{name: "phase timings", extra: retry("--phase-timings"), code: "operation_timeout", retry: true, next: "retry"},
+		{name: "escalate and lenses", extra: retry("--next-transition", "--escalate-item", "2", "--escalate-reason", "weakens a permission check", "--lenses", "risk", "--lenses-reason", "touches authority"), code: "operation_timeout", retry: true, next: "retry"},
+
+		{name: "repair actor", extra: []string{"--repair-actor", "maintainer"}, code: "operation_timeout", next: "stop"},
+		{name: "repair reason", extra: []string{"--repair-reason", "fix"}, code: "operation_timeout", next: "stop"},
+		{name: "repair authorization", extra: []string{"--repair-authorization", "token"}, code: "operation_timeout", next: "stop"},
+		{name: "recovery successor lineage", extra: []string{"--recovery-successor-lineage", "successor"}, code: "operation_timeout", next: "stop"},
+		{name: "recovery reason", extra: []string{"--recovery-reason", "fix"}, code: "operation_timeout", next: "stop"},
+		{name: "recovery actor", extra: []string{"--recovery-actor", "maintainer"}, code: "operation_timeout", next: "stop"},
+		{name: "recovery authorization", extra: []string{"--recovery-authorization", "token"}, code: "operation_timeout", next: "stop"},
+		{name: "single dash equals", extra: []string{"-repair-actor=maintainer"}, code: "operation_timeout", next: "stop"},
+		{name: "empty repair value", extra: []string{"--repair-reason="}, code: "operation_timeout", next: "stop"},
+		{name: "empty recovery value", extra: []string{"--recovery-successor-lineage="}, code: "operation_timeout", next: "stop"},
+		{name: "repository context", extra: []string{"--repository-context", "context"}, code: "operation_timeout", next: "stop"},
+
+		{name: "positional authorization", extra: []string{"positional", "--repair-authorization", "x"}, code: "invalid_request", retry: true, next: "correct_request"},
+		{name: "after terminator", extra: []string{"--", "--recovery-authorization", "x"}, code: "invalid_request", retry: true, next: "correct_request"},
+		{name: "bool value consumed as positional", extra: []string{"--committed-only", "true", "--repair-authorization", "x"}, code: "invalid_request", retry: true, next: "correct_request"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview(append(append([]string{}, base...), tt.extra...), &output); err == nil {
+				t.Fatal("STATUS succeeded while exclusive maintenance held")
+			}
+			failure := decodeReviewIntegrationFailure(t, output.Bytes())
+			phase := "pre_native"
+			if tt.code == "invalid_request" {
+				phase = "preflight"
+			}
+			if failure.Operation != "review.status" || failure.Code != tt.code || failure.Phase != phase ||
+				failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe != tt.retry || failure.NextAction != tt.next {
+				t.Fatalf("STATUS deadline failure = %#v", failure)
+			}
+			if tt.code != "operation_timeout" && failure.NextAction == "retry" {
+				t.Fatalf("deceptive authorization form classified as a retryable timeout: %#v", failure)
+			}
+			if err := failure.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
