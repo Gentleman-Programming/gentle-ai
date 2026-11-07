@@ -3518,6 +3518,24 @@ func (s componentApplyStep) Run() error {
 			if err != nil {
 				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
 			}
+			// engram setup (above) prompts interactively to add Engram's
+			// memory-write tools to Claude Code's allowlist, but runCommand
+			// invokes it non-interactively with no stdin, so the prompt reads
+			// EOF and always answers "Skipped" (Gentleman-Programming/engram#2231).
+			// Without these rules, Claude Code's auto permission mode denies
+			// every Engram memory write. Write them directly instead.
+			//
+			// Only under ScopeGlobal: this writes the user-level
+			// ~/.claude/settings.json unconditionally, and Claude Code has no
+			// workspace-scoped equivalent this repair can target yet. Under
+			// ScopeWorkspace, writing it would grant Engram's tools in every
+			// other project on the machine, not just this one (same leak
+			// #1074 fixed for the rest of this component's scope handling).
+			if adapter.Agent() == model.AgentClaudeCode && s.scope != ScopeWorkspace {
+				if _, allowErr := permissions.EnsureEngramClaudeAutoAllowRules(s.homeDir); allowErr != nil {
+					fmt.Fprintf(os.Stderr, "WARNING: could not ensure Engram Claude auto-mode allow rules: %v\n", allowErr)
+				}
+			}
 		}
 		return nil
 	case model.ComponentContext7:
