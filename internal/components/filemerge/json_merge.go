@@ -8,7 +8,37 @@ import (
 	"strings"
 )
 
+// jsonBOM is the UTF-8 byte order mark some editors write before a JSON
+// document. It is encoding metadata, not content: parsers ignore it and
+// writers keep it when the user's file already had one.
+var jsonBOM = []byte("\xEF\xBB\xBF")
+
+// splitJSONBOM separates a leading UTF-8 BOM from the document body.
+func splitJSONBOM(raw []byte) (bom, body []byte) {
+	if bytes.HasPrefix(raw, jsonBOM) {
+		return jsonBOM, raw[len(jsonBOM):]
+	}
+	return nil, raw
+}
+
+// withJSONBOMOf prefixes out with the BOM of base, when base has one.
+func withJSONBOMOf(base, out []byte) []byte {
+	if bom, _ := splitJSONBOM(base); bom != nil {
+		return append(append([]byte{}, bom...), out...)
+	}
+	return out
+}
+
 func MergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
+	merged, err := mergeJSONObjects(baseJSON, overlayJSON)
+	if err != nil {
+		return nil, err
+	}
+	return withJSONBOMOf(baseJSON, merged), nil
+}
+
+func mergeJSONObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
+	_, baseJSON = splitJSONBOM(baseJSON)
 	base, err := unmarshalJSONObject(baseJSON)
 	if err != nil {
 		// Real user machines may have a malformed or non-JSON mcp.json (e.g. a file
@@ -53,8 +83,21 @@ func MergeJSONObjectsForPath(path string, baseJSON []byte, overlayJSON []byte) (
 // spellings of touched keys and comments inside touched values, all of which
 // the map-based rewrite would silently collapse or discard.
 func MergeOpenCodeJSONCObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
+	_, body := splitJSONBOM(baseJSON)
+	merged, err := mergeOpenCodeJSONCObjects(body, overlayJSON)
+	if err != nil {
+		if merged != nil {
+			// Refusals return the unchanged base document.
+			merged = baseJSON
+		}
+		return merged, err
+	}
+	return withJSONBOMOf(baseJSON, merged), nil
+}
+
+func mergeOpenCodeJSONCObjects(baseJSON []byte, overlayJSON []byte) ([]byte, error) {
 	if len(bytes.TrimSpace(baseJSON)) == 0 {
-		return MergeJSONObjects(baseJSON, overlayJSON)
+		return mergeJSONObjects(baseJSON, overlayJSON)
 	}
 	if err := RejectDuplicateJSONKeys(baseJSON); err != nil {
 		return baseJSON, fmt.Errorf("refuse to merge JSONC settings; resolve duplicate keys and retry: %w", err)
@@ -120,6 +163,15 @@ func MergeOpenCodeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte
 }
 
 func mergeJSONDefaultsForPath(path string, baseJSON, defaultsJSON []byte, openCode bool) ([]byte, error) {
+	_, body := splitJSONBOM(baseJSON)
+	merged, err := mergeJSONDefaultsForPathBody(path, body, defaultsJSON, openCode)
+	if err != nil {
+		return nil, err
+	}
+	return withJSONBOMOf(baseJSON, merged), nil
+}
+
+func mergeJSONDefaultsForPathBody(path string, baseJSON, defaultsJSON []byte, openCode bool) ([]byte, error) {
 	if openCode {
 		if err := RejectDuplicateJSONKeys(baseJSON); err != nil {
 			return nil, fmt.Errorf("refuse defaults over settings; resolve duplicate keys and retry: %w", err)
@@ -220,6 +272,7 @@ func marshalPermissionOrder(base []byte, value any, ordered bool) ([]byte, error
 }
 
 func unmarshalJSONObject(raw []byte) (map[string]any, error) {
+	_, raw = splitJSONBOM(raw)
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return map[string]any{}, nil
 	}
@@ -265,6 +318,7 @@ func RejectDuplicateJSONKeys(raw []byte) error {
 // rejectDuplicateJSONKeys checks every object before a map decoder can collapse
 // duplicate user keys. The migration must never serialize such a document.
 func rejectDuplicateJSONKeys(raw []byte) error {
+	_, raw = splitJSONBOM(raw)
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil
 	}
@@ -488,10 +542,11 @@ func RemoveJSONAgentTools(raw []byte, names ...string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(encoded, '\n'), nil
+	return withJSONBOMOf(raw, append(encoded, '\n')), nil
 }
 
 func normalizeJSON(raw []byte) []byte {
+	_, raw = splitJSONBOM(raw)
 	withoutComments := stripJSONComments(raw)
 	return stripTrailingCommas(withoutComments)
 }
