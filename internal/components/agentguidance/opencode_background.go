@@ -9,6 +9,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 )
 
 const (
@@ -30,17 +31,31 @@ func ApplyOpenCodeBackgroundPolicy(settingsPath string, enabled bool) (Result, e
 	if err != nil {
 		return Result{}, fmt.Errorf("parse OpenCode settings: %w", err)
 	}
-	agents, ok := settings["agent"].(map[string]any)
-	if !ok {
-		return Result{}, nil
+	// Native documents carry the orchestrator prompt in agents.<name>.system;
+	// V2 wins over the legacy map when both exist.
+	useNative := opencode.NativeConfig(settings)
+	field := "prompt"
+	var managed map[string]any
+	if useNative {
+		nativeAgents, _ := settings["agents"].(map[string]any)
+		managed, _ = nativeAgents[opencodedefault.ManagedAgent].(map[string]any)
+		if managed == nil {
+			return Result{}, nil
+		}
+		field = "system"
+	} else {
+		agents, ok := settings["agent"].(map[string]any)
+		if !ok {
+			return Result{}, nil
+		}
+		managed, ok = agents[opencodedefault.ManagedAgent].(map[string]any)
+		if !ok {
+			return Result{}, nil
+		}
 	}
-	managed, ok := agents[opencodedefault.ManagedAgent].(map[string]any)
+	prompt, ok := managed[field].(string)
 	if !ok {
-		return Result{}, nil
-	}
-	prompt, ok := managed["prompt"].(string)
-	if !ok {
-		return Result{}, fmt.Errorf("OpenCode managed orchestrator prompt is not a string")
+		return Result{}, fmt.Errorf("OpenCode managed orchestrator %s is not a string", field)
 	}
 	start, end := strings.Index(prompt, backgroundStart), strings.Index(prompt, backgroundEnd)
 	if (start < 0) != (end < 0) || strings.Count(prompt, backgroundStart) > 1 || strings.Count(prompt, backgroundEnd) > 1 || (start >= 0 && end <= start) {
@@ -59,8 +74,8 @@ func ApplyOpenCodeBackgroundPolicy(settingsPath string, enabled bool) (Result, e
 		}
 		prompt = strings.TrimRight(prompt, "\n") + "\n\n" + policy + "\n"
 	}
-	managed["prompt"] = prompt
-	overlay, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, mustBackgroundOverlay(managed))
+	managed[field] = prompt
+	overlay, err := filemerge.MergeJSONObjectsForPath(settingsPath, raw, mustBackgroundOverlay(managed, field, useNative))
 	if err != nil {
 		return Result{}, err
 	}
@@ -71,9 +86,13 @@ func ApplyOpenCodeBackgroundPolicy(settingsPath string, enabled bool) (Result, e
 	return Result{Changed: written.Changed, Files: []string{settingsPath}}, nil
 }
 
-func mustBackgroundOverlay(managed map[string]any) []byte {
-	// Only the prompt is changed; all other user-owned settings remain intact.
-	prompt := managed["prompt"].(string)
-	overlay, _ := json.Marshal(map[string]any{"agent": map[string]any{opencodedefault.ManagedAgent: map[string]any{"prompt": prompt}}})
+func mustBackgroundOverlay(managed map[string]any, field string, native bool) []byte {
+	// Only the managed prompt field is changed; all other user-owned settings
+	// remain intact.
+	overlayKey := "agent"
+	if native {
+		overlayKey = "agents"
+	}
+	overlay, _ := json.Marshal(map[string]any{overlayKey: map[string]any{opencodedefault.ManagedAgent: map[string]any{field: managed[field]}}})
 	return overlay
 }

@@ -384,6 +384,12 @@ func looksLikeManagedOpenCodeAgent(def map[string]any) bool {
 	if !hidden {
 		return false
 	}
+	// Native V2 entries carry the prompt in `system` and rules in the ordered
+	// `permissions` list; legacy entries use `prompt` + `permission`.
+	if system, ok := def["system"].(string); ok && system != "" {
+		_, hasRules := def["permissions"].([]any)
+		return hasRules
+	}
 	if _, ok := def["prompt"].(string); !ok {
 		return false
 	}
@@ -403,15 +409,20 @@ func managedConfigPriority(path string) int {
 		return 0
 	}
 	agents, _ := root["agent"].(map[string]any)
-	for _, raw := range agents {
-		def, _ := raw.(map[string]any)
-		if def["__managed_by"] == "gentle-ai/sdd" {
-			return 2
+	nativeAgents, _ := root["agents"].(map[string]any)
+	for _, scope := range []map[string]any{agents, nativeAgents} {
+		for _, raw := range scope {
+			def, _ := raw.(map[string]any)
+			if def["__managed_by"] == "gentle-ai/sdd" {
+				return 2
+			}
 		}
 	}
 	for _, key := range managedOpenCodeAgentKeys() {
-		def, _ := agents[key].(map[string]any)
-		if looksLikeManagedOpenCodeAgent(def) {
+		if def, _ := agents[key].(map[string]any); looksLikeManagedOpenCodeAgent(def) {
+			return 1
+		}
+		if def, _ := nativeAgents[key].(map[string]any); looksLikeManagedOpenCodeAgent(def) {
 			return 1
 		}
 	}

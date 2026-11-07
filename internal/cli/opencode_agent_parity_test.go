@@ -109,7 +109,7 @@ func TestOpenCodeInstallParityAgentsAreIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changed, err := installOpenCodeODDParityAgents(settingsPath)
+	changed, err := installOpenCodeODDParityAgents(settingsPath, home)
 	if err != nil {
 		t.Fatal(err)
 	}
