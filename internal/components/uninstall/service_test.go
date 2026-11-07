@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -1499,6 +1500,8 @@ func TestUninstallWorkspaceSnapshotRestoresAcrossRoots(t *testing.T) {
 	// A workspace root unrelated to homeDir, like the CLI fixtures that pass
 	// their own temp directory.
 	workspaceDir := t.TempDir()
+	// GGA lives under %APPDATA% on Windows; keep it inside the isolated home.
+	t.Setenv("APPDATA", filepath.Join(homeDir, "AppData", "Roaming"))
 
 	svc, err := NewService(homeDir, workspaceDir, "dev")
 	if err != nil {
@@ -1538,7 +1541,7 @@ func TestUninstallWorkspaceSnapshotRestoresAcrossRoots(t *testing.T) {
 	// The guard is unchanged: a home-only restore still refuses the workspace
 	// entries this plan snapshotted, and it refuses the whole manifest.
 	err = (backup.RestoreService{Roots: []string{homeDir}}).Restore(result.Manifest)
-	if err == nil || !strings.Contains(err.Error(), workspaceDir) || !strings.Contains(err.Error(), "must be an absolute path under an allowed root") {
+	if err == nil || !strings.Contains(err.Error(), strings.Trim(strconv.Quote(workspaceDir), `"`)) || !strings.Contains(err.Error(), "must be an absolute path under an allowed root") {
 		t.Fatalf("home-only restore error = %v, want a refusal naming %q", err, workspaceDir)
 	}
 
@@ -1555,6 +1558,7 @@ func TestUninstallWorkspaceSnapshotRestoresAcrossRoots(t *testing.T) {
 // not claim <home>/.mcp.json as a backup target either.
 func TestUninstallRestoreRootsSkipHomeWorkspace(t *testing.T) {
 	homeDir := t.TempDir()
+	t.Setenv("APPDATA", filepath.Join(homeDir, "AppData", "Roaming"))
 
 	svc, err := NewService(homeDir, homeDir, "dev")
 	if err != nil {
