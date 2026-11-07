@@ -542,3 +542,59 @@ func indentedJSON(t *testing.T, fixture string, value any) []byte {
 	}
 	return append(result, '\n')
 }
+
+// A UTF-8 BOM written by some editors is encoding metadata: the theme writer
+// must keep it, keep every user key, and converge on repeated runs.
+func TestInjectAtPathPreservesBOMSettings(t *testing.T) {
+	const bom = "\xEF\xBB\xBF"
+	for _, tc := range []struct {
+		name, file, body string
+		keep             []string
+	}{
+		{
+			name: "json",
+			file: "settings.json",
+			body: "{\n  \"model\": \"user-model\",\n  \"permissions\": {\"allow\": [\"Bash(ls)\"], \"deny\": [\"Read(.env)\"]}\n}\n",
+			keep: []string{`"model": "user-model"`, `"Bash(ls)"`, `"Read(.env)"`, `"theme": "gentleman"`},
+		},
+		{
+			name: "jsonc",
+			file: "opencode.jsonc",
+			body: "{\n  // user note\n  \"model\": \"user-model\",\n}\n",
+			keep: []string{"// user note", `"model": "user-model"`, `"theme": "gentleman"`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tc.file)
+			if err := os.WriteFile(path, []byte(bom+tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			first, err := InjectAtPath(path)
+			if err != nil || !first.Changed {
+				t.Fatalf("first InjectAtPath() = %#v, %v; want changed", first, err)
+			}
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.HasPrefix(want, []byte(bom)) || bytes.Count(want, []byte(bom)) != 1 {
+				t.Fatalf("settings must keep exactly one leading BOM:\n%q", want)
+			}
+			for _, key := range tc.keep {
+				if !bytes.Contains(want, []byte(key)) {
+					t.Fatalf("settings lost %s:\n%s", key, want)
+				}
+			}
+			for run := 2; run <= 3; run++ {
+				again, err := InjectAtPath(path)
+				if err != nil || again.Changed {
+					t.Fatalf("run %d InjectAtPath() = %#v, %v; want unchanged", run, again, err)
+				}
+				got, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("run %d rewrote settings:\n%q\nwant:\n%q", run, got, want)
+				}
+			}
+		})
+	}
+}
