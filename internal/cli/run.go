@@ -2949,7 +2949,11 @@ func (s rollbackRestoreStep) Rollback() error {
 	defer s.state.cleanupRollbackSnapshot()
 	manifest := s.state.manifest
 	var telemetryErr error
-	roots := rollbackRoots(s.homeDir, s.workspaceDir)
+	targets := make([]string, 0, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		targets = append(targets, entry.OriginalPath)
+	}
+	roots := rollbackRoots(s.homeDir, s.workspaceDir, targets)
 	// guard:population pi-rollback-agent-root too-loose: Only the selected adapter directory extends restore roots; sibling and symlink escapes remain refused.
 	if s.piAgentDir != "" {
 		roots = append(roots, s.piAgentDir)
@@ -3002,12 +3006,17 @@ func codexRollbackRoot(homeDir string, agents []model.AgentID) string {
 // Both values are exactly what backupTargets/syncBackupTargets used to
 // compute what this run actually snapshotted, so allowing rollback to
 // write within them is not wider than what this run could already do.
-func rollbackRoots(homeDir, workspaceDir string) []string {
+//
+// The product config directories this run's snapshot targets live under
+// (%APPDATA%\gga redirected outside the profile, issue #6030) come from
+// backup.WithConfigRoots, shared with the uninstall and standalone restores;
+// the targets only select which of those process-derived directories apply.
+func rollbackRoots(homeDir, workspaceDir string, targets []string) []string {
 	roots := []string{homeDir}
 	if workspaceDir != "" && workspaceDir != homeDir {
 		roots = append(roots, workspaceDir)
 	}
-	return roots
+	return backup.WithConfigRoots(roots, homeDir, targets)
 }
 
 type agentInstallStep struct {
