@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// stubUserWindowsKernelGate bypasses only the Windows 11 / unelevated host
+// stubUserWindowsKernelGate bypasses only the Windows 10/11 / unelevated host
 // qualification (the CI runner is an elevated Windows Server); the manifest,
 // identity and confirmation checks below stay real. The previous gate is
 // restored after the test.
