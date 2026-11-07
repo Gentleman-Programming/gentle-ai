@@ -69,7 +69,7 @@ func TestRestoreRootsForPlanRestoresRedirectedAppData(t *testing.T) {
 	if err := (backup.RestoreService{Roots: roots}).Restore(manifest); err != nil {
 		t.Fatalf("Restore() error = %v", err)
 	}
-	if want := []string{homeDir, appData}; !slices.Equal(roots, want) {
+	if want := []string{homeDir, filepath.Join(appData, "gga")}; !slices.Equal(roots, want) {
 		t.Fatalf("restoreRootsForPlan() = %v, want %v", roots, want)
 	}
 	if got := readRestoreRootsFile(t, homeFile); got != "home original" {
@@ -83,37 +83,75 @@ func TestRestoreRootsForPlanRestoresRedirectedAppData(t *testing.T) {
 	}
 }
 
-// TestRestoreRootsForPlanRefusesEntryOutsideEveryRoot: admitting %APPDATA%
-// does not widen the guard to its parent or to any other path.
+// TestRestoreRootsForPlanRefusesEntryOutsideEveryRoot: admitting %APPDATA%\gga
+// does not widen the guard to the rest of %APPDATA%, its parent, or the temp
+// directory under %LOCALAPPDATA%, the real-Windows runner layout where HOME is
+// a temp directory and both variables sit outside it.
 func TestRestoreRootsForPlanRefusesEntryOutsideEveryRoot(t *testing.T) {
-	homeDir, appData := redirectedAppDataFixture(t, "windows")
-	ggaAgents := filepath.Join(appData, "gga", "AGENTS.md")
-	// A sibling of %APPDATA%: same redirected parent, outside every root.
-	sibling := filepath.Join(filepath.Dir(appData), "Other", "file.txt")
-	writeRestoreRootsFile(t, ggaAgents, "gga original")
-	writeRestoreRootsFile(t, sibling, "sibling original")
-	targets := []string{sibling, ggaAgents}
+	for name, refused := range map[string]func(appData, localAppData string) string{
+		"sibling of APPDATA":   func(appData, _ string) string { return filepath.Join(filepath.Dir(appData), "Other", "file.txt") },
+		"elsewhere in APPDATA": func(appData, _ string) string { return filepath.Join(appData, "Other", "file.txt") },
+		"temp dir under LOCALAPPDATA": func(_, localAppData string) string {
+			return filepath.Join(localAppData, "Temp", "Other", "outside.json")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			homeDir, appData := redirectedAppDataFixture(t, "windows")
+			ggaAgents := filepath.Join(appData, "gga", "AGENTS.md")
+			outside := refused(appData, os.Getenv("LOCALAPPDATA"))
+			writeRestoreRootsFile(t, ggaAgents, "gga original")
+			writeRestoreRootsFile(t, outside, "outside original")
+			targets := []string{outside, ggaAgents}
 
+			manifest, err := backup.NewSnapshotter().Create(filepath.Join(t.TempDir(), "snapshot"), targets)
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			writeRestoreRootsFile(t, ggaAgents, "gga uninstalled")
+			writeRestoreRootsFile(t, outside, "outside changed")
+
+			roots := restoreRootsForPlan(homeDir, "", targets)
+			err = (backup.RestoreService{Roots: roots}).Restore(manifest)
+			if err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") || !strings.Contains(err.Error(), "Other") {
+				t.Fatalf("Restore() error = %v, want an invalid OriginalPath refusal for %q", err, outside)
+			}
+			if want := []string{homeDir, filepath.Join(appData, "gga")}; !slices.Equal(roots, want) {
+				t.Fatalf("restoreRootsForPlan() = %v, want %v", roots, want)
+			}
+			if got := readRestoreRootsFile(t, outside); got != "outside changed" {
+				t.Fatalf("refused entry = %q, want it untouched", got)
+			}
+			if got := readRestoreRootsFile(t, ggaAgents); got != "gga uninstalled" {
+				t.Fatalf("gga AGENTS.md = %q, want it untouched by the refused restore", got)
+			}
+		})
+	}
+}
+
+// TestRestoreRootsForPlanTempUnderLocalAppDataKeepsHomeRoot reproduces the
+// real-Windows runner: the temp directory lives under %LOCALAPPDATA%, outside
+// a temp HOME, and an entry there neither adds a root nor restores.
+func TestRestoreRootsForPlanTempUnderLocalAppDataKeepsHomeRoot(t *testing.T) {
+	homeDir, _ := redirectedAppDataFixture(t, "windows")
+	outside := filepath.Join(os.Getenv("LOCALAPPDATA"), "Temp", "003", "outside.json")
+	writeRestoreRootsFile(t, outside, "before")
+	targets := []string{outside}
 	manifest, err := backup.NewSnapshotter().Create(filepath.Join(t.TempDir(), "snapshot"), targets)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	writeRestoreRootsFile(t, ggaAgents, "gga uninstalled")
-	writeRestoreRootsFile(t, sibling, "sibling changed")
+	writeRestoreRootsFile(t, outside, "changed")
 
 	roots := restoreRootsForPlan(homeDir, "", targets)
-	if want := []string{homeDir, appData}; !slices.Equal(roots, want) {
+	if want := []string{homeDir}; !slices.Equal(roots, want) {
 		t.Fatalf("restoreRootsForPlan() = %v, want %v", roots, want)
 	}
 	err = (backup.RestoreService{Roots: roots}).Restore(manifest)
-	if err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") || !strings.Contains(err.Error(), "Other") {
-		t.Fatalf("Restore() error = %v, want an invalid OriginalPath refusal for the sibling", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") {
+		t.Fatalf("Restore() error = %v, want an invalid OriginalPath refusal", err)
 	}
-	if got := readRestoreRootsFile(t, sibling); got != "sibling changed" {
-		t.Fatalf("refused sibling = %q, want it untouched", got)
-	}
-	if got := readRestoreRootsFile(t, ggaAgents); got != "gga uninstalled" {
-		t.Fatalf("gga AGENTS.md = %q, want it untouched by the refused restore", got)
+	if got := readRestoreRootsFile(t, outside); got != "changed" {
+		t.Fatalf("refused entry = %q, want it untouched", got)
 	}
 }
 

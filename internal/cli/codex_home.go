@@ -67,7 +67,7 @@ func StandaloneRestoreRoots(manifest backup.Manifest) ([]string, error) {
 // directory only when it differs from the home root and an entry resolves
 // strictly inside it. It mirrors uninstall.restoreRootsForPlan, which adds the
 // workspace root only when the plan's own backup targets reach it, and shares
-// its per-user config roots through backup.WithConfigRoots.
+// its product config directories through backup.WithConfigRoots.
 func restoreRootsForManifest(homeDir string, manifest backup.Manifest) []string {
 	roots := []string{homeDir}
 	workspaceDir, ok := workspaceRestoreRoot(homeDir, manifest)

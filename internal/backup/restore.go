@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 )
 
 // UserHomeDirFn is the function used to resolve the user's home directory.
@@ -78,29 +79,31 @@ func isPathUnderRoot(path, root string) bool {
 	return strings.HasPrefix(resolvedClean, resolvedRoot+string(filepath.Separator))
 }
 
-// ConfigRootsGOOS selects the platform WithConfigRoots derives per-user config
-// roots for. Package-level var for testability — tests set "windows" to cover
-// %APPDATA% and %LOCALAPPDATA% on any host.
+// ConfigRootsGOOS selects the platform WithConfigRoots derives product config
+// directories for. Package-level var for testability — tests set "windows" to
+// cover %APPDATA% on any host.
 var ConfigRootsGOOS = runtime.GOOS
 
-// WithConfigRoots returns roots extended by each per-user config root that a
-// target lies strictly inside and that no admitted root already covers.
+// WithConfigRoots returns roots extended by each product config directory that
+// a target lies strictly inside and that no admitted root already covers.
 //
-// Windows folder redirection can move %APPDATA% and %LOCALAPPDATA% outside the
-// user profile, so targets such as the gga config (issue #6024) fall outside
-// the home root and the restore refused the whole manifest. The config roots
-// come from this process's environment, resolved the way the targets resolve
-// them, never from the manifest; targets only select which of them apply, so a
-// tampered manifest cannot widen the roots.
+// Windows folder redirection can move %APPDATA% outside the user profile, so
+// targets such as the gga config (issue #6024) fall outside the home root and
+// the restore refused the whole manifest. Only the exact product directories
+// are candidates, never the whole %APPDATA% or %LOCALAPPDATA%: those also hold
+// the temp directory and other applications' data. Each directory comes from
+// the resolver that builds the targets, with this process's environment, never
+// from the manifest; targets only select which of them apply, so a tampered
+// manifest cannot widen the roots.
 //
 // A candidate already covered by an admitted root, lexically or canonically
-// (symlinks, 8.3 short names), is never added: a config root spelled inside
-// the home but linked elsewhere must stay refused by isPathUnderRoot's
+// (symlinks, 8.3 short names), is never added: a directory spelled inside the
+// home but linked elsewhere must stay refused by isPathUnderRoot's
 // ancestor-symlink check, as before. The appended root keeps the spelling the
 // targets were recorded with. Both uninstall and standalone restore derive
 // their roots through this helper.
 func WithConfigRoots(roots []string, homeDir string, targets []string) []string {
-	for _, configRoot := range userConfigRoots(homeDir) {
+	for _, configRoot := range productConfigDirs(homeDir) {
 		if !filepath.IsAbs(configRoot) {
 			continue
 		}
@@ -120,24 +123,18 @@ func WithConfigRoots(roots []string, homeDir string, targets []string) []string 
 	return roots
 }
 
-// userConfigRoots returns the per-user config directories gentle-ai's own
-// targets live under. On Windows these are %APPDATA% (the gga config, see
-// gga.ggaConfigDir) and %LOCALAPPDATA%, with the same profile fallbacks the
-// targets use. Elsewhere the targets live under the home root, so there are
-// none and the restore roots stay exactly the caller's.
-func userConfigRoots(homeDir string) []string {
+// productConfigDirs returns the product-owned directories Windows backup
+// targets resolve to outside the profile. Only directories whose resolver is
+// GOOS-injectable and tested are listed, so today that is %APPDATA%\gga
+// (globalBackupTargets records it in every uninstall manifest). The kiro,
+// Windsurf, VS Code and Trae User folders under %APPDATA% stay refused until
+// their resolvers can be injected. Elsewhere every target lives under the home
+// root, so there are none and the restore roots stay exactly the caller's.
+func productConfigDirs(homeDir string) []string {
 	if ConfigRootsGOOS != "windows" {
 		return nil
 	}
-	appData := os.Getenv("APPDATA")
-	if appData == "" {
-		appData = filepath.Join(homeDir, "AppData", "Roaming")
-	}
-	localAppData := os.Getenv("LOCALAPPDATA")
-	if localAppData == "" {
-		localAppData = filepath.Join(homeDir, "AppData", "Local")
-	}
-	return []string{filepath.Clean(appData), filepath.Clean(localAppData)}
+	return []string{filepath.Clean(gga.ConfigDir(homeDir, ConfigRootsGOOS))}
 }
 
 // canonicalPath resolves symlinks and, on Windows, 8.3 short names in the

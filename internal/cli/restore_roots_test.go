@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -71,7 +73,7 @@ func TestRestoreManagedBackupRestoresRedirectedAppData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StandaloneRestoreRoots() error = %v", err)
 	}
-	if want := []string{home, appData}; !slices.Equal(roots, want) {
+	if want := []string{home, filepath.Join(appData, "gga")}; !slices.Equal(roots, want) {
 		t.Fatalf("StandaloneRestoreRoots() = %v, want %v", roots, want)
 	}
 	if got := readCLIRestoreFile(t, homeFile); got != "home original" {
@@ -82,11 +84,12 @@ func TestRestoreManagedBackupRestoresRedirectedAppData(t *testing.T) {
 	}
 }
 
-// TestRestoreManagedBackupRefusesEntryOutsideEveryRoot: a manifest entry beside
-// the redirected %APPDATA% is still refused, and nothing is written.
+// TestRestoreManagedBackupRefusesEntryOutsideEveryRoot: a manifest entry in the
+// redirected %APPDATA% but outside %APPDATA%\gga is still refused, and nothing
+// is written.
 func TestRestoreManagedBackupRefusesEntryOutsideEveryRoot(t *testing.T) {
 	_, appData := redirectedAppDataCLIHome(t, "windows")
-	sibling := filepath.Join(filepath.Dir(appData), "Other", "file.txt")
+	sibling := filepath.Join(appData, "Other", "file.txt")
 	ggaAgents := filepath.Join(appData, "gga", "AGENTS.md")
 	writeCLIRestoreFile(t, sibling, "sibling original")
 	writeCLIRestoreFile(t, ggaAgents, "gga original")
@@ -106,6 +109,40 @@ func TestRestoreManagedBackupRefusesEntryOutsideEveryRoot(t *testing.T) {
 	}
 	if got := readCLIRestoreFile(t, ggaAgents); got != "gga changed" {
 		t.Fatalf("gga AGENTS.md = %q, want it untouched by the refused restore", got)
+	}
+}
+
+// TestStandaloneRestoreRefusesTempEntryUnderLocalAppData reproduces the
+// real-Windows runner: the temp directory lives under %LOCALAPPDATA%, outside a
+// temp HOME, and `gentle-ai restore` refuses an entry there with the home-only
+// message, exactly like TestStandaloneRestoreRefusesEntryOutsideWorkspaceAndHome.
+func TestStandaloneRestoreRefusesTempEntryUnderLocalAppData(t *testing.T) {
+	home := standaloneRestoreHome(t)
+	original := backup.ConfigRootsGOOS
+	backup.ConfigRootsGOOS = "windows"
+	t.Cleanup(func() { backup.ConfigRootsGOOS = original })
+	profile := canonicalDir(t)
+	t.Setenv("APPDATA", filepath.Join(profile, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(profile, "AppData", "Local"))
+	t.Chdir(canonicalDir(t))
+
+	path := filepath.Join(profile, "AppData", "Local", "Temp", "003", "outside.json")
+	writeCLIRestoreFile(t, path, "before")
+	if _, err := backup.NewSnapshotter().Create(filepath.Join(home, ".gentle-ai", "backups", "local-temp"), []string{path}); err != nil {
+		t.Fatal(err)
+	}
+	writeCLIRestoreFile(t, path, "after")
+
+	var output bytes.Buffer
+	wantError := fmt.Sprintf("restore failed: manifest entry has invalid OriginalPath %q: must be an absolute path under an allowed root (%s)", path, home)
+	if err := RunRestore([]string{"local-temp", "--yes"}, &output); err == nil || err.Error() != wantError {
+		t.Fatalf("restore error = %v, want %q", err, wantError)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("rejected restore output = %q, want empty", output.String())
+	}
+	if got := readCLIRestoreFile(t, path); got != "after" {
+		t.Fatalf("refused entry changed = %q", got)
 	}
 }
 

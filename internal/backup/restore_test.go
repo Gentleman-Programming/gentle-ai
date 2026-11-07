@@ -860,9 +860,10 @@ func useConfigRootsGOOS(t *testing.T, goos string) {
 	t.Cleanup(func() { ConfigRootsGOOS = original })
 }
 
-// TestWithConfigRootsWindows pins issue #6024: a per-user config root a target
-// lives under is admitted only when it is absolute and outside every admitted
-// root, compared by canonical path.
+// TestWithConfigRootsWindows pins issue #6024: the gga config directory under a
+// redirected %APPDATA% is admitted only when a target lives inside it and no
+// admitted root covers it, lexically or canonically. The rest of %APPDATA% and
+// all of %LOCALAPPDATA% (which holds the temp directory) are never admitted.
 func TestWithConfigRootsWindows(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -902,14 +903,21 @@ func TestWithConfigRootsWindows(t *testing.T) {
 			roots:   []string{home},
 			appData: appData, localAppData: localAppData,
 			targets: []string{filepath.Join(home, ".claude", "CLAUDE.md"), filepath.Join(appData, "gga", "AGENTS.md")},
-			want:    []string{home, appData},
+			want:    []string{home, filepath.Join(appData, "gga")},
 		},
 		{
-			name:    "redirected LOCALAPPDATA with a target",
+			name:    "elsewhere in a redirected APPDATA",
 			roots:   []string{home},
 			appData: appData, localAppData: localAppData,
-			targets: []string{filepath.Join(localAppData, "gentle-ai", "state.json")},
-			want:    []string{home, localAppData},
+			targets: []string{filepath.Join(appData, "Other", "settings.json")},
+			want:    []string{home},
+		},
+		{
+			name:    "temp directory under a redirected LOCALAPPDATA",
+			roots:   []string{home},
+			appData: appData, localAppData: localAppData,
+			targets: []string{filepath.Join(localAppData, "Temp", "outside.json"), filepath.Join(localAppData, "gentle-ai", "state.json")},
+			want:    []string{home},
 		},
 		{
 			name:    "redirected roots without a target there",
@@ -1027,8 +1035,8 @@ func TestWithConfigRootsNonWindowsConfigSymlinkedOutside(t *testing.T) {
 }
 
 // TestWithConfigRootsTargetsCannotWidenRoots: targets only select among the
-// environment's config roots; a target beside, above, or outside %APPDATA%
-// never adds a root.
+// product directories; a target beside, above, or outside %APPDATA%\gga never
+// adds a root.
 func TestWithConfigRootsTargetsCannotWidenRoots(t *testing.T) {
 	useConfigRootsGOOS(t, "windows")
 	base := t.TempDir()
@@ -1040,6 +1048,8 @@ func TestWithConfigRootsTargetsCannotWidenRoots(t *testing.T) {
 		"parent of APPDATA":      filepath.Join(base, "redirected", "file"),
 		"sibling sharing prefix": appData + "X" + string(filepath.Separator) + "file",
 		"APPDATA itself":         appData,
+		"gga directory itself":   filepath.Join(appData, "gga"),
+		"elsewhere in APPDATA":   filepath.Join(appData, "Other", "file"),
 		"dot-dot escape":         appData + string(filepath.Separator) + ".." + string(filepath.Separator) + "evil",
 		"relative":               filepath.Join("Roaming", "file"),
 		"empty":                  "",
@@ -1053,7 +1063,7 @@ func TestWithConfigRootsTargetsCannotWidenRoots(t *testing.T) {
 }
 
 // TestWithConfigRootsKeepsSymlinkEscapeRefused: a link inside an admitted
-// %APPDATA% that points elsewhere neither selects the root nor passes the
+// %APPDATA%\gga that points elsewhere neither selects the root nor passes the
 // per-entry guard once a legitimate target admitted it.
 func TestWithConfigRootsKeepsSymlinkEscapeRefused(t *testing.T) {
 	useConfigRootsGOOS(t, "windows")
@@ -1061,23 +1071,24 @@ func TestWithConfigRootsKeepsSymlinkEscapeRefused(t *testing.T) {
 	home := filepath.Join(base, "home")
 	elsewhere := filepath.Join(base, "elsewhere")
 	appData := filepath.Join(base, "redirected", "Roaming")
-	for _, dir := range []string{home, elsewhere, appData} {
+	ggaDir := filepath.Join(appData, "gga")
+	for _, dir := range []string{home, elsewhere, ggaDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Symlink(elsewhere, filepath.Join(appData, "escape")); err != nil {
+	if err := os.Symlink(elsewhere, filepath.Join(ggaDir, "escape")); err != nil {
 		t.Skipf("directory symlinks unavailable: %v", err)
 	}
 	t.Setenv("APPDATA", appData)
 	t.Setenv("LOCALAPPDATA", "")
-	escape := filepath.Join(appData, "escape", "file")
+	escape := filepath.Join(ggaDir, "escape", "file")
 	if got := WithConfigRoots([]string{home}, home, []string{escape}); !slices.Equal(got, []string{home}) {
 		t.Fatalf("WithConfigRoots(escape only) = %v, want only the home root", got)
 	}
-	got := WithConfigRoots([]string{home}, home, []string{escape, filepath.Join(appData, "gga", "config")})
-	if !slices.Equal(got, []string{home, appData}) {
-		t.Fatalf("WithConfigRoots(escape + gga) = %v, want [%s %s]", got, home, appData)
+	got := WithConfigRoots([]string{home}, home, []string{escape, filepath.Join(ggaDir, "config")})
+	if !slices.Equal(got, []string{home, ggaDir}) {
+		t.Fatalf("WithConfigRoots(escape + gga) = %v, want [%s %s]", got, home, ggaDir)
 	}
 	if isPathUnderRoots(escape, got) {
 		t.Fatalf("symlink escape %q accepted under %v", escape, got)
