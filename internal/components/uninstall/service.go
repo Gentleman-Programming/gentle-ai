@@ -48,8 +48,17 @@ type Snapshotter interface {
 }
 
 type Result struct {
-	Manifest                         backup.Manifest
-	BackupPath                       string
+	Manifest   backup.Manifest
+	BackupPath string
+	// RestoreRoots lists the directories a restore of Manifest legitimately
+	// spans: the home root, plus the workspace root when this uninstall
+	// actually snapshotted something there. RestoreService refuses manifest
+	// entries outside its Roots, so a home-only fallback rejects the
+	// workspace .mcp.json and settings a workspace-scoped uninstall backs up
+	// (issue #2213). The values come from the plan's own inputs and backup
+	// targets, never from the manifest, so a tampered manifest cannot widen
+	// them.
+	RestoreRoots                     []string
 	ChangedFiles                     []string
 	RemovedFiles                     []string
 	RemovedDirectories               []string
@@ -651,8 +660,9 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 	}
 
 	result := Result{
-		Manifest:   manifest,
-		BackupPath: snapshotDir,
+		Manifest:     manifest,
+		BackupPath:   snapshotDir,
+		RestoreRoots: restoreRootsForPlan(s.homeDir, s.workspaceDir, p.backupTargets),
 	}
 	// A batch has no per-agent transaction, so aborting at the first failure
 	// left later agents untouched, state.json stale, and no record of how far
@@ -804,6 +814,40 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		return result, errors.Join(errs...)
 	}
 	return result, nil
+}
+
+// restoreRootsForPlan returns the caller-known directories a restore of this
+// plan's snapshot may legitimately write under: the home root, plus the
+// workspace root only when a backup target really lives there.
+//
+// The workspace root is added so the workspace files a workspace-scoped
+// uninstall rewrites (<workspace>/.mcp.json and .claude/settings.json, issue
+// #2213) validate on restore, and it is skipped whenever the workspace is
+// unset or is the home directory itself. The product config directories a target
+// lives under (%APPDATA%\gga and the kiro, Windsurf, VS Code and Trae User
+// folders redirected outside the profile, issues #6024 and #6029) come
+// from backup.WithConfigRoots, shared with the standalone restore. Everything is
+// derived from the plan's inputs and targets rather than from the manifest, so
+// the restore guard keeps refusing arbitrary paths.
+func restoreRootsForPlan(homeDir, workspaceDir string, backupTargets []string) []string {
+	roots := []string{homeDir}
+	if workspaceDir != "" && filepath.Clean(workspaceDir) != filepath.Clean(homeDir) {
+		for _, target := range backupTargets {
+			if isPathWithinDir(workspaceDir, target) {
+				roots = append(roots, workspaceDir)
+				break
+			}
+		}
+	}
+	return backup.WithConfigRoots(roots, homeDir, backupTargets)
+}
+
+// isPathWithinDir reports lexical containment: path must sit strictly inside
+// dir. It is deliberately lexical, because a backup target records where this
+// plan would write even when the file does not exist yet.
+func isPathWithinDir(dir, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // publishAntigravityRules runs after the staging file lost its removed
@@ -1109,6 +1153,19 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		}
 		ops = append(ops, legacyOps...)
 		targets = append(targets, legacyTargets...)
+		// Workspace-scoped installs write <workspace>/.mcp.json (issue
+		// #2213). Clean the managed entry there and the legacy inert
+		// settings.json block, preserving unrelated servers and any
+		// user-authored context7 server.
+		if adapter.Agent() == model.AgentClaudeCode && strings.TrimSpace(s.workspaceDir) != "" && s.workspaceDir != s.homeDir {
+			workspaceMCPPath := filepath.Join(s.workspaceDir, ".mcp.json")
+			targets = append(targets, workspaceMCPPath)
+			ops = append(ops, guardManagedContext7Entry(rewriteJSONFile(workspaceMCPPath, jsonPath{"mcpServers", "context7"})))
+			if p := adapter.SettingsPath(s.workspaceDir); p != "" {
+				targets = append(targets, p)
+				ops = append(ops, guardManagedContext7Entry(rewriteJSONFile(p, jsonPath{"mcpServers", "context7"})))
+			}
+		}
 	case model.ComponentEngram:
 		if s.engramUninstallScope == model.EngramUninstallScopeProject {
 			projectDataPath := filepath.Join(s.workspaceDir, ".engram")
@@ -1403,8 +1460,8 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 	case model.StrategyTOMLFile:
 		targets = append(targets,
 			adapter.MCPConfigPath(homeDir, "engram"),
-			filepath.Join(homeDir, ".codex", "engram-instructions.md"),
-			filepath.Join(homeDir, ".codex", "engram-compact-prompt.md"),
+			filepath.Join(system.CodexConfigDir(homeDir), "engram-instructions.md"),
+			filepath.Join(system.CodexConfigDir(homeDir), "engram-compact-prompt.md"),
 		)
 	}
 	return targets
@@ -1453,14 +1510,19 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 		return ops
 	case model.StrategyTOMLFile:
 		configPath := adapter.MCPConfigPath(homeDir, "engram")
-		instructionsPath := filepath.Join(homeDir, ".codex", "engram-instructions.md")
-		compactPath := filepath.Join(homeDir, ".codex", "engram-compact-prompt.md")
-		return []operation{
+		instructionsPath := filepath.Join(system.CodexConfigDir(homeDir), "engram-instructions.md")
+		compactPath := filepath.Join(system.CodexConfigDir(homeDir), "engram-compact-prompt.md")
+		ops := []operation{
 			rewriteTOMLFile(configPath, cleanCodexTOML),
 			removeFile(instructionsPath),
 			removeFile(compactPath),
-			removeDirIfEmpty(filepath.Dir(instructionsPath)),
 		}
+		// A CODEX_HOME override is the user's directory, and ValidateCodexHome
+		// requires it to exist; only the default ~/.codex is pruned when empty.
+		if !system.CodexHomeOverridden(homeDir) {
+			ops = append(ops, removeDirIfEmpty(filepath.Dir(instructionsPath)))
+		}
+		return ops
 	default:
 		return nil
 	}
@@ -1882,6 +1944,41 @@ func removeManagedContext7File(path string) operation {
 			return true, true, nil
 		},
 	}
+}
+
+// guardManagedContext7Entry runs op only when the context7 entry under
+// mcpServers matches the managed shape, so a project file uninstall never
+// deletes a context7 server the user authored by hand. A missing, unparsable,
+// or unmanaged entry leaves the file untouched (issue #2213).
+func guardManagedContext7Entry(op operation) operation {
+	apply := op.apply
+	op.apply = func(path string) (bool, bool, error) {
+		raw, err := readManagedFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return false, false, nil
+			}
+			return false, false, err
+		}
+		root, err := unmarshalJSONObject(raw)
+		if err != nil {
+			return false, false, nil
+		}
+		servers, ok := root["mcpServers"].(map[string]any)
+		if !ok {
+			return false, false, nil
+		}
+		entry, ok := servers["context7"]
+		if !ok {
+			return false, false, nil
+		}
+		encoded, err := json.Marshal(entry)
+		if err != nil || !isManagedContext7ServerJSON(encoded) {
+			return false, false, nil
+		}
+		return apply(path)
+	}
+	return op
 }
 
 func removeManagedAntigravityPluginAsset(path string) operation {

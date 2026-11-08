@@ -782,3 +782,102 @@ func installFakeCodeGraphMCP(t *testing.T, tools string) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
+
+// TestCommunityToolInstallStepForwardsForceCommunityTools covers #984's
+// plumbing seam: the step must hand the force opt-in to the installer so the
+// installer decides to reinstall @latest instead of skipping.
+func TestCommunityToolInstallStepForwardsForceCommunityTools(t *testing.T) {
+	previousOptions := installCommunityToolWithOptions
+	previousInstall := installCommunityToolWithHome
+	t.Cleanup(func() {
+		installCommunityToolWithOptions = previousOptions
+		installCommunityToolWithHome = previousInstall
+	})
+	installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector) (communitytool.Result, error) {
+		t.Fatal("a forced step must not use the unforced installer seam")
+		return communitytool.Result{}, nil
+	}
+
+	var gotTool model.CommunityToolID
+	var gotWorkspace string
+	var gotOptions communitytool.InstallOptions
+	var gotRunner communitytool.Runner
+	installCommunityToolWithOptions = func(tool model.CommunityToolID, workspaceDir string, options communitytool.InstallOptions, runner communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+		gotTool, gotWorkspace, gotOptions, gotRunner = tool, workspaceDir, options, runner
+		return communitytool.Result{Tool: tool}, nil
+	}
+
+	step := communityToolInstallStep{id: "community-tool:codegraph", tool: model.CommunityToolCodeGraph, workspaceDir: "/work/project", homeDir: "/home/pi", forceCommunityTools: true}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if gotTool != model.CommunityToolCodeGraph || gotWorkspace != "/work/project" || gotRunner == nil {
+		t.Fatalf("installer args = (%q, %q, %#v), want CodeGraph, workspace, runner", gotTool, gotWorkspace, gotRunner)
+	}
+	if gotOptions.HomeDir != "/home/pi" || !gotOptions.ForceCommunityTools {
+		t.Fatalf("install options = %#v, want the runtime home and the force opt-in", gotOptions)
+	}
+}
+
+// TestCommunityToolInstallStepKeepsTheLegacyInstallerWithoutForce is the
+// preserve guard for the shared step: without the flag the step keeps calling
+// the unforced installer exactly as before.
+func TestCommunityToolInstallStepKeepsTheLegacyInstallerWithoutForce(t *testing.T) {
+	previousOptions := installCommunityToolWithOptions
+	previousInstall := installCommunityToolWithHome
+	t.Cleanup(func() {
+		installCommunityToolWithOptions = previousOptions
+		installCommunityToolWithHome = previousInstall
+	})
+	installCommunityToolWithOptions = func(model.CommunityToolID, string, communitytool.InstallOptions, communitytool.Runner, communitytool.Detector) (communitytool.Result, error) {
+		t.Fatal("an unforced step must keep the legacy installer seam")
+		return communitytool.Result{}, nil
+	}
+	installCommunityToolWithHome = func(tool model.CommunityToolID, _, _ string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+		return communitytool.Result{Tool: tool}, nil
+	}
+
+	step := communityToolInstallStep{id: "community-tool:codegraph", tool: model.CommunityToolCodeGraph, workspaceDir: "/work/project", homeDir: "/home/pi"}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
+// TestRunInstallForwardsForceCommunityToolsToTheInstallRuntime drives the real
+// CLI entry point: `gentle-ai install --force-community-tools` must reach the
+// install runtime that builds the community-tool step, not a test-only struct
+// field.
+func TestRunInstallForwardsForceCommunityToolsToTheInstallRuntime(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "flag present", args: []string{"--force-community-tools"}, want: true},
+		{name: "flag absent", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			installTestHome(t)
+			t.Chdir(t.TempDir())
+			previousPlan := installStagePlan
+			t.Cleanup(func() { installStagePlan = previousPlan })
+			var got *bool
+			installStagePlan = func(rt *installRuntime) pipeline.StagePlan {
+				value := rt.forceCommunityTools
+				got = &value
+				return rt.stagePlan()
+			}
+
+			args := append([]string{"--agent", "claude-code", "--scope", "workspace"}, test.args...)
+			if _, err := RunInstall(args, macOSDetectionResult()); err != nil {
+				t.Fatalf("RunInstall(%v) error = %v", args, err)
+			}
+			if got == nil {
+				t.Fatal("installStagePlan was never called; the flag cannot reach the community-tool step")
+			}
+			if *got != test.want {
+				t.Fatalf("runtime forceCommunityTools = %t, want %t", *got, test.want)
+			}
+		})
+	}
+}

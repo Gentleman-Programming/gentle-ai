@@ -37,6 +37,24 @@ func userIdentity(path string) (string, error) {
 	return fmt.Sprintf("%d:%d:%d:%v", st.Dev, st.Ino, st.Uid, info.Mode()), nil
 }
 
+// userIdentityMatches compares a recorded dev:ino:uid:mode identity with the
+// freshly computed one. The leading device number is ignored: macOS reassigns
+// st_dev per mount, so it can change across reboots (issue #5918) while the
+// inode, uid and mode of an intact directory stay stable. A recorded identity
+// that does not carry the four fields is never silently portable; it only
+// matches through plain equality.
+func userIdentityMatches(recorded, current string) bool {
+	if recorded == current {
+		return true
+	}
+	recordedParts := strings.SplitN(recorded, ":", 4)
+	currentParts := strings.SplitN(current, ":", 4)
+	if len(recordedParts) != 4 || len(currentParts) != 4 {
+		return false
+	}
+	return strings.Join(recordedParts[1:], ":") == strings.Join(currentParts[1:], ":")
+}
+
 // This is a consent preimage, not a replacement for recoverable snapshots.
 // Inventory both trees twice at inspection; never follow an escaping symlink.
 // Every entry passes the darwin metadata guard as foreign, like the selected

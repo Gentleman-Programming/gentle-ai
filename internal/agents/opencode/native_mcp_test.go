@@ -1,10 +1,90 @@
 package opencode
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestNativeCodeGraphCommandVariants(t *testing.T) {
+	for _, tt := range []struct {
+		name, command string
+		want          bool
+	}{
+		{"canonical", `["codegraph","serve","--mcp"]`, true},
+		{"no watch", `["codegraph","serve","--mcp","--no-watch"]`, true},
+		// A pinned path serves a fixed project regardless of the client's rootUri.
+		{"pinned long path", `["codegraph","serve","--mcp","--path","/other"]`, false},
+		{"pinned equals path", `["codegraph","serve","--mcp","--path=/work/my project"]`, false},
+		{"empty equals path", `["codegraph","serve","--mcp","--path="]`, false},
+		{"pinned short path and no watch", `["codegraph","serve","-p","/work/project","--no-watch","--mcp"]`, false},
+		{"absolute POSIX", `["/opt/tools/codegraph","serve","--mcp"]`, true},
+		{"absolute Windows", `["C:\\Tools\\codegraph.exe","serve","--mcp","--no-watch"]`, true},
+		{"absolute Windows npm shim", `["C:\\Tools\\codegraph.cmd","serve","--mcp"]`, true},
+		{"relative executable", `["tools/codegraph","serve","--mcp"]`, false},
+		{"wrong POSIX basename", `["/opt/tools/not-codegraph","serve","--mcp"]`, false},
+		{"wrong Windows basename", `["C:\\Tools\\other.exe","serve","--mcp"]`, false},
+		{"missing mcp", `["codegraph","serve","--no-watch"]`, false},
+		{"wrong subcommand", `["codegraph","install","--mcp"]`, false},
+		{"unknown flag", `["codegraph","serve","--mcp","--invented"]`, false},
+		{"extra positional", `["codegraph","serve","--mcp","project"]`, false},
+		{"missing path value", `["codegraph","serve","--mcp","--path"]`, false},
+		{"flag as path value", `["codegraph","serve","--path","--mcp"]`, false},
+		{"numeric executable", `[42,"serve","--mcp"]`, false},
+		{"numeric path", `["codegraph","serve","--mcp","--path",42]`, false},
+		{"boolean option", `["codegraph","serve","--mcp",true]`, false},
+		{"null option", `["codegraph","serve","--mcp",null]`, false},
+		{"object option", `["codegraph","serve","--mcp",{}]`, false},
+		{"string command", `"codegraph serve --mcp"`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", "")
+			a := NewAdapter()
+			path := a.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			body := fmt.Sprintf(`{"mcp":{"servers":{"codegraph":{"type":"local","command":%s}}}}`, tt.command)
+			if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+				t.Fatal(err)
+			}
+			gotPath, got := a.EffectiveCodeGraphWiring(home)
+			if got != tt.want || (got && gotPath != path) {
+				t.Fatalf("EffectiveCodeGraphWiring() = (%q, %v), want configured=%v at %q", gotPath, got, tt.want, path)
+			}
+		})
+	}
+}
+
+func TestNativeCodeGraphLegacyFilePriority(t *testing.T) {
+	for _, lower := range []string{`["codegraph","serve","--mcp"]`, `["other"]`} {
+		t.Run(lower, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", "")
+			a := NewAdapter()
+			path := a.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			for file, body := range map[string]string{
+				path:       fmt.Sprintf(`{"mcp":{"servers":{"codegraph":{"type":"local","command":%s}}}}`, lower),
+				path + "c": `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":false}}}`,
+			} {
+				if err := os.WriteFile(file, []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if gotPath, configured := a.EffectiveCodeGraphWiring(home); gotPath != "" || configured {
+				t.Errorf("effective = (%q, %v), want missing", gotPath, configured)
+			}
+			if err := a.NativeCodeGraphWiringError(home); err != nil {
+				t.Errorf("authoritative legacy entry must retain installer path, got %v", err)
+			}
+		})
+	}
+}
 
 func TestNativeCodeGraphWiring(t *testing.T) {
 	for _, tt := range []struct {
@@ -12,6 +92,9 @@ func TestNativeCodeGraphWiring(t *testing.T) {
 		want       bool
 	}{
 		{"native", `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"]}}}}`, true},
+		{"legacy canonical", `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`, true},
+		{"legacy no watch", `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp","--no-watch"]}}}`, true},
+		{"legacy disabled", `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":false}}}`, false},
 		{"native disabled shadows legacy", `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"]},"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"disabled":true}}}}`, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -30,5 +113,47 @@ func TestNativeCodeGraphWiring(t *testing.T) {
 				t.Fatalf("configured=%v want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// A leading UTF-8 BOM must not hide the CodeGraph entry (#5545).
+func TestCodeGraphWiringToleratesUTF8BOM(t *testing.T) {
+	const bom = "\xef\xbb\xbf"
+	for _, ext := range []string{".json", ".jsonc"} {
+		for _, tt := range []struct {
+			name, body        string
+			effective, pinned bool
+			diagnostic        bool
+		}{
+			{"legacy canonical", `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`, true, false, false},
+			{"native canonical", `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"]}}}}`, true, false, false},
+			{"native no watch", `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp","--no-watch"]}}}}`, true, false, false},
+			// Callers check PinnedCodeGraphPath before the native diagnostic.
+			{"native pinned", `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp","-p","/x"]}}}}`, false, true, true},
+			{"native disabled", `{"mcp":{"servers":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"disabled":true}}}}`, false, false, true},
+		} {
+			t.Run(ext+"/"+tt.name, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("XDG_CONFIG_HOME", "")
+				a := NewAdapter()
+				path := filepath.Join(home, ".config", "opencode", "opencode"+ext)
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(bom+tt.body), 0600); err != nil {
+					t.Fatal(err)
+				}
+				gotPath, got := a.EffectiveCodeGraphWiring(home)
+				if got != tt.effective || (got && gotPath != path) {
+					t.Errorf("EffectiveCodeGraphWiring() = (%q, %v), want %v at %q", gotPath, got, tt.effective, path)
+				}
+				if pinPath, pinned := a.PinnedCodeGraphPath(home); pinned != tt.pinned || (pinned && pinPath != path) {
+					t.Errorf("PinnedCodeGraphPath() = (%q, %v), want %v at %q", pinPath, pinned, tt.pinned, path)
+				}
+				if err := a.NativeCodeGraphWiringError(home); (err != nil) != tt.diagnostic {
+					t.Errorf("NativeCodeGraphWiringError() = %v, want error=%v", err, tt.diagnostic)
+				}
+			})
+		}
 	}
 }

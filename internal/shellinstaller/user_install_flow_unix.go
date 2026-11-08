@@ -651,10 +651,10 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 		}
 	}
 	freshPrefix, identityErr := userIdentity(prefix)
-	if identityErr != nil || freshPrefix != manifest.PrefixIdentity {
+	if identityErr != nil || !userIdentityMatches(manifest.PrefixIdentity, freshPrefix) {
 		return result, privateError("preimage", identityErr)
 	}
-	if freshAgent, identityErr := userSelectedAgentIdentity(manifest.Mode, agent); identityErr != nil || freshAgent != manifest.AgentIdentity {
+	if freshAgent, identityErr := userSelectedAgentIdentity(manifest.Mode, agent); identityErr != nil || !userIdentityMatches(manifest.AgentIdentity, freshAgent) {
 		return result, privateError("preimage", identityErr)
 	}
 	if err = privateDestination(manifest.Destination); err != nil || ctx.Err() != nil {
@@ -1215,10 +1215,10 @@ func userReadRecordedManifest(ctx context.Context, root string, reuse *userInsta
 			return manifest, err
 		}
 	}
-	if actual, err := userIdentity(manifest.Prefix); err != nil || actual != manifest.PrefixIdentity {
+	if actual, err := userIdentity(manifest.Prefix); err != nil || !userIdentityMatches(manifest.PrefixIdentity, actual) {
 		return manifest, privateError("preimage", err)
 	}
-	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || actual != manifest.AgentIdentity {
+	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || !userIdentityMatches(manifest.AgentIdentity, actual) {
 		return manifest, privateError("preimage", err)
 	}
 	if reuse == nil {

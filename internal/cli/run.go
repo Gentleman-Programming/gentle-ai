@@ -88,9 +88,13 @@ var (
 	goEnv                        = defaultGoEnv
 	installCommunityTool         = communitytool.Install
 	installCommunityToolWithHome = communitytool.InstallWithHome
-	injectInstallPersona         = defaultInjectInstallPersona
-	injectSyncPersona            = defaultInjectSyncPersona
-	pathEnvEntries               = func(profile system.PlatformProfile) []string {
+	// installCommunityToolWithOptions carries the --force-community-tools
+	// opt-in down into the installer. The unforced seam above stays in place so
+	// every caller that never forces keeps its existing behaviour.
+	installCommunityToolWithOptions = communitytool.InstallWithOptions
+	injectInstallPersona            = defaultInjectInstallPersona
+	injectSyncPersona               = defaultInjectSyncPersona
+	pathEnvEntries                  = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
 	}
 	addUserPath          = system.AddToUserPath
@@ -276,6 +280,10 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 	if err != nil {
 		return result, err
 	}
+	// --force-community-tools is a CLI opt-in: it must reach the community-tool
+	// step through the runtime so the installer re-runs @latest instead of
+	// taking the reconcile short-circuit.
+	runtime.forceCommunityTools = flags.ForceCommunityTools
 	defer runtime.state.cleanupCompatibilityTransaction()
 	defer runtime.state.cleanupRollbackSnapshot()
 
@@ -790,6 +798,11 @@ type installRuntime struct {
 	// user-global Claude module pilot. stagePlan hands it to both the backup
 	// planner and the routing step, so it must be set before the plan is built.
 	claudeOrchestratorModules bool
+
+	// forceCommunityTools is the --force-community-tools opt-in. stagePlan
+	// hands it to every community-tool step so the installer reinstalls the
+	// tool at @latest even when the installed CLI is current and reconciled.
+	forceCommunityTools bool
 }
 
 type runtimeState struct {
@@ -956,7 +969,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
 		piAgentDir = piagent.AgentConfigPath(r.homeDir)
 	}
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, piAgentDir: piAgentDir})
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir, telemetryConfigDir: telemetryDir, piAgentDir: piAgentDir, codexHomeDir: codexRollbackRoot(r.homeDir, r.resolved.Agents)})
 	if telemetryDir != "" {
 		apply = append(apply, openCodeTelemetryStep{id: "opencode:telemetry-runtime", configDir: telemetryDir, state: r.state})
 	}
@@ -1048,7 +1061,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	// persona replaces whole prompt files for some agents, so CodeGraph guidance
 	// injected before it would be dropped and re-added by the first sync.
 	for _, tool := range r.selection.CommunityTools {
-		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state})
+		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state, forceCommunityTools: r.forceCommunityTools})
 	}
 
 	// After every prompt writer, including community-tool guidance.
@@ -1258,6 +1271,7 @@ func retiredSDDAgentBackupPaths(homeDir string, scope InstallScope, adapters []a
 // retiredOpenCodeSDDTarget is one OpenCode-family settings file that may hold
 // retired SDD agents, with the shared prompt directory retired beside it.
 type retiredOpenCodeSDDTarget struct {
+	homeDir  string
 	agent    model.AgentID
 	settings string
 	prompts  string
@@ -1279,7 +1293,7 @@ func retiredOpenCodeSDDTargets(homeDir, workspaceDir string, scope InstallScope,
 			// the global markdown agents beside it.
 			config := opencodeagent.ConfigPath(homeDir)
 			target := retiredOpenCodeSDDTarget{
-				agent: agent, settings: syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter()),
+				homeDir: homeDir, agent: agent, settings: syncOpenCodeSettingsPath(homeDir, workspaceDir, scope, opencodeagent.NewAdapter()),
 				agentDirs: []string{filepath.Join(config, "agent"), filepath.Join(config, "agents")},
 			}
 			if scope != ScopeWorkspace {
@@ -1291,6 +1305,17 @@ func retiredOpenCodeSDDTargets(homeDir, workspaceDir string, scope InstallScope,
 		}
 	}
 	return targets
+}
+
+// settingsPaths includes both global spellings, whose surviving entries may
+// still reference shared prompts even when project settings are selected.
+func (t retiredOpenCodeSDDTarget) settingsPaths() []string {
+	paths := []string{t.settings}
+	if t.prompts != "" {
+		config := filepath.Dir(filepath.Dir(t.prompts))
+		paths = append(paths, filepath.Join(config, "opencode.json"), filepath.Join(config, "opencode.jsonc"))
+	}
+	return dedupPaths(paths)
 }
 
 // retiredOpenCodeSDDSettingsSteps schedules the settings retirement for every
@@ -1349,7 +1374,15 @@ func (s retiredOpenCodeSDDSettingsStep) Run() error {
 	}
 	actions := settings.ManualActions()
 	if s.target.prompts != "" {
-		prompts, err := legacyassets.RetireOpenCodeSDDPrompts(s.target.prompts)
+		var references []string
+		for _, path := range s.target.settingsPaths() {
+			refs, err := opencodeactivation.SettingsFileReferences(path, s.target.homeDir)
+			if err != nil {
+				return err
+			}
+			references = append(references, refs...)
+		}
+		prompts, err := legacyassets.RetireOpenCodeSDDPrompts(s.target.prompts, references...)
 		if s.changedFiles != nil {
 			*s.changedFiles = append(*s.changedFiles, prompts.Removed...)
 		}
@@ -2880,6 +2913,7 @@ type rollbackRestoreStep struct {
 	workspaceDir       string
 	telemetryConfigDir string // Selected adapter authority, potentially outside HOME via XDG.
 	piAgentDir         string // Selected Pi adapter authority, never derived from the manifest.
+	codexHomeDir       string // Selected Codex CODEX_HOME override, potentially outside HOME.
 }
 
 type openCodeBackgroundActivationStep struct {
@@ -2915,10 +2949,18 @@ func (s rollbackRestoreStep) Rollback() error {
 	defer s.state.cleanupRollbackSnapshot()
 	manifest := s.state.manifest
 	var telemetryErr error
-	roots := rollbackRoots(s.homeDir, s.workspaceDir)
+	targets := make([]string, 0, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		targets = append(targets, entry.OriginalPath)
+	}
+	roots := rollbackRoots(s.homeDir, s.workspaceDir, targets)
 	// guard:population pi-rollback-agent-root too-loose: Only the selected adapter directory extends restore roots; sibling and symlink escapes remain refused.
 	if s.piAgentDir != "" {
 		roots = append(roots, s.piAgentDir)
+	}
+	// guard:population codex-home-rollback-root too-loose: Only the CODEX_HOME override of a selected Codex adapter extends restore roots; unselected agents, isolated homes, and the default root add nothing.
+	if s.codexHomeDir != "" {
+		roots = append(roots, s.codexHomeDir)
 	}
 	if s.telemetryConfigDir != "" {
 		roots = append(roots, s.telemetryConfigDir)
@@ -2942,6 +2984,16 @@ func (s rollbackRestoreStep) Rollback() error {
 	return errors.Join(telemetryErr, (backup.RestoreService{Roots: roots}).Restore(manifest))
 }
 
+// codexRollbackRoot returns the CODEX_HOME override a selected Codex adapter
+// writes under, or "" when no override applies. The default ~/.codex already
+// lives under the home restore root.
+func codexRollbackRoot(homeDir string, agents []model.AgentID) string {
+	if !containsAgent(agents, model.AgentCodex) || !system.CodexHomeOverridden(homeDir) {
+		return ""
+	}
+	return system.CodexConfigDir(homeDir)
+}
+
 // rollbackRoots returns the directories this install/sync run could
 // legitimately have written under, for validating rollback's manifest
 // entries against a caller-known root instead of anything the manifest
@@ -2954,12 +3006,17 @@ func (s rollbackRestoreStep) Rollback() error {
 // Both values are exactly what backupTargets/syncBackupTargets used to
 // compute what this run actually snapshotted, so allowing rollback to
 // write within them is not wider than what this run could already do.
-func rollbackRoots(homeDir, workspaceDir string) []string {
+//
+// The product config directories this run's snapshot targets live under
+// (%APPDATA%\gga redirected outside the profile, issue #6030) come from
+// backup.WithConfigRoots, shared with the uninstall and standalone restores;
+// the targets only select which of those process-derived directories apply.
+func rollbackRoots(homeDir, workspaceDir string, targets []string) []string {
 	roots := []string{homeDir}
 	if workspaceDir != "" && workspaceDir != homeDir {
 		roots = append(roots, workspaceDir)
 	}
-	return roots
+	return backup.WithConfigRoots(roots, homeDir, targets)
 }
 
 type agentInstallStep struct {
@@ -3125,18 +3182,19 @@ type componentApplyStep struct {
 }
 
 type communityToolInstallStep struct {
-	id           string
-	tool         model.CommunityToolID
-	workspaceDir string
-	homeDir      string
-	agents       []model.AgentID
-	state        *runtimeState
+	id                  string
+	tool                model.CommunityToolID
+	workspaceDir        string
+	homeDir             string
+	agents              []model.AgentID
+	state               *runtimeState
+	forceCommunityTools bool
 }
 
 func (s communityToolInstallStep) ID() string { return s.id }
 
 func (s communityToolInstallStep) Run() error {
-	result, err := installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, communitytool.RunnerFunc(runCommand), communitytool.DetectorFunc(cmdLookPath))
+	result, err := s.install()
 	if err != nil {
 		return fmt.Errorf("install community tool %q: %w", s.tool, err)
 	}
@@ -3144,6 +3202,18 @@ func (s communityToolInstallStep) Run() error {
 		s.state.piCodeGraph = result.PiCodeGraph
 	}
 	return nil
+}
+
+// install keeps the unforced installer seam for every run that did not ask for
+// --force-community-tools and only routes through the options seam when the
+// flag is set.
+func (s communityToolInstallStep) install() (communitytool.Result, error) {
+	runner := communitytool.RunnerFunc(runCommand)
+	detector := communitytool.DetectorFunc(cmdLookPath)
+	if s.forceCommunityTools {
+		return installCommunityToolWithOptions(s.tool, s.workspaceDir, communitytool.InstallOptions{HomeDir: s.homeDir, ForceCommunityTools: true}, runner, detector)
+	}
+	return installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, runner, detector)
 }
 
 func (s componentApplyStep) ID() string {
@@ -4385,12 +4455,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 						// Context7 injection writes ~/.claude.json (issue #1868).
 						paths = append(paths, claude.UserConfigPath(homeDir))
 					} else {
-						// Workspace scope writes <project-root>/.mcp.json, the file
-						// Claude Code loads project-scoped MCP servers from (issue #2213).
-						// The legacy .claude/settings.json block is a best-effort
-						// cleanup, not a guaranteed write, so it is not declared as a
-						// verification target (declaring it would force a false-negative
-						// when the file never existed).
+						// Workspace scope writes <workspace>/.mcp.json, the
+						// project-scoped file Claude Code loads MCP servers
+						// from (issue #2213).
 						paths = append(paths, filepath.Join(targetDir, ".mcp.json"))
 					}
 					break

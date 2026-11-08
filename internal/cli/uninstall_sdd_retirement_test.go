@@ -147,7 +147,10 @@ func TestUninstallRetiresOwnedSDDInventoryForEveryRuntime(t *testing.T) {
 		}
 	}
 
-	if err := (backup.RestoreService{}).Restore(result.Manifest); err != nil {
+	// The snapshot spans the home root and the workspace this run was given, so
+	// the restore must authorize the same roots the uninstall knew. The guard is
+	// unchanged: anything outside those roots is still refused.
+	if err := (backup.RestoreService{Roots: result.RestoreRoots}).Restore(result.Manifest); err != nil {
 		t.Fatalf("restore uninstall snapshot: %v", err)
 	}
 	for _, group := range []map[string][]byte{owned, kept, rewritten} {

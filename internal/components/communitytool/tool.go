@@ -118,11 +118,35 @@ func DefinitionFor(id model.CommunityToolID) (Definition, bool) {
 	return Definition{}, false
 }
 
-func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Result, error) {
-	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath))
+// InstallOptions carries the per-run knobs of a community-tool install.
+type InstallOptions struct {
+	// HomeDir is the user home that owns the agent configuration.
+	HomeDir string
+	// ForceCommunityTools is the user's opt-in to reinstall the tool at
+	// @latest and re-run the reconcile even when the installed CLI is
+	// available and already meets codeGraphUpstreamVersion. It is never
+	// derived: only `gentle-ai install --force-community-tools` sets it.
+	ForceCommunityTools bool
 }
 
+// Install is the legacy entry point: default home directory, no force opt-in.
+func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Result, error) {
+	return InstallWithOptions(id, workspaceDir, InstallOptions{HomeDir: defaultHomeDir()}, runner, DetectorFunc(exec.LookPath))
+}
+
+// InstallWithHome keeps the unforced signature used by callers that have no
+// opt-in for --force-community-tools; it installs with the given home and
+// never forces.
 func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
+	return InstallWithOptions(id, workspaceDir, InstallOptions{HomeDir: homeDir}, runner, detector)
+}
+
+// InstallWithOptions is the version-aware installer. An explicit
+// ForceCommunityTools opt-in bypasses the CodeGraphReconcileSatisfied() /
+// codeGraphCanRepairWithoutFullInstall short-circuit unconditionally and
+// re-installs the package at @latest before the reconcile commands run.
+func InstallWithOptions(id model.CommunityToolID, workspaceDir string, options InstallOptions, runner Runner, detector Detector) (Result, error) {
+	homeDir := options.HomeDir
 	if runner == nil {
 		return Result{}, fmt.Errorf("community tool runner is not configured")
 	}
@@ -137,17 +161,46 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	result := Result{Tool: id}
 	before := DetectStatus(id, homeDir, detector)
 	result.StatusBefore = &before
+	// Probe the installed CodeGraph version once. A single shared result feeds
+	// both the short-circuit gate (does the existing CLI need an upgrade to
+	// meet codeGraphUpstreamVersion?) and the drop-targets advisory (should
+	// we tell the user the detected version is older than the contract and
+	// avoid sending target ids the older binary would reject?). Probing once
+	// keeps `codeGraphInstalledVersion` cheap and preserves the existing
+	// invariant that a CLI whose version cannot be determined takes today's
+	// short-circuit, not a forced reinstall.
+	installedVersion, hasInstalledVersion := "", false
+	if before.CLI == AvailabilityAvailable && strings.TrimSpace(before.CLIPath) != "" {
+		installedVersion, hasInstalledVersion = codeGraphInstalledVersion(before.CLIPath)
+	}
+	installedVersionIsStale := hasInstalledVersion && codeGraphVersionLess(installedVersion, codeGraphUpstreamVersion)
 	snapshots, err := snapshotCodeGraphPaths(CodeGraphManagedPaths(homeDir))
 	if err != nil {
 		return result, err
 	}
+	// versionGapHint carries the stale-CLI install hint so it reaches the user
+	// only when the upgrade did not complete; a successful run reports the
+	// completed upgrade instead of asking for it again.
+	versionGapHint := ""
 	rollback := func(cause error) (Result, error) {
+		if versionGapHint != "" {
+			result.ManualActions = append(result.ManualActions, versionGapHint)
+		}
 		if restoreErr := restoreCodeGraphPaths(snapshots); restoreErr != nil {
 			return result, fmt.Errorf("%w; rollback CodeGraph configuration: %v", cause, restoreErr)
 		}
 		return result, cause
 	}
-	if before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before) {
+	// An older CodeGraph CLI is a hidden staleness: status holds "reconciled"
+	// because every detected agent is wired, but the installed binary predates
+	// codeGraphUpstreamVersion and would receive targets written against the
+	// contract and reject them. Bypass the short-circuit in that one case so
+	// the upgrade command runs. A CLI whose version cannot be determined, or
+	// that is already at or above the contract, keeps today's no-reinstall
+	// behaviour. The explicit --force-community-tools opt-in bypasses the gate
+	// unconditionally: the user asked for a fresh @latest install even when the
+	// existing CLI is current and reconciled.
+	if (before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before)) && !installedVersionIsStale && !options.ForceCommunityTools {
 		if NeedsOpenCodeCodeGraphReconcile(homeDir) {
 			result.CommandsRun = append(result.CommandsRun, "codegraph install --target opencode --location global --yes")
 		}
@@ -199,14 +252,12 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	// of ours it understands. A CLI that is not installed yet is exempt: the
 	// install command below fetches @latest, which meets the contract.
 	droppedBlindTargets := false
-	if before.CLI == AvailabilityAvailable && len(targets) > 0 {
-		if installed, ok := codeGraphInstalledVersion(before.CLIPath); ok && codeGraphVersionLess(installed, codeGraphUpstreamVersion) {
-			targets = nil
-			droppedBlindTargets = true
-			result.ManualActions = append(result.ManualActions, fmt.Sprintf(
-				"CodeGraph %s is older than the %s target contract Gentle AI is written against, so agent targets were left to CodeGraph's own detection. Run `npm install -g @colbymchenry/codegraph@latest` (or `pnpm add -g @colbymchenry/codegraph@latest`) and rerun Gentle AI to get explicit target selection.",
-				installed, codeGraphUpstreamVersion))
-		}
+	if before.CLI == AvailabilityAvailable && len(targets) > 0 && installedVersionIsStale {
+		targets = nil
+		droppedBlindTargets = true
+		versionGapHint = fmt.Sprintf(
+			"CodeGraph %s is older than the %s target contract Gentle AI is written against, so agent targets were left to CodeGraph's own detection. Run `npm install -g @colbymchenry/codegraph@latest` (or `pnpm add -g @colbymchenry/codegraph@latest`) and rerun Gentle AI to get explicit target selection.",
+			installedVersion, codeGraphUpstreamVersion)
 	}
 	commands := make([][]string, 0, 2)
 	switch {
@@ -215,13 +266,35 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	case droppedBlindTargets:
 		commands = append(commands, []string{"codegraph", "install", "--yes"})
 	}
-	if before.CLI != AvailabilityAvailable {
+	// Re-install path: when no CLI is present the upgrade starts with the
+	// package install; the same applies when the existing CLI is provably
+	// older than the contract — the short-circuit skipped us, but the binary
+	// still needs to be replaced with @latest before any `codegraph install`
+	// it forwards makes sense. A stale CLI therefore routes through the same
+	// CodeGraphCommandsForDetectorAndTargets helper that a missing CLI does,
+	// re-using its package-manager resolution (npm → pnpm) and target-keep
+	// behaviour. Today only `before.CLI == AvailabilityMissing` enters this
+	// branch; R1 makes the stale but available case also enter, and the
+	// --force-community-tools opt-in enters it for a current, available CLI so
+	// the package is reinstalled at @latest before the reconcile commands.
+	if before.CLI != AvailabilityAvailable || installedVersionIsStale || options.ForceCommunityTools {
 		var err error
 		commands, err = CodeGraphCommandsForDetectorAndTargets(DetectorFunc(codeGraphPackageLookPath), targets)
 		if err != nil {
+			if versionGapHint != "" {
+				result.ManualActions = append(result.ManualActions, versionGapHint)
+			}
 			return result, err
 		}
-		if len(targets) == 0 {
+		// Stale-but-available keeps both the package install AND
+		// `codegraph install` so the freshly-upgraded CLI re-resolves its
+		// agents. Truncating to the package install (the missing-CLI
+		// behaviour) would leave us upgraded but unwired. A forced run over a
+		// current CLI keeps the reconcile command the same way; with no
+		// detected target there is nothing to reconcile and the @latest
+		// package install stands alone.
+		staleButAvailable := before.CLI == AvailabilityAvailable && installedVersionIsStale
+		if !staleButAvailable && len(targets) == 0 {
 			commands = commands[:1]
 		}
 	}
@@ -259,6 +332,11 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	result.StatusAfter = &after
 	if err := validateCodeGraphInstallStatus(after); err != nil {
 		return rollback(err)
+	}
+	if droppedBlindTargets {
+		result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+			"CodeGraph was upgraded from %s, which is older than the %s target contract Gentle AI is written against, so agent targets were left to CodeGraph's own detection on this run; rerun Gentle AI to restore explicit target selection.",
+			installedVersion, codeGraphUpstreamVersion))
 	}
 	result.ManualActions = append(result.ManualActions, "CodeGraph CLI was installed and supported agents were connected. Project indexes will be created automatically when an enabled agent opens inside a project.")
 	return result, nil

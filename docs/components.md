@@ -106,6 +106,16 @@ Community Tools are opt-in and are not included by presets or automatic detectio
 |---|---|---|
 | CodeGraph | Installs its CLI and configures supported agent MCP/guidance integration. | Use CodeGraph’s upstream lifecycle commands. |
 
+### OpenCode CodeGraph wiring
+
+Existing native `mcp.servers.codegraph` wiring is preserved byte-for-byte, including JSONC comments. A local string-array command may use `codegraph serve --mcp`, an absolute `codegraph` executable path (including Windows `.exe`/`.cmd`), and the supported `--no-watch` option.
+
+An entry, native or legacy `mcp.codegraph`, whose local `codegraph serve --mcp` command pins a project with a non-empty `--path <directory>`, `--path=<directory>`, or `-p <directory>` serves that fixed project regardless of the client's workspace, so it is not managed wiring. Install, status, and sync treat it as configured by the user: they never run the installer, fail, or rewrite that entry, whatever its enable flags. A pin that is not a valid CodeGraph serve command (another program, a non-local type, or a missing or empty path value) still gets the native diagnostic or the legacy installer path.
+
+When both `opencode.jsonc` and `opencode.json` exist, the CodeGraph entry in JSONC takes priority; JSON is consulted only if JSONC has no CodeGraph entry. An invalid or disabled higher-priority entry never falls back to the lower-priority file. A leading UTF-8 BOM in either file is ignored when detecting wiring.
+
+If a native entry is disabled or has an unsupported type or command, sync stops and names the configuration path, key, and unmet condition instead of repeatedly invoking a legacy installer. Correct unsupported wiring to complete sync. For a disabled native entry, enable or remove that entry to complete sync; leaving it disabled keeps sync blocked. Disabled native entries never fall back to legacy wiring. Missing or ineffective legacy-only wiring still uses CodeGraph's upstream installer.
+
 ### CodeGraph initialization workspace
 
 For project initialization, the explicit agent working directory is the target—not an enclosing Git repository. Check its local `.git` (directory or worktree file) and `.codegraph/` first. Ancestor Git-root discovery is only appropriate for an already-selected existing repository.

@@ -14,11 +14,13 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+func piAdapter() agents.Adapter       { return pi.NewAdapter() }
 
 func TestInjectMergesThemeOverlayIntoAdapterSettings(t *testing.T) {
 	home := t.TempDir()
@@ -151,6 +153,81 @@ func TestInjectLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
 			}
 			if info, err := os.Stat(settingsPath); err != nil || info.Mode().Perm() != wantMode {
 				t.Fatalf("native settings mode = %v, %v; want %v", info, err, wantMode)
+			}
+		})
+	}
+}
+
+// TestInjectSkipsAdapterWithoutGentlemanTheme covers #4775: the overlay selects
+// a theme by name, so it only belongs on adapters that register "gentleman"
+// (Claude Code and OpenCode). Pi ships its own themes (Gentle, Gentleman-Cute,
+// Gentleman-Sexy) through the gentle-pi npm package, so persisting "gentleman"
+// in its settings makes every Pi startup fail to load the theme. Sync still owns
+// one contract for every adapter: the settings file exists afterwards, so a
+// missing file is created without a theme key while an existing one is left
+// byte-for-byte untouched. Kimi reads TOML settings, which stay untouched too.
+func TestInjectSkipsAdapterWithoutGentlemanTheme(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	piSeed := "{\n  \"tuiMode\": \"fullscreen\",\n  \"packages\": [\"npm:gentle-pi\"]\n}\n"
+	tests := []struct {
+		name        string
+		adapter     agents.Adapter
+		seed        string
+		wantCreated bool
+	}{
+		{name: "pi json keeps user settings", adapter: piAdapter(), seed: piSeed},
+		{name: "pi json created when missing", adapter: piAdapter(), wantCreated: true},
+		{name: "kimi toml", adapter: kimi.NewAdapter(), seed: "[settings]\ntheme = \"user-theme\"\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			jsonPath := agents.JSONSettingsPath(home, tt.adapter)
+			if tt.seed != "" {
+				seedPath := tt.adapter.SettingsPath(home)
+				if err := os.MkdirAll(filepath.Dir(seedPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(seedPath, []byte(tt.seed), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			first, err := Inject(home, tt.adapter)
+			if err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+			if tt.wantCreated {
+				// Sync verification requires the adapter's settings file to exist
+				// after a sync even when the adapter has no theme assets.
+				if !first.Changed || len(first.Files) != 1 || first.Files[0] != jsonPath {
+					t.Fatalf("Inject() = %#v, want the created settings file %q reported", first, jsonPath)
+				}
+				got, err := os.ReadFile(jsonPath)
+				if err != nil {
+					t.Fatalf("ReadFile(%s) error = %v", jsonPath, err)
+				}
+				if strings.Contains(string(got), "theme") {
+					t.Fatalf("created settings contain a theme key: %q", got)
+				}
+				if strings.TrimSpace(string(got)) != "{}" {
+					t.Fatalf("created settings = %q, want an empty JSON object", got)
+				}
+			} else {
+				if first.Changed || len(first.Files) != 0 {
+					t.Fatalf("Inject() = %#v, want a no-op without reported files", first)
+				}
+			}
+			if tt.seed != "" {
+				seedPath := tt.adapter.SettingsPath(home)
+				if got, err := os.ReadFile(seedPath); err != nil || string(got) != tt.seed {
+					t.Fatalf("settings = %q, %v; want bytes preserved as %q", got, err, tt.seed)
+				}
+			}
+
+			second, err := Inject(home, tt.adapter)
+			if err != nil || second.Changed || len(second.Files) != 0 {
+				t.Fatalf("Inject() second = %#v, %v; want a no-op on re-run", second, err)
 			}
 		})
 	}
@@ -464,4 +541,60 @@ func indentedJSON(t *testing.T, fixture string, value any) []byte {
 		t.Fatal(err)
 	}
 	return append(result, '\n')
+}
+
+// A UTF-8 BOM written by some editors is encoding metadata: the theme writer
+// must keep it, keep every user key, and converge on repeated runs.
+func TestInjectAtPathPreservesBOMSettings(t *testing.T) {
+	const bom = "\xEF\xBB\xBF"
+	for _, tc := range []struct {
+		name, file, body string
+		keep             []string
+	}{
+		{
+			name: "json",
+			file: "settings.json",
+			body: "{\n  \"model\": \"user-model\",\n  \"permissions\": {\"allow\": [\"Bash(ls)\"], \"deny\": [\"Read(.env)\"]}\n}\n",
+			keep: []string{`"model": "user-model"`, `"Bash(ls)"`, `"Read(.env)"`, `"theme": "gentleman"`},
+		},
+		{
+			name: "jsonc",
+			file: "opencode.jsonc",
+			body: "{\n  // user note\n  \"model\": \"user-model\",\n}\n",
+			keep: []string{"// user note", `"model": "user-model"`, `"theme": "gentleman"`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tc.file)
+			if err := os.WriteFile(path, []byte(bom+tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			first, err := InjectAtPath(path)
+			if err != nil || !first.Changed {
+				t.Fatalf("first InjectAtPath() = %#v, %v; want changed", first, err)
+			}
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.HasPrefix(want, []byte(bom)) || bytes.Count(want, []byte(bom)) != 1 {
+				t.Fatalf("settings must keep exactly one leading BOM:\n%q", want)
+			}
+			for _, key := range tc.keep {
+				if !bytes.Contains(want, []byte(key)) {
+					t.Fatalf("settings lost %s:\n%s", key, want)
+				}
+			}
+			for run := 2; run <= 3; run++ {
+				again, err := InjectAtPath(path)
+				if err != nil || again.Changed {
+					t.Fatalf("run %d InjectAtPath() = %#v, %v; want unchanged", run, again, err)
+				}
+				got, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("run %d rewrote settings:\n%q\nwant:\n%q", run, got, want)
+				}
+			}
+		})
+	}
 }
