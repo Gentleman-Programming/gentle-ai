@@ -429,11 +429,12 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		userShellDetail(ctx, 3, 5, "Reusing the installed global runtime")
 	}
 	pkg := filepath.Join(prefix, "lib/node_modules/gentle-pi")
-	// The supplier files are authenticated against the reviewed list entry for
-	// the gentle-pi version this stage carries. A rebuilt Stable SDK carries
-	// the newest listed release, authenticated against the staged selected
-	// list. A rebuilt Main preview SDK keeps the frozen lock's stock base,
-	// authenticated against the embedded entry like every pre-list install
+	// The supplier files are advisory data since #5994: the generated lock's
+	// registry SRI anchors the tree, so a listed entry's digests only inform.
+	// A rebuilt Stable SDK resolves npm `latest` and compares its supplier
+	// digests against the staged selected list when listed, warning instead of
+	// refusing. A rebuilt Main preview SDK keeps the frozen lock's stock base,
+	// compared against the embedded entry like every pre-list install
 	// (S23/M4). A reused SDK carries its recorded version — or the frozen
 	// lock's version for a manifest predating the field (S23/M3) — and runs no
 	// supplier, so an entry is required only when one exists: the selected
@@ -464,15 +465,30 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 	} else {
-		version = list.newestReviewedRelease()
-		if installerSHA, resolverSHA, err = userStableSupplierPins(list, version); err != nil {
+		// The channel is the contract (#5994): the generated lock resolved npm
+		// `latest` and the resolved version is the install. The reviewed table
+		// only advises: compare the supplier digests when the installed
+		// version is listed on the staged selected list, warn otherwise.
+		if version, err = userStageGentlePiVersion(root); err != nil {
 			return result, err
+		}
+		if entry, found := list.Releases[version]; found {
+			installerSHA, resolverSHA = entry.Installer, entry.Binary
+		} else {
+			authenticate = false
+			userShellDetail(ctx, 3, 5, fmt.Sprintf("gentle-pi@%s is outside the reviewed supplier table; supplier file digests unchecked", version))
 		}
 	}
 	if authenticate {
 		for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", installerSHA}, {"runtime/gentle-ai-binary.mjs", resolverSHA}} {
-			if _, err = userSourceFile(ctx, filepath.Join(pkg, source.name), -1, source.pin); err != nil {
-				return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, err)
+			// Advisory: the physical readback still refuses (transport), but a
+			// digest that differs from the reviewed entry only warns.
+			stamp, stampErr := userSourceFile(ctx, filepath.Join(pkg, source.name), -1, "")
+			if stampErr != nil {
+				return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, stampErr)
+			}
+			if digest := stamp[len(stamp)-64:]; digest != source.pin {
+				userShellDetail(ctx, 3, 5, fmt.Sprintf("Supplier advisory: gentle-pi@%s file %s differs from its reviewed entry", version, source.name))
 			}
 		}
 	}

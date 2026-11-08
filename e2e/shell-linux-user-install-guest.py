@@ -622,6 +622,14 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     sent = False
     typed = False
     expected = b'type, or / for commands' if opening_only else b'el Gentleman package is active.'
+    # The channel contract installs whatever gentle-pi npm's latest resolves:
+    # recent releases start with a codemode consent dialog and no longer print
+    # the historical registration line. Their branded header is rendered with
+    # cursor positioning between glyphs, so the witness is searched over the
+    # ANSI-stripped visible stream with flexible spacing — fixed bytes, never
+    # a dynamic or vacuous pass.
+    branded = re.compile(rb'\xe2\x9c\xbf\s+Gentle\s+Shell')
+    witnessed = False
     confirmed = False
     stopped = False
     observed_cwd = ''
@@ -664,6 +672,11 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     del raw[:discarded]
                     truncated += discarded
                 require(len(raw) <= 65536, 'whole PTY capture bound')
+                # The channel contract witnesses registration with either the
+                # historical line or the branded header over the ANSI-stripped
+                # stream; the exit choreography starts on the same witness.
+                visible = re.sub(rb'\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-B]|\x1b[=>]', b'', bytes(raw))
+                witnessed = expected in raw or (not opening_only and branded.search(visible))
                 input_ready = installer_seen if installer is not None else (no_models_seen or prompt_seen)
                 if not trust_answered and b'Trust project folder' in raw:
                     time.sleep(0.2)
@@ -686,7 +699,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 if installer is not None and not confirmed and b'Confirm this physical selection' in raw:
                     os.write(master, b'y')
                     confirmed = True
-                if installer is None and expected in raw and (input_ready or not opening_only) and not stopped:
+                if installer is None and witnessed and (input_ready or not opening_only) and not stopped:
                     foreground = os.tcgetpgrp(master)
                     observed_cwd = os.readlink(f'/proc/{foreground}/cwd')
                     require(observed_cwd == str(project), 'actual foreground caller CWD differs')
@@ -716,7 +729,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     os.write(master, b'finish\n')
                     break
         if installer is None:
-            require(expected in raw, 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')
+            require(witnessed, 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')
             if opening_only:
                 require(stopped and b'GUEST-STATUS:0' in raw, 'Gentle opening did not settle successfully')
             require(not installer_seen, 'ordinary launch opened installer')

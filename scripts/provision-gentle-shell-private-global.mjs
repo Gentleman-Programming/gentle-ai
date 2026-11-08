@@ -41,10 +41,11 @@ function lockRoots(dependencies) {
   const base = [...rootNames].sort();
   return JSON.stringify(names) === JSON.stringify(base) || JSON.stringify(names) === JSON.stringify([...base, companionName].sort()) ? names : null;
 }
-// Stable Separate private-global route (S19): gentle-pi is declared at the
-// exact newest release of the staged reviewed supplier list, the companion at
-// that release's exact pin, and the other four roots at `latest`; the lock is
-// generated at install time like Windows.
+// Stable Separate private-global route (S19): every stock root is declared at
+// npm's `latest` dist-tag — the channel is the contract — and the lock is
+// generated at install time like Windows. The resolved gentle-pi is the
+// install; no re-resolution ever rewrites it, and the companion is read from
+// its resolved tarball.
 const reviewedSeed = { name: 'gentle-shell-owned-seed', version: '1.0.0' };
 function rootDeclaration(target, companion = null) {
   const dependencies = Object.fromEntries(rootNames.map(name => [name, name === 'gentle-pi' ? target : 'latest']));
@@ -113,32 +114,34 @@ function readReviewedList() {
   let raw;
   try { raw = read(listPath); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  // The staged list read is bounded at 256 KiB, matching the Go loader's bound.
-  if (raw.length > 262144) reject('reviewed supplier list');
-  const list = JSON.parse(raw);
+  // The list is advisory data: an unreadable, oversized or malformed staged
+  // list degrades to no supplier advisories instead of refusing the channel
+  // install. The staged list read is bounded at 256 KiB, matching the Go
+  // loader's bound.
+  const unavailable = reason => {
+    console.error(`global provision advisory: the reviewed supplier list is unusable (${reason}); supplier advisories are unavailable`);
+    return {};
+  };
+  if (raw.length > 262144) return unavailable('the staged list exceeds the 256 KiB bound');
+  let list;
+  try { list = JSON.parse(raw); }
+  catch (error) { return unavailable(error.message); }
   const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
   const sri = value => typeof value === 'string' && /^sha512-[A-Za-z0-9+/]{86}==$/.test(value) &&
     Buffer.from(value.slice(7), 'base64').toString('base64') === value.slice(7);
   if (list === null || typeof list !== 'object' || Array.isArray(list) || list.schema !== 'gentle-shell-reviewed-suppliers/v1' ||
-      list.releases === null || typeof list.releases !== 'object' || Array.isArray(list.releases)) reject('reviewed supplier list');
-  if (Object.keys(list).sort().join(',') !== 'releases,schema') reject('reviewed supplier list');
+      list.releases === null || typeof list.releases !== 'object' || Array.isArray(list.releases) ||
+      Object.keys(list).sort().join(',') !== 'releases,schema') return unavailable('the staged list shape is malformed');
   for (const [version, entry] of Object.entries(list.releases)) {
     if (!semver.test(version) || entry === null || typeof entry !== 'object' || Array.isArray(entry) ||
         Object.keys(entry).sort().join(',') !== 'binary,installer,integrity' || !sri(entry.integrity) ||
-        !/^[0-9a-f]{64}$/.test(entry.installer) || !/^[0-9a-f]{64}$/.test(entry.binary)) reject('reviewed supplier list');
+        !/^[0-9a-f]{64}$/.test(entry.installer) || !/^[0-9a-f]{64}$/.test(entry.binary)) return unavailable(`entry ${version} is malformed`);
   }
-  if (Object.keys(list.releases).length === 0) reject('reviewed supplier list');
+  if (Object.keys(list.releases).length === 0) return unavailable('the staged list lists no releases');
   return list.releases;
 }
 // Newest reviewed version in semantic order (4.10.0 > 4.9.0): the exact
 // gentle-pi version the Stable install declares.
-function newestReviewedListVersion(table) {
-  const order = version => version.split('.').map(Number);
-  return Object.keys(table).sort((left, right) => {
-    const a = order(left), b = order(right);
-    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
-  }).at(-1);
-}
 function physical(absolute, directory = false) {
   if (!path.isAbsolute(absolute) || path.resolve(absolute) !== absolute || fs.realpathSync(absolute) !== absolute) reject('noncanonical path');
   const stat = fs.lstatSync(absolute);
@@ -396,12 +399,10 @@ if (action === 'restore') {
       writeExclusive(path.join(source, 'package-lock.json'), lockBytes);
     }
   } else {
-    // Generated-lock route (S19): declare gentle-pi at the exact newest listed
-    // release and the other roots at `latest`, resolve the lock at install
-    // time, and complete its SRI records like the Windows provisioner. An
-    // unknown `latest` never occurs for gentle-pi because it is pinned to a
-    // listed version; a listed version with a mismatch is refused below.
-    const target = newestReviewedListVersion(reviewed);
+    // Generated-lock route (S19): declare every stock root at `latest` — the
+    // channel is the contract — resolve the lock at install time, and complete
+    // its SRI records like the Windows provisioner. The resolved gentle-pi is
+    // the install; no re-resolution ever rewrites it.
     if (action === 'install') {
       physical(agent, true);
       snapshot(preparing);
@@ -409,25 +410,35 @@ if (action === 'restore') {
         absent(directory);
         fs.mkdirSync(directory, { mode: 0o700 });
       }
-      // Separate only (B1): Shared and agent installs keep the five stock
-      // roots. The companion pin is read once, before the lock exists, from
-      // the listed tarball stock npm fetches into the private cache (npm ci
-      // reuses it), only after its bytes match the reviewed SRI.
-      if (mode === 'separate') {
-        const packed = path.join(root, 'tmp', `gentle-pi-${crypto.randomUUID()}`);
-        fs.mkdirSync(packed, { mode: 0o700 });
-        stockNpm(['pack', `gentle-pi@${target}`, `--pack-destination=${packed}`, '--ignore-scripts', '--registry=https://registry.npmjs.org/']);
-        const tarball = read(path.join(packed, `gentle-pi-${target}.tgz`));
-        if (`sha512-${crypto.createHash('sha512').update(tarball).digest('base64')}` !== reviewed[target].integrity) reject('stock supplier pin');
-        const member = spawnSync('/usr/bin/tar', ['-xOzf', '-', 'package/runtime/gentle-shell-bundled.mjs'], { input: tarball, env, shell: false, timeout: 60000, maxBuffer: 8388608, encoding: 'utf8' });
-        companion = member.status === 0 ? companionPin(member.stdout) : null;
-        fs.unlinkSync(path.join(packed, `gentle-pi-${target}.tgz`));
-        fs.rmdirSync(packed);
-      }
-      writeExclusive(path.join(source, 'package.json'), `${JSON.stringify(rootDeclaration(target, companion))}\n`);
+      writeExclusive(path.join(source, 'package.json'), `${JSON.stringify(rootDeclaration('latest'))}\n`);
       stockNpm(['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
       const { completeFile } = await import(pathToFileURL(path.join(root, 'complete-generated-lock-sri.mjs')).href);
       await completeFile(lockPath);
+      // Separate only (B1): Shared and agent installs keep the five stock
+      // roots. The companion pin is read once, from the resolved gentle-pi
+      // tarball stock npm fetches into the private cache (npm ci reuses it),
+      // only after its bytes match the lock SRI — the channel resolution
+      // anchors the pack bytes.
+      if (mode === 'separate') {
+        const first = JSON.parse(read(lockPath));
+        const resolved = first.packages['node_modules/gentle-pi'];
+        const packed = path.join(root, 'tmp', `gentle-pi-${crypto.randomUUID()}`);
+        fs.mkdirSync(packed, { mode: 0o700 });
+        stockNpm(['pack', `gentle-pi@${resolved.version}`, `--pack-destination=${packed}`, '--ignore-scripts', '--registry=https://registry.npmjs.org/']);
+        const tarball = read(path.join(packed, `gentle-pi-${resolved.version}.tgz`));
+        if (`sha512-${crypto.createHash('sha512').update(tarball).digest('base64')}` !== resolved.integrity) reject('stock supplier pack SRI');
+        const member = spawnSync('/usr/bin/tar', ['-xOzf', '-', 'package/runtime/gentle-shell-bundled.mjs'], { input: tarball, env, shell: false, timeout: 60000, maxBuffer: 8388608, encoding: 'utf8' });
+        companion = member.status === 0 ? companionPin(member.stdout) : null;
+        fs.unlinkSync(path.join(packed, `gentle-pi-${resolved.version}.tgz`));
+        fs.rmdirSync(packed);
+        if (companion) {
+          fs.unlinkSync(path.join(source, 'package.json'));
+          fs.unlinkSync(lockPath);
+          writeExclusive(path.join(source, 'package.json'), `${JSON.stringify(rootDeclaration(resolved.version, companion))}\n`);
+          stockNpm(['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
+          await completeFile(lockPath);
+        }
+      }
     }
     lockBytes = read(lockPath);
     lock = JSON.parse(lockBytes);
@@ -442,11 +453,13 @@ if (action === 'restore') {
       if (!entry) reject('generated root declaration');
       return [name, [entry.version, entry.integrity]];
     }));
-    // The locked gentle-pi must be the declared listed release with the
-    // entry's exact npm tarball SRI, on install and on every later verify.
+    // Advisory: the reviewed table never gates the channel. A gentle-pi
+    // outside the table, or a listed version whose lock SRI differs from its
+    // entry, installs anyway and says so. The lock's registry SRI stays the
+    // only hard integrity anchor.
     const listed = reviewed[pins['gentle-pi'][0]];
-    if (!listed || listed.integrity !== pins['gentle-pi'][1] ||
-        (action === 'install' && pins['gentle-pi'][0] !== target)) reject('stock supplier pin');
+    if (!listed) console.error(`global provision advisory: gentle-pi@${pins['gentle-pi'][0]} is outside the reviewed supplier table; installing the channel resolution`);
+    else if (listed.integrity !== pins['gentle-pi'][1]) console.error(`global provision advisory: gentle-pi@${pins['gentle-pi'][0]} lock SRI differs from its reviewed entry; installing the channel resolution`);
   }
   if (frozenLock && !read(lockPath).equals(lockBytes)) reject('selected frozen lock differs');
   if (action === 'install') {
@@ -815,21 +828,22 @@ if (action === 'restore') {
     }
   }
   const supplier = path.join(modules, 'gentle-pi');
-  // Reviewed supplier sources (S19): with the staged reviewed list — every
-  // Stable install this feature provisions stages one — the installed
-  // gentle-pi's supplier files must match its locked version's list entry
-  // before the supplier runs. A stage without a staged list (a Main preview
-  // install, or a legacy tree) keeps the frozen-lock route, whose supplier
+  // Advisory supplier digests (S19, #5994): with the staged reviewed list —
+  // every Stable install this feature provisions stages one — the installed
+  // gentle-pi's supplier files are compared against its locked version's list
+  // entry, and a deviation warns instead of refusing; the lock's registry SRI
+  // anchors the tree. A stage without a staged list (a Main preview install,
+  // or a legacy tree) keeps the frozen-lock route, whose supplier
   // authentication the Go launch boundary enforces against the embedded list
   // entry (S23/M1).
   if (reviewed) {
     const entry = reviewed[pins['gentle-pi'][0]];
-    if (!entry) reject('stock supplier pin');
-    for (const [relative, expected] of [
+    if (!entry) console.error(`global provision advisory: gentle-pi@${pins['gentle-pi'][0]} is outside the reviewed supplier table; supplier file digests unchecked`);
+    else for (const [relative, expected] of [
       ['scripts/gentle-ai-installer.mjs', entry.installer],
       ['runtime/gentle-ai-binary.mjs', entry.binary],
     ]) {
-      if (digest(read(path.join(supplier, relative))) !== expected) reject('stock supplier pin');
+      if (digest(read(path.join(supplier, relative))) !== expected) console.error(`global provision advisory: gentle-pi@${pins['gentle-pi'][0]} supplier file ${relative} differs from its reviewed entry`);
     }
   }
   nativeState();
