@@ -24,14 +24,6 @@ import (
 
 const userWindowsSchema = "gentle-shell-windows-separate/v1"
 
-// windowsQualifiedBuildFloor is the oldest Windows build the Separate installer
-// qualifies: Windows 10 22H2 (build 19045) and every Windows 11 build (22000+)
-// share the installer's full API surface (Job Objects with CPU rate control,
-// IsWow64Process2, NTFS ACL walks via Get/SetNamedSecurityInfo); the floor was
-// verified on a real Windows 10 22H2 host (issue #5927). Server (ProductType 2+)
-// and ARM64 stay unqualified.
-const windowsQualifiedBuildFloor = 19045
-
 type userWindowsManifest struct {
 	Schema, Destination, SID, Identity, SupervisorSHA string
 	PrefixIdentity, AgentIdentity                     string
@@ -68,8 +60,8 @@ func UserKernelCheck() error {
 	if err := windows.IsWow64Process2(windows.CurrentProcess(), &processMachine, &nativeMachine); err != nil {
 		return err
 	}
-	if runtime.GOARCH != "amd64" || nativeMachine != 0x8664 || version.MajorVersion != 10 || version.BuildNumber < windowsQualifiedBuildFloor || version.ProductType != 1 {
-		return errors.New("Gentle Shell Separate requires Windows 10 22H2 (build 19045) or Windows 11 x64; Windows Server and ARM64 are not qualified targets")
+	if err := windowsKernelQualificationError(runtime.GOARCH, nativeMachine, version.MajorVersion, version.BuildNumber, version.ProductType); err != nil {
+		return err
 	}
 	if windows.GetCurrentProcessToken().IsElevated() {
 		return errors.New("run Gentle Shell from your normal Windows account, not an Administrator terminal")
