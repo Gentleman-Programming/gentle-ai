@@ -107,10 +107,26 @@ type reviewLensContextBinding struct {
 type reviewLensContextError struct {
 	Code   string
 	Action string
+	// Budget metrics are additive instance data (#5662/#5499/#4954): only the
+	// budget refusal populates them, and every field renders inside the
+	// published 4000-character cause bound.
+	Runtime         string
+	BudgetBytes     int64
+	BlockBytes      int64
+	TopSection      string
+	TopSectionBytes int64
 }
 
 func (err *reviewLensContextError) Error() string {
-	return fmt.Sprintf("%s: provider-owned reviewer lens context was not produced; %s", err.Code, err.Action)
+	message := fmt.Sprintf("%s: provider-owned reviewer lens context was not produced; %s", err.Code, err.Action)
+	if err.BudgetBytes > 0 {
+		message += fmt.Sprintf(" [runtime=%s budget_bytes=%d block_bytes=%d", err.Runtime, err.BudgetBytes, err.BlockBytes)
+		if err.TopSection != "" {
+			message += fmt.Sprintf(" top_section=%q top_section_bytes=%d", err.TopSection, err.TopSectionBytes)
+		}
+		message += "]"
+	}
+	return message
 }
 
 func reviewLensContextRefusal(code, action string) error {
@@ -335,7 +351,7 @@ func reviewLensContextBudgetProbe(
 		}, subject, frozen, state.RuntimeAgent)
 		var refusal *reviewLensContextError
 		if errors.As(assemblyErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
-			return reviewLensContextOverBudget, nil
+			return reviewLensContextOverBudget, assemblyErr
 		}
 		if assemblyErr != nil {
 			return reviewLensContextUnproven, assemblyErr
@@ -351,7 +367,7 @@ func reviewLensContextBudgetProbe(
 	if floorErr := reviewProviderRoleEnvelopeFloor(assemblyContext, repo, state.RuntimeAgent, frozenPolicy, reviewFrozenRequestContext(state), state.InitialSnapshot); floorErr != nil {
 		var refusal *reviewLensContextError
 		if errors.As(floorErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
-			return reviewLensContextOverBudget, nil
+			return reviewLensContextOverBudget, floorErr
 		}
 		return reviewLensContextUnproven, floorErr
 	}
@@ -436,7 +452,7 @@ func reviewLensContextCompactAtomicStartBudgetRefusal(
 	}
 	// START freezes this runtime, so it is the one every later STATUS of the
 	// same runtime will render for.
-	outcome, _ := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision, model.AgentID(state.RuntimeAgent))
+	outcome, cause := reviewLensContextBudgetProbe(ctx, reviewLensContextDependencies(), repo, state, revision, model.AgentID(state.RuntimeAgent))
 	if outcome != reviewLensContextOverBudget {
 		return nil
 	}
@@ -453,7 +469,34 @@ func reviewLensContextCompactAtomicStartBudgetRefusal(
 			action += reviewLensContextStartRequestShareAction
 		}
 	}
-	return reviewPreflightRefusal(reason, &reviewLensContextError{Code: "lens_context_budget_exceeded", Action: action})
+	refusal := reviewLensContextStartBudgetError(action, cause)
+	// The measured metrics travel in the typed cause prose and in the additive
+	// per-instance context variant (#5662/#5499/#4954), so the refusal's own
+	// envelope is triageable without re-deriving the assembly by hand. Whichever
+	// budget refusal fires -- candidate or request-context share -- carries the
+	// same measurement of the block that overflowed; a refusal with no block
+	// measurement stays metrics-free.
+	if refusal.BudgetBytes > 0 {
+		reason.Context = &ReviewIntegrationFailureContext{LensBudget: &ReviewIntegrationLensBudget{
+			Runtime: refusal.Runtime, BudgetBytes: refusal.BudgetBytes, BlockBytes: refusal.BlockBytes,
+			TopSection: refusal.TopSection, TopSectionBytes: refusal.TopSectionBytes,
+		}}
+	}
+	return reviewPreflightRefusal(reason, refusal)
+}
+
+// reviewLensContextStartBudgetError rebuilds the START-shaped budget refusal
+// from the probe's typed cause, carrying the measured metrics forward so the
+// preflight envelope and its cause prose name the same numbers. A cause with
+// no metrics (an older construction path) still yields the typed refusal.
+func reviewLensContextStartBudgetError(action string, cause error) *reviewLensContextError {
+	refusal := &reviewLensContextError{Code: "lens_context_budget_exceeded", Action: action}
+	var metrics *reviewLensContextError
+	if errors.As(cause, &metrics) {
+		refusal.Runtime, refusal.BudgetBytes, refusal.BlockBytes = metrics.Runtime, metrics.BudgetBytes, metrics.BlockBytes
+		refusal.TopSection, refusal.TopSectionBytes = metrics.TopSection, metrics.TopSectionBytes
+	}
+	return refusal
 }
 
 // reviewLensContextStartBudgetReason classifies START's budget refusal. The
@@ -724,12 +767,33 @@ func reviewLensContextBlock(
 	// was admitted that later failed -- but the comment promised a bound the
 	// arithmetic did not keep.
 	terminator := reviewLensContextTerminator + "\n"
-	budget := reviewLensContextRuntimeBudget(runtime) - block.Len() - len(terminator)
+	effectiveBudget := reviewLensContextRuntimeBudget(runtime)
+	remaining := effectiveBudget - block.Len() - len(terminator)
+	topSection, topSectionBytes := "", 0
+	// The dominating section is recorded as a neutral label, never the raw
+	// section header: headers carry the GENTLE_AI_REVIEW_ marker, and a refusal
+	// envelope must never reproduce reviewer-context markers. The diagnostics
+	// name the section kind and its manifest path, not the marker.
+	recordTop := func(header string, size int) {
+		if size > topSectionBytes {
+			topSection, topSectionBytes = strings.TrimPrefix(header, "GENTLE_AI_REVIEW_"), size
+		}
+	}
 	consume := func(header, footer string, body []byte) error {
 		rendered := header + "\n" + string(bytes.TrimSpace(body)) + "\n" + footer + "\n"
-		budget -= len(rendered)
-		if budget < 0 {
-			return reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextBudgetAction)
+		remaining -= len(rendered)
+		recordTop(header, len(rendered))
+		if remaining < 0 {
+			// The measured numbers ride with the refusal (#5662/#5499/#4954):
+			// block_bytes is what the block held through the section that
+			// overflowed, so a caller sees how far over the runtime cap the
+			// candidate reached and which section dominates it, without
+			// re-deriving the assembly by hand.
+			return &reviewLensContextError{
+				Code: "lens_context_budget_exceeded", Action: reviewLensContextBudgetAction,
+				Runtime: runtime, BudgetBytes: int64(effectiveBudget), BlockBytes: int64(effectiveBudget - remaining),
+				TopSection: topSection, TopSectionBytes: int64(topSectionBytes),
+			}
 		}
 		block.WriteString(rendered)
 		return nil

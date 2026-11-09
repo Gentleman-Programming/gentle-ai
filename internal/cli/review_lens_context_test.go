@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
@@ -235,6 +236,29 @@ func TestNegotiatedStartRefusesOverBudgetCandidateWithoutPersistingAuthority(t *
 	if !strings.Contains(failure.Failure.Cause, "chained sequence of smaller reviewable commits") ||
 		!strings.Contains(failure.Failure.Cause, "gentle-ai review status") {
 		t.Fatalf("over-budget START cause does not name the runnable continuation: %q", failure.Failure.Cause)
+	}
+	// The measured metrics ride with the refusal (#5662/#5499/#4954): both the
+	// cause prose and the additive context variant name the same numbers, so
+	// the envelope is triageable without re-deriving the assembly by hand.
+	if failure.Failure.Context == nil || failure.Failure.Context.LensBudget == nil {
+		t.Fatalf("over-budget START carries no lens budget context: %#v", failure.Failure)
+	}
+	budget := failure.Failure.Context.LensBudget
+	if budget.BudgetBytes != int64(reviewerprovider.ApprovedRuntimeContextBudget) || budget.BlockBytes <= budget.BudgetBytes {
+		t.Fatalf("lens budget context does not measure an over-budget block: %#v", budget)
+	}
+	if budget.BlockBytes <= budget.BudgetBytes || budget.TopSection == "" || budget.TopSectionBytes <= 0 {
+		t.Fatalf("lens budget context omits the dominating section or does not measure an over-budget block: %#v", budget)
+	}
+	if failure.Failure.Context.ScopeChange != nil || failure.Failure.Context.TargetDrift != nil {
+		t.Fatalf("lens budget context is not the exclusive context variant: %#v", failure.Failure.Context)
+	}
+	if !strings.Contains(failure.Failure.Cause, fmt.Sprintf("budget_bytes=%d", budget.BudgetBytes)) ||
+		!strings.Contains(failure.Failure.Cause, fmt.Sprintf("block_bytes=%d", budget.BlockBytes)) {
+		t.Fatalf("over-budget START cause does not carry the measured numbers: %q", failure.Failure.Cause)
+	}
+	if err := failure.Failure.Validate(); err != nil {
+		t.Fatalf("over-budget START refusal with lens budget context fails schema validation: %v", err)
 	}
 	if strings.Contains(output.String(), "GENTLE_AI_REVIEW_") {
 		t.Fatalf("over-budget START refusal emitted reviewer evidence:\n%s", output.String())
