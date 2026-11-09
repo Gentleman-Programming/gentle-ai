@@ -30,7 +30,7 @@ func TestWindowsUserHelperAcquiredIdentityRefusalNamesValues(t *testing.T) {
 		t.Fatal("provision helper has no acquired-identity refusal")
 	}
 	for _, want := range []string{
-		"reject(`acquired identity: ${acquiredRelative}",
+		"reject(`acquired identity: ${relative}",
 		"expected ${name}@${record.version}",
 		"acquired ${identity.name}@${identity.version}`)",
 	} {
