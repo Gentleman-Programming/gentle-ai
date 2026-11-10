@@ -18,8 +18,8 @@ var releasedPluginDigests = map[string][]string{
 	},
 	"model-variants.ts": {
 		"fdcbf9c6e4c398216c32394abf4c1ee2f9ed17eb96b1238c226bf5dd6a08416f", // plugins/ v1.29.0 to v1.39.4
-		"47bad2b6a0ebc13cb921174b8b2d61628767b312edd2373a426b6979e5df170d", // plugins/ v1.40.1 to v4.3.1
-		"6c894d141b97b67f2689b41afc79579ce3be2f3aa57aa2de9586645fbf0b18f4", // plugins-v2/ v3.3.0 to v4.3.1
+		"47bad2b6a0ebc13cb921174b8b2d61628767b312edd2373a426b6979e5df170d", // plugins/ v1.40.1 to v4.4.0
+		"6c894d141b97b67f2689b41afc79579ce3be2f3aa57aa2de9586645fbf0b18f4", // plugins-v2/ v3.3.0 to v4.4.0
 	},
 	"opencode-review-transport.ts": {
 		"fa4c1674d8897371341088548e1c4be9098be03f737e97878d008327f6b38e66", // plugins/ v2.4.0-rc.8
@@ -27,9 +27,9 @@ var releasedPluginDigests = map[string][]string{
 		"aa2f0beffddc3496a7e5ddd9eb26d963be7efab31123fd65e7126d478028f222", // plugins/ v2.5.0-rc.1 to v3.7.0
 		"886f5c89a6da4ae1b378aed39cbc7f90b0e4dc5c92350660db015287fb3c2445", // plugins-v2/ v3.3.0 to v3.7.0
 		"e52edacb8868d227cb5ec74505fa60dc555d120ec7b5c64ceaf0291176856e94", // plugins-v2/ v4.0.0
-		"3e58dde99d5a8ecf4d1a8377a24c86cb90ef99015815ab93f1775bdbc5766268", // plugins/ v4.0.0 to v4.3.1
+		"3e58dde99d5a8ecf4d1a8377a24c86cb90ef99015815ab93f1775bdbc5766268", // plugins/ v4.0.0 to v4.4.0
 		"0f2a91a3579f65d5b04a94c0833103d2b9c37a7869c3880eed34d8bbbdc0e3c5", // plugins-v2/ v4.1.0 to v4.3.1
-		"e4f82346c097a648ad0e6b47c3449b78d7183599c4164ddde1b471f38f5a9cba", // plugins-v2/ unreleased
+		"e4f82346c097a648ad0e6b47c3449b78d7183599c4164ddde1b471f38f5a9cba", // plugins-v2/ v4.4.0
 	},
 	"review-result-artifacts.ts": {
 		"5f22438ddf29e1c0f0aad68a48f8feb4c188a01e8d6853d062a09c60a7e39936", // plugins/ v2.1.7
@@ -57,7 +57,9 @@ var releasedPluginDigests = map[string][]string{
 		"d402d2414b3c9ec5b31cad6f85787d152037e76148c3cea18fd443c1d7f5eab4", // plugins/ v2.4.0-rc.8
 		"af143abb8250087431110739af3e6ae7b16c963f200968b777e1f38b3e58d8ff", // plugins/ v2.4.0
 		"12dcf0eb388ebbb000d8ac318b906a3ab3f7880049fcc0ceed2012143271c4cd", // plugins/ v2.5.0-rc.1 to v3.6.0
-		"c2b4382c014c2c15d4b18c70df8d65c272e557d2639e2b2f1ad8d9236142dc48", // plugins-v2/ v3.3.0 to v4.3.1
-		"eaae11a2e1bcbdfaeeb030a40de46e15a8c098bfef3018226fc8e05327e86cdf", // plugins/ v3.6.1 to v4.3.1
+		"c2b4382c014c2c15d4b18c70df8d65c272e557d2639e2b2f1ad8d9236142dc48", // plugins-v2/ v3.3.0 to v4.4.0
+		"eaae11a2e1bcbdfaeeb030a40de46e15a8c098bfef3018226fc8e05327e86cdf", // plugins/ v3.6.1 to v4.4.0
+		"1164d2b0221e31e9ad1fdb6b88d1ae0fcd7071bd872fc17c49aa9b18d6d0551d", // plugins/ unreleased
+		"edee3cede7b8f1a847e1e52fc11e82d0a89d36e84248aefc0329f1cabaf616d3", // plugins-v2/ unreleased
 	},
 }

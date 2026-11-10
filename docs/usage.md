@@ -193,11 +193,11 @@ gentle-ai skill-registry refresh --force
 gentle-ai skill-registry refresh --cwd /path/to/project --quiet
 ```
 
-The command scans project skills first (`skills/`, `.opencode/skills/`, `.claude/skills/`, `.github/skills/`, and other supported workspace skill roots), then global agent skill directories. Project-local skills win over same-name global skills.
+The command scans project skills first (`skills/`, `.opencode/skills/`, `.claude/skills/`, `.trae/skills/`, and other supported workspace roots), then global agent skill directories. Project-local skills win over same-name global skills; `list` shows the same disk winners without writing.
 
-The command writes `.atl/skill-registry.md` and `.atl/.skill-registry.cache.json`. The cache fingerprint includes schema version plus each discovered `SKILL.md` file path, mtime, and size, so normal startup is a cheap cache-hit when skills have not changed.
+Every refresh rescans disk and compares the rendered bytes with `.atl/skill-registry.md`; even `--force` leaves identical bytes untouched. The adjacent `.atl/.skill-registry.cache.json` is a repairable SHA-256 hint, not authority to skip the scan. `--quiet` suppresses output, `--no-gitignore` leaves `.gitignore` alone, and the project-root guard still applies.
 
-Codex, Claude Code, and OpenCode installs wire this command into startup/plugin hooks. Pi gets the equivalent behavior from `gentle-pi`; keep those hook/plugin scan roots in sync when changing these discovery rules.
+Codex, Claude Code, and OpenCode installs wire this command into startup/plugin hooks. Upgraded Pi and Gentle AI share the disk index for the same project, home, and `CODEX_HOME`; Pi adds session-only runtime skills to its own effective view, not the file. Upgrade both writers before expecting convergence: older binaries or different homes can produce different indexes.
 
 See [Skill Registry](skill-registry.md) for the full index-first flow and diagrams.
 
