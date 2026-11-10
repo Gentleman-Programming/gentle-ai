@@ -355,7 +355,7 @@ for (const [relative, record] of Object.entries(lock.packages)) {
   }
   const bytes = read(metadata), identity = JSON.parse(bytes);
   const name = record.name ?? relative.split('node_modules/').at(-1);
-  if (identity.name !== name || identity.version !== record.version) reject('acquired identity');
+  if (identity.name !== name || identity.version !== record.version) reject(`acquired identity: ${relative} expected ${name}@${record.version}, acquired ${identity.name}@${identity.version}`);
   const key = `${name}@${record.version}`, previous = authority.get(key);
   if (previous && (!previous.bytes.equals(bytes) || previous.integrity !== record.integrity)) reject('ambiguous acquired source');
   authority.set(key, { directory: path.dirname(metadata), bytes, integrity: record.integrity });
