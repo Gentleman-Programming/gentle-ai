@@ -361,6 +361,31 @@ Keep the image URL exactly as shown — it is how I find and feature the project
 
 <div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
 
+## Support the project
+
+Gentle AI, Engram and Gentle Shell are free and open source, for everyone, under the MIT License.
+
+We deliberately don't want to depend on investors. Keeping these projects fully independent
+means no outside agenda deciding the roadmap, no features locked behind paywalls for
+developers, and no pressure to trade the community's trust for growth.
+
+Donations are what make that possible. If these tools save you time or help your team,
+consider sponsoring the project: every contribution, big or small, goes straight into
+maintenance, new features and keeping everything free and ours.
+
+<div align="center">
+
+<a href="https://github.com/sponsors/Gentleman-Programming"><img src="https://img.shields.io/badge/Sponsor-Gentleman%20Programming-F095C8?style=for-the-badge&labelColor=1A1218&logo=githubsponsors&logoColor=F095C8" alt="Sponsor Gentleman Programming"></a>
+
+</div>
+
+Not able to donate? A star, a bug report or a pull request helps too.
+Sponsorship never buys rankings, default selections or endorsements; see [TRADEMARKS.md](TRADEMARKS.md).
+
+<div align="right"><a href="#top">Back to top</a></div>
+
+<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
+
 ## About the author
 
 Built by [Alan Buscaglia](https://github.com/Gentleman-Programming) (Gentleman Programming): 15 years of enterprise architecture, a community of thousands of developers testing these tools daily, and one rule for AI-assisted work — **verifying beats generating**.
