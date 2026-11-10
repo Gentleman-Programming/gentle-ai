@@ -55,6 +55,8 @@ func TestUserUnitLimitsRejectsInvalidSetting(t *testing.T) {
 		"below memory":  `{"memory_max_bytes":1048576,"swap_max_bytes":0,"cpus":1,"tasks_max":512}`,
 		"zero cpus":     `{"memory_max_bytes":3221225472,"swap_max_bytes":0,"cpus":0,"tasks_max":512}`,
 		"tasks too low": `{"memory_max_bytes":3221225472,"swap_max_bytes":0,"cpus":1,"tasks_max":64}`,
+		"unaligned mem": `{"memory_max_bytes":1395864371,"swap_max_bytes":0,"cpus":1,"tasks_max":512}`,
+		"unaligned swp": `{"memory_max_bytes":3221225472,"swap_max_bytes":4097,"cpus":1,"tasks_max":512}`,
 		"unknown field": `{"memory_max_bytes":3221225472,"swap_max_bytes":0,"cpus":1,"tasks_max":512,"x":1}`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -87,7 +89,7 @@ func TestUserUnitLimitsEnvironmentRoundTrip(t *testing.T) {
 	if err != nil || got != DefaultUserUnitLimits() {
 		t.Fatalf("absent entry = %+v (%v), want defaults", got, err)
 	}
-	for _, bad := range []string{"max/0/1/512", "3221225472/0/1", "3221225472/0/0/512", "3221225472/0/1/64", ""} {
+	for _, bad := range []string{"1395864371/0/1/512", "max/0/1/512", "3221225472/0/1", "3221225472/0/0/512", "3221225472/0/1/64", ""} {
 		if _, err := userUnitLimitsFromEnv([]string{"GENTLE_SHELL_UNIT_LIMITS=" + bad}); err == nil {
 			t.Fatalf("invalid entry %q accepted", bad)
 		}
@@ -98,7 +100,7 @@ func TestUserUnitLimitsEnvironmentRoundTrip(t *testing.T) {
 }
 
 func TestParseUserUnitSize(t *testing.T) {
-	for in, want := range map[string]uint64{"0": 0, "3G": 3 << 30, "12g": 12 << 30, "512M": 512 << 20, "1T": 1 << 40, "4096": 4096, "1.5G": 3 << 29} {
+	for in, want := range map[string]uint64{"0": 0, "3G": 3 << 30, "12g": 12 << 30, "512M": 512 << 20, "1T": 1 << 40, "4096": 0, "1.5G": 3 << 29, "1.3G": 1331 << 20, "1048577": 1 << 20} {
 		got, err := ParseUserUnitSize(in)
 		if err != nil || got != want {
 			t.Fatalf("ParseUserUnitSize(%q) = %d (%v), want %d", in, got, err, want)

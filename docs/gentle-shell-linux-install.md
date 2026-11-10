@@ -154,7 +154,7 @@ gentle-ai shell limits --cpus 6 --memory 12G --swap 8G --tasks 2048
 gentle-ai shell limits --reset                           # back to the defaults
 ```
 
-The setting is per user (`~/.gentle-ai/shell-limits.json`) and applies from the next launch. Flags left out keep their value. Values must be finite: 1 CPU up to the host count, 1G to 1T memory, up to 1T swap, 512 to 65536 tasks. The unit is created with these values and the inner leaf check verifies them exactly, so an edited or invalid setting refuses the launch instead of running unbounded.
+The setting is per user (`~/.gentle-ai/shell-limits.json`) and applies from the next launch. Flags left out keep their value. Values must be finite: 1 CPU up to the host count, 1G to 1T memory, up to 1T swap, 512 to 65536 tasks. Sizes are rounded down to a whole MiB, because the kernel stores memory limits in pages. Native installs keep their slice at the defaults, so the setting applies to the Separate unit. The unit is created with these values and the inner leaf check verifies them exactly, so an edited or invalid setting refuses the launch instead of running unbounded.
 
 ## Safety limits
 

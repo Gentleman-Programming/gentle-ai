@@ -32,6 +32,10 @@ const (
 	userUnitMaxCPUs        uint64 = 1024
 	userUnitMaxTasks       uint64 = 1 << 16
 	userUnitCPUPeriodUSec  uint64 = 100000
+	// The kernel rounds memory.max and memory.swap.max down to a page, and
+	// the leaf check compares exactly: sizes stay whole MiB, a multiple of
+	// every page size.
+	userUnitSizeAlign uint64 = 1 << 20
 )
 
 // DefaultUserUnitLimits returns the budget used when no setting exists.
@@ -45,6 +49,8 @@ func (l UserUnitLimits) validate() error {
 		return fmt.Errorf("memory must be between 1G and 1T, got %d bytes", l.MemoryMaxBytes)
 	case l.SwapMaxBytes > userUnitMaxBytes:
 		return fmt.Errorf("swap must be at most 1T, got %d bytes", l.SwapMaxBytes)
+	case l.MemoryMaxBytes%userUnitSizeAlign != 0 || l.SwapMaxBytes%userUnitSizeAlign != 0:
+		return fmt.Errorf("memory and swap must be whole MiB, got %d and %d bytes", l.MemoryMaxBytes, l.SwapMaxBytes)
 	case l.CPUs < 1 || l.CPUs > userUnitMaxCPUs:
 		return fmt.Errorf("cpus must be between 1 and %d, got %d", userUnitMaxCPUs, l.CPUs)
 	case l.TasksMax < userUnitTasksMax || l.TasksMax > userUnitMaxTasks:
@@ -179,7 +185,8 @@ func userUnitLimitsEnvironment(home string) ([]string, error) {
 }
 
 // ParseUserUnitSize parses a byte size such as 512M, 12G, 1.5G or 1T
-// (binary units); a bare number is bytes.
+// (binary units); a bare number is bytes. The result is rounded down to a
+// whole MiB so the kernel stores exactly the configured value.
 func ParseUserUnitSize(original string) (uint64, error) {
 	text := strings.TrimSpace(original)
 	multiplier := uint64(1)
@@ -206,5 +213,5 @@ func ParseUserUnitSize(original string) (uint64, error) {
 	if bytes > float64(userUnitMaxBytes) {
 		return 0, fmt.Errorf("size %q is above 1T", original)
 	}
-	return uint64(bytes), nil
+	return uint64(bytes) / userUnitSizeAlign * userUnitSizeAlign, nil
 }
