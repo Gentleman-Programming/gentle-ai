@@ -21,3 +21,22 @@ func TestSkillRegistrySkillDelegatesGenerationToTheCLI(t *testing.T) {
 		t.Fatal("skill-registry SKILL.md must limit the hand scan to when the CLI is unavailable")
 	}
 }
+
+// A curated registry is loaded verbatim, never regenerated, and still mirrored
+// to Engram so agents without startup skill loading can recall it (#516).
+func TestSkillRegistrySkillLoadsCuratedRegistryAndSavesItToEngram(t *testing.T) {
+	data, err := Read("skills/skill-registry/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"## Load a Curated Registry",
+		"gentle-ai skill-registry load <path>",
+		"Do not regenerate",
+		"save the loaded content with `title: skill-registry`, `topic_key: skill-registry`, `type: config`, and `capture_prompt: false`",
+	} {
+		if !strings.Contains(data, want) {
+			t.Fatalf("skill-registry SKILL.md must describe the curated load flow; missing %q", want)
+		}
+	}
+}

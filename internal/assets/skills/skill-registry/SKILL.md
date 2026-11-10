@@ -29,6 +29,7 @@ Use this skill after installing, removing, creating, moving, or renaming skills,
 | Same skill exists in multiple global locations | Keep the first source in scan order |
 | No skills found | Write an empty registry so agents stop searching blindly |
 | Agent will delegate work | Select matching registry rows and pass their `SKILL.md` paths |
+| User provides a curated registry file | Follow Load a Curated Registry instead of regenerating |
 
 ## Execution Steps
 
@@ -37,6 +38,13 @@ Use this skill after installing, removing, creating, moving, or renaming skills,
 3. Render `.atl/skill-registry.md` with scanned sources, registry contract, skill name, trigger/description, scope, and exact path.
 4. Persist to Engram when available using `title: skill-registry`, `topic_key: skill-registry`, `type: config`, and `capture_prompt: false`.
 5. Return the registry path, skill count, cache status, and whether Engram was updated.
+
+## Load a Curated Registry
+
+1. Run `gentle-ai skill-registry load <path> --cwd <project>`; it validates the file and writes it to `.atl/skill-registry.md`. If it fails, report the error and stop.
+2. Do not regenerate or rescan afterwards; the loaded file is the registry.
+3. If `mem_save` is available, save the loaded content with `title: skill-registry`, `topic_key: skill-registry`, `type: config`, and `capture_prompt: false`.
+4. This flow works without startup skill loading: agents recall the registry from `.atl/skill-registry.md` or Engram.
 
 ## Output Contract
 
