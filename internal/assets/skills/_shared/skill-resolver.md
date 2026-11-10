@@ -17,10 +17,10 @@ Before every sub-agent launch that involves reading, writing, reviewing, testing
 The registry is an **index** of skill names, triggers, scopes, and exact `SKILL.md` paths. It is not a compact-rules bundle.
 
 Resolution order:
-1. Use the session cache if present.
-2. `mem_search(query: "skill-registry", project: "{project}")` → `mem_get_observation(id)` for full content.
-3. Fallback: read `.atl/skill-registry.md` from the project root.
-4. No registry found → proceed without project skills and warn the user to run `gentle-ai skill-registry refresh`.
+
+1. In Pi, use the current effective session view, which combines disk entries with that session's runtime-resolved skills. The shared file alone omits session-only entries.
+2. For other delegators, read the current `.atl/skill-registry.md` disk index. Do not substitute a stale Engram or session copy.
+3. No effective view or disk index found → proceed without project skills and warn the user to run `gentle-ai skill-registry refresh`.
 
 ### Step 2: Match Relevant Skills
 
@@ -61,8 +61,8 @@ If a sub-agent reports anything other than `paths-injected`, the orchestrator MU
 
 ## Compaction Safety
 
-- The registry persists in Engram and `.atl/skill-registry.md`.
-- Delegators can recover selected paths after compaction by re-reading the registry.
+- The shared disk index persists in `.atl/skill-registry.md`; Pi's effective view is session-local and must not be written to the file or Engram.
+- After compaction, select paths again from the current effective view or disk index.
 - Sub-agents receive exact files to read, so skill meaning is not degraded by generated summaries.
 
 ## Integration Points
