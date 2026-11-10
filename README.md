@@ -18,6 +18,12 @@
 </p>
 
 <p>
+<a href="https://trendshift.io/repositories/24855?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-24855" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/24855" alt="Gentleman-Programming%2Fgentle-ai | Trendshift" width="250" height="55"/></a>
+<a href="https://trendshift.io/repositories/24855?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-24855" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/24855/weekly?language=Go" alt="Gentleman-Programming%2Fgentle-ai | Trendshift" width="250" height="55"/></a>
+<a href="https://trendshift.io/repositories/24855?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-24855" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/24855/monthly?language=Go" alt="Gentleman-Programming%2Fgentle-ai | Trendshift" width="250" height="55"/></a>
+</p>
+
+<p>
 <a href="https://gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
 <a href="docs/quickstart.md"><strong>Quickstart</strong></a> &bull;
 <a href="docs/intended-usage.md"><strong>Docs</strong></a> &bull;
