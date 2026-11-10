@@ -21,6 +21,9 @@ gentle-ai shell launch-pnpm ROOT pi|gentle-shell [ARGS...]
   Launch the selected authenticated PNPM entry through the same qualified worker.
 gentle-ai shell recover ROOT inspect
   Replace inspect with its printed confirmation to restore shared preimages.
+gentle-ai shell limits [--cpus N] [--memory SIZE] [--swap SIZE] [--tasks N]
+  Show or set the Gentle Shell unit budget for the next launch (SIZE: 512M, 12G).
+  Flags left out keep their value; --reset restores 1 CPU, 3G, no swap, 512 tasks.
 Requires Linux amd64 and qualified cgroup limits or an existing delegated
 systemd user manager >=254. No sudo, delegation creation or container fallback.
 Root is refused by default: --accept-root-risk or the TUI acceptance screen

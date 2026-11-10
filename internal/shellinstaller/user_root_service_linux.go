@@ -95,6 +95,13 @@ func rootSystemService(ctx context.Context, self string, args []string, stdin io
 	// The unit's PATH is the fixed system one: the launcher step needs the
 	// caller terminal's decision, never its PATH.
 	env = append(env, userLauncherIntentEnvironment(os.Getenv("HOME"))...)
+	// The configured unit budget (gentle-ai shell limits) rides in the unit
+	// environment so the inner leaf check verifies the same values.
+	limitsEnv, err := userUnitLimitsEnvironment(os.Getenv("HOME"))
+	if err != nil {
+		return err
+	}
+	env = append(env, limitsEnv...)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
