@@ -145,6 +145,10 @@ var reviewStopReasonNarration = map[string]string{
 		"Run the exact sync command the refusal carries: `gentle-ai sync` when a capture or `gentle-ai review repair` was refused, which syncs every agent, " +
 		"or `gentle-ai sync --agent " + reviewUndeclaredRuntimeIdentitySlot + "` when STATUS or START was refused for that runtime. Then re-run " +
 		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition`.",
+	"correction_request_unavailable": "This review's stored record is valid, but Gentle AI cannot build a correction request from it: " +
+		"the frozen correction budget is invalid or an accepted finding is not actionable, so this review cannot plan its correction. " +
+		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
 		"Ask a maintainer to inspect it directly, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
