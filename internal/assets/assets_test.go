@@ -1717,6 +1717,31 @@ func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
 	}
 }
 
+// gentle-ai#6067 (PD-50): the worker is the writer the parent delegates for a
+// named Writer trigger reason, never for size; the size wording contradicted it.
+// The Per-action rule also sends long suites, builds and installs to a fresh
+// worker, so the scope names that case too.
+func TestOpenCodeWorkerScopeFollowsTheWriterTrigger(t *testing.T) {
+	t.Parallel()
+
+	body, err := FS.ReadFile("opencode/agents/gentle-ai-worker.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, clause := range []string{
+		"Use this agent only for scoped, bounded work the parent delegates: implementation for a named Writer trigger reason (parallel units or the context backstop) that uses ODD task context, or a parent-authorized per-action command (a long suite, build, or install); never for Judgment Day artifact protocols.",
+		"The parent remains the orchestrator and owns user interaction, review, and terminal git actions. Never delegate to another agent.",
+	} {
+		if !strings.Contains(text, clause) {
+			t.Errorf("gentle-ai-worker.md is missing %q", clause)
+		}
+	}
+	if strings.Contains(text, "too large for the parent to execute inline") {
+		t.Error("gentle-ai-worker.md still scopes the worker by size")
+	}
+}
+
 // C7: the worker keeps test scratch and tool caches out of the delivered diff
 // and checks `git status --short` before it returns.
 func TestOpenCodeWorkerKeepsScratchOutOfTheDiff(t *testing.T) {
