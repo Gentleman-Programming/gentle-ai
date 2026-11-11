@@ -87,7 +87,7 @@ func TestNonBlockingFindingsAreOnlyForStoppedReviews(t *testing.T) {
 }
 
 func TestNonBlockingStatementNeverSaysApproved(t *testing.T) {
-	if containsFold(NonBlockingStatement, "approved") || !containsFold(NonBlockingStatement, "non-blocking") {
+	if containsFold(NonBlockingStatement, "approved") || !containsFold(NonBlockingStatement, "non-blocking") || !containsFold(NonBlockingStatement, "refuted") {
 		t.Fatalf("NonBlockingStatement %q must say non-blocking and never approved", NonBlockingStatement)
 	}
 }

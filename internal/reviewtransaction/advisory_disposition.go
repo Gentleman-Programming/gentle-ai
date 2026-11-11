@@ -107,7 +107,7 @@ func nonBlockingFindingsOf(view CompactReviewView) []NonBlockingFinding {
 // stopped in correction_required or escalated. It never says the review
 // passed: the findings to correct and the unresolved findings travel
 // elsewhere, and none of them is listed here.
-const NonBlockingStatement = "Every finding listed here is non-blocking: it is not a finding to correct and not an unresolved finding that stopped this review, and it needs no correction in this review. Treat them as separate later work."
+const NonBlockingStatement = "Every finding listed here is non-blocking: it is not a finding to correct and not an unresolved finding that stopped this review, and it needs no correction in this review. A `follow_up` finding is separate later work; a `refuted` finding needs none."
 
 // NonBlockingFinding is one non-blocking finding of a stopped review, with the
 // reviewer's admitted claim text. The claim is data for the reader; nothing
