@@ -1869,7 +1869,7 @@ func TestVerifierChecksByChangeKind(t *testing.T) {
 				"**Prompt or other contract text**: compare every removed or rewritten sentence with the baseline, one by one, and report each lost qualifier",
 				"**Other code**: probes aimed at what the change can break.",
 			},
-			shared: []string{"Name the change kind;"},
+			shared: []string{"Name the change kind and"},
 		},
 		{
 			name: "no re-run of the writer's suite, except the user's failing command",
@@ -1882,14 +1882,16 @@ func TestVerifierChecksByChangeKind(t *testing.T) {
 			name: "user-reported failure reproduced first",
 			verifier: []string{
 				"**A fix for a failure the user reported**: first run the user's exact failing command (the parent passes it verbatim, which authorizes it)",
+				"against the baseline and against the change, and compare its output with the user's error text.",
 				"When the handoff does not carry the failing command, report the fix unverified and name the missing command; never guess one.",
+				"report that check unverified with its exact command so the parent runs it",
 			},
-			shared: []string{"for a user-reported failure, pass the user's exact failing command, error text, versions, and configuration, and run any real-case check left unverified."},
+			shared: []string{"Name the change kind and a user-reported failure's exact command."},
 		},
 		{
 			name:     "writer adds probes, parent commits only when authorized",
 			verifier: []string{"for the parent to hand to the writer, who adds them; the parent commits them only when a commit is authorized, otherwise they stay uncommitted in the working tree; you never write them."},
-			shared:   []string{"The writer adds the probes; the parent commits them only when authorized, else they stay uncommitted."},
+			shared:   []string{"The parent commits probes only when authorized."},
 		},
 		{
 			name:     "one self-correction of the verifier's own setup",
@@ -1933,6 +1935,7 @@ func TestVerifierChecksByChangeKind(t *testing.T) {
 		"re-runs the verification commands",
 		"who adds them; the parent commits; you never write them.",
 		"The writer adds the probes as regression tests; the parent commits.",
+		"The writer adds the probes; the parent commits them only when authorized, else they stay uncommitted.",
 	}
 	copies, err := fs.Glob(FS, "*/orchestrator.md")
 	if err != nil || len(copies) == 0 {

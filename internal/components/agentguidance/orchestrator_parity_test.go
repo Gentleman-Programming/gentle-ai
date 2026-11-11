@@ -242,7 +242,7 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 				"a fresh scratch copy created with `mktemp -d` under the system temp dir, never inside the workspace, and leaves no new file in the workspace",
 				"the data hash is unchanged after a rejected command, and prior commands' output is identical to the baseline",
 				"silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker",
-				"The writer adds the probes; the parent commits them only when authorized, else they stay uncommitted.",
+				"The parent commits probes only when authorized.",
 			}
 			if model.SupportsReceiptDrivenDevelopment(agent) {
 				// Native RDD review allows exactly one correction attempt
