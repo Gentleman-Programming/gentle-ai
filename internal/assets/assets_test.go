@@ -387,7 +387,7 @@ func TestOrchestratorsDelegateOnlyWhenATriggerTrulyHolds(t *testing.T) {
 		for _, required := range []string{
 			"#### Delegation Triggers",
 			"Each trigger holds only when its condition truly holds, and only then is it mandatory; no trigger holds by default, and when in doubt work inline.",
-			"parallel units launched together (two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work: several files or roughly 100+ changed lines, because a subagent spends one to two minutes reading before it writes) or the context backstop",
+			"parallel units launched together in one turn (two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work: several files or roughly 100+ changed lines, because a subagent spends one to two minutes reading before it writes) or the context backstop",
 			"A unit is one independent piece of behavior with its code, tests, and docs together: never split one behavior into test, docs, and code writers, and a delivery that depends on another is not independent; several small independent changes run inline, one after another.",
 		} {
 			if !strings.Contains(content, required) {
@@ -404,7 +404,7 @@ func TestOrchestratorsDelegateOnlyWhenATriggerTrulyHolds(t *testing.T) {
 	for _, required := range []string{
 		"only when a Delegation Trigger's condition truly holds and names a reason",
 		"A Delegation Trigger holds only when its condition truly holds; none holds by default, and when in doubt work inline. Once one holds, delegation is not optional",
-		"A writer reason is parallel units launched together (independent units of behavior, each with its code, tests, and docs and several minutes of work) or the context backstop",
+		"A writer reason is parallel units launched together in one turn (independent units of behavior, each with its code, tests, and docs and several minutes of work) or the context backstop",
 	} {
 		if !strings.Contains(shared, required) {
 			t.Errorf("shared orchestrator sections missing %q", required)
@@ -412,6 +412,38 @@ func TestOrchestratorsDelegateOnlyWhenATriggerTrulyHolds(t *testing.T) {
 	}
 	if strings.Contains(shared, "Mandatory Delegation Trigger") {
 		t.Error("shared orchestrator sections keep the retired Mandatory Delegation Trigger framing")
+	}
+}
+
+// gentle-ai#6067 (Gentle Shell parity): parallel writer units launch together
+// in one turn, or a parent launches one per turn and they run one after
+// another. "Background mode" is a Gentle Shell setting the hand-maintained
+// assets' runtimes do not define, so only Pi's routing render names it.
+func TestShippedAssetsLaunchParallelUnitsInOneTurn(t *testing.T) {
+	const launch = "launched together"
+	const backgroundMode = "in background when background mode is on"
+	err := fs.WalkDir(FS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return walkErr
+		}
+		content := MustRead(path)
+		for rest := content; ; {
+			i := strings.Index(rest, launch)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(launch):]
+			if !strings.HasPrefix(rest, " in one turn") {
+				t.Errorf("%s says %q without \"in one turn\"", path, launch)
+			}
+		}
+		if strings.Contains(content, backgroundMode) {
+			t.Errorf("%s names %q, a setting its runtime does not define", path, backgroundMode)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -965,7 +965,7 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 			"**Writer trigger:** a writer is delegated only for a named reason",
 			// pain-point-iteration S9 C4: a unit is an independent behavior with
 			// several minutes of work, never a test/doc/code split of one behavior.
-			"(a) parallelism: two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work (several files or roughly 100+ changed lines; a subagent spends one to two minutes reading before it writes), launched together",
+			"(a) parallelism: two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work (several files or roughly 100+ changed lines; a subagent spends one to two minutes reading before it writes), launched together in one turn",
 			"A unit is one independent piece of behavior with its code, tests, and docs together: never split one behavior into test, docs, and code writers, and a delivery that depends on another is not independent; several small independent changes run inline, one after another.",
 			"(b) context: the long-session backstop below",
 			"Never delegate a writer for size, a large task alone, file count, or a price ratio",
@@ -1048,6 +1048,16 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 						t.Errorf("%s: RenderRouting(%q) keeps retired %q", spec.name, agent.ID, retired)
 					}
 				}
+			}
+			// gentle-ai#6067: only Pi's rendering, mirrored by Gentle Shell, says
+			// the parallel units run in background when that mode is on.
+			const background = "launched together in one turn (in background when background mode is on);"
+			wantBackground := agent.ID == model.AgentPi
+			if got := strings.Contains(rendered, background); got != wantBackground {
+				t.Errorf("RenderRouting(%q) contains %q = %v, want %v", agent.ID, background, got, wantBackground)
+			}
+			if strings.Count(rendered, "launched together") != strings.Count(rendered, "launched together in one turn") {
+				t.Errorf("RenderRouting(%q) says \"launched together\" without \"in one turn\"", agent.ID)
 			}
 		})
 	}
