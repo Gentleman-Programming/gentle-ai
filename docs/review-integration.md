@@ -242,7 +242,7 @@ The role submission descriptor is a negotiated status contract change, so the ne
 
 Native Go alone selects lenses, classifies candidate causality, performs refutation, derives repository evidence, and permits at most one bounded correction. A validator that cannot inspect its immutable trees has no verdict; report that block rather than submitting a failed validation.
 
-Medium and high-risk START may return the typed `gentle-ai.review-integration.consent/v3` envelope. Relay the complete choice envelope losslessly, preserve machine tokens and invocations exactly, and run only the invocation selected by the human. Global RDD mode permits review; it never grants per-candidate consent. A decline is not the kill switch. START checks the lens context budget before it asks: a candidate whose reviewer evidence cannot fit gets the `lens_context_budget_exceeded` refusal instead of the consent envelope, so the human is never asked to grant a review that cannot run.
+Medium and high-risk START may return the typed `gentle-ai.review-integration.consent/v3` envelope. Relay the complete choice envelope losslessly, preserve machine tokens and invocations exactly, and run only the invocation selected by the human. Global RDD mode permits review; it never grants per-candidate consent. A decline is not the kill switch. A START with `--consent relay` checks the lens context budget before it returns the envelope: a candidate whose reviewer evidence cannot fit gets the `lens_context_budget_exceeded` refusal instead, so the human is not asked to grant a review that cannot run.
 
 ## Read-only risk assessment (`gentle-ai review assess`)
 
