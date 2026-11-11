@@ -1807,9 +1807,19 @@ func TestDelegationSkillsDelegateForReasonAndForwardTestDiscipline(t *testing.T)
 			retired: []string{"4+ files", "multi-file reads", "TDD mode", "strict TDD"},
 		},
 		{
-			path:     "skills/_shared/persistence-contract.md",
-			required: []string{"the applicable test-first policy and runner from `## Implementation Routing`"},
-			retired:  []string{"TDD mode", "strict TDD"},
+			path: "skills/_shared/persistence-contract.md",
+			required: []string{
+				"the applicable test-first policy and runner from `## Implementation Routing`",
+				// gentle-ai#6067 (GS-03, GS-10): plain read-back, file as source, never replay, mirror cadence.
+				"Read back both writes with the normal read tool; they are not atomic, but never author comparison or reconciliation scripts or gates for them.",
+				"After a partial or failed sync, check which writes already applied and continue from that state; never replay an applied write.",
+				"The document is the source: a mirror that differs from the document just written is refreshed from it, never a blocker.",
+				"Refresh the mirror once per task transition (a task starts, finishes, is blocked, reopened, or dropped) or material plan change, and at close; progress notes and evidence added between those points go to the document only and reach the mirror at the next one.",
+				// Sentences the port did not replace stay.
+				"If Engram is unavailable, preserve the local document and explicitly mark the mirror pending without blocking independent safe work.",
+				"On resume, retrieve the full observation (search results are truncated), read the document and reconcile them before modifying either.",
+			},
+			retired: []string{"TDD mode", "strict TDD"},
 		},
 	}
 	for _, tt := range tests {
