@@ -1840,3 +1840,139 @@ func TestDelegationSkillsDelegateForReasonAndForwardTestDiscipline(t *testing.T)
 		})
 	}
 }
+
+// gentle-ai#6067 (gentle-shell#3101 parity): the verifier chooses its evidence
+// by change kind, never re-runs the writer's reported suite unless the parent
+// passes it as the user's failing command, reproduces a user-reported failure
+// with the exact command first and only counts it reproduced when the baseline
+// fails with the user's error, leaves adding probes to the writer and an
+// authorized commit to the parent, and corrects its own setup once. These rules
+// live in the verifier body only; the shared Verify handoff keeps its main text
+// plus the authorized-commit sentence, which fits the Antigravity budget.
+func TestVerifierChecksByChangeKind(t *testing.T) {
+	t.Parallel()
+
+	verifier := MustRead("opencode/agents/gentle-ai-verify.md")
+	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
+	gates := map[string]string{}
+	for _, name := range []string{"Delegated Verification Gate (MANDATORY)", "Delegated Verification Gate (MANDATORY) (ODD only)"} {
+		start := "<!-- odd-orchestrator-section:" + name + ":start -->"
+		end := "<!-- odd-orchestrator-section:" + name + ":end -->"
+		_, rest, ok := strings.Cut(shared, start)
+		body, _, ok2 := strings.Cut(rest, end)
+		if !ok || !ok2 {
+			t.Fatalf("shared section %q not found", name)
+		}
+		gates[name] = body
+	}
+
+	rules := []struct {
+		name     string
+		verifier []string
+	}{
+		{
+			name: "method by change kind",
+			verifier: []string{
+				"## Evidence by change kind",
+				"**External tool or environment** (package managers, CLIs, network services, operating-system behavior): reproduce the real case with the real tool and the configuration the change will meet, plus your own probes.",
+				"**Prompt or other contract text**: compare every removed or rewritten sentence with the baseline, one by one, and report each lost qualifier",
+				"**Other code**: probes aimed at what the change can break.",
+			},
+		},
+		{
+			name: "no re-run of the writer's suite, except the user's failing command",
+			verifier: []string{
+				"Do not re-run the suite the writer reported: the parent's spot check of one reported command covers the writer's results.",
+				"The exception is the command the parent passes as the user's failing command: run it even when it is the writer's reported suite. Run the commands the parent authorizes as your evidence and your own probes.",
+			},
+		},
+		{
+			name: "user-reported failure reproduced first",
+			verifier: []string{
+				"**A fix for a failure the user reported**: first run the user's exact failing command (the parent passes it verbatim, which authorizes it)",
+				"against the baseline and against the change, and compare its output with the user's error text.",
+				"The failure counts as reproduced only when that command fails on the baseline with the user's error; when it passes there or fails with a different error, report the fix unverified and say which, never verified.",
+				"When the handoff does not carry the failing command, report the fix unverified and name the missing command; never guess one.",
+				"report that check unverified with its exact command so the parent runs it",
+			},
+		},
+		{
+			name:     "writer adds probes, parent commits only when authorized",
+			verifier: []string{"for the parent to hand to the writer, who adds them; the parent commits them only when a commit is authorized, otherwise they stay uncommitted in the working tree; you never write them."},
+		},
+		{
+			name:     "one self-correction of the verifier's own setup",
+			verifier: []string{"make exactly one corrected attempt and report both attempts; at a second setup failure or a missing prerequisite, stop and report the checks left unrun as unverified, not passed."},
+		},
+	}
+	for _, rule := range rules {
+		for _, want := range rule.verifier {
+			if !strings.Contains(verifier, want) {
+				t.Errorf("%s: gentle-ai-verify.md is missing %q", rule.name, want)
+			}
+		}
+	}
+
+	// The shared handoff keeps its main text; only the probe sentence changes.
+	for name, gate := range gates {
+		if !strings.Contains(gate, "is always a blocker. The writer adds the probes as regression tests; the parent commits them when authorized.\n") {
+			t.Errorf("shared section %q is missing the authorized-commit probe sentence", name)
+		}
+		if strings.Contains(gate, "The writer commits the probes as regression tests.") {
+			t.Errorf("shared section %q keeps the unconditional probe-commit sentence", name)
+		}
+	}
+	if high := "a fresh read-only worker that re-runs the verification commands and inspects the diff without the writer's context."; !strings.Contains(gates["Delegated Verification Gate (MANDATORY) (ODD only)"], high) {
+		t.Errorf("ODD-only gate lost the main High bullet text %q", high)
+	}
+
+	// Replaced sentences are gone from the verifier, the shared sections, and
+	// every hand-maintained orchestrator copy.
+	retired := []string{
+		"for the parent to hand to the writer to commit",
+		"The writer commits the probes",
+		"who adds them; the parent commits; you never write them.",
+		"The writer adds the probes as regression tests; the parent commits.",
+	}
+	copies, err := fs.Glob(FS, "*/orchestrator.md")
+	if err != nil || len(copies) == 0 {
+		t.Fatalf("orchestrator copies: %v (%d)", err, len(copies))
+	}
+	for _, path := range append([]string{"opencode/agents/gentle-ai-verify.md", "skills/_shared/odd-orchestrator-sections.md"}, copies...) {
+		body := MustRead(path)
+		for _, phrase := range retired {
+			if strings.Contains(body, phrase) {
+				t.Errorf("%s still contains replaced sentence %q", path, phrase)
+			}
+		}
+	}
+
+	// Pi and Node scratch details stay out; untouched pinned sentences stay in.
+	for _, phrase := range []string{"NODE_COMPILE_CACHE", "NO_UPDATE_NOTIFIER", "env -i", "Setup pitfalls"} {
+		if strings.Contains(verifier, phrase) {
+			t.Errorf("gentle-ai-verify.md contains Pi/Node scratch detail %q", phrase)
+		}
+	}
+	for _, want := range []string{
+		"Read-only means no edits to the repository or its git state",
+		"Verify the request, not the writer's work",
+		"Do not use review lenses. RDD review remains independent and parent-owned.",
+		"Before returning, list every scratch directory you created by exact path in your result so the parent removes it; never delete it yourself.",
+		"one correction batch and one recheck limited to the reported blockers",
+	} {
+		if !strings.Contains(verifier, want) {
+			t.Errorf("gentle-ai-verify.md lost pinned sentence %q", want)
+		}
+	}
+	for name, gate := range gates {
+		for _, want := range []string{
+			"**Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms",
+			"silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker",
+			"The parent spot check — re-running one reported command before delivery — stays in every tier.",
+		} {
+			if !strings.Contains(gate, want) {
+				t.Errorf("shared section %q lost pinned sentence %q", name, want)
+			}
+		}
+	}
+}
