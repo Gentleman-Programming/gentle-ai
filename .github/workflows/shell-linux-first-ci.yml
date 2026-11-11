@@ -77,6 +77,10 @@ jobs:
           sudo -n chown 1002:1002 /work/src
           git archive HEAD | sudo -n -u gentle-lab tar -xf - -C /work/src
           sudo -n install -m 0444 e2e/shell-linux-user-install-guest.py /fixture/harness.py
+          # The stock-update lane resolves the scoped graph against the frozen
+          # lock's own versions/integrity; the guest mirror serves this lock.
+          sudo -n install -d -m 0755 /fixture/user-locks/modern
+          sudo -n install -m 0444 scripts/user-locks/modern/package-lock.json /fixture/user-locks/modern/package-lock.json
           curl --noproxy '*' --proto '=https' --max-redirs 0 --fail --silent --show-error --connect-timeout 10 --max-time 180 --max-filesize 59844667 -o "$RUNNER_TEMP/go.data" https://dl.google.com/go/go1.25.10.linux-amd64.tar.gz
           test "$(stat -c %s "$RUNNER_TEMP/go.data")" = 59844667
           printf '%s  %s\n' 42d4f7a32316aa66591eca7e89867256057a4264451aca10570a715b3637ba70 "$RUNNER_TEMP/go.data" | sha256sum -c -

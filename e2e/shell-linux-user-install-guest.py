@@ -51,6 +51,33 @@ ALLOW = {'registry.npmjs.org', 'nodejs.org', 'github.com', 'release-assets.githu
 # stock updater runs), so the update lands exactly the graph the managed
 # prefix's generated lock authenticates.
 CHANNEL_PI_VERSION = ['1.0.0']
+# The stock updater runs a live `npm install -g` with no lockfile. Left alone,
+# its fresh resolution drifts against the frozen lock that authenticates the
+# managed prefix, so the post-update provisioner refuses the mixed graph
+# (observed: pi-coding-agent@1.5.2 installed, pi-ai@1.0.0 unauthenticated).
+# Constrain resolution instead of weakening the trust boundary: the scope's
+# packuments are served from the frozen lock (exact versions and integrity),
+# and every dist tarball is rewritten to a same-registry relative URL so no
+# signed third-party redirect is required.
+LOCK_SCOPE = {}
+def load_lock_scope():
+    lock = json.loads((FIXTURE / 'user-locks/modern/package-lock.json').read_text())
+    for key, entry in lock['packages'].items():
+        parts = key.split('node_modules/')
+        name = parts[-1]
+        if not name.startswith('@earendil-works/') or '/' not in name[1:]:
+            continue
+        if 'node_modules/' in name[len('@earendil-works/'):]:
+            continue  # nested placement of a scoped package is not a scope root
+        tarball = urllib.parse.urlsplit(entry['resolved']).path
+        LOCK_SCOPE[name] = {
+            'version': entry['version'],
+            'dist': {
+                'tarball': f'https://registry.npmjs.org{tarball}',
+                'integrity': entry['integrity'],
+                'shasum': entry.get('shasum', ''),
+            },
+        }
 NODE_SHA = '783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8'
 PUBLIC_TLS = ssl.create_default_context()
 FIXTURE_UID = 1002
@@ -294,6 +321,27 @@ def public_bytes(host, resource):
         connection.close()
 
 
+def scope_bytes(path):
+    if not LOCK_SCOPE:
+        load_lock_scope()
+    clean = path.split('?', 1)[0]
+    parts = urllib.parse.unquote(clean).strip('/').split('/')
+    name = '/'.join(parts[:2])
+    if name not in LOCK_SCOPE:
+        require(False, f'unapproved scoped fixture package: {name}')
+    entry = LOCK_SCOPE[name]
+    if len(parts) == 2:
+        document = {
+            'name': name,
+            'dist-tags': {'latest': entry['version']},
+            'versions': {entry['version']: {'name': name, 'version': entry['version'], 'dist': entry['dist']}},
+        }
+        return 200, {'content-type': 'application/json'}, json.dumps(document).encode()
+    if parts[-1].endswith('.tgz'):
+        return public_bytes('registry.npmjs.org', urllib.parse.urlsplit(entry['dist']['tarball']).path)
+    require(False, f'unapproved scoped fixture path: {path}')
+
+
 class Mirror(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # Never expose signed release URLs or arbitrary stock diagnostics.
@@ -319,6 +367,8 @@ class Mirror(http.server.BaseHTTPRequestHandler):
                 status, headers, raw = 404, {}, b''
             elif host == 'pi.dev' and self.path == '/api/latest-version':
                 status, headers, raw = 200, {'content-type': 'application/json'}, json.dumps({'version': CHANNEL_PI_VERSION[0]}).encode()
+            elif host == 'registry.npmjs.org' and self.path.startswith('/@earendil-works/'):
+                status, headers, raw = scope_bytes(self.path)
             else:
                 status, headers, raw = public_bytes(host, self.path)
             self.send_response(status)
