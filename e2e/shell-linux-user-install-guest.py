@@ -46,6 +46,11 @@ CACHE_LOCK = threading.Lock()
 REQUESTS = []
 PUBLIC_IPS = {}
 ALLOW = {'registry.npmjs.org', 'nodejs.org', 'github.com', 'release-assets.githubusercontent.com', 'pi.dev'}
+# The channel contract installs whatever npm's latest resolves: the Pi API
+# mock announces the version the channel provisioned (fixed before the
+# stock updater runs), so the update lands exactly the graph the managed
+# prefix's generated lock authenticates.
+CHANNEL_PI_VERSION = ['1.0.0']
 NODE_SHA = '783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8'
 PUBLIC_TLS = ssl.create_default_context()
 FIXTURE_UID = 1002
@@ -313,7 +318,7 @@ class Mirror(http.server.BaseHTTPRequestHandler):
                 FAULT_SEEN.set()
                 status, headers, raw = 404, {}, b''
             elif host == 'pi.dev' and self.path == '/api/latest-version':
-                status, headers, raw = 200, {'content-type': 'application/json'}, b'{"version":"1.0.0"}'
+                status, headers, raw = 200, {'content-type': 'application/json'}, json.dumps({'version': CHANNEL_PI_VERSION[0]}).encode()
             else:
                 status, headers, raw = public_bytes(host, self.path)
             self.send_response(status)
@@ -1241,15 +1246,19 @@ def main():
         prefix, agent = pathlib.Path(manifest['Prefix']), pathlib.Path(manifest['Agent'])
         roots_before = [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]]
         bindings_before = {name: (target / 'bin' / name).read_bytes() for name in ['pi', 'gentle-shell']}
+        # The channel cohort is still live here: capture the exact pi version the
+        # generated lock authenticates, so the mocked Pi API announces a
+        # transition target whose graph the post-update verify admits.
+        CHANNEL_PI_VERSION[0] = json.loads((prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/package.json').read_text())['version']
         run([str(target / 'runtime/node/bin/node'), str(target / 'provision.mjs'), str(target), str(prefix), str(agent), str(prefix), str(target), 'separate', 'prepare-prior'], timeout=remaining())
         require('0.99.2' in run([str(target / 'bin/pi'), '--version']), 'authenticated prior did not launch')
         nested = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/package.json'
         require(json.loads(nested.read_text())['version'] == '0.99.2', 'actual prior nested TUI placement differs')
         run([str(target / 'bin/pi'), 'update', '--self'], cwd=WORK / 'project', timeout=180)
-        require('1.3.0' in run([str(target / 'bin/pi'), '--version']), 'actual stock prior-to-next transition absent')
+        require(CHANNEL_PI_VERSION[0] in run([str(target / 'bin/pi'), '--version']), 'actual stock prior-to-next transition absent')
         require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'update replaced physical selected roots')
         require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'update changed owned command bindings')
-        REPORT['trueUpgrade'] = 'actual published 0.99.2 to 1.3.0 stock updater; TEST-only Pi API selection, not public latest authority'
+        REPORT['trueUpgrade'] = f'actual published 0.99.2 to {CHANNEL_PI_VERSION[0]} stock updater; TEST-only Pi API selection, not public latest authority'
         run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180)
         run([str(target / 'bin/pi'), '--version'], cwd=WORK / 'project')
         REPORT['stockForce'] = 'actual separate same-version reinstall after true upgrade'
@@ -1263,7 +1272,7 @@ def main():
         upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
         run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
         require(coding_metadata.read_bytes() == expected_metadata, 'separate upgrade preimages did not restore known bytes')
-        require('1.3.0' in run([str(target / 'bin/pi'), '--version']), 'restored known cohort did not retry successfully')
+        require(CHANNEL_PI_VERSION[0] in run([str(target / 'bin/pi'), '--version']), 'restored known cohort did not retry successfully')
         REPORT['upgradeRecovery'] = 'actual unknown cohort refused, full saved trees restored and authenticated retry observed'
         shared_prefix, shared_agent = WORK / 'shared-prefix', WORK / 'shared-agent'
         shutil.copytree(manifest['Prefix'], shared_prefix, symlinks=True)
