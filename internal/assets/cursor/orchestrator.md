@@ -47,7 +47,7 @@ When it is ours, never offer to switch to, inspect, modify, or directly repair t
 - If the captured exact v3 decline invocation, exact target identity, or consumer continuation context is unavailable or ambiguous, fail closed with all consumer state preserved and do not run a substitute command.
 - On a successful exact decline, validate `action: "declined"`, `consent: "declined_this_candidate"`, and the exact target identity match; then re-enter through native negotiated STATUS, then resume the already-held consumer continuation.
 - The result carries no lineage or receipt; ordinary delivery is unmanaged by the candidate choice, and the next candidate asks again.
-- Do not invoke `gentle-ai review mode disable` at clone or global scope within this handoff. Do not turn RDD off or on within this handoff.
+- Unless the user explicitly asks, do not invoke `gentle-ai review mode disable` at clone or global scope or turn RDD off or on within this handoff.
 - Report observed evidence, not an unconfirmed root cause. Include or reuse sanitized version/build, OS/architecture/client, the operation shape without secrets, bounded attempts and outcomes, failure envelopes, mutation outcome, expected and actual behavior, a minimal reproduction, safe opaque reason/revision identifiers, and preserved-state evidence.
 - Resume after an installed published fix or an explicit maintainer-authorized, documented native recovery or reset that the runtime contract supports; then re-enter through native status. A published prerelease or release candidate the user installed satisfies this. Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request.
 
