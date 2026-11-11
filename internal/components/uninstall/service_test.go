@@ -2781,8 +2781,8 @@ func TestPartialUninstallLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
 	}
 }
 
-// antigravityEngramPluginForTest injects Engram for Antigravity through the
-// real install path and returns the plugin directory it wrote (#779).
+// antigravityEngramPluginForTest seeds managed Engram plugin assets for
+// Antigravity to verify that uninstall properly retires them (#779).
 func antigravityEngramPluginForTest(t *testing.T, svc *Service, homeDir string) (string, agents.Adapter) {
 	t.Helper()
 	engram.SetLookPathForTest(t, "/opt/homebrew/bin/engram", "")
@@ -2790,13 +2790,13 @@ func antigravityEngramPluginForTest(t *testing.T, svc *Service, homeDir string) 
 	if !ok {
 		t.Fatal("Antigravity adapter not found in registry")
 	}
-	if _, err := engram.Inject(homeDir, adapter); err != nil {
-		t.Fatalf("engram.Inject(antigravity) error = %v", err)
+	pluginDir := engram.AntigravityPluginDir(homeDir)
+	if err := engram.WriteManagedAntigravityPluginForTest(pluginDir, "/opt/homebrew/bin/engram"); err != nil {
+		t.Fatalf("WriteManagedAntigravityPluginForTest error = %v", err)
 	}
-	pluginDir := filepath.Join(homeDir, ".gemini", "config", "plugins", "gentle-ai-engram")
 	for _, name := range []string{"plugin.json", "mcp_config.json", "hooks.json"} {
 		if _, err := os.Stat(filepath.Join(pluginDir, name)); err != nil {
-			t.Fatalf("install did not write plugin asset %q: %v", name, err)
+			t.Fatalf("test helper did not write plugin asset %q: %v", name, err)
 		}
 	}
 	return pluginDir, adapter

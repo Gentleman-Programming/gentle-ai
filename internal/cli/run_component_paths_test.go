@@ -14,7 +14,6 @@ import (
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
@@ -1790,12 +1789,10 @@ func TestComponentPathsOpenCodeGentleLogoMatchesSelectedAdapter(t *testing.T) {
 	}
 }
 
-// TestBackupTargetsEngramAntigravityIncludePluginStagingFiles pins that the
-// Antigravity Engram plugin assets Engram injection writes stay install backup
-// targets, so a failed install or sync can restore the plugin staging files
-// (PR #1643). Plugin staging lives under the shared ~/.gemini/config root agy
-// 1.4 loads (#5930).
-func TestBackupTargetsEngramAntigravityIncludePluginStagingFiles(t *testing.T) {
+// TestBackupTargetsEngramAntigravityIncludeGlobalMCPAndSettings pins that
+// Antigravity Engram injection targets ~/.gemini/config/mcp_config.json and
+// ~/.gemini/antigravity-cli/settings.json for backup (#5988).
+func TestBackupTargetsEngramAntigravityIncludeGlobalMCPAndSettings(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{Agents: []model.AgentID{model.AgentAntigravity}, Components: []model.ComponentID{model.ComponentEngram}}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
@@ -1804,15 +1801,12 @@ func TestBackupTargetsEngramAntigravityIncludePluginStagingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backupTargets() error = %v", err)
 	}
-	pluginDir := engram.AntigravityPluginDir(home)
 	for _, want := range []string{
-		filepath.Join(pluginDir, "mcp_config.json"),
-		filepath.Join(pluginDir, "hooks.json"),
-		filepath.Join(pluginDir, "plugin.json"),
+		filepath.Join(home, ".gemini", "config", "mcp_config.json"),
 		filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"),
 	} {
 		if !containsPath(targets, want) {
-			t.Fatalf("backupTargets missing Antigravity plugin staging path %q; targets=%v", want, targets)
+			t.Fatalf("backupTargets missing Antigravity path %q; targets=%v", want, targets)
 		}
 	}
 }

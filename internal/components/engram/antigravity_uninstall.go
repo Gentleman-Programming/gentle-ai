@@ -44,29 +44,53 @@ func antigravityPluginAssetPathsIn(dir string) []string {
 	}
 }
 
-// removeLegacyAntigravityPlugin retires the managed plugin assets an older
-// gentle-ai wrote under AntigravityLegacyPluginDir (#5930). Only byte-identical
-// managed assets are removed and the directory only when it is left empty;
-// edited assets and unrelated plugins are never touched. It returns the
-// removed asset paths.
-func removeLegacyAntigravityPlugin(homeDir string) ([]string, error) {
+// RetireManagedAntigravityPlugins retires any managed plugin assets older gentle-ai
+// versions wrote under either AntigravityPluginDir or AntigravityLegacyPluginDir (#5988).
+// Only byte-identical managed assets are removed and the directory only when it is left
+// empty; edited assets and unrelated plugins are never touched.
+func RetireManagedAntigravityPlugins(homeDir string) ([]string, error) {
 	var removed []string
-	for _, path := range AntigravityLegacyPluginAssetPaths(homeDir) {
-		ok, err := RemoveManagedAntigravityPluginAsset(path)
-		if err != nil {
-			return removed, err
+	for _, dir := range []string{AntigravityPluginDir(homeDir), AntigravityLegacyPluginDir(homeDir)} {
+		for _, path := range antigravityPluginAssetPathsIn(dir) {
+			ok, err := RemoveManagedAntigravityPluginAsset(path)
+			if err != nil {
+				return removed, err
+			}
+			if ok {
+				removed = append(removed, path)
+			}
 		}
-		if ok {
-			removed = append(removed, path)
-		}
-	}
-	dir := AntigravityLegacyPluginDir(homeDir)
-	if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
-		if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
-			return removed, fmt.Errorf("remove empty legacy Antigravity Engram plugin dir %q: %w", dir, err)
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
+			if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
+				return removed, fmt.Errorf("remove empty Antigravity Engram plugin dir %q: %w", dir, err)
+			}
 		}
 	}
 	return removed, nil
+}
+
+// removeLegacyAntigravityPlugin retires the managed plugin assets an older
+// gentle-ai wrote under AntigravityLegacyPluginDir (#5930).
+func removeLegacyAntigravityPlugin(homeDir string) ([]string, error) {
+	return RetireManagedAntigravityPlugins(homeDir)
+}
+
+// WriteManagedAntigravityPluginForTest writes byte-identical managed plugin assets into dir.
+func WriteManagedAntigravityPluginForTest(dir, command string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	assets := map[string][]byte{
+		"plugin.json":     []byte(antigravityEngramPluginJSON),
+		"mcp_config.json": engramOverlayJSON(model.AgentAntigravity, command),
+		"hooks.json":      antigravityEngramHooksJSON(),
+	}
+	for name, content := range assets {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RemoveManagedAntigravityPluginAsset removes path only when it is a regular

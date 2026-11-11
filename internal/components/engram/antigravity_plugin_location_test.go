@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -96,69 +95,26 @@ func TestAntigravityPluginDirUsesSharedConfigRoot(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityWritesPluginWhereAgyLoadsIt(t *testing.T) {
+func TestInjectAntigravityWritesGlobalMCPConfigAndRetiresPlugins(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := Inject(home, antigravityAdapter())
 	if err != nil {
 		t.Fatalf("Inject(antigravity) error = %v", err)
 	}
-	for _, name := range []string{"plugin.json", "mcp_config.json", "hooks.json"} {
-		path := filepath.Join(sharedAntigravityPluginDir(home), name)
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("plugin asset %q missing under the shared config root: %v", path, err)
-		}
-		if !slices.Contains(result.Files, path) {
-			t.Fatalf("result.Files = %v, want it to report %q", result.Files, path)
-		}
+
+	globalMCP := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	if _, err := os.Stat(globalMCP); err != nil {
+		t.Fatalf("global MCP config %q missing: %v", globalMCP, err)
+	}
+	if !slices.Contains(result.Files, globalMCP) {
+		t.Fatalf("result.Files = %v, want it to report %q", result.Files, globalMCP)
+	}
+	if _, err := os.Stat(sharedAntigravityPluginDir(home)); !os.IsNotExist(err) {
+		t.Fatalf("plugin dir %q must not exist; stat err = %v", sharedAntigravityPluginDir(home), err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".gemini", "antigravity-cli", "plugins")); !os.IsNotExist(err) {
 		t.Fatalf("no plugin may be written under antigravity-cli/plugins; stat err = %v", err)
-	}
-}
-
-func TestInjectAntigravityHookRunsOncePerSession(t *testing.T) {
-	home := t.TempDir()
-	if _, err := Inject(home, antigravityAdapter()); err != nil {
-		t.Fatalf("Inject(antigravity) error = %v", err)
-	}
-	raw := readAntigravityFile(t, filepath.Join(sharedAntigravityPluginDir(home), "hooks.json"))
-	var hooks map[string]map[string][]struct {
-		Type    string `json:"type"`
-		Command string `json:"command"`
-		Timeout int    `json:"timeout"`
-	}
-	if err := json.Unmarshal(raw, &hooks); err != nil {
-		t.Fatalf("Unmarshal(hooks.json) error = %v\n%s", err, raw)
-	}
-	events := hooks["gentle-ai-engram-tools"]
-	if len(events) != 1 || len(events["SessionStart"]) != 1 {
-		t.Fatalf("hooks must register exactly one SessionStart command and no per-invocation hook; got:\n%s", raw)
-	}
-	entry := events["SessionStart"][0]
-	if entry.Type != "command" {
-		t.Fatalf("SessionStart hook type = %q, want command", entry.Type)
-	}
-	if entry.Timeout != 10 {
-		t.Fatalf("SessionStart hook timeout = %d, want an explicit 10", entry.Timeout)
-	}
-	if runtime.GOOS == "windows" {
-		return
-	}
-	out, err := exec.Command("sh", "-c", entry.Command).Output()
-	if err != nil {
-		t.Fatalf("run SessionStart hook command error = %v", err)
-	}
-	var payload struct {
-		InjectSteps []struct {
-			EphemeralMessage string `json:"ephemeralMessage"`
-		} `json:"injectSteps"`
-	}
-	if err := json.Unmarshal(out, &payload); err != nil {
-		t.Fatalf("SessionStart hook stdout is not the injectSteps contract: %v\n%s", err, out)
-	}
-	if len(payload.InjectSteps) != 1 || payload.InjectSteps[0].EphemeralMessage != antigravityEngramToolsMessage {
-		t.Fatalf("SessionStart hook must emit the Engram guidance as one ephemeral step; got %s", out)
 	}
 }
 
@@ -179,10 +135,10 @@ func TestInjectAntigravityMigratesLegacyManagedPlugin(t *testing.T) {
 		t.Fatalf("Inject(antigravity) error = %v", err)
 	}
 
-	// The registration survives the move: the legacy command is carried over.
-	gotMCP := readAntigravityFile(t, filepath.Join(sharedAntigravityPluginDir(home), "mcp_config.json"))
+	// The registration survives: the legacy command is carried over to global mcp_config.json.
+	gotMCP := readAntigravityFile(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"))
 	if want := engramOverlayJSON(model.AgentAntigravity, customCommand); !bytes.Equal(gotMCP, want) {
-		t.Fatalf("migrated plugin MCP config must keep the legacy command\nwant:\n%s\ngot:\n%s", want, gotMCP)
+		t.Fatalf("migrated global MCP config must keep the legacy command\nwant:\n%s\ngot:\n%s", want, gotMCP)
 	}
 	for _, name := range []string{"plugin.json", "mcp_config.json", "hooks.json"} {
 		path := filepath.Join(legacyDir, name)
@@ -236,7 +192,7 @@ func TestInjectAntigravityKeepsEditedLegacyPluginAsset(t *testing.T) {
 func TestInjectAntigravityKeepsLegacyPluginWhenNewRegistrationFails(t *testing.T) {
 	home := t.TempDir()
 	legacyDir := seedLegacyAntigravityPlugin(t, home, "/opt/engram/bin/engram")
-	failAntigravityWrite(t, filepath.Join(".gemini", "config", "plugins", "gentle-ai-engram", "hooks.json"), false)
+	failAntigravityWrite(t, filepath.Join(".gemini", "config", "mcp_config.json"), false)
 
 	if _, err := Inject(home, antigravityAdapter()); err == nil {
 		t.Fatalf("Inject(antigravity) error = nil, want the injected write fault")
@@ -296,9 +252,9 @@ func TestInjectAntigravityReplacesUnresolvableLegacyCommand(t *testing.T) {
 					t.Fatalf("Inject(antigravity) error = %v", err)
 				}
 
-				gotMCP := readAntigravityFile(t, filepath.Join(sharedAntigravityPluginDir(home), "mcp_config.json"))
+				gotMCP := readAntigravityFile(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"))
 				if want := engramOverlayJSON(model.AgentAntigravity, fresh); !bytes.Equal(gotMCP, want) {
-					t.Fatalf("plugin MCP config must use the fresh-install command instead of %q\nwant:\n%s\ngot:\n%s", tt.command, want, gotMCP)
+					t.Fatalf("global MCP config must use the fresh-install command instead of %q\nwant:\n%s\ngot:\n%s", tt.command, want, gotMCP)
 				}
 			})
 		}

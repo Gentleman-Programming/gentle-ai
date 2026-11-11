@@ -491,17 +491,17 @@ func TestGoldenEngram_Antigravity(t *testing.T) {
 		t.Fatalf("engram.Inject(antigravity) changed = false")
 	}
 
-	// #797: Engram registration for Antigravity is plugin-owned only; the
-	// plugin MCP config uses the canonical agent tool profile
-	// (args ["mcp", "--tools=agent"]).
-	pluginMCPJSON := readTestFile(t, filepath.Join(home, ".gemini", "config", "plugins", "gentle-ai-engram", "mcp_config.json"))
-	assertGolden(t, "engram-antigravity-mcp.golden", pluginMCPJSON)
-
-	// The global ~/.gemini/config/mcp_config.json is shared with other MCP
-	// servers and must never be written for Engram.
+	// #5988: Engram registration for Antigravity is written natively to
+	// ~/.gemini/config/mcp_config.json; the MCP config uses the canonical
+	// agent tool profile (args ["mcp", "--tools=agent"]).
 	globalMCPPath := filepath.Join(home, ".gemini", "config", "mcp_config.json")
-	if _, err := os.Stat(globalMCPPath); !os.IsNotExist(err) {
-		t.Fatalf("global Antigravity MCP config %q must not be written for Engram; stat err = %v", globalMCPPath, err)
+	mcpJSON := readTestFile(t, globalMCPPath)
+	assertGolden(t, "engram-antigravity-mcp.golden", mcpJSON)
+
+	// Plugin directory must not be created.
+	pluginDir := filepath.Join(home, ".gemini", "config", "plugins", "gentle-ai-engram")
+	if _, err := os.Stat(pluginDir); !os.IsNotExist(err) {
+		t.Fatalf("Antigravity Engram plugin dir %q should not exist; stat err = %v", pluginDir, err)
 	}
 
 	// The staged prompt must contain the engram-protocol section.
