@@ -293,6 +293,8 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"omit tests, minify, add gratuitous abstractions, or split artificially to fit the heuristic",
 			"Forward this same advisory-only instruction when delegating tasks to subagents",
 			"Existing PR size gates remain unchanged",
+			// gentle-ai#6067 (GS-03): a user's line limit caps, it does not gate.
+			"A user's line limit is a ceiling, never an exact-count gate; never invent acceptance gates the user did not ask for",
 		}},
 		{"recover the right feature", []string{
 			"mem_context",
@@ -303,8 +305,17 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"Reconcile current requirements, code, and proof before resuming",
 		}},
 		{"partial persistence and conflict", []string{
-			"Read back both writes; they are not atomic",
+			// gentle-ai#6067 (GS-03): a plain read-back, no reconciliation script.
+			"Read back both writes with the normal read tool; they are not atomic, but never author comparison or reconciliation scripts or gates for them",
+			// gentle-ai#6067 (GS-03): the file is the source; never replay.
+			"After a partial or failed sync, check which writes already applied and continue from that state; never replay an applied write",
+			"The file is the source: a mirror that differs from the file just written is refreshed from the file, never a blocker",
+			// gentle-ai#6067 (GS-10): Engram mirror cadence.
+			"Refresh the mirror once per task transition (a task starts, finishes, is blocked, reopened, or dropped) or material plan change, and at close; `## Log` entries and evidence added between those points go to the file only and reach the mirror at the next one",
+			// Sentences the port did not replace stay.
 			"Engram is unavailable, preserve local progress and explicitly mark the mirror pending",
+			"Resynchronize when available",
+			"If a file write is unsafe or unavailable, preserve existing state and report the limitation",
 			"do not claim success or block unrelated safe work",
 			"Preserve both versions on irreconcilable edits and ask only about the real conflict",
 		}},
