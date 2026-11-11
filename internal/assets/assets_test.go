@@ -1719,6 +1719,8 @@ func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
 
 // gentle-ai#6067 (PD-50): the worker is the writer the parent delegates for a
 // named Writer trigger reason, never for size; the size wording contradicted it.
+// The Per-action rule also sends long suites, builds and installs to a fresh
+// worker, so the scope names that case too.
 func TestOpenCodeWorkerScopeFollowsTheWriterTrigger(t *testing.T) {
 	t.Parallel()
 
@@ -1728,7 +1730,7 @@ func TestOpenCodeWorkerScopeFollowsTheWriterTrigger(t *testing.T) {
 	}
 	text := string(body)
 	for _, clause := range []string{
-		"Use this agent only for scoped, bounded implementation the parent delegates for a named Writer trigger reason (parallel units or the context backstop) that uses ODD task context; never for Judgment Day artifact protocols.",
+		"Use this agent only for scoped, bounded work the parent delegates: implementation for a named Writer trigger reason (parallel units or the context backstop) that uses ODD task context, or a parent-authorized per-action command (a long suite, build, or install); never for Judgment Day artifact protocols.",
 		"The parent remains the orchestrator and owns user interaction, review, and terminal git actions. Never delegate to another agent.",
 	} {
 		if !strings.Contains(text, clause) {
