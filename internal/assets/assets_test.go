@@ -981,7 +981,7 @@ func TestFourRReviewAgentAssets(t *testing.T) {
 	for _, dir := range nativeDirs {
 		for _, agent := range reviewAgents {
 			content := MustRead(dir + "/" + agent + ".md")
-			for _, want := range []string{"read-only reviewer", "severity: BLOCKER | CRITICAL | WARNING | SUGGESTION", "No findings."} {
+			for _, want := range []string{"read-only reviewer", "severity: BLOCKER | CRITICAL | WARNING | SUGGESTION", "If clean, return an empty `findings` array and a non-empty `evidence` array."} {
 				if !strings.Contains(content, want) {
 					t.Fatalf("%s/%s.md missing %q", dir, agent, want)
 				}
