@@ -186,6 +186,9 @@ func TestUserWindowsCancelWatchRefusesForeignChannels(t *testing.T) {
 }
 
 func TestUserWindowsJobQuiesceStopsOwnedDescendants(t *testing.T) {
+	if userWindowsJobOwned() == nil {
+		t.Skip("already inside an owned-profile Windows job (e.g. a live Gentle Shell session): running the quiesce fixture here would terminate the session's own process tree")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	command, marker := userWindowsCancelFixture(t, ctx, "quiesce")
