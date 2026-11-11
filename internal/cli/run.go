@@ -4632,13 +4632,15 @@ func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScop
 }
 
 // antigravityLegacyEngramPluginPaths returns the Engram plugin assets older
-// gentle-ai versions wrote under antigravity-cli/plugins. Engram injection
-// retires them (#5930), so they are backup-only targets: never verified.
+// gentle-ai versions wrote under antigravity-cli/plugins or plugins/gentle-ai-engram.
+// Engram injection retires them (#5930, #5988), so they are backup-only targets: never verified.
 func antigravityLegacyEngramPluginPaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
 	var paths []string
 	for _, adapter := range adapters {
 		if adapter.Agent() == model.AgentAntigravity {
-			paths = append(paths, engram.AntigravityLegacyPluginAssetPaths(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))...)
+			dir := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
+			paths = append(paths, engram.AntigravityLegacyPluginAssetPaths(dir)...)
+			paths = append(paths, engram.AntigravityPluginAssetPaths(dir)...)
 		}
 	}
 	return paths

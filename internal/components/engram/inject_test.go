@@ -1122,6 +1122,77 @@ func TestInjectAntigravityPreservesCustomGlobalEngramCommand(t *testing.T) {
 	}
 }
 
+func TestInjectAntigravityPreservesGlobalCommandWithNonstandardExecutableName(t *testing.T) {
+	home := t.TempDir()
+	mcpPath := filepath.Join(home, antigravityGlobalMCPSuffix)
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(mcpPath), err)
+	}
+
+	binDir := t.TempDir()
+	customLauncher := filepath.Join(binDir, "agy-engram-custom")
+	if runtime.GOOS == "windows" {
+		customLauncher += ".exe"
+	}
+	if err := os.WriteFile(customLauncher, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(customLauncher) error = %v", err)
+	}
+
+	global := fmt.Sprintf(`{
+  "mcpServers": {
+    "engram": {"command": %q, "args": ["mcp"]}
+  }
+}
+`, customLauncher)
+	if err := os.WriteFile(mcpPath, []byte(global), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
+	}
+
+	if _, err := Inject(home, antigravityAdapter()); err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+
+	raw, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", mcpPath, err)
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", mcpPath, err)
+	}
+	server := cfg.MCPServers["engram"]
+	if server.Command != customLauncher {
+		t.Fatalf("command = %q, want nonstandard launcher %q", server.Command, customLauncher)
+	}
+
+	// Now verify that if the custom command is removed/invalid, it falls back to standard preferred engram.
+	if err := os.Remove(customLauncher); err != nil {
+		t.Fatalf("Remove(customLauncher) error = %v", err)
+	}
+	if _, err := Inject(home, antigravityAdapter()); err != nil {
+		t.Fatalf("second Inject(antigravity) error = %v", err)
+	}
+	raw2, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) second error = %v", mcpPath, err)
+	}
+	if err := json.Unmarshal(raw2, &cfg); err != nil {
+		t.Fatalf("Unmarshal second error = %v", err)
+	}
+	server2 := cfg.MCPServers["engram"]
+	if server2.Command == customLauncher {
+		t.Fatalf("command should have fallen back from invalid launcher %q, but stayed %q", customLauncher, server2.Command)
+	}
+	if !isEngramCommand(server2.Command) {
+		t.Fatalf("fallback command %q should satisfy isEngramCommand", server2.Command)
+	}
+}
+
 func TestInjectAntigravityRetiresLegacyPluginAssets(t *testing.T) {
 	home := t.TempDir()
 	legacyDir := AntigravityLegacyPluginDir(home)

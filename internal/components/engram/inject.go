@@ -912,10 +912,14 @@ func stableAntigravityEngramCommand(homeDir, globalPath string) string {
 		if err != nil {
 			continue
 		}
-		// #5930: a preserved command that no longer resolves leaves agy with a
+		// #5930, #5988: a preserved command that no longer resolves leaves agy with a
 		// disconnected Engram, so it falls through to the fresh-install command.
-		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) && engramCommandResolves(cmd) {
-			return stableEngramCommandForExisting(cmd, model.AgentAntigravity)
+		// A configured command in globalPath is preserved whenever the executable works,
+		// even if its basename does not satisfy the managed-plugin check in isEngramCommand.
+		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok {
+			if (path == globalPath || isEngramCommand(cmd)) && engramCommandResolves(cmd) {
+				return stableEngramCommandForExisting(cmd, model.AgentAntigravity)
+			}
 		}
 	}
 	return preferredStableEngramCommand()
