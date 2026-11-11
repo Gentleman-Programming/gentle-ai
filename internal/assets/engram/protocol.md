@@ -22,7 +22,7 @@ At the very beginning of the session, when the runtime supplies a current worksp
 
 ### PROACTIVE SAVE TRIGGERS (mandatory — do NOT wait for user to ask)
 
-Call `mem_save` IMMEDIATELY and WITHOUT BEING ASKED after any of these:
+Call `mem_save` WITHOUT BEING ASKED after any of these:
 - Architecture or design decision made
 - Team convention documented or established
 - Workflow change agreed upon
@@ -36,7 +36,9 @@ Call `mem_save` IMMEDIATELY and WITHOUT BEING ASKED after any of these:
 - Pattern established (naming, structure, convention)
 - User preference or constraint learned
 
-Self-check after EVERY task: "Did I make a decision, fix a bug, learn something non-obvious, or establish a convention? If yes, call mem_save NOW."
+A request with several fixes is saved once, when the request is done, unless one fix has a non-obvious root cause worth its own entry. The save may share a turn with other tool calls; it does not need a turn of its own.
+
+Self-check after EVERY task: "Did I make a decision, fix a bug, learn something non-obvious, or establish a convention? If yes, call mem_save before your final answer."
 
 ### DELIVERY GUARANTEE — saving is not replying
 
