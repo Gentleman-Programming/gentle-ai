@@ -1800,9 +1800,12 @@ func TestDelegationSkillsDelegateForReasonAndForwardTestDiscipline(t *testing.T)
 }
 
 // gentle-ai#6067 (gentle-shell#3101 parity): the verifier chooses its evidence
-// by change kind, never re-runs the writer's reported suite, reproduces a
-// user-reported failure with the exact command first, leaves adding probes to
-// the writer and committing to the parent, and corrects its own setup once.
+// by change kind, never re-runs the writer's reported suite unless the parent
+// passes it as the user's failing command, reproduces a user-reported failure
+// with the exact command first, leaves adding probes to the writer and an
+// authorized commit to the parent, and corrects its own setup once. The shared
+// Verify handoff keeps only what the parent acts on; the verifier's method
+// lives in its body alone, which keeps the Antigravity always-on budget.
 func TestVerifierChecksByChangeKind(t *testing.T) {
 	t.Parallel()
 
@@ -1820,6 +1823,8 @@ func TestVerifierChecksByChangeKind(t *testing.T) {
 		gates[name] = body
 	}
 
+	// Each rule is pinned in the file where it lives: the verifier's method in
+	// its body, the parent's duties in both shared Verify handoff bullets.
 	rules := []struct {
 		name             string
 		verifier, shared []string
@@ -1832,12 +1837,14 @@ func TestVerifierChecksByChangeKind(t *testing.T) {
 				"**Prompt or other contract text**: compare every removed or rewritten sentence with the baseline, one by one, and report each lost qualifier",
 				"**Other code**: probes aimed at what the change can break.",
 			},
-			shared: []string{"The verifier checks by the change kind the parent names: an external tool or environment change by reproducing the real case plus its own probes; prompt or contract text by comparing it sentence by sentence with the baseline for lost qualifiers and contradictions; other code by probes aimed at what the change can break."},
+			shared: []string{"Name the change kind;"},
 		},
 		{
-			name:     "no re-run of the writer's suite",
-			verifier: []string{"Do not re-run the suite the writer reported: the parent's spot check of one reported command covers the writer's results. Run the commands the parent authorizes as your evidence and your own probes."},
-			shared:   []string{"It does not re-run the writer's reported suite; the parent spot check covers it."},
+			name: "no re-run of the writer's suite, except the user's failing command",
+			verifier: []string{
+				"Do not re-run the suite the writer reported: the parent's spot check of one reported command covers the writer's results.",
+				"The exception is the command the parent passes as the user's failing command: run it even when it is the writer's reported suite. Run the commands the parent authorizes as your evidence and your own probes.",
+			},
 		},
 		{
 			name: "user-reported failure reproduced first",
@@ -1845,17 +1852,16 @@ func TestVerifierChecksByChangeKind(t *testing.T) {
 				"**A fix for a failure the user reported**: first run the user's exact failing command (the parent passes it verbatim, which authorizes it)",
 				"When the handoff does not carry the failing command, report the fix unverified and name the missing command; never guess one.",
 			},
-			shared: []string{"For a user-reported failure, the handoff carries verbatim the exact failing command, error text, and tool versions and configuration; run yourself any real-case check the verifier leaves unverified before calling the change verified."},
+			shared: []string{"for a user-reported failure, pass the user's exact failing command, error text, versions, and configuration, and run any real-case check left unverified."},
 		},
 		{
-			name:     "writer adds probes, parent commits",
-			verifier: []string{"for the parent to hand to the writer, who adds them; the parent commits; you never write them."},
-			shared:   []string{"The writer adds the probes as regression tests; the parent commits."},
+			name:     "writer adds probes, parent commits only when authorized",
+			verifier: []string{"for the parent to hand to the writer, who adds them; the parent commits them only when a commit is authorized, otherwise they stay uncommitted in the working tree; you never write them."},
+			shared:   []string{"The writer adds the probes; the parent commits them only when authorized, else they stay uncommitted."},
 		},
 		{
 			name:     "one self-correction of the verifier's own setup",
 			verifier: []string{"make exactly one corrected attempt and report both attempts; at a second setup failure or a missing prerequisite, stop and report the checks left unrun as unverified, not passed."},
-			shared:   []string{"A setup error the verifier made itself gets one corrected attempt; a second setup failure is reported as unverified, never retried."},
 		},
 	}
 	for _, rule := range rules {
@@ -1873,9 +1879,29 @@ func TestVerifierChecksByChangeKind(t *testing.T) {
 		}
 	}
 
+	// The verifier's method stays out of the shared handoff, which Antigravity
+	// renders inside its always-on budget.
+	for name, gate := range gates {
+		for _, phrase := range []string{
+			"The verifier checks by the change kind the parent names",
+			"It does not re-run the writer's reported suite",
+			"A setup error the verifier made itself",
+		} {
+			if strings.Contains(gate, phrase) {
+				t.Errorf("shared section %q carries verifier method %q", name, phrase)
+			}
+		}
+	}
+
 	// Replaced sentences are gone from the verifier, the shared sections, and
 	// every hand-maintained orchestrator copy.
-	retired := []string{"for the parent to hand to the writer to commit", "The writer commits the probes", "re-runs the verification commands"}
+	retired := []string{
+		"for the parent to hand to the writer to commit",
+		"The writer commits the probes",
+		"re-runs the verification commands",
+		"who adds them; the parent commits; you never write them.",
+		"The writer adds the probes as regression tests; the parent commits.",
+	}
 	copies, err := fs.Glob(FS, "*/orchestrator.md")
 	if err != nil || len(copies) == 0 {
 		t.Fatalf("orchestrator copies: %v (%d)", err, len(copies))
