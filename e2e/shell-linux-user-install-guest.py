@@ -328,17 +328,26 @@ def scope_bytes(path):
     parts = urllib.parse.unquote(clean).strip('/').split('/')
     name = '/'.join(parts[:2])
     if name not in LOCK_SCOPE:
-        require(False, f'unapproved scoped fixture package: {name}')
+        return public_bytes('registry.npmjs.org', path)
     entry = LOCK_SCOPE[name]
     if len(parts) == 2:
-        document = {
-            'name': name,
-            'dist-tags': {'latest': entry['version']},
-            'versions': {entry['version']: {'name': name, 'version': entry['version'], 'dist': entry['dist']}},
+        # Serve the real packument with the frozen lock's version entry pinned
+        # (exact dist integrity/tarball) and dist-tags.latest pointing at it.
+        # Other versions stay resolvable live (the pnpm probe pins an older
+        # cohort), but a fresh latest-resolution lands exactly the locked
+        # graph the provisioner authenticates.
+        status, headers, raw = public_bytes('registry.npmjs.org', path)
+        require(status == 200, 'scoped packument upstream')
+        document = json.loads(raw)
+        document.setdefault('versions', {})[entry['version']] = {
+            'name': name, 'version': entry['version'], 'dist': entry['dist'],
         }
+        document.setdefault('dist-tags', {})['latest'] = entry['version']
         return 200, {'content-type': 'application/json'}, json.dumps(document).encode()
     if parts[-1].endswith('.tgz'):
-        return public_bytes('registry.npmjs.org', urllib.parse.urlsplit(entry['dist']['tarball']).path)
+        if parts[-1] == urllib.parse.urlsplit(entry['dist']['tarball']).path.rsplit('/', 1)[-1]:
+            return public_bytes('registry.npmjs.org', urllib.parse.urlsplit(entry['dist']['tarball']).path)
+        return public_bytes('registry.npmjs.org', path)
     require(False, f'unapproved scoped fixture path: {path}')
 
 
