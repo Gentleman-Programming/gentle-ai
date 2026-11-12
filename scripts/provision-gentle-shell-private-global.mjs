@@ -329,6 +329,24 @@ function restore() {
   }
   console.log('Shared preimages restored; uncertain new evidence retained');
 }
+
+// reprovisionRecordedGentlePi returns the channel-recorded gentle-pi version a
+// reprovision must hold, derived from the install's durable record — never the
+// staged reviewed list, which is not durable on a published install. It refuses
+// Main preview, prior and frozen/legacy installs.
+function reprovisionRecordedGentlePi(root, graphPath, versionPattern) {
+  const manifest = JSON.parse(read(path.join(root, 'installation.json')));
+  if (manifest.main_sdk !== undefined && manifest.main_sdk !== null) reject('reprovision requires the Stable channel');
+  const graph = JSON.parse(read(graphPath));
+  if (!Array.isArray(graph)) reject('reprovision requires the recorded graph');
+  const gentle = graph.find(record => record && record.name === 'gentle-pi' && typeof record.version === 'string' && versionPattern.test(record.version));
+  if (!gentle) reject('reprovision requires a recorded gentle-pi');
+  // A frozen/legacy install keeps the embedded frozen modern lock: refuse so
+  // its pinned channel is never silently re-resolved to npm latest.
+  const frozenModern = JSON.parse(read(path.join(root, 'user-locks', 'modern', 'package-lock.json')));
+  if (frozenModern.packages?.['node_modules/gentle-pi']?.version === gentle.version) reject('reprovision requires the generated Stable channel');
+  return gentle.version;
+}
 if (action === 'restore') {
   restore();
 } else {
@@ -350,13 +368,19 @@ if (action === 'restore') {
   // staged list is likewise a legacy installation or a Main tree, checked
   // against its frozen lock as before, with supplier authentication enforced
   // at the Go launch boundary against the embedded list entry (S23/M1).
-  const frozenLock = prior || reviewed === null;
-  // A drifted self-update is repaired only through the modern generated route
-  // (issue #5812): the frozen prior/legacy route has no staged reviewed list
-  // and its re-acquisition would restore the historical lock instead of the
-  // channel the install recorded.
-  if (reprovision && frozenLock) reject('reprovision requires the modern reviewed route');
   const versionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  // Reprovision is the launch-time repair for a drifted self-update (issue
+  // #5812). The staged reviewed list is install-time state and is not assumed
+  // present on a published install, so eligibility and the gentle-pi target
+  // come from the install's durable record instead of `reviewed`.
+  let reprovisionGentlePi = null;
+  if (reprovision) {
+    if (prior) reject('reprovision requires the modern Stable channel');
+    reprovisionGentlePi = reprovisionRecordedGentlePi(root, graphPath, versionPattern);
+  }
+  // A reprovision always takes the generated route, even without a staged
+  // list; install and verify keep their existing route selection unchanged.
+  const frozenLock = prior || (reviewed === null && !reprovision);
   // Every per-package canonical-URL/SRI gate, shared by the frozen and the
   // generated lock route. The refusal slugs name the route that produced
   // them: the generated reviewed-list route never reports "frozen" (S23/L2).
@@ -427,7 +451,7 @@ if (action === 'restore') {
           fs.mkdirSync(directory, { mode: 0o700 });
         }
       }
-      writeExclusive(path.join(source, 'package.json'), `${JSON.stringify(rootDeclaration('latest'))}\n`);
+      writeExclusive(path.join(source, 'package.json'), `${JSON.stringify(rootDeclaration(reprovision ? reprovisionGentlePi : 'latest'))}\n`);
       stockNpm(['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
       const { completeFile } = await import(pathToFileURL(path.join(root, 'complete-generated-lock-sri.mjs')).href);
       await completeFile(lockPath);
@@ -473,10 +497,13 @@ if (action === 'restore') {
     // Advisory: the reviewed table never gates the channel. A gentle-pi
     // outside the table, or a listed version whose lock SRI differs from its
     // entry, installs anyway and says so. The lock's registry SRI stays the
-    // only hard integrity anchor.
-    const listed = reviewed[pins['gentle-pi'][0]];
-    if (!listed) console.error(`global provision advisory: gentle-pi@${pins['gentle-pi'][0]} is outside the reviewed supplier table; installing the channel resolution`);
-    else if (listed.integrity !== pins['gentle-pi'][1]) console.error(`global provision advisory: gentle-pi@${pins['gentle-pi'][0]} lock SRI differs from its reviewed entry; installing the channel resolution`);
+    // only hard integrity anchor. A reprovision has no staged list at launch,
+    // so its advisory is unavailable and simply skipped.
+    if (reviewed) {
+      const listed = reviewed[pins['gentle-pi'][0]];
+      if (!listed) console.error(`global provision advisory: gentle-pi@${pins['gentle-pi'][0]} is outside the reviewed supplier table; installing the channel resolution`);
+      else if (listed.integrity !== pins['gentle-pi'][1]) console.error(`global provision advisory: gentle-pi@${pins['gentle-pi'][0]} lock SRI differs from its reviewed entry; installing the channel resolution`);
+    }
   }
   if (frozenLock && !read(lockPath).equals(lockBytes)) reject('selected frozen lock differs');
   if (action === 'install' || reprovision) {
