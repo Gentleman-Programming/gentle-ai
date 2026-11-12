@@ -242,6 +242,27 @@ The role submission descriptor is a negotiated status contract change, so the ne
 
 Native Go alone selects lenses, classifies candidate causality, performs refutation, derives repository evidence, and permits at most one bounded correction. A validator that cannot inspect its immutable trees has no verdict; report that block rather than submitting a failed validation.
 
+### Non-blocking findings of a stopped review (`--non-blocking-findings`)
+
+If the authority revision changes during this read, STATUS refuses rather than mixing revisions. Rerun the same `gentle-ai review status` command with unchanged arguments; the refusal grants no new authority.
+
+When a review stops in `correction_required` or `escalated`, the correction request carries only the findings to correct. A client that also wants the findings the provider admitted as non-blocking opts in by adding `--non-blocking-findings` to a contracted `review status --contract gentle-ai.review-integration/v2` call. Add it also to the `status_continuation` that only a `correction_required` closure returns; an `escalated` closure returns none, so query STATUS with the flag directly. That STATUS then carries `non_blocking_findings`:
+
+```json
+"non_blocking_findings": {
+  "statement": "Every finding listed here is non-blocking: ...",
+  "findings": [
+    {"id": "R3-W01", "lens": "reliability", "location": "internal/auth/session.go:4", "severity": "WARNING", "disposition": "informational", "claim": "the token check could be easier to read"}
+  ]
+}
+```
+
+- It appears only for a current compact authority in `correction_required` or `escalated`; `findings` is `[]` when every finding blocks. Any other state omits the key, even with the opt-in.
+- It lists a finding only when its admitted outcome names a disposition: `informational` (WARNING or SUGGESTION), `follow_up` (a severe finding proved pre-existing or base-only), or `refuted`. A finding to correct, a corroborated or inconclusive severe finding, and an unrecognized outcome are never listed, so an escalation's unresolved findings never appear here.
+- `claim` is the reviewer's admitted text, unbounded like the correction request's `claim`. Display it; never route on it.
+- Without the opt-in, STATUS output is unchanged. The last-event closure is unchanged for every client: `advisory_findings` and `reviewer_results` stay approved-only.
+- The flag requires `--contract gentle-ai.review-integration/v2`; without it, or with v1, STATUS refuses. A provider older than this change refuses the unknown flag, so a client can fall back to plain STATUS.
+
 Medium and high-risk START may return the typed `gentle-ai.review-integration.consent/v3` envelope. Relay the complete choice envelope losslessly, preserve machine tokens and invocations exactly, and run only the invocation selected by the human. Global RDD mode permits review; it never grants per-candidate consent. A decline is not the kill switch.
 
 ## Read-only risk assessment (`gentle-ai review assess`)

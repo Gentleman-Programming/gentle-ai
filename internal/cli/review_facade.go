@@ -27,6 +27,11 @@ import (
 const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " +
 	ReviewIntegrationContractV1 + " or " + ReviewIntegrationContractV2
 
+// reviewNonBlockingFindingsRequiresContractReason refuses the
+// --non-blocking-findings opt-in outside the contract whose STATUS schema
+// (status/v9) declares non_blocking_findings.
+const reviewNonBlockingFindingsRequiresContractReason = "--non-blocking-findings requires --contract " + ReviewIntegrationContractV2
+
 // reviewStatusTargetSelectorsRequireContractReason is the sibling of
 // reviewContractRequiredForActionEligibilityReason above: it names the same
 // exact contract value for the other set of --contract-gated review status
@@ -826,6 +831,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	lensSelection := flags.String("lenses", "", "preflight review start --lenses and render it into the fresh START next transition")
 	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason and render it into the fresh START next transition")
 	phaseTimings := flags.Bool("phase-timings", false, "emit opt-in native STATUS phase timing diagnostics")
+	nonBlockingFindings := flags.Bool("non-blocking-findings", false, "include the optional non_blocking_findings (with claims) of a correction_required or escalated authority in negotiated output; requires --contract "+ReviewIntegrationContractV2)
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -855,6 +861,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *contract != "" {
 		if err := validateReviewIntegrationContract(*contract); err != nil {
 			return err
+		}
+		if *nonBlockingFindings && *contract != ReviewIntegrationContractV2 {
+			return reviewPreflightError(errors.New(reviewNonBlockingFindingsRequiresContractReason))
 		}
 		// rdd-risk-gated S17: the START options are validated before the
 		// repository is touched, so a refused preflight writes nothing.
@@ -1234,6 +1243,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
+		if *nonBlockingFindings {
+			if result.NonBlockingFindings, err = reviewStatusNonBlockingFindings(ctx, root, native); err != nil {
+				return err
+			}
+		}
 		result.intendedUntracked = intendedScope
 		result.committedRangeBaseRef = derivedBaseRef
 		result.startOptions = startOptions
@@ -1646,6 +1660,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	}
 	if *actionEligibility || *nextTransition {
 		return errors.New(reviewContractRequiredForActionEligibilityReason)
+	}
+	if *nonBlockingFindings {
+		return errors.New(reviewNonBlockingFindingsRequiresContractReason)
 	}
 	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*repositoryContextHandle) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || committedOnlyProvided || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 		return errors.New(reviewStatusTargetSelectorsRequireContractReason)
