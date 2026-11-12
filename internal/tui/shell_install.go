@@ -203,6 +203,33 @@ type shellManageState struct {
 	backup       string
 	uninstallErr error
 	fromConfig   bool
+	backups      *shellBackupsState
+}
+
+// shellBackupsState holds the Manage → Replaced backups sub-flow state. It is
+// populated by the shellBackupsLoaded/shellBackupsPruned messages and by the
+// list/confirmation key handling in the implementation slice.
+type shellBackupsState struct {
+	loading bool
+	list    []shellinstaller.UserReplacedBackup
+	cursor  int
+	confirm bool
+	working bool
+	done    bool
+	err     error
+}
+
+// shellBackupsLoaded delivers the discovery result: the sorted candidates and
+// any discovery error.
+type shellBackupsLoaded struct {
+	list []shellinstaller.UserReplacedBackup
+	err  error
+}
+
+// shellBackupsPruned delivers the batch-prune result. A non-nil err is a
+// preservation error that must be shown, never retracted.
+type shellBackupsPruned struct {
+	err error
 }
 
 func (m Model) beginShellUpdate(config shellExperienceConfig) (tea.Model, tea.Cmd) {
