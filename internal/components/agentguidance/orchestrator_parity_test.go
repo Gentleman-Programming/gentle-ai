@@ -190,8 +190,8 @@ func TestInstalledOrchestratorHasGentleShellParity(t *testing.T) {
 			}
 
 			for _, forbidden := range gentleShellOnlyContent {
-				if agent == model.AgentAntigravity && forbidden == "subagent_run" {
-					// Antigravity specifies subagent_run on pi-bridge when running in Gentle Shell (#6011).
+				if (agent == model.AgentAntigravity || agent == model.AgentGeminiCLI) && (forbidden == "subagent_run" || forbidden == "pi_subagent_run") {
+					// Antigravity and Gemini CLI specify pi_subagent_run on pi-bridge when running in Gentle Shell (#6011).
 					continue
 				}
 				if strings.Contains(prompt, forbidden) {
