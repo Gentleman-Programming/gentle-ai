@@ -140,15 +140,62 @@ func AntigravityModelPickerOptionCount(state AntigravityModelPickerState) int {
 	return len(antigravityPresetOrder) + 1 // presets + Back
 }
 
+const antigravityHostLimitationNotice = "Note: Antigravity native subagents support tiers (inherit/flash_lite/flash/pro); arbitrary model/provider/effort is unsupported by the host."
+
+// renderAntigravityNotice renders the host limitation notice, wrapping by words
+// when a positive terminal width is provided so it fits 80-column and narrower terminals.
+func renderAntigravityNotice(width int) string {
+	if width <= 0 {
+		return styles.HelpStyle.Render(antigravityHostLimitationNotice)
+	}
+
+	words := strings.Fields(antigravityHostLimitationNotice)
+	if len(words) == 0 {
+		return ""
+	}
+
+	var lines []string
+	var cur strings.Builder
+	for _, w := range words {
+		if cur.Len() == 0 {
+			cur.WriteString(w)
+			continue
+		}
+		if cur.Len()+1+len(w) > width {
+			lines = append(lines, cur.String())
+			cur.Reset()
+			cur.WriteString(w)
+		} else {
+			cur.WriteString(" ")
+			cur.WriteString(w)
+		}
+	}
+	if cur.Len() > 0 {
+		lines = append(lines, cur.String())
+	}
+
+	var rendered []string
+	for _, l := range lines {
+		rendered = append(rendered, styles.HelpStyle.Render(l))
+	}
+	return strings.Join(rendered, "\n")
+}
+
 // RenderAntigravityModelPicker renders the Antigravity model picker screen for the given state and cursor index.
-func RenderAntigravityModelPicker(state AntigravityModelPickerState, cursor int) string {
+// If an optional width is provided, long notices are wrapped to fit the available terminal width.
+func RenderAntigravityModelPicker(state AntigravityModelPickerState, cursor int, width ...int) string {
+	targetWidth := 0
+	if len(width) > 0 {
+		targetWidth = width[0]
+	}
+
 	var b strings.Builder
 	if !state.InCustomMode {
 		b.WriteString(styles.TitleStyle.Render("Antigravity Model Assignments"))
 		b.WriteString("\n\n")
 		b.WriteString(styles.SubtextStyle.Render("Choose the agy model tier for Antigravity subagents:"))
 		b.WriteString("\n")
-		b.WriteString(styles.HelpStyle.Render("Note: Antigravity native subagents support tiers (inherit/flash_lite/flash/pro); arbitrary model/provider/effort is unsupported by the host."))
+		b.WriteString(renderAntigravityNotice(targetWidth))
 		b.WriteString("\n\n")
 		for idx, preset := range antigravityPresetOrder {
 			b.WriteString(renderRadio(string(preset), preset == state.Preset, idx == cursor))
@@ -165,7 +212,7 @@ func RenderAntigravityModelPicker(state AntigravityModelPickerState, cursor int)
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Press enter on a role to cycle: inherit → flash_lite → flash → pro"))
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("Note: Antigravity native subagents support tiers (inherit/flash_lite/flash/pro); arbitrary model/provider/effort is unsupported by the host."))
+	b.WriteString(renderAntigravityNotice(targetWidth))
 	b.WriteString("\n\n")
 	for idx, role := range model.AntigravityModelRoles {
 		roleLabel := antigravityRoleLabels[role]

@@ -90,3 +90,25 @@ func TestNewAntigravityModelPickerStateFromAssignments(t *testing.T) {
 		t.Fatalf("custom assignments preset = %q", got.Preset)
 	}
 }
+
+// TestRenderAntigravityModelPickerWrapsNoticeToTerminalWidth verifies that the host limitation
+// notice wraps within 80 columns in both preset and custom views without losing content.
+func TestRenderAntigravityModelPickerWrapsNoticeToTerminalWidth(t *testing.T) {
+	state := NewAntigravityModelPickerState()
+	outPreset := RenderAntigravityModelPicker(state, 0, 80)
+	if !strings.Contains(outPreset, "support tiers (inherit/flash_lite/flash/pro)") {
+		t.Fatalf("preset view must retain tiers mention, got:\n%s", outPreset)
+	}
+	if !strings.Contains(outPreset, "arbitrary model/provider/effort is unsupported by the host.") {
+		t.Fatalf("preset view must retain unsupported mention, got:\n%s", outPreset)
+	}
+
+	state.InCustomMode = true
+	outCustom := RenderAntigravityModelPicker(state, 0, 80)
+	if !strings.Contains(outCustom, "support tiers (inherit/flash_lite/flash/pro)") {
+		t.Fatalf("custom view must retain tiers mention, got:\n%s", outCustom)
+	}
+	if !strings.Contains(outCustom, "arbitrary model/provider/effort is unsupported by the host.") {
+		t.Fatalf("custom view must retain unsupported mention, got:\n%s", outCustom)
+	}
+}
