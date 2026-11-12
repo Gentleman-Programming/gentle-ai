@@ -352,3 +352,9 @@ The published v1 directory contains 23 strict JSON Schemas and 24 deterministic 
 - [ ] `approved` acknowledgement was retained and run only from the provider-owned START, STATUS, or terminal-closure transition.
 - [ ] Commit, push, PR, release, and archive followed ordinary repository policy.
 - [ ] Each delivery action has explicit authorization.
+
+## Frozen v1 STATUS compatibility
+
+Ordinary target STATUS selects compact authority, not legacy receipt authority. For contract v1, `receipt: {"status":"not_applicable"}` is only the required compatibility marker: it provides no receipt identity or approval. Contract v2 does not gain this marker.
+
+The v1 response omits v2-only inventory, frozen-manifest digest, disposition, and generated-path metadata. Full evidence and routing are computed and validated before the final disposition/manifest serialization projection; stored authority is not rewritten. The frozen v1 and historical v7/v8 schemas remain unchanged.

@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -38,5 +40,37 @@ func TestV9ReleaseSchemaMatchesGoBoundaryRejections(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestV1ReachableStatusSerializationBoundaries(t *testing.T) {
+	for _, name := range []string{"generated manifest", "disposition"} {
+		t.Run(name, func(t *testing.T) {
+			reviewEnabledHome(t)
+			repo := initReviewCLIRepo(t)
+			var lineage string
+			var selectors []string
+			if name == "generated manifest" {
+				writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+				writeReviewStartCandidate(t, repo, "testdata/golden/output.golden", "after\n", 0o644)
+				started := runNegotiatedReviewStart(t, repo, "v1-generated")
+				lineage = started.LineageID
+			} else {
+				writeInspectCLIRecoveryPair(t, repo, "v1-disposition", false, dispositionForgedAuthorization)
+				lineage = "v1-disposition-successor"
+				selectors = []string{"--projection", "staged"}
+			}
+			before := inspectCLIAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
+			args := []string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", lineage}
+			var output bytes.Buffer
+			if err := RunReview(append(args, selectors...), &output); err != nil {
+				t.Fatal(err)
+			}
+			after := inspectCLIAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("read-only STATUS changed authority")
+			}
+			validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, "v1", "status-v2.schema.json"), output.Bytes())
+		})
 	}
 }

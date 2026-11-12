@@ -6,11 +6,19 @@ Delivery: stacked-to-main PR slices, each <=400 authored changed lines. Real RDD
 S1. Owner approved: "Recomiendo que, **cuando abandonar sea elegible**, se informe esa salida como recuperación manual; cuando no lo sea, se mantenga la parada actual. Sin abandonar automáticamente ni desactivar RDD." Reply: "si".
 S2. Owner approved: "¿Avanzo con esa distinción y la prueba del ejecutable, separando los cambios en PRs si exceden el límite de 400 líneas?" Reply: "si".
 
+S3. Owner approved: "¿Aprobás ese criterio: arreglo acotado de v9 y mantener v1 sin la continuación nueva?" Reply: "Si". Scope: exact two correction-release reasons, closed v9 continuation schema, no v1 schema or historical v7/v8 changes, real envelope and negative validation tests.
+
+S4. Owner approved: "¿Avanzo también con ese arreglo separado de compatibilidad v1?" Reply: "si". Accepted proposal: "arreglar también la respuesta v1 en un cambio separado, respetando su esquema congelado y sin inventar recibos"; existing PR stays scoped to v9 repair and continuation suppression, with explicit evidence of pre-existing v1 defects.
+
 ## Tasks
 T1 | S1 | inline | done | conditional eligibility probe, release continuation, eligible/ineligible and unchanged-state tests, documentation | commit: 945b80290
 T2 | S2 | inline | done | driven zero-budget journey against built executable, corpus/CI registration | commit: 945b80290
 T3 | S1-S2 | independent verifier | done | isolated driven proof, focused tests, exact public differential | commit: 945b80290
-T4 | S1-S2 | parent | in_progress | Linux references, stacked PR CI/review and delivery | commit: pending
+T4 | S1-S2 | parent | pending | Linux references, stacked PR CI/review and delivery | commit: pending
+
+T5 | S3 | inline / independent verifier | done | published v9 schema repair and frozen-v1 compatibility, RED/GREEN and focused re-verification | commit: 19866a939
+
+T6 | S4 | inline / independent verifier | done | truthful frozen-v1 serialization implemented; six boundary regression cases independently pass; executable closure recovery authorized | commit: pending
 
 ## Log
 L1. Original accepted proposal: "La revisión confirmó **dos pendientes reales** en #6087; no lo mergeé aunque el CI esté verde:\n\n1. **Falta documentar una salida válida:** algunas revisiones con presupuesto cero permiten `review abandon`, pero solo si pasan sus controles y hay autorización explícita. Eso descarta la revisión; **no la corrige ni aprueba los cambios**.\n2. **Falta un caso de prueba contra el ejecutable:** el test actual cubre ese escenario dentro del paquete CLI, pero las corridas de bench no prueban ese caso concreto. Haber pasado los otros journeys no cubre esa ausencia.\n\n**Hay una decisión de comportamiento:** hoy ese stop se anuncia como terminal y falla de la herramienta. Recomiendo que, **cuando abandonar sea elegible**, se informe esa salida como recuperación manual; cuando no lo sea, se mantenga la parada actual. Sin abandonar automáticamente ni desactivar RDD.\n\n¿Avanzo con esa distinción y la prueba del ejecutable, separando los cambios en PRs si exceden el límite de 400 líneas?"
@@ -27,3 +35,18 @@ L8. Job-34 built changed executable and j129 completed (exit 0), git diff --chec
 
 L9. Independent verifier mwd2eb3i-1a-50ao: S1/S2 met, no actionable code blocker. Corrected preparation succeeded; focused tests, bench build/vet/tests, independently built j129 and public differential passed; one incorrect sibling-probe assumption retained as failure evidence before correct provider-context comparisons. Authority byte hashes unchanged, exact flagless command refuses with binding template. Parent full corpus: 53 completed, zero unsupported/failed. No full root suite; Linux baseline refresh pending. Actual abandonment intentionally not performed.
 L10. Delivery boundary: original #6087 ends at 71bb14d49; follow-up branch fix/correction-unavailable-manual-release starts there. Commit 945b80290 contains only recovery and its executable coverage, 281 changed lines including this task document. Follow-up PR targets original branch until #6087 merges, then retarget main with a clean incremental diff. No oversized exception.
+
+L11. User approved scoped in-place v9 correction and frozen-v1 continuation suppression: "Si". Source review found closed inherited schemas reject both correction release continuations; reproduce against published schema before fix. Prior CI green is not evidence of schema compatibility. Reopen verification for S3; original S1/S2 implementation evidence retained.
+
+L12. Jobs 42/43 demonstrated v9 continuation rejection and undesired v1 continuation. Initial GREEN attempts hit test-helper regex/URL preparation failures, corrected by reusing the existing regexp engine. Job-46 then exposed missing receipt / extra eligible_untracked_inventory in actual v1 envelopes. Job-47 reproduced both plus continuation on baseline 0e2a7c704 in /private/tmp/v1-schema-baseline.bFNXqc. No schema thaw or receipt invention. User approved separate v1 repair with "si"; explorer mwdbe4li-1c-dc81 maps truthful serializer adaptation.
+
+L13. Jobs 48 RED and 49/50 GREEN established truthful v1 receipt not_applicable without identity, v2-only inventory/frozen digest, and preserved legacy/corrupt authority. Independent sweep mwdbp45z-1e-w5dz found three blockers: escaped CR / Unicode blank schema parity, generated manifest metadata, and root disposition. Job-52 reproduced all six boundary cases. Jobs 53/54 failed due regex Unicode encoding and premature manifest projection; both failures preserved. Final projection occurs only after full validation, immediately before encoding. Job-55 broad schema checks and diff check passed.
+
+L14. Independent bounded recheck mwdcaghb-1f-yl72: six regression cases passed (1.529s), both builds passed; separate executable probes never ran because prior temporary schema_check.go was absent. No residual product defect reproduced; no unconditional completion or publication. Worker stopped without repair loop.
+
+L15. User: "si recupera y deja todo listo please". Accepted bounded recovery: same verifier reconstructs isolated helper, at most one preparation correction, only missing public v1/v9 and unaffected v2 exact differential/state checks, no product changes. Task mwdd5m9k-1g-0ou5 running. Preserve evidence until explicit release. Delivery remains blocked on proof and CI; separate S3/S4 slices required.
+
+L16. User authorized fresh preparation: "si, pero porque tantas recuperaciones? quiero que esto termine". Independent verifier mwddn2v9-1h-rpdv completed all four missing checks: S3/S4 met, first-attempt mandatory preparation, 4 negative v9 boundaries rejected / 2 valid accepted, both built v1 reproductions validate, 3 exact v2 controls and 12 authority hash checks pass. Durable evidence: /private/tmp/status-schema-verify.o8WAAv/final-evidence/. No additional product correction requested. T5/T6 implementation and verification complete; delivery remains T4.
+L17. Split S3 from S4 as approved. First slice isolated CLI tests passed (job-57, 33.925s); format command failed because checkout-index snapshot lacked Git metadata, not a source format finding. Added a local Git index to the snapshot; job-58 runs the unchanged formatting check. No tests weakened.
+
+L18. First delivery slice committed 19866a939, 162 additions+deletions, published as #6103 targeting #6101. Isolated tests pass; job-58 identified one extra blank line from splitting the test; formatted index content and job-59 gofmtcheck/diff checks passed. Remaining S4 source is unchanged from the independently verified candidate; receipt/serialization explanation added to docs. New slice branch fix/frozen-v1-status-serialization.
