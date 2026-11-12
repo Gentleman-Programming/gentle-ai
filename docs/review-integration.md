@@ -244,6 +244,8 @@ Native Go alone selects lenses, classifies candidate causality, performs refutat
 
 ### Non-blocking findings of a stopped review (`--non-blocking-findings`)
 
+If the authority revision changes during this read, STATUS refuses rather than mixing revisions. Rerun the same `gentle-ai review status` command with unchanged arguments; the refusal grants no new authority.
+
 When a review stops in `correction_required` or `escalated`, the correction request carries only the findings to correct. A client that also wants the findings the provider admitted as non-blocking opts in by adding `--non-blocking-findings` to a contracted `review status --contract gentle-ai.review-integration/v2` call. Add it also to the `status_continuation` that only a `correction_required` closure returns; an `escalated` closure returns none, so query STATUS with the flag directly. That STATUS then carries `non_blocking_findings`:
 
 ```json
