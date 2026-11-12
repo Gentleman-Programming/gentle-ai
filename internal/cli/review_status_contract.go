@@ -57,7 +57,14 @@ type ReviewForecast struct {
 	Steps   []ReviewForecastItem  `json:"steps"`
 }
 
+// ReviewV1ReceiptStatus is a compatibility marker, not receipt evidence.
+// Ordinary target STATUS selects no legacy receipt authority.
+type ReviewV1ReceiptStatus struct {
+	Status string `json:"status"`
+}
+
 type ReviewTargetStatusResult struct {
+	Receipt       *ReviewV1ReceiptStatus                `json:"receipt,omitempty"`
 	Schema        string                                `json:"schema"`
 	Contract      string                                `json:"contract"`
 	Operation     string                                `json:"operation"`
@@ -248,6 +255,11 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 			IntendedUntrackedProof:  native.Projection.IntendedUntrackedProof,
 			InitialSnapshotIdentity: native.Projection.InitialSnapshotIdentity, CurrentSnapshotIdentity: native.Projection.CurrentSnapshotIdentity,
 		},
+	}
+	if contract == ReviewIntegrationContractV1 {
+		// The native loader selects compact authority only; its lifecycle
+		// does not publish deciding receipts. Never infer presence/identity.
+		result.Receipt = &ReviewV1ReceiptStatus{Status: "not_applicable"}
 	}
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
@@ -786,8 +798,8 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		return nil
 	}
 	// #3299, #4170: the continuation is the runnable follow-up of exactly the
-	// two stops that have one -- a stale managed-asset digest, and the #4680
-	// correction budget release. Attaching it to any other transition -- an
+	// stops that have one -- a stale managed-asset digest and the conditional
+	// correction-context or unavailable-request release. Attaching it to any other transition -- an
 	// execute the caller would run alongside a command it was never told
 	// about, or a stop for an unrelated reason -- would let a caller read two
 	// disagreeing exits out of one envelope. Each code's own shape is checked
@@ -803,7 +815,7 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			if err := validateManagedAssetsContinuation(continuation); err != nil {
 				return fmt.Errorf("invalid managed-assets STATUS continuation: %w", err)
 			}
-		case reviewCorrectionContextBudgetCode:
+		case reviewCorrectionContextBudgetCode, "correction_request_unavailable":
 			// #4680: the release route may not appear in the Pi facade
 			// contract's prose, so the stop is the only channel carrying it.
 			// Its shape is checked as strictly as the sync one.
@@ -811,7 +823,7 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 				return fmt.Errorf("invalid correction release STATUS continuation: %w", err)
 			}
 		default:
-			return errors.New("next_transition.continuation is valid only on a managed_assets_outdated or correction_context_budget_exceeded stop") // refusal:by-design world-action: a producer that attaches this continuation to any other stop built a malformed envelope and requires a code fix, not an operator command
+			return errors.New("next_transition.continuation is valid only on a managed_assets_outdated, correction_context_budget_exceeded or correction_request_unavailable stop") // refusal:by-design world-action: a producer that attaches this continuation to any other stop built a malformed envelope and requires a code fix, not an operator command
 		}
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {

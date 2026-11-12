@@ -353,9 +353,10 @@ func userWindowsProvision(ctx context.Context, root, action string, stdout, stde
 }
 
 // Runtime state written after publication by the owned Go, npm, Node and Pi
-// processes: GOPATH/GOMODCACHE, GOCACHE, TEMP, the npm cache and Pi sessions
-// named after the caller CWD. It is not an installed artefact.
-var userWindowsMutableState = []string{"home", "state", "tmp", "runtime/cache", "agent/sessions"}
+// processes: GOPATH/GOMODCACHE, GOCACHE, TEMP, the npm cache, the agent's own
+// npm package tree written when the user installs Pi extensions, and Pi
+// sessions named after the caller CWD. None of it is an installed artefact.
+var userWindowsMutableState = []string{"home", "state", "tmp", "runtime/cache", "agent/sessions", "agent/npm"}
 
 type userWindowsInventoryMode int
 
@@ -371,11 +372,30 @@ const (
 )
 
 func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
+	// Runtime state is not an installed artefact: caches and sessions written
+	// after publication legitimately grow past the artefact byte bounds. Only
+	// the fresh pre-publication stage keeps every one of its bytes bounded.
+	state := map[string]bool{}
+	if mode != userWindowsInventoryInstalled {
+		for _, relative := range userWindowsMutableState {
+			state[filepath.Join(root, filepath.FromSlash(relative))] = true
+		}
+	}
+	// Launch additionally treats names below these roots as data names.
 	mutable := map[string]bool{}
 	if mode == userWindowsInventoryLaunch {
-		for _, relative := range userWindowsMutableState {
-			mutable[filepath.Join(root, filepath.FromSlash(relative))] = true
+		mutable = state
+	}
+	stateDescendant := func(path string) bool {
+		if len(state) == 0 {
+			return false
 		}
+		for current := filepath.Dir(path); len(current) > len(root); current = filepath.Dir(current) {
+			if state[current] {
+				return true
+			}
+		}
+		return false
 	}
 	dataRoot := func(path string) string {
 		if mode == userWindowsInventoryCleanup {
@@ -411,6 +431,11 @@ func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
 		if !info.IsDir() {
 			if !info.Mode().IsRegular() {
 				return errors.New("Windows inventory contains nonregular objects")
+			}
+			if stateDescendant(path) {
+				// Runtime data keeps the per-entry guards above, but its size
+				// belongs to no installed artefact bound.
+				return nil
 			}
 			total += info.Size()
 			bound := int64(32 << 20)
