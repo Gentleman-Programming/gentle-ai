@@ -416,6 +416,9 @@ func TestPublishWorkspaceWithoutGitDirCreatesRegularFile(t *testing.T) {
 
 func TestPublishRemovesRetiredAntigravitySectionsFromWorkspaceAGENTS(t *testing.T) {
 	workspace := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	agentsPath := antigravityrules.AgentsMDPath(workspace)
 
 	initialContent := filemerge.InjectMarkdownSection("", "persona", "Active persona.\n")
@@ -440,6 +443,47 @@ func TestPublishRemovesRetiredAntigravitySectionsFromWorkspaceAGENTS(t *testing.
 	}
 	if strings.Contains(content, "<!-- gentle-ai:engram-protocol -->") {
 		t.Fatalf("expected retired engram-protocol section removed, got:\n%s", content)
+	}
+}
+
+func TestPublishWorkspaceReplacesOwnedSymlinkWithRegularFile(t *testing.T) {
+	workspace := t.TempDir()
+	agentsPath := antigravityrules.AgentsMDPath(workspace)
+	configPath := antigravityrules.ConfigAgentsMDPath(workspace)
+
+	// Setup config file and a symlink pointing to it
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	writeFile(t, configPath, "# Config AGENTS\n")
+	if err := os.Symlink(filepath.Join(".gemini", "config", "AGENTS.md"), agentsPath); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Workspace persona.\n")
+	writeFile(t, antigravityrules.StagingPath(workspace), staging)
+
+	result, err := antigravityrules.Publish(workspace, antigravityrules.WithWorkspaceScope(true))
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	info, err := os.Lstat(agentsPath)
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("expected workspace AGENTS.md to be converted to a regular file, still symlink")
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("expected workspace AGENTS.md to be regular file, mode=%v", info.Mode())
+	}
+	content := readFile(t, agentsPath)
+	if !strings.Contains(content, "Workspace persona.") {
+		t.Fatalf("expected workspace content written, got:\n%s", content)
 	}
 }
 

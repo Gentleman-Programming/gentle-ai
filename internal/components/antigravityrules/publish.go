@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
@@ -202,6 +203,8 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 		return fmt.Errorf("expected %q to be a file, got directory", agentsPath)
 	}
 
+	isWorkspace := resolveIsWorkspace(baseDir, options)
+
 	if lstatErr == nil && (info.Mode()&os.ModeSymlink != 0) {
 		target, readlinkErr := os.Readlink(agentsPath)
 		if readlinkErr != nil {
@@ -230,13 +233,37 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 			return nil
 		}
 
-		if isLegacyGeminiLink {
-			if err := os.Remove(agentsPath); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("remove legacy AGENTS.md symlink: %w", err)
+		if isWorkspace {
+			if isManagedConfigLink || isLegacyGeminiLink {
+				original := ""
+				if raw, err := os.ReadFile(agentsPath); err == nil {
+					original = string(raw)
+				}
+
+				updated := reconcileAgentsMDContent(original, staging, baseDir, options)
+				if strings.TrimSpace(updated) == "" {
+					if err := os.Remove(agentsPath); err != nil && !os.IsNotExist(err) {
+						return fmt.Errorf("remove emptied %q: %w", agentsPath, err)
+					}
+					result.Changed = true
+					result.Files = append(result.Files, agentsPath)
+					return nil
+				}
+
+				if err := replaceSymlinkWithRegularFile(agentsPath, []byte(updated), 0o644); err != nil {
+					return err
+				}
+				result.Changed = true
+				result.Files = append(result.Files, agentsPath)
+				return nil
 			}
+			return nil
+		}
+
+		if isLegacyGeminiLink {
 			relTarget := filepath.Join(".gemini", "config", "AGENTS.md")
-			if err := os.Symlink(relTarget, agentsPath); err != nil {
-				return fmt.Errorf("create AGENTS.md symlink: %w", err)
+			if err := replaceSymlink(agentsPath, relTarget); err != nil {
+				return fmt.Errorf("migrate legacy AGENTS.md symlink: %w", err)
 			}
 			result.Changed = true
 			result.Files = append(result.Files, agentsPath)
@@ -256,32 +283,7 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 		}
 		original := string(raw)
 
-		stagedSections := Sections(staging)
-		stagedMap := make(map[string]string, len(stagedSections))
-		for _, sec := range stagedSections {
-			stagedMap[sec.ID] = sec.Body
-		}
-
-		updated := original
-		// 1. Update or inject all sections present in staging
-		for _, sec := range stagedSections {
-			updated = filemerge.InjectMarkdownSection(updated, sec.ID, sec.Body)
-		}
-
-		// 2. Identify sections present in original that should be removed:
-		// Any managed section that is NOT in staging, provided no other active agent needs it.
-		for _, sec := range Sections(original) {
-			if _, inStaging := stagedMap[sec.ID]; inStaging {
-				continue
-			}
-			if !managedSectionIDs[sec.ID] {
-				continue
-			}
-			if otherAgentNeedsSection(baseDir, sec.ID, options.activeAgents) {
-				continue
-			}
-			updated = filemerge.InjectMarkdownSection(updated, sec.ID, "")
-		}
+		updated := reconcileAgentsMDContent(original, staging, baseDir, options)
 
 		if strings.TrimSpace(updated) == "" {
 			if err := os.Remove(agentsPath); err != nil && !os.IsNotExist(err) {
@@ -306,15 +308,6 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 	}
 
 	if os.IsNotExist(lstatErr) && hasStaging {
-		isWorkspace := false
-		if options.isWorkspace != nil {
-			isWorkspace = *options.isWorkspace
-		} else {
-			if _, err := os.Stat(filepath.Join(baseDir, ".git")); err == nil {
-				isWorkspace = true
-			}
-		}
-
 		if isWorkspace {
 			write, err := filemerge.WriteFileAtomic(agentsPath, []byte(staging), 0o644)
 			if err != nil {
@@ -343,6 +336,95 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 		}
 	}
 
+	return nil
+}
+
+func resolveIsWorkspace(baseDir string, options publishOptions) bool {
+	if options.isWorkspace != nil {
+		return *options.isWorkspace
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, ".git")); err == nil {
+		return true
+	}
+	return false
+}
+
+func reconcileAgentsMDContent(original string, staging string, baseDir string, options publishOptions) string {
+	stagedSections := Sections(staging)
+	stagedMap := make(map[string]string, len(stagedSections))
+	for _, sec := range stagedSections {
+		stagedMap[sec.ID] = sec.Body
+	}
+
+	updated := original
+	// 1. Update or inject all sections present in staging
+	for _, sec := range stagedSections {
+		updated = filemerge.InjectMarkdownSection(updated, sec.ID, sec.Body)
+	}
+
+	// 2. Identify sections present in original that should be removed:
+	// Any managed section that is NOT in staging, provided no other active agent needs it.
+	for _, sec := range Sections(original) {
+		if _, inStaging := stagedMap[sec.ID]; inStaging {
+			continue
+		}
+		if !managedSectionIDs[sec.ID] {
+			continue
+		}
+		if otherAgentNeedsSection(baseDir, sec.ID, options.activeAgents) {
+			continue
+		}
+		updated = filemerge.InjectMarkdownSection(updated, sec.ID, "")
+	}
+
+	return updated
+}
+
+func replaceSymlinkWithRegularFile(path string, content []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".agents-regular-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file for regular %q: %w", path, err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = os.Remove(tmpName)
+	}()
+
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp file for regular %q: %w", path, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temp file for regular %q: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file for regular %q: %w", path, err)
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return fmt.Errorf("chmod temp file for regular %q: %w", path, err)
+	}
+
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("replace symlink with regular file %q: %w", path, err)
+	}
+	return nil
+}
+
+func replaceSymlink(symlinkPath string, target string) error {
+	dir := filepath.Dir(symlinkPath)
+	tmpLink := filepath.Join(dir, fmt.Sprintf(".agents-link-%d-%d.tmp", os.Getpid(), time.Now().UnixNano()))
+	if err := os.Symlink(target, tmpLink); err != nil {
+		return fmt.Errorf("create temporary symlink: %w", err)
+	}
+	defer func() {
+		_ = os.Remove(tmpLink)
+	}()
+
+	if err := os.Rename(tmpLink, symlinkPath); err != nil {
+		return fmt.Errorf("replace symlink %q: %w", symlinkPath, err)
+	}
 	return nil
 }
 
