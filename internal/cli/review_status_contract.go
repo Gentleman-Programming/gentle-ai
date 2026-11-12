@@ -57,7 +57,14 @@ type ReviewForecast struct {
 	Steps   []ReviewForecastItem  `json:"steps"`
 }
 
+// ReviewV1ReceiptStatus is a compatibility marker, not receipt evidence.
+// Ordinary target STATUS selects no legacy receipt authority.
+type ReviewV1ReceiptStatus struct {
+	Status string `json:"status"`
+}
+
 type ReviewTargetStatusResult struct {
+	Receipt       *ReviewV1ReceiptStatus                `json:"receipt,omitempty"`
 	Schema        string                                `json:"schema"`
 	Contract      string                                `json:"contract"`
 	Operation     string                                `json:"operation"`
@@ -248,6 +255,11 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 			IntendedUntrackedProof:  native.Projection.IntendedUntrackedProof,
 			InitialSnapshotIdentity: native.Projection.InitialSnapshotIdentity, CurrentSnapshotIdentity: native.Projection.CurrentSnapshotIdentity,
 		},
+	}
+	if contract == ReviewIntegrationContractV1 {
+		// The native loader selects compact authority only; its lifecycle
+		// does not publish deciding receipts. Never infer presence/identity.
+		result.Receipt = &ReviewV1ReceiptStatus{Status: "not_applicable"}
 	}
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {

@@ -135,6 +135,7 @@ func TestStatusReportsUnbuildableCorrectionRequestTruthfully(t *testing.T) {
 		if legacy.NextTransition == nil || legacy.NextTransition.ReasonCode != "correction_request_unavailable" || legacy.NextTransition.Continuation != nil {
 			t.Fatalf("frozen v1 must retain a compatible stop: %#v", legacy.NextTransition)
 		}
+		validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, "v1", "status-v2.schema.json"), output.Bytes())
 	})
 	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "correction_request_unavailable" {
 		t.Fatalf("next_transition = %#v, want correction_request_unavailable stop", status.NextTransition)

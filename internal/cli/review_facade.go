@@ -1251,7 +1251,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// that inspects untracked files; the staged branch above never
 		// resolves intendedScope through intendedUntrackedScopeForTarget, so
 		// its Digest stays the zero value and `omitempty` drops the key.
-		result.EligibleUntrackedInventory = intendedScope.Digest
+		if *contract == ReviewIntegrationContractV2 {
+			result.EligibleUntrackedInventory = intendedScope.Digest
+		}
 		// Explicit reviewing resume keeps the immutable scope that the reviewer
 		// artifacts bind, rather than asking live workspace drift to select one.
 		// The same holds when the live target still equals the frozen one: an
@@ -1447,7 +1449,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								} else {
 									captureContext, artifactErr = newReviewCaptureContext(record.State, record.State.CapturePhaseRevision, frozen)
 									if artifactErr == nil && result.Frozen != nil {
-										result.Frozen.ChangedPathManifestSHA256, artifactErr = frozenManifestDigestForProjection(frozen.ChangedPathManifest, result.Projection.Paths)
+										digest, digestErr := frozenManifestDigestForProjection(frozen.ChangedPathManifest, result.Projection.Paths)
+										artifactErr = digestErr
+										if *contract == ReviewIntegrationContractV2 {
+											result.Frozen.ChangedPathManifestSHA256 = digest
+										}
 									}
 								}
 							}
@@ -1613,6 +1619,25 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		if validationErr != nil {
 			return fmt.Errorf("validate negotiated review status: %w", validationErr)
+		}
+		if *contract == ReviewIntegrationContractV1 {
+			// Keep disposition available for routing/validation above, but the
+			// frozen v1 wire contract has no disposition field.
+			result.Disposition = nil
+			// Validate the full manifest identity before projecting the frozen
+			// v1 wire shape. Never alter the stored evidence or routing inputs.
+			if result.NextTransition != nil && result.NextTransition.Collect != nil {
+				for index := range result.NextTransition.Collect.Inputs {
+					input := &result.NextTransition.Collect.Inputs[index]
+					if input.ChangedPathManifest != nil {
+						manifest := append([]reviewtransaction.ChangedPathManifestEntry{}, (*input.ChangedPathManifest)...)
+						for entry := range manifest {
+							manifest[entry].Generated = false
+						}
+						input.ChangedPathManifest = &manifest
+					}
+				}
+			}
 		}
 		return encodeReviewJSON(stdout, result)
 	}
