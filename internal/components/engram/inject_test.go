@@ -1188,8 +1188,9 @@ func TestInjectAntigravityPreservesGlobalCommandWithNonstandardExecutableName(t 
 	if server2.Command == customLauncher {
 		t.Fatalf("command should have fallen back from invalid launcher %q, but stayed %q", customLauncher, server2.Command)
 	}
-	if !isEngramCommand(server2.Command) {
-		t.Fatalf("fallback command %q should satisfy isEngramCommand", server2.Command)
+	wantFallback := preferredStableEngramCommand()
+	if server2.Command != wantFallback {
+		t.Fatalf("fallback command %q != preferred fallback %q", server2.Command, wantFallback)
 	}
 }
 

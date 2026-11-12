@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -47,21 +49,27 @@ func antigravityPluginAssetPathsIn(dir string) []string {
 
 // RetireManagedAntigravityPlugins retires any managed plugin assets older gentle-ai
 // versions wrote under either AntigravityPluginDir or AntigravityLegacyPluginDir (#5988).
-// If the plugin mcp_config.json contains custom env or cwd settings, they are migrated
+// If the plugin mcp_config.json contains custom env, cwd, or args settings, they are migrated
 // to the global MCP config before retiring the manifest. If a conflict prevents safe migration,
 // retirement stops and reports the conflict so the edited MCP file is not left inactive.
 func RetireManagedAntigravityPlugins(homeDir string) ([]string, error) {
 	var removed []string
 	for _, dir := range []string{AntigravityPluginDir(homeDir), AntigravityLegacyPluginDir(homeDir)} {
-		if err := migrateOrReconcilePluginMCP(homeDir, dir); err != nil {
+		migratedFiles, err := migrateOrReconcilePluginMCP(homeDir, dir)
+		if err != nil {
 			return removed, err
+		}
+		for _, f := range migratedFiles {
+			if !slices.Contains(removed, f) {
+				removed = append(removed, f)
+			}
 		}
 		for _, path := range antigravityPluginAssetPathsIn(dir) {
 			ok, err := RemoveManagedAntigravityPluginAsset(path)
 			if err != nil {
 				return removed, err
 			}
-			if ok {
+			if ok && !slices.Contains(removed, path) {
 				removed = append(removed, path)
 			}
 		}
@@ -103,9 +111,21 @@ func WriteManagedAntigravityPluginForTest(dir, command string) error {
 // config embeds the resolved engram command, so it is managed when re-rendering
 // the overlay with the file's own command reproduces it exactly. Anything
 // else -- an edited asset, a symlink, an unknown file -- is left untouched.
-// Before retiring plugin.json, any custom MCP env or cwd settings in the same directory
+// Before retiring plugin.json, any custom MCP env, cwd, or args settings in the same directory
 // are migrated to the global MCP config, or retirement stops if a conflict exists.
 func RemoveManagedAntigravityPluginAsset(path string) (bool, error) {
+	return removeManagedAntigravityPluginAssetInternal(path, true)
+}
+
+// RemoveManagedAntigravityPluginAssetForUninstall removes path during uninstall only
+// when it is byte-identical to the asset install writes there (#779). Unlike
+// RemoveManagedAntigravityPluginAsset, it performs removal only and never migrates
+// settings to the global MCP config, ensuring uninstall does not re-register Engram.
+func RemoveManagedAntigravityPluginAssetForUninstall(path string) (bool, error) {
+	return removeManagedAntigravityPluginAssetInternal(path, false)
+}
+
+func removeManagedAntigravityPluginAssetInternal(path string, migrateIfPluginJSON bool) (bool, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -127,12 +147,20 @@ func RemoveManagedAntigravityPluginAsset(path string) (bool, error) {
 		dir := filepath.Dir(path)
 		mcpPath := filepath.Join(dir, "mcp_config.json")
 		if mcpInfo, mcpErr := os.Lstat(mcpPath); mcpErr == nil && mcpInfo.Mode().IsRegular() {
-			if mcpContent, readErr := os.ReadFile(mcpPath); readErr == nil && !isManagedAntigravityPluginAsset("mcp_config.json", mcpContent) {
-				homeDir := resolveHomeDirFromPluginDir(dir)
-				if err := migrateOrReconcilePluginMCP(homeDir, dir); err != nil {
-					return false, err
+			mcpContent, readErr := os.ReadFile(mcpPath)
+			if readErr != nil {
+				return false, fmt.Errorf("read sibling plugin MCP config %q: %w", mcpPath, readErr)
+			}
+			if !isManagedAntigravityPluginAsset("mcp_config.json", mcpContent) {
+				if migrateIfPluginJSON {
+					homeDir := resolveHomeDirFromPluginDir(dir)
+					if _, err := migrateOrReconcilePluginMCP(homeDir, dir); err != nil {
+						return false, err
+					}
 				}
 			}
+		} else if mcpErr != nil && !os.IsNotExist(mcpErr) {
+			return false, fmt.Errorf("inspect sibling plugin MCP config %q: %w", mcpPath, mcpErr)
 		}
 	}
 	if !isManagedAntigravityPluginAsset(filepath.Base(path), content) {
@@ -200,37 +228,89 @@ func resolveHomeDirFromPluginDir(pluginDir string) string {
 	return d
 }
 
-// migrateOrReconcilePluginMCP preserves customized MCP env and cwd settings from a plugin's
-// mcp_config.json by migrating them to the global MCP config before retiring the manifest.
+func isDefaultAntigravityEngramArgs(args any) bool {
+	switch v := args.(type) {
+	case []any:
+		if len(v) != 2 {
+			return false
+		}
+		a0, ok0 := v[0].(string)
+		a1, ok1 := v[1].(string)
+		return ok0 && ok1 && a0 == "mcp" && a1 == "--tools=agent"
+	case []string:
+		return len(v) == 2 && v[0] == "mcp" && v[1] == "--tools=agent"
+	default:
+		return false
+	}
+}
+
+func argsEqual(a, b any) bool {
+	toStrings := func(val any) ([]string, bool) {
+		switch s := val.(type) {
+		case []string:
+			return s, true
+		case []any:
+			res := make([]string, len(s))
+			for i, v := range s {
+				str, ok := v.(string)
+				if !ok {
+					return nil, false
+				}
+				res[i] = str
+			}
+			return res, true
+		default:
+			return nil, false
+		}
+	}
+	as, okA := toStrings(a)
+	bs, okB := toStrings(b)
+	if !okA || !okB {
+		return false
+	}
+	return slices.Equal(as, bs)
+}
+
+// migrateOrReconcilePluginMCP preserves customized MCP env, cwd, command, and args settings
+// from a plugin's mcp_config.json by migrating them to the global MCP config before retiring the manifest.
 // If conflicting settings exist in the global config or the file cannot be safely migrated,
 // it returns an error to stop retirement and prevent leaving the edited MCP file inactive.
-func migrateOrReconcilePluginMCP(homeDir, dir string) error {
+// On success, it returns the list of modified and removed paths.
+func migrateOrReconcilePluginMCP(homeDir, dir string) ([]string, error) {
 	pluginMCP := filepath.Join(dir, "mcp_config.json")
 	content, err := os.ReadFile(pluginMCP)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("read plugin MCP config %q: %w", pluginMCP, err)
+		return nil, fmt.Errorf("read plugin MCP config %q: %w", pluginMCP, err)
 	}
 	if isManagedAntigravityPluginAsset("mcp_config.json", content) {
-		return nil
+		return nil, nil
 	}
 
 	var pluginRoot map[string]any
 	if err := json.Unmarshal(content, &pluginRoot); err != nil {
-		return fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json is not valid JSON", dir)
+		return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json is not valid JSON", dir)
 	}
 	pluginServers, _ := pluginRoot["mcpServers"].(map[string]any)
 	if len(pluginServers) == 0 {
-		return nil
+		return nil, nil
 	}
 	if len(pluginServers) > 1 {
-		return fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json contains other MCP servers; plugin manifest preserved", dir)
+		return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json contains other MCP servers; plugin manifest preserved", dir)
 	}
 	pluginEngram, ok := pluginServers["engram"].(map[string]any)
 	if !ok {
-		return fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json has non-Engram servers; plugin manifest preserved", dir)
+		return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json has non-Engram servers; plugin manifest preserved", dir)
+	}
+
+	for k := range pluginEngram {
+		switch k {
+		case "command", "args", "env", "cwd":
+		default:
+			return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json has unsupported setting %q; plugin manifest preserved", dir, k)
+		}
 	}
 
 	var customEnv map[string]any
@@ -245,9 +325,13 @@ func migrateOrReconcilePluginMCP(homeDir, dir string) error {
 	if c, ok := pluginEngram["command"].(string); ok && c != "" {
 		customCmd = c
 	}
+	var customArgs []any
+	if a, ok := pluginEngram["args"].([]any); ok && !isDefaultAntigravityEngramArgs(a) {
+		customArgs = a
+	}
 
-	if customEnv == nil && customCwd == "" && (customCmd == "" || customCmd == "engram") {
-		return fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json has customized settings; plugin manifest preserved", dir)
+	if customEnv == nil && customCwd == "" && (customCmd == "" || customCmd == "engram") && customArgs == nil {
+		return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json has customized settings; plugin manifest preserved", dir)
 	}
 
 	globalPath := resolveAntigravityGlobalMCPPath(homeDir)
@@ -255,8 +339,10 @@ func migrateOrReconcilePluginMCP(homeDir, dir string) error {
 	var globalRoot map[string]any
 	if err == nil && len(globalRaw) > 0 {
 		if err := json.Unmarshal(globalRaw, &globalRoot); err != nil {
-			return fmt.Errorf("conflict retiring Antigravity plugin in %q: global MCP config %q is not valid JSON", dir, globalPath)
+			return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: global MCP config %q is not valid JSON", dir, globalPath)
 		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read global MCP config %q: %w", globalPath, err)
 	} else {
 		globalRoot = map[string]any{}
 	}
@@ -278,12 +364,12 @@ func migrateOrReconcilePluginMCP(homeDir, dir string) error {
 		globalServers["engram"] = globalEngram
 	}
 
-	// Check for env conflict.
+	// Check for env conflict without leaking env values in error messages (#5988).
 	if customEnv != nil {
 		if globalEnv, ok := globalEngram["env"].(map[string]any); ok && len(globalEnv) > 0 {
 			for k, v := range customEnv {
 				if gv, exists := globalEnv[k]; exists && gv != v {
-					return fmt.Errorf("conflict retiring Antigravity plugin in %q: plugin env %q=%v conflicts with global env %v; plugin manifest preserved", dir, k, v, gv)
+					return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: plugin env key %q conflicts with global config; plugin manifest preserved", dir, k)
 				}
 			}
 			for k, v := range customEnv {
@@ -298,36 +384,63 @@ func migrateOrReconcilePluginMCP(homeDir, dir string) error {
 	if customCwd != "" {
 		if globalCwd, ok := globalEngram["cwd"].(string); ok && globalCwd != "" {
 			if globalCwd != customCwd {
-				return fmt.Errorf("conflict retiring Antigravity plugin in %q: plugin cwd %q conflicts with global cwd %q; plugin manifest preserved", dir, customCwd, globalCwd)
+				return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: plugin cwd %q conflicts with global cwd %q; plugin manifest preserved", dir, customCwd, globalCwd)
 			}
 		} else {
 			globalEngram["cwd"] = customCwd
 		}
 	}
 
+	// Check for command conflict (do not treat default "engram" as conflict against global path).
 	if customCmd != "" && engramCommandResolves(customCmd) {
-		if globalCmd, ok := globalEngram["command"].(string); ok && globalCmd != "" && globalCmd != "engram" && globalCmd != customCmd {
-			return fmt.Errorf("conflict retiring Antigravity plugin in %q: plugin command %q conflicts with global command %q; plugin manifest preserved", dir, customCmd, globalCmd)
+		if globalCmd, ok := globalEngram["command"].(string); customCmd != "engram" && ok && globalCmd != "" && globalCmd != "engram" && globalCmd != customCmd {
+			return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: plugin command %q conflicts with global command %q; plugin manifest preserved", dir, customCmd, globalCmd)
 		}
 		if globalCmd, ok := globalEngram["command"].(string); !ok || globalCmd == "" || globalCmd == "engram" {
 			globalEngram["command"] = customCmd
 		}
 	}
 
+	// Check for args conflict.
+	if customArgs != nil {
+		if gArgs, ok := globalEngram["args"]; ok && !isDefaultAntigravityEngramArgs(gArgs) {
+			if !argsEqual(gArgs, customArgs) {
+				return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: plugin args conflict with global args; plugin manifest preserved", dir)
+			}
+		} else {
+			globalEngram["args"] = customArgs
+		}
+	}
+
 	updatedJSON, err := json.MarshalIndent(globalRoot, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal updated global MCP config: %w", err)
+		return nil, fmt.Errorf("marshal updated global MCP config: %w", err)
 	}
 	updatedJSON = append(updatedJSON, '\n')
 	if err := os.MkdirAll(filepath.Dir(globalPath), 0o755); err != nil {
-		return fmt.Errorf("create global config dir: %w", err)
+		return nil, fmt.Errorf("create global config dir: %w", err)
 	}
-	if _, err := filemerge.WriteFileAtomic(globalPath, updatedJSON, 0o644); err != nil {
-		return fmt.Errorf("write migrated global MCP config %q: %w", globalPath, err)
+
+	targetMode := fs.FileMode(0o644)
+	if customEnv != nil {
+		targetMode = 0o600
+		if info, statErr := os.Stat(globalPath); statErr == nil {
+			if info.Mode().Perm() != 0o600 {
+				if err := os.Chmod(globalPath, 0o600); err != nil {
+					return nil, fmt.Errorf("restrict global MCP config permissions before migrating secrets: %w", err)
+				}
+			}
+		} else if !os.IsNotExist(statErr) {
+			return nil, fmt.Errorf("inspect global MCP config %q: %w", globalPath, statErr)
+		}
+	}
+
+	if _, err := filemerge.WriteFileAtomicMode(globalPath, updatedJSON, targetMode); err != nil {
+		return nil, fmt.Errorf("write migrated global MCP config %q: %w", globalPath, err)
 	}
 
 	if err := os.Remove(pluginMCP); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove migrated plugin MCP config %q: %w", pluginMCP, err)
+		return nil, fmt.Errorf("remove migrated plugin MCP config %q: %w", pluginMCP, err)
 	}
-	return nil
+	return []string{globalPath, pluginMCP}, nil
 }
