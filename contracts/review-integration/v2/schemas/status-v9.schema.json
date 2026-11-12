@@ -25,6 +25,51 @@
   "dependentRequired": {"forecast": ["next_transition"]},
   "$defs": {
     "next_transition": {"oneOf": [
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "reason_code",
+          "continuation"
+        ],
+        "properties": {
+          "kind": {
+            "const": "stop"
+          },
+          "reason_code": {
+            "enum": [
+              "correction_request_unavailable",
+              "correction_context_budget_exceeded"
+            ]
+          },
+          "continuation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operation",
+              "command",
+              "detail"
+            ],
+            "properties": {
+              "operation": {
+                "const": "abandon"
+              },
+              "command": {
+                "type": "string",
+                "pattern": "^(?:[A-Za-z0-9/._+=@:,-]+|\"(?:[^\"\\\\\\r\\n]|\\\\[^\\r\\n])*\"|'(?:[^'\\r\\n]|'\\\\'')*') review abandon --cwd (?:[A-Za-z0-9/._+=@:,-]+|\"(?:[^\"\\\\\\r\\n]|\\\\[^\\r\\n])*\"|'(?:[^'\\r\\n]|'\\\\'')*')$"
+              },
+              "detail": {
+                "type": "string",
+                "pattern": "[^\t-\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]"
+              },
+              "agent": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
       {"allOf": [
         {"$ref": "status-v8.schema.json#/$defs/next_transition"},
         {"not": {"properties": {"reason_code": {"enum": [
