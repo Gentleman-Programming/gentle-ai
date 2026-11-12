@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
@@ -108,6 +109,180 @@ func Refuter() map[string]any {
 }
 func Validator() map[string]any {
 	return map[string]any{"mode": "subagent", "hidden": true, "description": "Targeted read-only validator for provider-issued review checks", "prompt": "Execute only the Go-issued targeted validation. Do not edit files or delegate. Inspect only the frozen candidate using the provided gentle-ai review inspect-candidate command, not the live worktree. Return exactly the requested JSON.", "permission": map[string]any{"write": "deny", "edit": "deny", "task": "deny", "bash": map[string]any{"gentle-ai review inspect-candidate --purpose targeted-validation *": "allow", "*": "deny"}}}
+}
+
+// nativeActions maps V1 permission actions to their native OpenCode V2 names.
+// Unknown actions pass through unchanged.
+var nativeActions = map[string]string{"bash": "shell", "task": "subagent", "write": "edit", "patch": "edit"}
+
+// NativeRules converts a V1 permission object into the ordered native
+// `permissions` rule list. OpenCode evaluates rule lists in order and the last
+// matching rule wins, while the V1 object evaluator walks patterns in byte
+// order ("*" sorts first), so sorting the emitted rules by resource preserves
+// the exact same precedence.
+func NativeRules(permission map[string]any) []map[string]any {
+	type rule struct{ action, resource, effect string }
+	var rules []rule
+	add := func(action, resource, effect string) {
+		if mapped, ok := nativeActions[action]; ok {
+			action = mapped
+		}
+		rules = append(rules, rule{action, resource, effect})
+	}
+	for action, value := range permission {
+		switch typed := value.(type) {
+		case string:
+			add(action, "*", typed)
+		case bool:
+			if typed {
+				add(action, "*", "allow")
+			} else {
+				add(action, "*", "deny")
+			}
+		case map[string]any:
+			for resource, effect := range typed {
+				switch e := effect.(type) {
+				case string:
+					add(action, resource, e)
+				case bool:
+					if e {
+						add(action, resource, "allow")
+					} else {
+						add(action, resource, "deny")
+					}
+				}
+			}
+		}
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].action != rules[j].action {
+			return rules[i].action < rules[j].action
+		}
+		return rules[i].resource < rules[j].resource
+	})
+	// V1 maps can carry two actions that map to the same native action (for
+	// example write and edit); drop the resulting duplicate rules.
+	seen := make(map[string]bool, len(rules))
+	unique := rules[:0]
+	for _, r := range rules {
+		key := r.action + "\x00" + r.resource + "\x00" + r.effect
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, r)
+	}
+	out := make([]map[string]any, 0, len(unique))
+	for _, r := range unique {
+		out = append(out, map[string]any{"action": r.action, "resource": r.resource, "effect": r.effect})
+	}
+	return out
+}
+
+// NativeEntry renders spec as a native OpenCode V2 agent entry: the embedded
+// prompt moves to `system` and the V1 permission object becomes an ordered
+// native `permissions` rule list.
+func NativeEntry(spec Spec) (map[string]any, error) {
+	prompt, err := assets.Read("opencode/agents/" + spec.Name + ".md")
+	if err != nil {
+		return nil, fmt.Errorf("read embedded prompt for %q: %w", spec.Name, err)
+	}
+	return map[string]any{"mode": "subagent", "hidden": true, "description": spec.Description, "system": prompt, "permissions": NativeRules(spec.Permission)}, nil
+}
+
+// NativeRefuter renders the review refuter as a native OpenCode V2 entry.
+func NativeRefuter() map[string]any {
+	refuter := Refuter()
+	rules, _ := refuter["permission"].(map[string]any)
+	return map[string]any{"mode": "subagent", "hidden": true, "description": refuter["description"], "system": refuter["prompt"], "permissions": NativeRules(rules)}
+}
+
+// NativeValidator renders the review validator as a native OpenCode V2 entry.
+func NativeValidator() map[string]any {
+	validator := Validator()
+	rules, _ := validator["permission"].(map[string]any)
+	return map[string]any{"mode": "subagent", "hidden": true, "description": validator["description"], "system": validator["prompt"], "permissions": NativeRules(rules)}
+}
+
+// NativeEntryByName renders the native settings-entry shape for one managed
+// subagent by name.
+func NativeEntryByName(agent model.AgentID, name string) (map[string]any, error) {
+	for _, spec := range Parity(agent) {
+		if spec.Name == name {
+			return NativeEntry(spec)
+		}
+	}
+	if model.SupportsReceiptDrivenDevelopment(agent) && name == "review-refuter" {
+		return NativeRefuter(), nil
+	}
+	if agent == model.AgentOpenCode && name == "review-validator" {
+		return NativeValidator(), nil
+	}
+	return nil, fmt.Errorf("unknown managed subagent %q for %q", name, agent)
+}
+
+// MergeRulesByPrecedence inserts incoming rules into existing rules so the
+// effective decision of every existing rule is preserved under the
+// last-matching-rule semantics: each incoming rule is placed before the first
+// existing rule of the same action whose resource sorts equal or after it,
+// reproducing the byte-order precedence the legacy permission object
+// evaluator used. Existing rules are never reordered, merged, or dropped —
+// collapsing a duplicate triple can flip the effective decision (an
+// allow → deny → allow sequence for one resource would lose its final
+// allow). An incoming rule whose exact triple already exists is skipped,
+// making repeated merges idempotent.
+func MergeRulesByPrecedence(existing, incoming []map[string]any) []map[string]any {
+	merged := make([]map[string]any, 0, len(existing)+len(incoming))
+	for _, rule := range existing {
+		if rule != nil {
+			merged = append(merged, rule)
+		}
+	}
+	triple := func(r map[string]any) string {
+		action, _ := r["action"].(string)
+		resource, _ := r["resource"].(string)
+		effect, _ := r["effect"].(string)
+		return action + "\x00" + resource + "\x00" + effect
+	}
+	// Seed with the existing triples: an incoming rule whose exact triple is
+	// already in the list is skipped, so repeated merges are idempotent.
+	seen := make(map[string]bool, len(merged)+len(incoming))
+	for _, rule := range merged {
+		seen[triple(rule)] = true
+	}
+	actionResource := func(r map[string]any) (string, string) {
+		action, _ := r["action"].(string)
+		resource, _ := r["resource"].(string)
+		return action, resource
+	}
+	for _, in := range incoming {
+		if in == nil {
+			continue
+		}
+		key := triple(in)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		action, resource := actionResource(in)
+		idx := len(merged)
+		for i, rule := range merged {
+			ra, rr := actionResource(rule)
+			if ra != action {
+				if ra > action {
+					idx = i
+					break
+				}
+				continue
+			}
+			if rr >= resource {
+				idx = i
+				break
+			}
+		}
+		merged = append(merged[:idx], append([]map[string]any{in}, merged[idx:]...)...)
+	}
+	return merged
 }
 
 // GentlemanShape recognizes the persona overlay for this runtime, without

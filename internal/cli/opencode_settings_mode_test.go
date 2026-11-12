@@ -46,32 +46,42 @@ func TestOpenCodeFamilySettingsWritersPreservePrivateMode(t *testing.T) {
 			}
 
 			steps := []struct {
-				name string
-				run  func() (bool, error)
+				name       string
+				run        func() (bool, error)
+				wantChange bool
 			}{
 				{"strip legacy trigger rules", func() (bool, error) {
 					result, err := stripLegacyTriggerRulesFromOrchestrator(settingsPath)
 					return result.Changed, err
-				}},
+				}, true},
 				{"retire SDD settings", func() (bool, error) {
 					result, err := legacyassets.RetireOpenCodeSDDSettings(settingsPath)
 					return result.Changed, err
-				}},
+				}, true},
 				{"migrate legacy agents", func() (bool, error) {
 					changed, _, err := migrateLegacyOpenCodeAgents(settingsPath, agent)
 					return changed, err
-				}},
-				{"install review provider roles", func() (bool, error) { return installOpenCodeReviewProviderRoles(settingsPath, agent) }},
-				{"install parity agents", func() (bool, error) { return installOpenCodeFamilyParityAgents(settingsPath, agent) }},
-				{"share default", func() (bool, error) { return opencodedefault.ApplyShareDefault(settingsPath) }},
+				}, true},
+				{"install review provider roles", func() (bool, error) {
+					return installOpenCodeReviewProviderRoles(settingsPath, filepath.Dir(filepath.Dir(settingsPath)), agent)
+				}, true},
+				{"install parity agents", func() (bool, error) {
+					return installOpenCodeFamilyParityAgents(settingsPath, filepath.Dir(filepath.Dir(settingsPath)), agent)
+				}, agent != model.AgentOpenCode},
+				{"share default", func() (bool, error) { return opencodedefault.ApplyShareDefault(settingsPath) }, true},
 			}
 			for _, step := range steps {
 				changed, err := step.run()
 				if err != nil {
 					t.Fatalf("%s: %v", step.name, err)
 				}
-				if !changed {
+				if step.wantChange && !changed {
 					t.Fatalf("%s did not rewrite the settings; the mode assertion would prove nothing", step.name)
+				}
+				if !changed {
+					// OpenCode parity agents ship as individual agent files, so
+					// a no-op on the settings document is expected there.
+					continue
 				}
 				info, err := os.Stat(settingsPath)
 				if err != nil {

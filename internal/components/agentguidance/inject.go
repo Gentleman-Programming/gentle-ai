@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
@@ -427,11 +428,20 @@ func injectOrchestratorPrompt(delivery routingDelivery, agent model.AgentID, mer
 
 	updatedPrompt := merge(existingPrompt)
 
-	overlay, err := json.Marshal(map[string]any{
-		"agent": map[string]any{
-			opencodedefault.ManagedAgent: map[string]any{"prompt": updatedPrompt},
-		},
-	})
+	var overlay []byte
+	if opencode.NativeConfig(settings) {
+		overlay, err = json.Marshal(map[string]any{
+			"agents": map[string]any{
+				opencodedefault.ManagedAgent: map[string]any{"system": updatedPrompt},
+			},
+		})
+	} else {
+		overlay, err = json.Marshal(map[string]any{
+			"agent": map[string]any{
+				opencodedefault.ManagedAgent: map[string]any{"prompt": updatedPrompt},
+			},
+		})
+	}
 	if err != nil {
 		return Result{}, fmt.Errorf("encode routing guidance overlay for %q: %w", agent, err)
 	}
@@ -454,6 +464,27 @@ func injectOrchestratorPrompt(delivery routingDelivery, agent model.AgentID, mer
 // first install and yields empty content; a value of an unexpected type is not
 // something this component may overwrite, so it fails closed.
 func managedOrchestratorPrompt(settings map[string]any, settingsPath string) (string, error) {
+	// Native documents carry the prompt in agents.<name>.system; V2 wins over
+	// the legacy map when both exist.
+	nativeAgents, _ := settings["agents"].(map[string]any)
+	if nativeAgents != nil {
+		orchestratorRaw, ok := nativeAgents[opencodedefault.ManagedAgent]
+		if ok && orchestratorRaw != nil {
+			orchestratorMap, ok := orchestratorRaw.(map[string]any)
+			if !ok {
+				return "", fmt.Errorf("%w %q: native agent %q is not an object", ErrUnreadableSettings, settingsPath, opencodedefault.ManagedAgent)
+			}
+			systemRaw, ok := orchestratorMap["system"]
+			if !ok || systemRaw == nil {
+				return "", nil
+			}
+			prompt, ok := systemRaw.(string)
+			if !ok {
+				return "", fmt.Errorf("%w %q: agent %q has a non-string system", ErrUnreadableSettings, settingsPath, opencodedefault.ManagedAgent)
+			}
+			return prompt, nil
+		}
+	}
 	agentsRaw, ok := settings["agent"]
 	if !ok || agentsRaw == nil {
 		return "", nil

@@ -24,6 +24,12 @@ func DiscoverCustomAgents(settingsPath string) ([]string, error) {
 	}
 	agents, ok := root["agent"].(map[string]any)
 	if !ok {
+		agents = nil
+	}
+	// Native V2 documents define agents under `agents`; scan both maps so
+	// user-owned identities are discovered regardless of the document shape.
+	nativeAgents, _ := root["agents"].(map[string]any)
+	if agents == nil && nativeAgents == nil {
 		return nil, nil
 	}
 
@@ -43,12 +49,14 @@ func DiscoverCustomAgents(settingsPath string) ([]string, error) {
 		reserved[phase] = true
 	}
 	var custom []string
-	for name, definition := range agents {
-		if _, valid := definition.(map[string]any); !valid {
-			continue
-		}
-		if !reserved[name] {
-			custom = append(custom, name)
+	for _, scope := range []map[string]any{agents, nativeAgents} {
+		for name, definition := range scope {
+			if _, valid := definition.(map[string]any); !valid {
+				continue
+			}
+			if !reserved[name] {
+				custom = append(custom, name)
+			}
 		}
 	}
 	sort.Strings(custom)

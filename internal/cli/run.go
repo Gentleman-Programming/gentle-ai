@@ -37,6 +37,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeagentfiles"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeagents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeplugin"
@@ -2179,11 +2180,11 @@ func (s agentRoutingGuidanceStep) Run() error {
 		if shareChanged && s.changedFiles != nil {
 			*s.changedFiles = append(*s.changedFiles, settingsPath)
 		}
-		rolesChanged, err := installOpenCodeReviewProviderRoles(settingsPath, model.AgentKilocode)
+		rolesChanged, err := installOpenCodeReviewProviderRoles(settingsPath, s.homeDir, model.AgentKilocode)
 		if err != nil {
 			return fmt.Errorf("install Kilo review provider roles: %w", err)
 		}
-		parityChanged, err := installOpenCodeFamilyParityAgents(settingsPath, model.AgentKilocode)
+		parityChanged, err := installOpenCodeFamilyParityAgents(settingsPath, s.homeDir, model.AgentKilocode)
 		if err != nil {
 			return fmt.Errorf("install Kilo parity agents: %w", err)
 		}
@@ -2196,14 +2197,14 @@ func (s agentRoutingGuidanceStep) Run() error {
 		}
 	}
 	if s.agent == model.AgentOpenCode {
-		changed, err := installOpenCodeReviewProviderRoles(options.SettingsPath, model.AgentOpenCode)
+		changed, err := installOpenCodeReviewProviderRoles(options.SettingsPath, s.homeDir, model.AgentOpenCode)
 		if err != nil {
 			return fmt.Errorf("install OpenCode review provider roles: %w", err)
 		}
 		if changed && s.changedFiles != nil {
 			*s.changedFiles = append(*s.changedFiles, options.SettingsPath)
 		}
-		parityChanged, err := installOpenCodeODDParityAgents(options.SettingsPath)
+		parityChanged, err := installOpenCodeODDParityAgents(options.SettingsPath, s.homeDir)
 		if err != nil {
 			return fmt.Errorf("install OpenCode ODD parity agents: %w", err)
 		}
@@ -2396,7 +2397,7 @@ func retireOpenCodeFamilyReviewAgents(settingsPath string, agent model.AgentID, 
 // tool, which OpenCode denies to custom agents unless their own permission
 // allows it (#4816); v3.7.0 shipped the same rule. A question rule the user
 // already set is kept, and none is written over a user deny policy.
-func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID) (bool, error) {
+func installOpenCodeReviewProviderRoles(settingsPath, homeDir string, agent model.AgentID) (bool, error) {
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil {
 		return false, err
@@ -2405,10 +2406,10 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	if err != nil {
 		return false, err
 	}
-	task := map[string]any{}
-	agents, _ := root["agent"].(map[string]any)
-	orchestrator, _ := agents["gentle-orchestrator"].(map[string]any)
+	legacyAgents, _ := root["agent"].(map[string]any)
+	orchestrator, _ := legacyAgents["gentle-orchestrator"].(map[string]any)
 	current, _ := orchestrator["permission"].(map[string]any)
+	task := map[string]any{}
 	// Delegate only to Gentle AI agents: without a wildcard deny the
 	// orchestrator can pick OpenCode's built-in explore/general subagents,
 	// which lack the skill tool. OpenCode applies the last matching rule, and
@@ -2424,14 +2425,18 @@ func installOpenCodeReviewProviderRoles(settingsPath string, agent model.AgentID
 	if _, set := current["question"]; !set && !userDeniesQuestion(root, orchestrator) {
 		permission["question"] = "allow"
 	}
+	// Orchestrator delegation grants stay in the legacy `agent` map by design
+	// (#4816): the map merges beside user rules field-wise, and OpenCode V2
+	// normalizes it on native documents too. OpenCode ships the refuter and
+	// validator as individual agent files instead (see the parity writer), so
+	// no wholesale-managed entry is written into the settings document; other
+	// runtimes keep the legacy entries.
 	roles := map[string]any{
 		"gentle-orchestrator": map[string]any{"permission": permission},
 	}
-	if model.SupportsReceiptDrivenDevelopment(agent) {
+	shipAgentFiles := agent == model.AgentOpenCode
+	if !shipAgentFiles && model.SupportsReceiptDrivenDevelopment(agent) {
 		roles["review-refuter"] = opencodeagents.Refuter()
-	}
-	if agent == model.AgentOpenCode {
-		roles["review-validator"] = opencodeagents.Validator()
 	}
 	overlay, err := json.Marshal(map[string]any{"agent": roles})
 	if err != nil {
@@ -2488,25 +2493,50 @@ func userDeniesQuestion(root, orchestrator map[string]any) bool {
 // only gentle-orchestrator, gentleman, review-refuter, and review-validator
 // survived the SDD overlay's retirement; JD and the four review lenses were
 // dropped as collateral.
-func installOpenCodeODDParityAgents(settingsPath string) (bool, error) {
-	return installOpenCodeFamilyParityAgents(settingsPath, model.AgentOpenCode)
+func installOpenCodeODDParityAgents(settingsPath, homeDir string) (bool, error) {
+	return installOpenCodeFamilyParityAgents(settingsPath, homeDir, model.AgentOpenCode)
 }
 
-func installOpenCodeFamilyParityAgents(settingsPath string, agent model.AgentID) (bool, error) {
+func installOpenCodeFamilyParityAgents(settingsPath, homeDir string, agent model.AgentID) (bool, error) {
+	if agent == model.AgentOpenCode {
+		// OpenCode ships managed subagents as individual V2 agent files; the
+		// emitter also migrates older installs by removing the settings
+		// entries. User-authored files under managed names are preserved.
+		result, err := opencodeagentfiles.Install(homeDir, opencodeagent.NewAdapter(), settingsPath)
+		if err != nil {
+			return false, err
+		}
+		return result.SettingsChanged, nil
+	}
 	raw, err := os.ReadFile(settingsPath)
 	if err != nil {
 		return false, err
 	}
+	root, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return false, err
+	}
+	useNative := opencodeactivation.NativeConfig(root)
 	specs := opencodeagents.Parity(agent)
 	agentsOverlay := make(map[string]any, len(specs))
 	for _, spec := range specs {
-		entry, err := opencodeagents.Entry(spec)
-		if err != nil {
-			return false, err
+		var entry map[string]any
+		var entryErr error
+		if useNative {
+			entry, entryErr = opencodeagents.NativeEntry(spec)
+		} else {
+			entry, entryErr = opencodeagents.Entry(spec)
+		}
+		if entryErr != nil {
+			return false, entryErr
 		}
 		agentsOverlay[spec.Name] = entry
 	}
-	overlay, err := json.Marshal(map[string]any{"agent": agentsOverlay})
+	overlayKey := "agent"
+	if useNative {
+		overlayKey = "agents"
+	}
+	overlay, err := json.Marshal(map[string]any{overlayKey: agentsOverlay})
 	if err != nil {
 		return false, err
 	}
