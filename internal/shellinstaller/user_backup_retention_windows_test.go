@@ -210,6 +210,15 @@ func TestUserWindowsRemoveReplacedBackupPreservesUncertainBackup(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "foreign manifest SID",
+			corrupt: &userWindowsRetentionCorruption{
+				manifest: func(t *testing.T, destination string, manifest *userWindowsManifest) {
+					t.Helper()
+					manifest.SID = "S-1-0-0"
+				},
+			},
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -257,4 +266,95 @@ func TestUserWindowsRemoveReplacedBackupPreservesNonTreeCandidate(t *testing.T) 
 	}
 	userWindowsRetentionAssertEntries(t, root, "install", foreignName)
 	userWindowsRetentionAssertWhole(t, destination, "the active destination")
+}
+
+// (c) A backup must be an exact sibling of destination named
+// <base>.replaced-<UTC>; off-pattern, non-sibling, nested and self paths are
+// refused before any removal, so a shaped path can never reach the install.
+func TestUserWindowsRemoveReplacedBackupRefusesNonSiblingPath(t *testing.T) {
+	root, destination := userWindowsRetentionFixture(t)
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"off-pattern name", filepath.Join(root, "install.old")},
+		{"non-sibling path", filepath.Join(t.TempDir(), "install.replaced-20260101T000000Z")},
+		{"nested under destination", filepath.Join(destination, "install.replaced-20260101T000000Z")},
+		{"destination itself", destination},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			backup := test.path
+			if backup != destination {
+				userWindowsRetentionWriteTree(t, backup, destination, nil)
+			}
+			if err := userWindowsRemoveReplacedBackup(destination, backup); err == nil {
+				t.Fatal("removal accepted a path that is not an exact replaced sibling")
+			}
+			userWindowsRetentionAssertWhole(t, destination, "the active destination")
+			if backup != destination {
+				userWindowsRetentionAssertWhole(t, backup, "a refused path")
+			}
+		})
+	}
+}
+
+// (d) A backup tree holding an internal reparse point to the active
+// destination fails the cleanup inventory: the backup and the external target
+// must both survive, so a blind removal can never follow the junction out.
+func TestUserWindowsRemoveReplacedBackupPreservesInternalReparsePoint(t *testing.T) {
+	root, destination := userWindowsRetentionFixture(t)
+	backupName := "install.replaced-20260101T000000Z"
+	backup := filepath.Join(root, backupName)
+	userWindowsRetentionWriteTree(t, backup, destination, nil)
+	userWindowsJunction(t, filepath.Join(backup, "redirect"), destination)
+
+	err := userWindowsRemoveReplacedBackup(destination, backup)
+	if err == nil {
+		t.Fatal("removal accepted a backup with an internal reparse point to the active destination")
+	}
+	if !strings.Contains(err.Error(), backupName) {
+		t.Fatalf("removal error does not name the preserved backup %q: %v", backupName, err)
+	}
+	userWindowsRetentionAssertEntries(t, root, "install", backupName)
+	userWindowsRetentionAssertWhole(t, backup, "the backup beside its internal reparse point")
+	userWindowsRetentionAssertWhole(t, destination, "the active destination")
+	if _, identityErr := userWindowsIdentity(filepath.Join(backup, "redirect"), true); identityErr == nil {
+		t.Fatal("internal reparse point was removed or replaced")
+	}
+}
+
+// (e) Altered selection or lock bytes break their recorded digests even when
+// the manifest itself is intact; the tree is preserved, never removed on the
+// strength of an honest name.
+func TestUserWindowsRemoveReplacedBackupPreservesTamperedBytes(t *testing.T) {
+	cases := []struct {
+		name     string
+		relative string
+		data     []byte
+	}{
+		{"altered selection bytes", "selection.json", []byte(`{"Destination":"tampered","Mode":"separate","Channel":"stable"}`)},
+		{"altered lock bytes", "source/package-lock.json", []byte(`{"lockfileVersion":3,"packages":{"tampered":{}}}`)},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			root, destination := userWindowsRetentionFixture(t)
+			backupName := "install.replaced-20260101T000000Z"
+			backup := filepath.Join(root, backupName)
+			userWindowsRetentionWriteTree(t, backup, destination, nil)
+			if err := os.WriteFile(filepath.Join(backup, filepath.FromSlash(test.relative)), test.data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			err := userWindowsRemoveReplacedBackup(destination, backup)
+			if err == nil {
+				t.Fatal("removal accepted a backup whose bytes were altered after publication")
+			}
+			if !strings.Contains(err.Error(), backupName) {
+				t.Fatalf("removal error does not name the preserved backup %q: %v", backupName, err)
+			}
+			userWindowsRetentionAssertEntries(t, root, "install", backupName)
+			userWindowsRetentionAssertWhole(t, backup, "a tampered backup")
+			userWindowsRetentionAssertWhole(t, destination, "the active destination")
+		})
+	}
 }
