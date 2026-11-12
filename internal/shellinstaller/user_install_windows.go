@@ -936,6 +936,16 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "Windows installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
 	}
+	// A reconfigure retired the previous installation to its .replaced-
+	// backup. Bound those backups to one recent tree now that the replacement
+	// is published, verified and launched. Retention failure is reported but
+	// never retracts the valid installation; uncertain candidates are
+	// preserved whole and named.
+	if backup != "" {
+		if retentionErr := userWindowsPruneReplacedBackups(req.Destination, backup); retentionErr != nil {
+			fmt.Fprintf(os.Stderr, "Windows installation is published and verified, but replaced-backup retention failed; older backups may remain beside %q: %v\n", req.Destination, retentionErr)
+		}
+	}
 	return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "installed", result.LauncherNote}, nil
 }
 

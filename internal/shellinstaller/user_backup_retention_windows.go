@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -87,16 +88,54 @@ func userWindowsReplacedSibling(destination, backup string) error {
 	return nil
 }
 
-// userWindowsPruneReplacedBackups removes every validated replaced-backup
-// candidate older than keep, where keep is the exact clean absolute path of
-// the newly created backup to retain. The lexically latest candidate is also
-// retained when clock skew dated one in the future. Invalid, unrelated,
-// uncertain or noncanonical trees are preserved and reported; cleanup failure
-// is a warning and never retracts a valid install.
-//
-// Discovery, candidate filtering and best-effort removal are implemented in
-// PR B. This tests-only stub exists so the PR B behavior tests fail natively
-// on Windows until that implementation lands.
+// userWindowsPruneReplacedBackups bounds the Windows replaced-backup trees a
+// reconfigure leaves beside the active installation. Candidates are exact
+// siblings of destination discovered through the same userWindowsReplacedSibling
+// validator the single removal uses, so unrelated bases, wrong markers and
+// noncanonical timestamps are ignored. The exact keep (the backup just
+// created) is always retained, and the lexically latest candidate is also
+// retained when clock skew dated it in the future. Every other candidate is
+// removed through the validated single-backup primitive; an uncertain
+// candidate is preserved whole and reported in a joined error, so cleanup is
+// best-effort and never retracts a valid installation.
 func userWindowsPruneReplacedBackups(destination, keep string) error {
-	return nil
+	if err := userWindowsReplacedSibling(destination, keep); err != nil {
+		return err
+	}
+	prefix := filepath.Base(destination) + ".replaced-"
+	keepName := filepath.Base(keep)
+	keepStamp := strings.TrimPrefix(keepName, prefix)
+
+	entries, err := os.ReadDir(filepath.Dir(destination))
+	if err != nil {
+		return fmt.Errorf("Windows replaced backups beside %q cannot be listed; preserved: %w", destination, err)
+	}
+	candidates := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		candidate := filepath.Join(filepath.Dir(destination), entry.Name())
+		if err := userWindowsReplacedSibling(destination, candidate); err != nil {
+			continue // unrelated base, wrong marker or noncanonical timestamp
+		}
+		candidates = append(candidates, candidate)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	// Timestamps are the fixed-width canonical UTC layout, so lexical order is
+	// chronological order; the last candidate is the lexically latest.
+	sort.Strings(candidates)
+	retain := map[string]bool{keepName: true}
+	if latest := filepath.Base(candidates[len(candidates)-1]); latest != keepName && latest > keepStamp {
+		retain[latest] = true
+	}
+	var errs []error
+	for _, candidate := range candidates {
+		if retain[filepath.Base(candidate)] {
+			continue
+		}
+		if err := userWindowsRemoveReplacedBackup(destination, candidate); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

@@ -521,3 +521,70 @@ func TestUserWindowsPruneReplacedBackupsBestEffort(t *testing.T) {
 	userWindowsRetentionAssertWhole(t, filepath.Join(root, "install.replaced-20260101T130000Z"), "the kept backup")
 	userWindowsRetentionAssertWhole(t, destination, "the active destination")
 }
+
+// (e) Clock-skew retention compares the full latest candidate name against the
+// bare keep timestamp, so a destination base that sorts below '2' (for example
+// "1install") orders the future candidate before the keep and deletes it. The
+// exact keep and the future latest candidate must both survive.
+func TestUserWindowsPruneReplacedBackupsClockSkewSortingBase(t *testing.T) {
+	root := t.TempDir()
+	if err := userWindowsPrivate(root); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "1install")
+	userWindowsRetentionWriteTree(t, destination, destination, nil)
+	userWindowsRetentionBackup(t, root, destination, "20260101T110000Z", nil)
+	keep := userWindowsRetentionBackup(t, root, destination, "20260101T120000Z", nil) // keep
+	userWindowsRetentionBackup(t, root, destination, "20260101T140000Z", nil)         // clock-skewed future
+
+	if err := userWindowsPruneReplacedBackups(destination, keep); err != nil {
+		t.Fatalf("prune refused a clock-skewed keep: %v", err)
+	}
+	userWindowsRetentionAssertEntries(t, root, "1install",
+		"1install.replaced-20260101T120000Z", "1install.replaced-20260101T140000Z")
+	userWindowsRetentionAssertWhole(t, filepath.Join(root, "1install.replaced-20260101T120000Z"), "the exact keep")
+	userWindowsRetentionAssertWhole(t, filepath.Join(root, "1install.replaced-20260101T140000Z"), "the lexically latest candidate")
+	userWindowsRetentionAssertWhole(t, destination, "the active destination")
+}
+
+// (f) An uncertain candidate that is also the lexically latest future tree is
+// kept on disk by clock-skew retention but must never be silently ignored: it
+// is preserved whole and named in a joined error while the exact keep survives
+// and valid older candidates are pruned.
+func TestUserWindowsPruneReplacedBackupsUncertainLatestReported(t *testing.T) {
+	root, destination := userWindowsRetentionFixture(t)
+	userWindowsRetentionBackup(t, root, destination, "20260101T110000Z", nil)
+	keep := userWindowsRetentionBackup(t, root, destination, "20260101T120000Z", nil) // keep
+	uncertainName := "install.replaced-20260101T140000Z"
+	uncertain := userWindowsRetentionBackup(t, root, destination, "20260101T140000Z", nil)
+	if err := os.WriteFile(filepath.Join(uncertain, "selection.json"), []byte(`{"Destination":"tampered","Mode":"separate","Channel":"stable"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := userWindowsPruneReplacedBackups(destination, keep)
+	userWindowsRetentionJoined(t, err, uncertainName)
+	userWindowsRetentionAssertEntries(t, root, "install", uncertainName, "install.replaced-20260101T120000Z")
+	userWindowsRetentionAssertWhole(t, uncertain, "an uncertain lexically latest candidate")
+	userWindowsRetentionAssertWhole(t, filepath.Join(root, "install.replaced-20260101T120000Z"), "the exact keep")
+	userWindowsRetentionAssertWhole(t, destination, "the active destination")
+}
+
+// (g) A missing exact keep must be refused before any candidate is touched:
+// the error names the missing keep and no other candidate is deleted.
+func TestUserWindowsPruneReplacedBackupsMissingKeepRefused(t *testing.T) {
+	root, destination := userWindowsRetentionFixture(t)
+	candidate := userWindowsRetentionBackup(t, root, destination, "20260101T110000Z", nil)
+	keepName := "install.replaced-20260101T130000Z"
+	keep := filepath.Join(root, keepName)
+
+	err := userWindowsPruneReplacedBackups(destination, keep)
+	if err == nil {
+		t.Fatal("prune accepted a missing exact keep")
+	}
+	if !strings.Contains(err.Error(), keepName) {
+		t.Fatalf("prune error does not name the missing keep %q: %v", keepName, err)
+	}
+	userWindowsRetentionAssertEntries(t, root, "install", "install.replaced-20260101T110000Z")
+	userWindowsRetentionAssertWhole(t, candidate, "a candidate preserved when the keep is missing")
+	userWindowsRetentionAssertWhole(t, destination, "the active destination")
+}
