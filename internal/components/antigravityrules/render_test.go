@@ -219,6 +219,34 @@ func TestRenderRealAntigravityGuidanceKeepsCoreInlineWithinBudget(t *testing.T) 
 	}
 }
 
+func TestRenderCoreKeepsOneCompleteExplorationRule(t *testing.T) {
+	staging := renderRealGuidance(t, t.TempDir())
+	mapping := "more than approximately 5 sequential lookups requires one read-only explorer; with its handoff, re-evaluate task size. Return at most approximately 2k tokens with path:line evidence and one parent spot check. Do not reread the entire mapped evidence."
+	if count := strings.Count(staging, mapping); count != 1 {
+		t.Errorf("complete exploration rule rendered %d times, want one canonical copy", count)
+	}
+	var inline strings.Builder
+	inlineBytes := 0
+	for _, rule := range antigravityrules.Render(staging) {
+		if body, alwaysOn := ruleBody(t, rule); alwaysOn {
+			inline.WriteString(body)
+			inlineBytes += len(rule.Content)
+		}
+	}
+	for _, retained := range []string{
+		"Understanding that needs more evidence or " + mapping,
+		"Inline evidence uses one parallel batch, at most 3 calls and approximately 10k tokens.",
+		"Keep parent bash output bounded to counts, --stat, tail, or summaries.",
+		"On a large task, delegate long suites and builds; return concise observed results, including failures.",
+		"The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced; pause and delegate the next bounded unit without claiming runtime telemetry or enforcement.",
+	} {
+		if !strings.Contains(inline.String(), retained) {
+			t.Errorf("required exploration clause missing from always-on rules: %q", retained)
+		}
+	}
+	t.Logf("always-on bytes after exploration rendering: %d", inlineBytes)
+}
+
 func TestRenderKeepsSmallGuidanceAlwaysOn(t *testing.T) {
 	staging := filemerge.InjectMarkdownSection("", "persona", "Be kind.\n")
 	staging = filemerge.InjectMarkdownSection(staging, "agent-routing", "## Routing\nDelegate.\n")
