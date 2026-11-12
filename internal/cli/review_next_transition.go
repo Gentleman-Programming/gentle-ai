@@ -404,7 +404,9 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 		// cannot be planned on this lineage, but it is not corrupt (#6086).
 		// Every other missing request keeps the corrupted-authority stop.
 		if input.CorrectionRequest == nil && errors.Is(artifactErr, reviewtransaction.ErrCorrectionPlanRequestUnbuildable) {
-			return reviewStopTransition("correction_request_unavailable")
+			transition := reviewStopTransition("correction_request_unavailable")
+			transition.Continuation = reviewCorrectionReleaseContinuation(status.repositoryRoot, string(input.RuntimeAgent), input.CorrectionReleaseEligibility)
+			return transition
 		}
 		if input.CorrectionForecasted {
 			if input.CorrectionRequest == nil {
