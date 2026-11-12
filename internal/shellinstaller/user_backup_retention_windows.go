@@ -86,3 +86,17 @@ func userWindowsReplacedSibling(destination, backup string) error {
 	}
 	return nil
 }
+
+// userWindowsPruneReplacedBackups removes every validated replaced-backup
+// candidate older than keep, where keep is the exact clean absolute path of
+// the newly created backup to retain. The lexically latest candidate is also
+// retained when clock skew dated one in the future. Invalid, unrelated,
+// uncertain or noncanonical trees are preserved and reported; cleanup failure
+// is a warning and never retracts a valid install.
+//
+// Discovery, candidate filtering and best-effort removal are implemented in
+// PR B. This tests-only stub exists so the PR B behavior tests fail natively
+// on Windows until that implementation lands.
+func userWindowsPruneReplacedBackups(destination, keep string) error {
+	return nil
+}

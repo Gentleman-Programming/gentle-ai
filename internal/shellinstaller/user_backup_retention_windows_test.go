@@ -157,6 +157,33 @@ func userWindowsRetentionAssertEntries(t *testing.T, root string, want ...string
 	}
 }
 
+// userWindowsRetentionBackup builds one owned replaced-backup candidate whose
+// canonical name carries the given UTC timestamp, then returns its path.
+func userWindowsRetentionBackup(t *testing.T, root, destination, stamp string, corrupt *userWindowsRetentionCorruption) string {
+	t.Helper()
+	backup := filepath.Join(root, filepath.Base(destination)+".replaced-"+stamp)
+	userWindowsRetentionWriteTree(t, backup, destination, corrupt)
+	return backup
+}
+
+// userWindowsRetentionJoined proves an error is a joined error that names
+// every preserved candidate, so a best-effort prune can never report an
+// uncertain candidate as a clean, silently ignored removal.
+func userWindowsRetentionJoined(t *testing.T, err error, names ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected a joined cleanup error, got nil")
+	}
+	if _, ok := err.(interface{ Unwrap() []error }); !ok {
+		t.Fatalf("expected a joined error, got %T: %v", err, err)
+	}
+	for _, name := range names {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("joined error does not name the preserved candidate %q: %v", name, err)
+		}
+	}
+}
+
 // (a) A backup whose canonical manifest, canonical selection, original active
 // destination, current SID and physical identity all validate is removed,
 // while the active installation published over it stays untouched.
@@ -357,4 +384,140 @@ func TestUserWindowsRemoveReplacedBackupPreservesTamperedBytes(t *testing.T) {
 			userWindowsRetentionAssertWhole(t, destination, "the active destination")
 		})
 	}
+}
+
+// The multi-backup tests reuse userWindowsRetentionWriteTree. This self-check
+// pins that the fixture still publishes exactly the canonical installer bytes:
+// a manifest ending in the installer's trailing newline, a canonical six-field
+// selection, and the manifest bindings (original active destination, current
+// SID, physical backup identity, selection and lock digests) the validated
+// single-backup primitive requires.
+func TestUserWindowsRetentionFixtureFidelity(t *testing.T) {
+	root, destination := userWindowsRetentionFixture(t)
+	backup := userWindowsRetentionBackup(t, root, destination, "20260101T000000Z", nil)
+
+	manifestBytes, err := userWindowsRead(filepath.Join(backup, "manifest.json"), 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest userWindowsManifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	canonical, _ := json.Marshal(manifest)
+	if string(manifestBytes) != string(canonical)+"\n" {
+		t.Fatal("fixture manifest drifted from canonical installer bytes plus a trailing newline")
+	}
+
+	selectionBytes, err := userWindowsRead(filepath.Join(backup, "selection.json"), 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := UserInstallRequest{Destination: destination, Mode: "separate", Channel: "stable"}
+	canonicalSelection, _ := json.Marshal(selected)
+	if string(selectionBytes) != string(canonicalSelection) {
+		t.Fatal("fixture selection drifted from the canonical installer bytes")
+	}
+
+	lockBytes, err := userWindowsRead(filepath.Join(backup, "source/package-lock.json"), 32<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid, err := userWindowsSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := userWindowsIdentity(backup, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Schema != userWindowsSchema || manifest.Destination != destination ||
+		manifest.SID != sid || manifest.Identity != identity ||
+		manifest.SelectionSHA != userWindowsSHA(selectionBytes) || manifest.LockSHA != userWindowsSHA(lockBytes) {
+		t.Fatal("fixture manifest bindings drifted from the canonical installer output")
+	}
+	if _, err := userWindowsManifestReadAs(backup, destination); err != nil {
+		t.Fatalf("validated single-backup primitive rejects the fixture: %v", err)
+	}
+}
+
+// (a) Prune keeps exactly the newly created backup and removes every older
+// valid candidate: several candidates with increasing timestamps all survive
+// discovery, but only the exact keep is retained.
+func TestUserWindowsPruneReplacedBackupsExactKeep(t *testing.T) {
+	root, destination := userWindowsRetentionFixture(t)
+	for _, stamp := range []string{"20260101T110000Z", "20260101T120000Z"} {
+		userWindowsRetentionBackup(t, root, destination, stamp, nil)
+	}
+	keep := userWindowsRetentionBackup(t, root, destination, "20260101T130000Z", nil)
+	if err := userWindowsPruneReplacedBackups(destination, keep); err != nil {
+		t.Fatalf("prune refused an exact keep: %v", err)
+	}
+	userWindowsRetentionAssertEntries(t, root, "install", "install.replaced-20260101T130000Z")
+	userWindowsRetentionAssertWhole(t, filepath.Join(root, "install.replaced-20260101T130000Z"), "the kept backup")
+	userWindowsRetentionAssertWhole(t, destination, "the active destination")
+}
+
+// (b) Clock skew can leave a candidate dated in the future. Prune keeps both
+// the exact keep and the lexically latest future candidate, removing only the
+// older backups.
+func TestUserWindowsPruneReplacedBackupsClockSkew(t *testing.T) {
+	root, destination := userWindowsRetentionFixture(t)
+	userWindowsRetentionBackup(t, root, destination, "20260101T110000Z", nil)
+	keep := userWindowsRetentionBackup(t, root, destination, "20260101T120000Z", nil) // keep
+	userWindowsRetentionBackup(t, root, destination, "20260101T140000Z", nil)         // clock-skewed future
+	if err := userWindowsPruneReplacedBackups(destination, keep); err != nil {
+		t.Fatalf("prune refused a clock-skewed keep: %v", err)
+	}
+	userWindowsRetentionAssertEntries(t, root, "install",
+		"install.replaced-20260101T120000Z", "install.replaced-20260101T140000Z")
+	userWindowsRetentionAssertWhole(t, filepath.Join(root, "install.replaced-20260101T120000Z"), "the exact keep")
+	userWindowsRetentionAssertWhole(t, filepath.Join(root, "install.replaced-20260101T140000Z"), "the lexically latest candidate")
+	userWindowsRetentionAssertWhole(t, destination, "the active destination")
+}
+
+// (c) Discovery must ignore every name that is not an exact replaced sibling
+// with a canonical timestamp. Unrelated bases, wrong markers and noncanonical
+// timestamps survive untouched and produce no error.
+func TestUserWindowsPruneReplacedBackupsIgnoresUnrelated(t *testing.T) {
+	root, destination := userWindowsRetentionFixture(t)
+	unrelated := []string{
+		"other-install.replaced-20260101T110000Z", // unrelated base
+		"install.old",                           // wrong marker
+		"install.replaced-20260101T110000",      // missing Z
+		"install.replaced-2026-01-01T11-00-00Z", // noncanonical layout
+	}
+	for _, name := range unrelated {
+		if err := os.MkdirAll(filepath.Join(root, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := userWindowsRetentionBackup(t, root, destination, "20260101T120000Z", nil)
+	if err := userWindowsPruneReplacedBackups(destination, keep); err != nil {
+		t.Fatalf("prune reported an unrelated sibling: %v", err)
+	}
+	userWindowsRetentionAssertEntries(t, root, append(unrelated,
+		"install", "install.replaced-20260101T120000Z")...)
+	userWindowsRetentionAssertWhole(t, destination, "the active destination")
+}
+
+// (d) Prune is best-effort: a valid older candidate is removed, but an
+// uncertain candidate is preserved whole and reported in a joined error while
+// the exact keep and the active installation stay intact.
+func TestUserWindowsPruneReplacedBackupsBestEffort(t *testing.T) {
+	root, destination := userWindowsRetentionFixture(t)
+	userWindowsRetentionBackup(t, root, destination, "20260101T110000Z", nil)
+	uncertainName := "install.replaced-20260101T120000Z"
+	uncertain := userWindowsRetentionBackup(t, root, destination, "20260101T120000Z", nil)
+	if err := os.WriteFile(filepath.Join(uncertain, "selection.json"), []byte(`{"Destination":"tampered","Mode":"separate","Channel":"stable"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	keep := userWindowsRetentionBackup(t, root, destination, "20260101T130000Z", nil) // keep
+
+	err := userWindowsPruneReplacedBackups(destination, keep)
+	userWindowsRetentionJoined(t, err, uncertainName)
+	userWindowsRetentionAssertEntries(t, root, "install", uncertainName, "install.replaced-20260101T130000Z")
+	userWindowsRetentionAssertWhole(t, uncertain, "an uncertain candidate")
+	userWindowsRetentionAssertWhole(t, filepath.Join(root, "install.replaced-20260101T130000Z"), "the kept backup")
+	userWindowsRetentionAssertWhole(t, destination, "the active destination")
 }
