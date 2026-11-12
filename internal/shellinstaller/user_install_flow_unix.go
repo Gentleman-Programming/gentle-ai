@@ -1040,27 +1040,6 @@ func userVerifyGlobalAction(ctx context.Context, root, prefix, agent, finalPrefi
 	return nil
 }
 
-// userReprovisionGlobal re-runs the canonical acquisition against the live
-// installation. It is only invoked after the launch drift probe decides the
-// installed graph no longer matches its recorded seal; the provisioner then
-// re-acquires the recorded lock from the registry, re-materializes the prefix
-// and re-writes the graph seal. The ordinary verify stays the launch gate.
-func userReprovisionGlobal(ctx context.Context, root string, manifest userManifest) error {
-	if err := userProvisionAssets(ctx, root, false); err != nil {
-		return err
-	}
-	helper := filepath.Join(root, "provision.mjs")
-	ctx, cancel := context.WithTimeout(ctx, userUnixProvisionBound)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/bin/node"), helper, root, manifest.Prefix, manifest.Agent, manifest.Prefix, root, manifest.Mode, "reprovision")
-	cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, manifest.Prefix, manifest.Agent)
-	output, err := userOwnedRun(ctx, cmd, cancel)
-	if err != nil {
-		return fmt.Errorf("%w; bounded output: %s", err, output)
-	}
-	return nil
-}
-
 func userNativeReadback(ctx context.Context, root string) error {
 	if _, err := privateDirectory(root); err != nil {
 		return err
@@ -1338,12 +1317,12 @@ func userRootRiskBannerUID(stderr io.Writer, uid int) {
 }
 
 // userLaunchSealRead reads a small installer-owned JSON file for the launch
-// drift probe. The probe only decides whether to re-provision, so it uses a
+// drift probe. The probe only decides which refusal to emit, so it uses a
 // relaxed custody check — regular file, caller-owned, bounded size — without
 // darwin's extended-metadata custody (BSD flags, ACL, quarantine). A probe
-// misread can only trigger a safe re-provision or defer to the strict verify,
-// which keeps the full custody and remains the authority. This keeps the
-// inconclusive-fallback behavior identical on Linux and darwin.
+// misread can only skip the self-update guidance and defer to the strict
+// verify, which keeps the full custody and remains the authority. This keeps
+// the inconclusive-fallback behavior identical on Linux and darwin.
 func userLaunchSealRead(ctx context.Context, path string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1412,38 +1391,41 @@ func userLaunchRecordedPiVersion(ctx context.Context, root string) (version stri
 	return "", false
 }
 
-// userLaunchGlobalDrift reports whether the installed pi-coding-agent version
-// no longer matches the recorded graph seal. Any read/parse failure leaves the
-// probe unknown (false) so the strict verify keeps its refusal.
-func userLaunchGlobalDrift(ctx context.Context, root, prefix string) bool {
+// userLaunchGlobalDrift reports the installed and recorded pi-coding-agent
+// versions and whether they differ — the residue of a Pi self-update rewrote
+// the authenticated prefix. Any read/parse failure leaves the probe unknown
+// (drifted=false) so the strict verify keeps its refusal.
+func userLaunchGlobalDrift(ctx context.Context, root, prefix string) (installed, recorded string, drifted bool) {
 	installed, ok := userLaunchInstalledPiVersion(ctx, prefix)
 	if !ok {
-		return false
+		return "", "", false
 	}
-	recorded, ok := userLaunchRecordedPiVersion(ctx, root)
+	recorded, ok = userLaunchRecordedPiVersion(ctx, root)
 	if !ok {
-		return false
+		return "", "", false
 	}
-	return installed != recorded
+	return installed, recorded, installed != recorded
 }
 
-// userLaunchSeams let the launch repair sequence be observed without executing
-// Node or hitting the registry; production values run the real verifier and the
-// real canonical acquisition.
-var (
-	userLaunchVerify      = userVerifyInstalledGlobal
-	userLaunchReprovision = userReprovisionGlobal
-)
+// userLaunchSelfUpdateError describes the detected self-update and points to
+// the in-place TUI reconfigure that re-acquires and re-seals the graph. It
+// never advises deleting the target or installing into a different one.
+func userLaunchSelfUpdateError(root, installed, recorded string) error {
+	return fmt.Errorf("Gentle Shell refused launch: Pi was self-updated in place (installed @earendil-works/pi-coding-agent %s, recorded graph seal %s), so the authenticated global graph no longer matches.\nRepair in place: run `gentle-ai shell install` (no flags) and choose to reconfigure this existing installation at %q, which re-acquires and re-seals the graph with the new Pi version. Do not delete the target or install into a different one.", installed, recorded, root)
+}
 
-// userLaunchPrepare runs the pre-exec verification for a stock launch,
-// re-provisioning the canonical acquisition first when the installed graph has
-// drifted (issue #5812). Main SDK installs verify through userReadManifest and
+// userLaunchVerify lets tests substitute the stock verifier; production runs
+// userVerifyInstalledGlobal.
+var userLaunchVerify = userVerifyInstalledGlobal
+
+// userLaunchPrepare runs the pre-exec verification for a stock launch. A Pi
+// self-update is refused with actionable in-place repair guidance instead of
+// being silently re-provisioned (issue #5812); non-drift verification keeps its
+// existing repair error. Main SDK installs verify through userReadManifest and
 // never reach this path.
 func userLaunchPrepare(ctx context.Context, root string, manifest userManifest) error {
-	if userLaunchGlobalDrift(ctx, root, manifest.Prefix) {
-		if err := userLaunchReprovision(ctx, root, manifest); err != nil {
-			return userGraphRepairError(root, manifest.Mode, err)
-		}
+	if installed, recorded, drifted := userLaunchGlobalDrift(ctx, root, manifest.Prefix); drifted {
+		return userLaunchSelfUpdateError(root, installed, recorded)
 	}
 	if err := userLaunchVerify(ctx, root, manifest); err != nil {
 		return userGraphRepairError(root, manifest.Mode, err)
@@ -1468,8 +1450,8 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	// every launch's verification cost while leaving the unverified window at
 	// least as wide as the one it closed. Stock-only installs keep their single
 	// pre-exec verification, which only this call performs. A Pi self-update
-	// that rewrote the authenticated prefix is re-provisioned from the registry
-	// before that verification (issue #5812), never repaired inside verify.
+	// that rewrote the authenticated prefix is refused here with in-place repair
+	// guidance (issue #5812), never repaired inside verify.
 	if manifest.MainSDK == nil {
 		if err := userLaunchPrepare(ctx, root, manifest); err != nil {
 			return err

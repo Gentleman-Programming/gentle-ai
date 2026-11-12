@@ -4,7 +4,6 @@ package shellinstaller
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -153,11 +152,9 @@ func TestUnixLaunchGroupHandsOffAndRestoresForeground(t *testing.T) {
 	}
 }
 
-// userLaunchRepairFixture builds a published Separate installation with the
-// residue a Pi self-update leaves: the installed pi-coding-agent version
-// differs from the recorded graph seal and an orphan global package is planted
-// (issue #5812).
-func userLaunchRepairFixture(t *testing.T, recorded string) (string, userManifest) {
+// userLaunchDriftFixture builds a published Separate installation with the
+// given installed pi-coding-agent version and recorded graph seal.
+func userLaunchDriftFixture(t *testing.T, installed, seal string) (string, userManifest) {
 	t.Helper()
 	root := t.TempDir()
 	manifest := userManifest{Schema: userSchema, Destination: root, Prefix: filepath.Join(root, "prefix"), Agent: filepath.Join(root, "agent"), Mode: "separate"}
@@ -173,146 +170,99 @@ func userLaunchRepairFixture(t *testing.T, recorded string) (string, userManifes
 		}
 	}
 	write("prefix/lib/node_modules/@earendil-works/pi-coding-agent/package.json",
-		`{"name":"@earendil-works/pi-coding-agent","version":"9.9.9"}`, 0600)
-	write("prefix/lib/node_modules/orphan-global/package.json", `{"name":"orphan-global","version":"1.0.0"}`, 0600)
-	write("state/global-graph.json", recorded, 0600)
+		`{"name":"@earendil-works/pi-coding-agent","version":"`+installed+`"}`, 0600)
+	write("state/global-graph.json", seal, 0600)
 	return root, manifest
 }
 
-// userLaunchRepairSeams substitutes the launch verifier and the canonical
-// re-provision so the repair sequence can be observed without Node or npm.
-func userLaunchRepairSeams(t *testing.T, reprovision, verify func(context.Context, string, userManifest) error) {
+// userLaunchVerifySeam substitutes the stock verifier so the launch sequence
+// can be observed without executing Node.
+func userLaunchVerifySeam(t *testing.T, verify func(context.Context, string, userManifest) error) {
 	t.Helper()
-	previousReprovision, previousVerify := userLaunchReprovision, userLaunchVerify
-	userLaunchReprovision, userLaunchVerify = reprovision, verify
-	t.Cleanup(func() { userLaunchReprovision, userLaunchVerify = previousReprovision, previousVerify })
+	previous := userLaunchVerify
+	userLaunchVerify = verify
+	t.Cleanup(func() { userLaunchVerify = previous })
 }
 
-func TestUserLaunchPrepareAcceptsAndReauthenticatesDriftedGraph(t *testing.T) {
-	const installed = "9.9.9"
-	const recorded = "4.3.0"
-	root, manifest := userLaunchRepairFixture(t,
-		`[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"`+recorded+`","integrity":"sha512-old"}]`)
-	reprovisionCalls, verifyCalls := 0, 0
-	userLaunchRepairSeams(t,
-		func(ctx context.Context, root string, manifest userManifest) error {
-			reprovisionCalls++
-			// The provisioner's generated-route re-acquisition re-resolves npm
-			// latest and re-issues the seal for the newly resolved graph; the
-			// clean npm ci closure drops the orphaned global package.
-			seal := `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"` + installed + `","integrity":"sha512-reacquired"}]`
-			if err := os.WriteFile(filepath.Join(root, "state/global-graph.json"), []byte(seal), 0600); err != nil {
-				return err
-			}
-			return os.RemoveAll(filepath.Join(manifest.Prefix, "lib/node_modules/orphan-global"))
-		},
-		func(ctx context.Context, root string, manifest userManifest) error {
-			verifyCalls++
-			data, err := os.ReadFile(filepath.Join(root, "state/global-graph.json"))
-			if err != nil {
-				return err
-			}
-			var observed []struct {
-				Name    string `json:"name"`
-				Version string `json:"version"`
-			}
-			if err := json.Unmarshal(data, &observed); err != nil {
-				return err
-			}
-			for _, entry := range observed {
-				if entry.Name == "@earendil-works/pi-coding-agent" && entry.Version != installed {
-					return fmt.Errorf("seal not re-authenticated to %s: %s", installed, data)
-				}
-			}
-			if _, err := os.Lstat(filepath.Join(manifest.Prefix, "lib/node_modules/orphan-global")); !os.IsNotExist(err) {
-				return fmt.Errorf("orphan survived re-provision: %v", err)
-			}
-			return nil
-		})
-
-	if err := userLaunchPrepare(context.Background(), root, manifest); err != nil {
-		t.Fatalf("launch prepare = %v", err)
-	}
-	if reprovisionCalls != 1 || verifyCalls != 1 {
-		t.Fatalf("repair sequence = reprovision %d verify %d, want 1/1", reprovisionCalls, verifyCalls)
-	}
-	// The seal is re-authenticated to the newly resolved graph: it carries the
-	// accepted self-updated version and never reverts to the recorded one.
-	data, err := os.ReadFile(filepath.Join(root, "state/global-graph.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), installed) || !strings.Contains(string(data), "sha512-reacquired") {
-		t.Fatalf("seal was not re-authenticated to the new graph: %s", data)
-	}
-	if strings.Contains(string(data), recorded) || strings.Contains(string(data), "sha512-old") {
-		t.Fatalf("seal reverted to the recorded graph instead of accepting the self-update: %s", data)
-	}
-	if _, err := os.Lstat(filepath.Join(manifest.Prefix, "lib/node_modules/orphan-global")); !os.IsNotExist(err) {
-		t.Fatalf("orphan survived re-provision: %v", err)
-	}
-}
-
-func TestUserLaunchPrepareNoDriftKeepsVerifyOffline(t *testing.T) {
-	root, manifest := userLaunchRepairFixture(t,
-		`[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"9.9.9","integrity":"sha512-aaa"}]`)
-	reprovisionCalls, verifyCalls := 0, 0
-	userLaunchRepairSeams(t,
-		func(ctx context.Context, root string, manifest userManifest) error {
-			reprovisionCalls++
-			t.Fatal("no-drift launch re-provisioned the graph")
-			return nil
-		},
-		func(ctx context.Context, root string, manifest userManifest) error {
-			verifyCalls++
-			return nil
-		})
-
-	if err := userLaunchPrepare(context.Background(), root, manifest); err != nil {
-		t.Fatalf("launch prepare = %v", err)
-	}
-	if reprovisionCalls != 0 || verifyCalls != 1 {
-		t.Fatalf("no-drift sequence = reprovision %d verify %d, want 0/1", reprovisionCalls, verifyCalls)
-	}
-}
-
-func TestUserLaunchPrepareReprovisionFailureRefuses(t *testing.T) {
-	root, manifest := userLaunchRepairFixture(t,
+func TestUserLaunchPrepareDriftReturnsSelfUpdateGuidance(t *testing.T) {
+	root, manifest := userLaunchDriftFixture(t, "9.9.9",
 		`[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0","integrity":"sha512-aaa"}]`)
 	verifyCalls := 0
-	cause := errors.New("re-acquisition refused")
-	userLaunchRepairSeams(t,
-		func(ctx context.Context, root string, manifest userManifest) error { return cause },
-		func(ctx context.Context, root string, manifest userManifest) error {
-			verifyCalls++
-			return nil
-		})
+	userLaunchVerifySeam(t, func(ctx context.Context, root string, manifest userManifest) error {
+		verifyCalls++
+		return nil
+	})
+
+	err := userLaunchPrepare(context.Background(), root, manifest)
+	if err == nil {
+		t.Fatal("drifted launch prepared without refusal")
+	}
+	if verifyCalls != 0 {
+		t.Fatalf("verify ran after drift detection: %d", verifyCalls)
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"Pi was self-updated",
+		"@earendil-works/pi-coding-agent 9.9.9",
+		"recorded graph seal 4.3.0",
+		"gentle-ai shell install",
+		"reconfigure",
+		root,
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("guidance missing %q: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "different empty target") {
+		t.Fatalf("guidance advises a different target: %s", msg)
+	}
+}
+
+func TestUserLaunchPrepareNoDriftRunsVerify(t *testing.T) {
+	root, manifest := userLaunchDriftFixture(t, "4.3.0",
+		`[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0","integrity":"sha512-aaa"}]`)
+	verifyCalls := 0
+	userLaunchVerifySeam(t, func(ctx context.Context, root string, manifest userManifest) error {
+		verifyCalls++
+		return nil
+	})
+
+	if err := userLaunchPrepare(context.Background(), root, manifest); err != nil {
+		t.Fatalf("no-drift launch prepare = %v", err)
+	}
+	if verifyCalls != 1 {
+		t.Fatalf("no-drift verify calls = %d, want 1", verifyCalls)
+	}
+}
+
+func TestUserLaunchPrepareNonDriftVerifyFailureKeepsRepairError(t *testing.T) {
+	root, manifest := userLaunchDriftFixture(t, "4.3.0",
+		`[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0","integrity":"sha512-aaa"}]`)
+	cause := errors.New("graph drift")
+	userLaunchVerifySeam(t, func(ctx context.Context, root string, manifest userManifest) error { return cause })
 
 	err := userLaunchPrepare(context.Background(), root, manifest)
 	if err == nil || !errors.Is(err, cause) {
-		t.Fatalf("launch prepare = %v, want the re-acquisition cause", err)
-	}
-	if verifyCalls != 0 {
-		t.Fatalf("verify ran after a failed re-provision: %d", verifyCalls)
+		t.Fatalf("launch prepare = %v, want the verify cause", err)
 	}
 	if !strings.Contains(err.Error(), "gentle-ai shell install --help") {
-		t.Fatalf("repair refusal lost the manual continuation: %v", err)
+		t.Fatalf("non-drift verify failure lost the existing repair advice: %v", err)
 	}
 }
 
 func TestUserLaunchGlobalDriftDetection(t *testing.T) {
 	for _, tc := range []struct {
 		name                    string
-		installed               string
+		installed, recorded     string
 		seal                    string
 		withInstalled, withSeal bool
 		want                    bool
 	}{
-		{"drifted self-update", "9.9.9", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0"}]`, true, true, true},
-		{"matching graph", "4.3.0", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0"}]`, true, true, false},
-		{"missing installed package", "", "", false, true, false},
-		{"missing graph seal", "9.9.9", "", true, false, false},
-		{"seal without pi entry", "9.9.9", `[{"directory":"lib/node_modules/gentle-pi","name":"gentle-pi","version":"4.3.0"}]`, true, true, false},
+		{"drifted self-update", "9.9.9", "4.3.0", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0"}]`, true, true, true},
+		{"matching graph", "4.3.0", "4.3.0", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0"}]`, true, true, false},
+		{"missing installed package", "", "4.3.0", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0"}]`, false, true, false},
+		{"missing graph seal", "9.9.9", "", "", true, false, false},
+		{"seal without pi entry", "9.9.9", "", `[{"directory":"lib/node_modules/gentle-pi","name":"gentle-pi","version":"4.3.0"}]`, true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -333,8 +283,12 @@ func TestUserLaunchGlobalDriftDetection(t *testing.T) {
 			if tc.withSeal {
 				write("state/global-graph.json", tc.seal, 0600)
 			}
-			if got := userLaunchGlobalDrift(context.Background(), root, filepath.Join(root, "prefix")); got != tc.want {
-				t.Fatalf("drift = %v, want %v", got, tc.want)
+			installed, recorded, drifted := userLaunchGlobalDrift(context.Background(), root, filepath.Join(root, "prefix"))
+			if drifted != tc.want {
+				t.Fatalf("drift = %v, want %v", drifted, tc.want)
+			}
+			if tc.want && (installed != tc.installed || recorded != tc.recorded) {
+				t.Fatalf("drift versions = %q/%q, want %q/%q", installed, recorded, tc.installed, tc.recorded)
 			}
 		})
 	}
