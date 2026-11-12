@@ -52,6 +52,12 @@ markers and noncanonical timestamps are ignored; an invalid or uncertain
 candidate is preserved whole and reported. Retention failure is a warning and
 never retracts a valid installation.
 
+In the TUI, **Manage → Replaced backups** lists every candidate with its size
+(`≥` marks a lower bound when the bounded walk stopped early) and marks the
+latest. Listing never validates or deletes anything. **Clean older backups**
+asks for confirmation, then removes every candidate except the latest through
+the same validated removal; uncertain trees are preserved and shown.
+
 ## Persistent memory (Engram)
 
 Separate provisions Engram from the gentle-pi it installs, never from a

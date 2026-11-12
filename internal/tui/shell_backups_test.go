@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
 )
 
 func shellBackupsModel(t *testing.T) Model {
@@ -247,5 +248,71 @@ func TestShellBackupsViewRoutesToScreen(t *testing.T) {
 	}
 	if !strings.Contains(output, "install.replaced-20260101T110000Z") {
 		t.Fatalf("Manage view did not list the candidate: %q", output)
+	}
+}
+
+// (m) A prune result enters loading until the re-list arrives: the stale list
+// can never be confirmed again, keys are suppressed, and a loaded list clears
+// any leftover confirmation.
+func TestShellBackupsPrunedReloadsBeforeKeys(t *testing.T) {
+	m := shellBackupsModel(t)
+	install := shellBackupsInstall()
+	m.shellManage = &shellManageState{install: install, backups: &shellBackupsState{list: shellBackupsCandidates(), working: true, confirm: true}}
+	next, cmd := m.Update(shellBackupsPruned{})
+	m = next.(Model)
+	backups := m.shellManage.backups
+	if backups == nil || !backups.loading || backups.confirm || backups.working {
+		t.Fatalf("prune result did not enter loading without confirmation: %+v", backups)
+	}
+	if cmd == nil {
+		t.Fatal("prune result did not re-list")
+	}
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyEnter}, {Type: tea.KeyEnter}, {Type: tea.KeyEsc}} {
+		next, cmd = m.Update(key)
+		m = next.(Model)
+		if m.shellManage == nil || m.shellManage.backups == nil || !m.shellManage.backups.loading {
+			t.Fatalf("a key during the re-list mutated the state: %+v", m.shellManage)
+		}
+		if cmd != nil {
+			if _, ok := cmd().(shellBackupsPruned); ok {
+				t.Fatal("a key during the re-list issued a prune against the stale list")
+			}
+		}
+	}
+
+	m.shellManage.backups.confirm = true
+	next, _ = m.Update(shellBackupsLoaded{list: shellBackupsCandidates()[1:]})
+	m = next.(Model)
+	backups = m.shellManage.backups
+	if backups.loading || backups.confirm || len(backups.list) != 1 {
+		t.Fatalf("loaded list did not replace the stale list and clear confirmation: %+v", backups)
+	}
+}
+
+// (n) The cleanup confirmation opens on the non-destructive choice: one extra
+// Enter returns to the list instead of deleting.
+func TestShellBackupsConfirmationDefaultsToBack(t *testing.T) {
+	m := shellBackupsModel(t)
+	install := shellBackupsInstall()
+	m.shellManage = &shellManageState{install: install, backups: &shellBackupsState{list: shellBackupsCandidates()}}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	backups := m.shellManage.backups
+	actions := screens.ShellBackupsActions(shellBackupsView(m.shellManage))
+	if !backups.confirm || backups.cursor < 0 || backups.cursor >= len(actions) || actions[backups.cursor] != "Back" {
+		t.Fatalf("confirmation cursor %d does not default to Back in %v", backups.cursor, actions)
+	}
+	if view := m.View(); !strings.Contains(view, " ▸ Back") {
+		t.Fatalf("confirmation does not highlight Back:\n%s", view)
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.shellManage.backups == nil || m.shellManage.backups.confirm || m.shellManage.backups.working {
+		t.Fatalf("a second Enter did not return to the list: %+v", m.shellManage.backups)
+	}
+	if cmd != nil {
+		if _, ok := cmd().(shellBackupsPruned); ok {
+			t.Fatal("a second Enter deleted through the default confirmation choice")
+		}
 	}
 }

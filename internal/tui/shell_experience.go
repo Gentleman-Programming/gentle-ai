@@ -355,6 +355,9 @@ func (m Model) shellInstallView() string {
 	}
 	if m.shellManage != nil {
 		manage := m.shellManage
+		if manage.backups != nil {
+			return screens.RenderShellBackups(shellBackupsView(manage), manage.backups.cursor, m.Width, m.Height)
+		}
 		if manage.confirm || manage.uninstalled {
 			errText := ""
 			if manage.uninstallErr != nil {
