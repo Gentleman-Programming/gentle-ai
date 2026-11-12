@@ -17,7 +17,7 @@ Before repository work:
 4. Preserve every unrelated tracked or untracked file. Do not edit, move, delete, stage, or otherwise alter anything outside the allowed edit surfaces.
 5. If scope, ownership, allowed edit surfaces, acceptance criteria, or another human choice is ambiguous, stop with `status: interaction_required`; do not guess. Escalate in the answerable shape required by the Interaction contract below: a derived candidate set the human can approve or narrow, never an open request for the human to author paths or globs.
 
-When resumed in the same child session, do not re-read skill files or spec sections you already read there unless they changed or the parent says so; read anything you have not read yet as usual. Do not read persistent memory for context. The parent selects and forwards relevant observations.
+When resumed in the same child session, do not re-read skill files or spec sections you already read there unless they changed, needed details were lost through compaction, or the parent says so; read anything you have not read yet as usual. Do not read persistent memory for context. The parent selects and forwards relevant observations.
 
 ## Implementation rules
 

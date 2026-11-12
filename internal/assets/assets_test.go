@@ -2009,7 +2009,7 @@ func TestVerifierChecksByChangeKind(t *testing.T) {
 func TestGenericAgentsResumeWithoutRereadsAndReportCompactly(t *testing.T) {
 	t.Parallel()
 
-	resume := "When resumed in the same child session, do not re-read skill files or spec sections you already read there unless they changed or the parent says so; read anything you have not read yet as usual"
+	resume := "When resumed in the same child session, do not re-read skill files or spec sections you already read there unless they changed, needed details were lost through compaction, or the parent says so; read anything you have not read yet as usual"
 	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
 	tests := []struct {
 		path     string
