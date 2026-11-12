@@ -87,6 +87,7 @@ A `stop` ends its transition, never approves delivery. Complete atomic inventory
 | `captured_artifacts_unverifiable` | Terminal — maintainer inspects B authority, or `D`. |
 | `captured_result_selection_unavailable` | Terminal — maintainer inspects lineage, or `D`. |
 | `missing_authority_binding` | Terminal — file a bounded defect with lineage, or `D`. |
+| `correction_request_unavailable` | Terminal — valid authority, but no correction plan request can be built (invalid budget or non-actionable finding); this lineage cannot be corrected. File a bounded defect with lineage, or `D`. |
 | `corrupted_or_unverifiable_authority`, `manual_intervention_required`, `native_stop_required` | Terminal — maintainer inspects authority/lineage, or `D`. |
 | `empty_base_diff_bootstrap_required` | Terminal — authorized empty-root bootstrap for a new target, or `D`. |
 | `lens_context_budget_exceeded` | Terminal — reduce B scope and start a new transaction, or `D`. |

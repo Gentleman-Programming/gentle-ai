@@ -399,6 +399,13 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 			}
 			return reviewStopTransition("manual_intervention_required")
 		}
+		// A validated authority whose correction-plan request its own
+		// contract refuses (a zero frozen budget, a non-actionable finding)
+		// cannot be planned on this lineage, but it is not corrupt (#6086).
+		// Every other missing request keeps the corrupted-authority stop.
+		if input.CorrectionRequest == nil && errors.Is(artifactErr, reviewtransaction.ErrCorrectionPlanRequestUnbuildable) {
+			return reviewStopTransition("correction_request_unavailable")
+		}
 		if input.CorrectionForecasted {
 			if input.CorrectionRequest == nil {
 				return reviewStopTransition("corrupted_or_unverifiable_authority")
@@ -1519,6 +1526,8 @@ func reviewReasonDescription(reason string) string {
 		return "Correction evidence and findings exceed the native context budget"
 	case "corrupted_or_unverifiable_authority":
 		return "Review authority is corrupted or unverifiable"
+	case "correction_request_unavailable":
+		return "Correction plan request cannot be built from the admitted review authority"
 	case "missing_authority_binding":
 		return "Target authority binding is missing"
 	case "unchanged_or_unverified_authority":

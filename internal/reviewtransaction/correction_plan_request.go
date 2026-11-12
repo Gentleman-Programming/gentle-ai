@@ -89,9 +89,35 @@ func BuildCorrectionPlanRequest(state CompactState, revision string) (Correction
 	}
 	request.RequestHash = correctionPlanRequestHash(request)
 	if err := ValidateCorrectionPlanRequest(request); err != nil {
+		if errors.Is(err, errCorrectionPlanRequestBudgetInvalid) || errors.Is(err, errCorrectionPlanRequestNonActionableFinding) {
+			return CorrectionPlanRequest{}, correctionPlanRequestUnbuildableError{cause: err}
+		}
 		return CorrectionPlanRequest{}, err
 	}
 	return request, nil
+}
+
+// ErrCorrectionPlanRequestUnbuildable classifies a BuildCorrectionPlanRequest
+// refusal raised by the request contract itself, not by the authority it
+// projects (issue #6086). Every earlier refusal re-checks a fact that
+// CompactState.Validate and CompactReviewView already enforce, so reaching one
+// means the authority contradicts itself. The budget bound and the actionable
+// finding shape are stricter than admission: a validated authority can still
+// fail them, and that is an unavailable correction request, not corruption.
+// The wrapped error keeps the builder's exact message.
+var ErrCorrectionPlanRequestUnbuildable = errors.New("correction plan request cannot be built from admitted authority") // refusal:by-design world-action: the provider request contract is stricter than admitted authority; provider code must reconcile them
+
+var (
+	errCorrectionPlanRequestBudgetInvalid        = errors.New("correction plan request budget is invalid")                 // refusal:by-design world-action: provider code must preserve the frozen authority budget
+	errCorrectionPlanRequestNonActionableFinding = errors.New("correction plan request contains a non-actionable finding") // refusal:by-design world-action: provider code must project complete accepted finding evidence
+)
+
+type correctionPlanRequestUnbuildableError struct{ cause error }
+
+func (err correctionPlanRequestUnbuildableError) Error() string { return err.cause.Error() }
+
+func (err correctionPlanRequestUnbuildableError) Unwrap() []error {
+	return []error{err.cause, ErrCorrectionPlanRequestUnbuildable}
 }
 
 // validateCompactReviewConsumerState validates compact lifecycle facts against
@@ -106,7 +132,7 @@ func ValidateCorrectionPlanRequest(request CorrectionPlanRequest) error {
 		return errors.New("correction plan request identity is incomplete") // refusal:by-design world-action: a malformed provider request cannot authorize correction planning
 	}
 	if request.CorrectionBudget <= 0 || request.CorrectionBudget > MaxCorrectionChangedLines {
-		return errors.New("correction plan request budget is invalid") // refusal:by-design world-action: provider code must preserve the frozen authority budget
+		return errCorrectionPlanRequestBudgetInvalid
 	}
 	ids, err := canonicalStrings(request.FixFindingIDs, "fix finding id")
 	if err != nil || !equalStrings(ids, request.FixFindingIDs) || len(ids) == 0 || len(ids) != len(request.Findings) {
@@ -120,7 +146,7 @@ func ValidateCorrectionPlanRequest(request CorrectionPlanRequest) error {
 		if finding.ID != ids[index] || validateStructuredFinding(structured) != nil || !isConcreteEvidence(finding.Evidence) ||
 			!isSupportedEvidenceClass(finding.EvidenceClass) ||
 			(finding.CausalDisposition != CausalIntroduced && finding.CausalDisposition != CausalBehaviorActivated && finding.CausalDisposition != CausalWorsened) {
-			return errors.New("correction plan request contains a non-actionable finding") // refusal:by-design world-action: provider code must project complete accepted finding evidence
+			return errCorrectionPlanRequestNonActionableFinding
 		}
 	}
 	if correctionPlanRequestHash(request) != request.RequestHash {

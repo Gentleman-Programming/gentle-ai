@@ -52,6 +52,7 @@ A `stop` ends its transition, never approves delivery. `D` means the human disab
 | Reason codes | Continuation |
 | --- | --- |
 | `captured_artifacts_unverifiable`, `captured_result_selection_unavailable`, `captured_verification_evidence_invalid`, `final_verification_retry_unavailable`, `missing_authority_binding`, `corrupted_or_unverifiable_authority`, `manual_intervention_required`, `native_stop_required` | Terminal: the maintainer inspects authority/lineage, or `D`. |
+| `correction_request_unavailable` | Terminal: valid authority, but no correction plan request can be built (invalid budget or non-actionable finding), so this lineage cannot be corrected. File a bounded defect with the lineage, or `D`. |
 | `empty_base_diff_bootstrap_required` | Terminal: authorized empty-root bootstrap for a new target, or `D`. |
 | `lens_context_budget_exceeded` | Terminal: reduce the candidate scope and start a new transaction, or `D`. |
 | `correction_context_budget_exceeded` | Terminal: this authority has to be released rather than left in place, and invalidation refuses here. The maintainer runs the release command the stop's `continuation` names, exactly as printed; it is the preparatory step its `detail` describes, and its refusal prints the binding the full release needs. A stop with no `continuation` means the authority is not releasable in its current state: the maintainer inspects it, or `D`. Then review as smaller candidates, or `D`. |

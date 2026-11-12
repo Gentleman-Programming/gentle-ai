@@ -94,6 +94,14 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      false,
 		Justification: "caller-continuable: the stop's own `continuation` field names the exact `gentle-ai sync` command that reconciles the recorded managed-asset digest; re-querying STATUS afterward offers the same candidate's START again — a concrete, flag-driven continuation (#3299, #4170), not a maintainer-only action",
 	},
+	"correction_request_unavailable": {
+		Terminal:      true,
+		Justification: "the authority passed validation, but the provider's own correction-plan request contract refuses it (a zero or out-of-range frozen budget, a non-actionable accepted finding; #6086); the budget and findings are frozen, so no caller input or retry can produce a request on this lineage",
+		// Tool-fault: provider admission accepted an authority its own
+		// request contract cannot carry forward. The store is intact, so
+		// this is a code defect, not a data-integrity finding.
+		ToolFault: reviewStopToolFault(true),
+	},
 	"corrupted_or_unverifiable_authority": {
 		Terminal:      true,
 		Justification: "review repair --preflight already classified this authority unsupported/ambiguous/conflicting/truncated; requires a maintainer to inspect the review authority store directly",
