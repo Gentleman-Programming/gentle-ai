@@ -18,6 +18,7 @@ func TestPriorStatusSchemaKeepsCurrentCaptureCollection(t *testing.T) {
 	}, &output); err != nil {
 		t.Fatal(err)
 	}
+	validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, "v1", "status-v2.schema.json"), output.Bytes())
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &status)
 	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||

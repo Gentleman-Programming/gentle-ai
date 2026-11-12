@@ -97,6 +97,7 @@ var coreJourneyReviewModes = map[string]ReviewPrecondition{
 	"j120-welcome-tui-runs-under-a-real-tty":                                    reviewUntouched,
 	"j121-rdd-tui-controls-global-mode":                                         reviewUntouched,
 	"j127-customizable-install-rdd-choice":                                      reviewUntouched,
+	"j129-correction-request-unavailable-zero-budget":                           reviewOptedIn,
 	"j4395-telemetry-trigger-resolves-rdd-repository":                           reviewUntouched,
 	"j4433-restored-escalated-derived-target-stops":                             reviewOptedIn,
 	"j122-global-review-mode-from-non-git-cwd":                                  reviewUntouched,
