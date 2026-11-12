@@ -1337,17 +1337,27 @@ func userRootRiskBannerUID(stderr io.Writer, uid int) {
 	_, _ = fmt.Fprintln(stderr, "WARNING: running as root; the private installation sandbox (capability drop, NoNewPrivileges, delegated unit limits) is disabled for this root-risk installation")
 }
 
-// userLaunchSealRead reads a small installer-owned JSON file with the same
-// physical custody discipline as the strict verifier, bounded to 1 MiB. The
-// drift probe only decides whether to re-provision; the strict verify stays
-// the final authority on the installed graph.
+// userLaunchSealRead reads a small installer-owned JSON file for the launch
+// drift probe. The probe only decides whether to re-provision, so it uses a
+// relaxed custody check — regular file, caller-owned, bounded size — without
+// darwin's extended-metadata custody (BSD flags, ACL, quarantine). A probe
+// misread can only trigger a safe re-provision or defer to the strict verify,
+// which keeps the full custody and remains the authority. This keeps the
+// inconclusive-fallback behavior identical on Linux and darwin.
 func userLaunchSealRead(ctx context.Context, path string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	before, err := privatePhysical(path)
+	before, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("seal %q is not a regular file", path)
+	}
+	stat, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Getuid()) {
+		return nil, fmt.Errorf("seal %q is not owned by the caller", path)
 	}
 	if before.Size() > 1<<20 {
 		return nil, fmt.Errorf("seal %q exceeds the read bound", path)
@@ -1356,8 +1366,8 @@ func userLaunchSealRead(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	after, err := privatePhysical(path)
-	if err != nil || !os.SameFile(before, after) || privateStamp(before) != privateStamp(after) || int64(len(data)) != before.Size() {
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(before, after) || after.Size() != before.Size() || int64(len(data)) != before.Size() {
 		return nil, errors.New("seal changed during read")
 	}
 	return data, nil
