@@ -127,22 +127,6 @@ type NonBlockingFindingSet struct {
 	Findings  []NonBlockingFinding `json:"findings"`
 }
 
-// NonBlockingFindingSetFor projects the non-blocking findings of a compact
-// lineage in StateCorrectionRequired or StateEscalated, with the same
-// selection as AdvisoryFindings. It returns an explicit empty set when every
-// finding blocks, and nil for any other state or an underivable view. It is a
-// pure read and decides nothing.
-func NonBlockingFindingSetFor(state CompactState) *NonBlockingFindingSet {
-	if state.State != StateCorrectionRequired && state.State != StateEscalated {
-		return nil
-	}
-	view, err := state.CompactReviewView()
-	if err != nil {
-		return nil
-	}
-	return &NonBlockingFindingSet{Statement: NonBlockingStatement, Findings: nonBlockingFindingsOf(view)}
-}
-
 // AdvisoryFindingSetFor pairs the projection with its statement, or reports
 // nothing when the lineage has no non-blocking finding to explain.
 func AdvisoryFindingSetFor(state CompactState) *AdvisoryFindingSet {

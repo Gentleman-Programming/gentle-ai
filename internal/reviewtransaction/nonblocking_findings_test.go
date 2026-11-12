@@ -2,7 +2,6 @@ package reviewtransaction
 
 import (
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -15,28 +14,6 @@ func nonBlockingFixtureFindings() []Finding {
 		{ID: "R3-002", Lens: LensReliability, Location: "internal/a.go:7", Severity: "CRITICAL", Claim: "introduced nil dereference", ProofRefs: []string{"the changed line dereferences a nil session"}, EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalIntroduced},
 		{ID: "R3-003", Lens: LensReliability, Location: "internal/b.go:5", Severity: "CRITICAL", Claim: "pre-existing injection", ProofRefs: []string{"base and candidate share the behavior"}, EvidenceClass: EvidenceDeterministic, CausalDisposition: CausalPreExisting},
 		{ID: "R3-004", Lens: LensReliability, Location: "internal/b.go:9", Severity: "CRITICAL", Claim: "possible race", ProofRefs: []string{"the lock order could not be established"}, EvidenceClass: EvidenceInsufficient, CausalDisposition: CausalUnknown},
-	}
-}
-
-func TestNonBlockingFindingsOfStoppedReviewCarryClaimsAndNeverAFindingToCorrect(t *testing.T) {
-	want := []NonBlockingFinding{
-		{ID: "R3-001", Lens: "reliability", Location: "internal/a.go:3", Severity: "WARNING", Disposition: AdvisoryInformational, Claim: "no covering assertion"},
-		{ID: "R3-003", Lens: "reliability", Location: "internal/b.go:5", Severity: "CRITICAL", Disposition: AdvisoryFollowUp, Claim: "pre-existing injection"},
-	}
-	for _, state := range []State{StateCorrectionRequired, StateEscalated} {
-		admitted := admittedAdvisoryState(t, "non-blocking-"+strings.ReplaceAll(string(state), "_", "-"), nonBlockingFixtureFindings())
-		admitted.State = state
-		view, err := admitted.CompactReviewView()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if view.Outcomes["R3-002"] != OutcomeInconclusive || view.Outcomes["R3-004"] != OutcomeInconclusive {
-			t.Fatalf("fixture view outcomes = %v, want R3-002 and R3-004 unresolved", view.Outcomes)
-		}
-		got := NonBlockingFindingSetFor(admitted)
-		if got == nil || got.Statement != NonBlockingStatement || !reflect.DeepEqual(got.Findings, want) {
-			t.Fatalf("NonBlockingFindingSetFor(%s) = %#v, want %#v", state, got, want)
-		}
 	}
 }
 
@@ -64,25 +41,6 @@ func TestNonBlockingSelectionExcludesFindingsToCorrectAndUnknownOutcomes(t *test
 	}
 	if got := nonBlockingFindingsOf(view); !reflect.DeepEqual(got, want) {
 		t.Fatalf("nonBlockingFindingsOf = %#v, want %#v", got, want)
-	}
-}
-
-func TestNonBlockingFindingsAreEmptyNotAbsentWhenEveryFindingBlocks(t *testing.T) {
-	admitted := admittedAdvisoryState(t, "non-blocking-empty", nonBlockingFixtureFindings()[1:2])
-	admitted.State = StateCorrectionRequired
-	got := NonBlockingFindingSetFor(admitted)
-	if got == nil || got.Findings == nil || len(got.Findings) != 0 {
-		t.Fatalf("NonBlockingFindingSetFor(only a finding to correct) = %#v, want an explicit empty set", got)
-	}
-}
-
-func TestNonBlockingFindingsAreOnlyForStoppedReviews(t *testing.T) {
-	for _, state := range []State{StateApproved, StateReviewing, StateValidating} {
-		admitted := admittedAdvisoryState(t, "non-blocking-other-"+string(state), nonBlockingFixtureFindings())
-		admitted.State = state
-		if got := NonBlockingFindingSetFor(admitted); got != nil {
-			t.Fatalf("NonBlockingFindingSetFor(%s) = %#v, want nil", state, got)
-		}
 	}
 }
 
