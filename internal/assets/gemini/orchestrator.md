@@ -71,7 +71,7 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 | Focused test and suite of the change being made | ✅ once each | — |
 | High-risk change, or long suites, builds, installs, or native review actions of a large task | — | ✅ independent verifier or fresh per-action worker |
 
-Use Gemini's native bounded worker for delegated-direct work.
+When `pi-bridge` is active (such as running inside Gentle Shell or when the `pi-bridge` MCP server is available), route all subagent delegation to `pi_subagent_run` on `pi-bridge` (governed by models in `~/.pi/gentle-ai/models.json`). For eager MCP tools, call the registered direct `mcp_<serverName>_<toolName>` tool (e.g. `mcp_pi-bridge_pi_subagent_run` or direct `pi_subagent_run`); for lazy MCP tools, call `call_mcp_tool` with `ServerName: "pi-bridge"` and `ToolName: "pi_subagent_run"`. Otherwise, when `pi-bridge` is not active, use Gemini's native bounded worker for delegated-direct work.
 
 Keep each delegated writer bounded, with a short synthesized handoff. Delegation is mandatory only when a mechanism's own trigger fires.
 
