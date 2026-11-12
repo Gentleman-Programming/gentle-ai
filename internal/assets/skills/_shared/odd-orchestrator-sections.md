@@ -212,11 +212,13 @@ The parent resolves skills once per session or before first delegation:
 
 1. Read `.atl/skill-registry.md` if present.
 2. Match task context and target files against the `Trigger / description` column.
-3. Pass only matching `Path` values to subagents under `## Skills to load before work`.
+3. Pass only matching `Path` values to subagents under `## Skills to load before work`, matching the delegated task's own files and actions, never a fixed set: a child that will not commit gets no commit skill, and one that writes no docs gets no docs skill.
 4. Tell subagents to read those exact `SKILL.md` files before reading, writing, reviewing, testing, or creating artifacts.
 5. If the registry is absent, continue but mention that project-specific skill paths were unavailable.
 
 Subagents receive exact indexed paths and do not rediscover the registry or additional project/user `SKILL.md` files during normal runtime.
+
+`gentle-ai-worker` reports only `paths-injected`, `paths-invalid`, or `none`; the fallback values below come from other agents.
 
 If a subagent reports `skill_resolution`, interpret it as project/user skill resolution:
 
