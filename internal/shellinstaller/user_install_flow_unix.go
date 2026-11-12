@@ -1316,6 +1316,129 @@ func userRootRiskBannerUID(stderr io.Writer, uid int) {
 	_, _ = fmt.Fprintln(stderr, "WARNING: running as root; the private installation sandbox (capability drop, NoNewPrivileges, delegated unit limits) is disabled for this root-risk installation")
 }
 
+// userLaunchSealRead reads a small installer-owned JSON file for the launch
+// drift probe. The probe only decides which refusal to emit, so it uses a
+// relaxed custody check — regular file, caller-owned, bounded size — without
+// darwin's extended-metadata custody (BSD flags, ACL, quarantine). A probe
+// misread can only skip the self-update guidance and defer to the strict
+// verify, which keeps the full custody and remains the authority. This keeps
+// the inconclusive-fallback behavior identical on Linux and darwin.
+func userLaunchSealRead(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("seal %q is not a regular file", path)
+	}
+	stat, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Getuid()) {
+		return nil, fmt.Errorf("seal %q is not owned by the caller", path)
+	}
+	if before.Size() > 1<<20 {
+		return nil, fmt.Errorf("seal %q exceeds the read bound", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(before, after) || after.Size() != before.Size() || int64(len(data)) != before.Size() {
+		return nil, errors.New("seal changed during read")
+	}
+	return data, nil
+}
+
+// userLaunchInstalledPiVersion returns the installed pi-coding-agent version
+// recorded by its own package.json, or ok=false when the read is inconclusive.
+func userLaunchInstalledPiVersion(ctx context.Context, prefix string) (version string, ok bool) {
+	data, err := userLaunchSealRead(ctx, filepath.Join(prefix, "lib/node_modules/@earendil-works/pi-coding-agent/package.json"))
+	if err != nil {
+		return "", false
+	}
+	var metadata struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(data, &metadata) != nil || metadata.Name != "@earendil-works/pi-coding-agent" || metadata.Version == "" {
+		return "", false
+	}
+	return metadata.Version, true
+}
+
+// userLaunchRecordedPiVersion returns the pi-coding-agent version sealed in the
+// installation's global graph, or ok=false when the seal is absent or malformed.
+func userLaunchRecordedPiVersion(ctx context.Context, root string) (version string, ok bool) {
+	data, err := userLaunchSealRead(ctx, filepath.Join(root, "state/global-graph.json"))
+	if err != nil {
+		return "", false
+	}
+	var observed []struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(data, &observed) != nil {
+		return "", false
+	}
+	for _, entry := range observed {
+		if entry.Name == "@earendil-works/pi-coding-agent" && entry.Version != "" {
+			return entry.Version, true
+		}
+	}
+	return "", false
+}
+
+// userLaunchGlobalDrift reports the installed and recorded pi-coding-agent
+// versions and whether the installed version is strictly newer — the residue
+// of a genuine Pi self-update. The installer's intentional prior-cohort
+// transition moves to an OLDER version and is never reported as drift: it
+// falls through to the strict verify, which already compares the prior cohort
+// against state/prior-global-graph.json. Malformed or inconclusive reads also
+// defer to verify (fail-closed).
+func userLaunchGlobalDrift(ctx context.Context, root, prefix string) (installed, recorded string, drifted bool) {
+	installed, ok := userLaunchInstalledPiVersion(ctx, prefix)
+	if !ok {
+		return "", "", false
+	}
+	recorded, ok = userLaunchRecordedPiVersion(ctx, root)
+	if !ok {
+		return "", "", false
+	}
+	if !userReviewedListSemver(installed) || !userReviewedListSemver(recorded) {
+		return installed, recorded, false
+	}
+	return installed, recorded, userReviewedListVersionLess(recorded, installed)
+}
+
+// userLaunchSelfUpdateError describes the detected self-update and points to
+// the in-place TUI reconfigure that re-acquires and re-seals the graph. It
+// never advises deleting the target or installing into a different one.
+func userLaunchSelfUpdateError(root, installed, recorded string) error {
+	return fmt.Errorf("Gentle Shell refused launch: Pi was self-updated in place (installed @earendil-works/pi-coding-agent %s, recorded graph seal %s), so the authenticated global graph no longer matches.\nRepair in place: run `gentle-ai shell install` (no flags) and choose to reconfigure this existing installation at %q, which re-acquires and re-seals the graph with the new Pi version. Do not delete the target or install into a different one.", installed, recorded, root)
+}
+
+// userLaunchVerify lets tests substitute the stock verifier; production runs
+// userVerifyInstalledGlobal.
+var userLaunchVerify = userVerifyInstalledGlobal
+
+// userLaunchPrepare runs the pre-exec verification for a stock launch. A Pi
+// self-update is refused with actionable in-place repair guidance instead of
+// being silently re-provisioned (issue #5812); non-drift verification keeps its
+// existing repair error. Main SDK installs verify through userReadManifest and
+// never reach this path.
+func userLaunchPrepare(ctx context.Context, root string, manifest userManifest) error {
+	if installed, recorded, drifted := userLaunchGlobalDrift(ctx, root, manifest.Prefix); drifted {
+		return userLaunchSelfUpdateError(root, installed, recorded)
+	}
+	if err := userLaunchVerify(ctx, root, manifest); err != nil {
+		return userGraphRepairError(root, manifest.Mode, err)
+	}
+	return nil
+}
+
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	userRootRiskBanner(stderr)
 	ctx = userEngramLaunchScope(ctx, root, args)
@@ -1332,10 +1455,12 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	// stat/read operations ran since; re-running the provisioner here doubled
 	// every launch's verification cost while leaving the unverified window at
 	// least as wide as the one it closed. Stock-only installs keep their single
-	// pre-exec verification, which only this call performs.
+	// pre-exec verification, which only this call performs. A Pi self-update
+	// that rewrote the authenticated prefix is refused here with in-place repair
+	// guidance (issue #5812), never repaired inside verify.
 	if manifest.MainSDK == nil {
-		if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
-			return userGraphRepairError(root, manifest.Mode, err)
+		if err := userLaunchPrepare(ctx, root, manifest); err != nil {
+			return err
 		}
 	}
 	// S23/M1: a tree without a staged reviewed list keeps its supplier files

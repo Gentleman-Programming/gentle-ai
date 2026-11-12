@@ -27,6 +27,11 @@ import (
 const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " +
 	ReviewIntegrationContractV1 + " or " + ReviewIntegrationContractV2
 
+// reviewNonBlockingFindingsRequiresContractReason refuses the
+// --non-blocking-findings opt-in outside the contract whose STATUS schema
+// (status/v9) declares non_blocking_findings.
+const reviewNonBlockingFindingsRequiresContractReason = "--non-blocking-findings requires --contract " + ReviewIntegrationContractV2
+
 // reviewStatusTargetSelectorsRequireContractReason is the sibling of
 // reviewContractRequiredForActionEligibilityReason above: it names the same
 // exact contract value for the other set of --contract-gated review status
@@ -826,6 +831,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	lensSelection := flags.String("lenses", "", "preflight review start --lenses and render it into the fresh START next transition")
 	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason and render it into the fresh START next transition")
 	phaseTimings := flags.Bool("phase-timings", false, "emit opt-in native STATUS phase timing diagnostics")
+	nonBlockingFindings := flags.Bool("non-blocking-findings", false, "include the optional non_blocking_findings (with claims) of a correction_required or escalated authority in negotiated output; requires --contract "+ReviewIntegrationContractV2)
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -855,6 +861,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *contract != "" {
 		if err := validateReviewIntegrationContract(*contract); err != nil {
 			return err
+		}
+		if *nonBlockingFindings && *contract != ReviewIntegrationContractV2 {
+			return reviewPreflightError(errors.New(reviewNonBlockingFindingsRequiresContractReason))
 		}
 		// rdd-risk-gated S17: the START options are validated before the
 		// repository is touched, so a refused preflight writes nothing.
@@ -1234,6 +1243,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
+		if *nonBlockingFindings {
+			if result.NonBlockingFindings, err = reviewStatusNonBlockingFindings(ctx, root, native); err != nil {
+				return err
+			}
+		}
 		result.intendedUntracked = intendedScope
 		result.committedRangeBaseRef = derivedBaseRef
 		result.startOptions = startOptions
@@ -1251,7 +1265,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// that inspects untracked files; the staged branch above never
 		// resolves intendedScope through intendedUntrackedScopeForTarget, so
 		// its Digest stays the zero value and `omitempty` drops the key.
-		result.EligibleUntrackedInventory = intendedScope.Digest
+		if *contract == ReviewIntegrationContractV2 {
+			result.EligibleUntrackedInventory = intendedScope.Digest
+		}
 		// Explicit reviewing resume keeps the immutable scope that the reviewer
 		// artifacts bind, rather than asking live workspace drift to select one.
 		// The same holds when the live target still equals the frozen one: an
@@ -1358,6 +1374,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							request, requestErr := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.State.CapturePhaseRevision)
 							if requestErr != nil {
 								artifactErr = requestErr
+								if errors.Is(requestErr, reviewtransaction.ErrCorrectionPlanRequestUnbuildable) {
+									if eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(ctx, root, native.LineageID); err == nil {
+										correctionReleaseEligibility = &eligibility
+									}
+								}
 							} else {
 								correctionRequest = &request
 							}
@@ -1442,7 +1463,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								} else {
 									captureContext, artifactErr = newReviewCaptureContext(record.State, record.State.CapturePhaseRevision, frozen)
 									if artifactErr == nil && result.Frozen != nil {
-										result.Frozen.ChangedPathManifestSHA256, artifactErr = frozenManifestDigestForProjection(frozen.ChangedPathManifest, result.Projection.Paths)
+										digest, digestErr := frozenManifestDigestForProjection(frozen.ChangedPathManifest, result.Projection.Paths)
+										artifactErr = digestErr
+										if *contract == ReviewIntegrationContractV2 {
+											result.Frozen.ChangedPathManifestSHA256 = digest
+										}
 									}
 								}
 							}
@@ -1609,6 +1634,25 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if validationErr != nil {
 			return fmt.Errorf("validate negotiated review status: %w", validationErr)
 		}
+		if *contract == ReviewIntegrationContractV1 {
+			// Keep disposition available for routing/validation above, but the
+			// frozen v1 wire contract has no disposition field.
+			result.Disposition = nil
+			// Validate the full manifest identity before projecting the frozen
+			// v1 wire shape. Never alter the stored evidence or routing inputs.
+			if result.NextTransition != nil && result.NextTransition.Collect != nil {
+				for index := range result.NextTransition.Collect.Inputs {
+					input := &result.NextTransition.Collect.Inputs[index]
+					if input.ChangedPathManifest != nil {
+						manifest := append([]reviewtransaction.ChangedPathManifestEntry{}, (*input.ChangedPathManifest)...)
+						for entry := range manifest {
+							manifest[entry].Generated = false
+						}
+						input.ChangedPathManifest = &manifest
+					}
+				}
+			}
+		}
 		return encodeReviewJSON(stdout, result)
 	}
 	if reviewStatusStartOptionsDeclared(args) {
@@ -1616,6 +1660,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	}
 	if *actionEligibility || *nextTransition {
 		return errors.New(reviewContractRequiredForActionEligibilityReason)
+	}
+	if *nonBlockingFindings {
+		return errors.New(reviewNonBlockingFindingsRequiresContractReason)
 	}
 	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*repositoryContextHandle) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || committedOnlyProvided || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 		return errors.New(reviewStatusTargetSelectorsRequireContractReason)

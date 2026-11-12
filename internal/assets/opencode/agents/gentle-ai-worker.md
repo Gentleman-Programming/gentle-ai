@@ -17,7 +17,7 @@ Before repository work:
 4. Preserve every unrelated tracked or untracked file. Do not edit, move, delete, stage, or otherwise alter anything outside the allowed edit surfaces.
 5. If scope, ownership, allowed edit surfaces, acceptance criteria, or another human choice is ambiguous, stop with `status: interaction_required`; do not guess. Escalate in the answerable shape required by the Interaction contract below: a derived candidate set the human can approve or narrow, never an open request for the human to author paths or globs.
 
-Do not read persistent memory for context. The parent selects and forwards relevant observations.
+When resumed in the same child session, do not re-read skill files or spec sections you already read there unless they changed, needed details were lost through compaction, or the parent says so; read anything you have not read yet as usual. Do not read persistent memory for context. The parent selects and forwards relevant observations.
 
 ## Implementation rules
 
@@ -80,7 +80,7 @@ Do not return `blocked` for a human decision and do not invent a second interact
 
 ## Return contract
 
-Return one concise handoff using this schema:
+Return one compact handoff using the schema below; cite exact commands with exit codes and test counts, blockers with `path:line`, and scratch paths, and never restate the task, the spec text, or unchanged file contents. Any requested `## Key Learnings` block follows it.
 
 ```text
 status: completed | partial | blocked | interaction_required
@@ -107,4 +107,4 @@ interaction_required: <include only when status is interaction_required>
 
 Use `skill_resolution: paths-injected` only when the parent listed skills and every listed skill was loaded before repository work. Use `skill_resolution: paths-invalid` only when the parent listed one or more skills and any listed skill cannot be loaded. With `skill_resolution: paths-invalid`, keep `status: blocked`, stop before repository work, and identify the skill that could not be loaded in `risks`. Use `skill_resolution: none` only when no skills were listed. Never report a fallback registry or path value.
 
-Report `partial` or `blocked` honestly. A clean handoff is more valuable than pretending the task is complete.
+Report `partial` or `blocked` honestly.

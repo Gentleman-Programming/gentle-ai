@@ -199,6 +199,12 @@ type ReviewTransitionArtifact struct {
 
 func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, artifactErr error, input reviewNextTransitionInput) ReviewNextTransition {
 	transition := resolveReviewNextTransition(status, selectedLenses, artifacts, artifactErr, input)
+	// The frozen v1 STATUS shape has no correction-release continuation.
+	// Preserve its stop without widening that published schema.
+	if input.Contract == "gentle-ai.review-integration/v1" &&
+		(transition.ReasonCode == "correction_request_unavailable" || transition.ReasonCode == reviewCorrectionContextBudgetCode) {
+		transition.Continuation = nil
+	}
 	// Gate only active capture offers; recovery, acknowledgement, and existing
 	// stops retain their routing. Freshness never changes the bound authority.
 	if status.Applicability == reviewtransaction.TargetApplicabilityCurrent && status.Authority != nil && transition.Collect != nil {
@@ -398,6 +404,15 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 				return reviewStopTransition("manual_intervention_required")
 			}
 			return reviewStopTransition("manual_intervention_required")
+		}
+		// A validated authority whose correction-plan request its own
+		// contract refuses (a zero frozen budget, a non-actionable finding)
+		// cannot be planned on this lineage, but it is not corrupt (#6086).
+		// Every other missing request keeps the corrupted-authority stop.
+		if input.CorrectionRequest == nil && errors.Is(artifactErr, reviewtransaction.ErrCorrectionPlanRequestUnbuildable) {
+			transition := reviewStopTransition("correction_request_unavailable")
+			transition.Continuation = reviewCorrectionReleaseContinuation(status.repositoryRoot, string(input.RuntimeAgent), input.CorrectionReleaseEligibility)
+			return transition
 		}
 		if input.CorrectionForecasted {
 			if input.CorrectionRequest == nil {
@@ -1519,6 +1534,8 @@ func reviewReasonDescription(reason string) string {
 		return "Correction evidence and findings exceed the native context budget"
 	case "corrupted_or_unverifiable_authority":
 		return "Review authority is corrupted or unverifiable"
+	case "correction_request_unavailable":
+		return "Correction plan request cannot be built from the admitted review authority"
 	case "missing_authority_binding":
 		return "Target authority binding is missing"
 	case "unchanged_or_unverified_authority":
