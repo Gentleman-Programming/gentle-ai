@@ -1392,9 +1392,12 @@ func userLaunchRecordedPiVersion(ctx context.Context, root string) (version stri
 }
 
 // userLaunchGlobalDrift reports the installed and recorded pi-coding-agent
-// versions and whether they differ — the residue of a Pi self-update rewrote
-// the authenticated prefix. Any read/parse failure leaves the probe unknown
-// (drifted=false) so the strict verify keeps its refusal.
+// versions and whether the installed version is strictly newer — the residue
+// of a genuine Pi self-update. The installer's intentional prior-cohort
+// transition moves to an OLDER version and is never reported as drift: it
+// falls through to the strict verify, which already compares the prior cohort
+// against state/prior-global-graph.json. Malformed or inconclusive reads also
+// defer to verify (fail-closed).
 func userLaunchGlobalDrift(ctx context.Context, root, prefix string) (installed, recorded string, drifted bool) {
 	installed, ok := userLaunchInstalledPiVersion(ctx, prefix)
 	if !ok {
@@ -1404,7 +1407,10 @@ func userLaunchGlobalDrift(ctx context.Context, root, prefix string) (installed,
 	if !ok {
 		return "", "", false
 	}
-	return installed, recorded, installed != recorded
+	if !userReviewedListSemver(installed) || !userReviewedListSemver(recorded) {
+		return installed, recorded, false
+	}
+	return installed, recorded, userReviewedListVersionLess(recorded, installed)
 }
 
 // userLaunchSelfUpdateError describes the detected self-update and points to

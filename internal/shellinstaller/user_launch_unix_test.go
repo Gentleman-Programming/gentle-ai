@@ -258,8 +258,12 @@ func TestUserLaunchGlobalDriftDetection(t *testing.T) {
 		withInstalled, withSeal bool
 		want                    bool
 	}{
-		{"drifted self-update", "9.9.9", "4.3.0", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0"}]`, true, true, true},
-		{"matching graph", "4.3.0", "4.3.0", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0"}]`, true, true, false},
+		{"newer self-update", "9.9.9", "4.3.0", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0"}]`, true, true, true},
+		{"prior-cohort transition (older)", "0.99.2", "1.5.2", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"1.5.2"}]`, true, true, false},
+		{"older downgrade", "1.2.0", "1.5.2", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"1.5.2"}]`, true, true, false},
+		{"matching graph (equal)", "4.3.0", "4.3.0", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0"}]`, true, true, false},
+		{"malformed installed version", "not-a-version", "1.5.2", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"1.5.2"}]`, true, true, false},
+		{"malformed recorded version", "2.0.0", "", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"not-a-version"}]`, true, true, false},
 		{"missing installed package", "", "4.3.0", `[{"directory":"lib/node_modules/@earendil-works/pi-coding-agent","name":"@earendil-works/pi-coding-agent","version":"4.3.0"}]`, false, true, false},
 		{"missing graph seal", "9.9.9", "", "", true, false, false},
 		{"seal without pi entry", "9.9.9", "", `[{"directory":"lib/node_modules/gentle-pi","name":"gentle-pi","version":"4.3.0"}]`, true, true, false},
