@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,8 +14,16 @@ import (
 // (issue #5888).
 func persistMixedOutcomeCorrectionAuthority(t *testing.T, repo, lineage string) (CompactState, CompactStore) {
 	t.Helper()
+	return persistMixedOutcomeCorrectionAuthorityFrom(t, repo, lineage, func(state CompactState) CompactState { return state })
+}
+
+// persistMixedOutcomeCorrectionAuthorityFrom lets a test adjust the START
+// authority before any capture binds it, so every later capture phase is
+// derived from the adjusted state exactly as a real lineage's would be.
+func persistMixedOutcomeCorrectionAuthorityFrom(t *testing.T, repo, lineage string, prepare func(CompactState) CompactState) (CompactState, CompactStore) {
+	t.Helper()
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nwrong\n")
-	state := newCompactTestState(t, repo, lineage)
+	state := prepare(newCompactTestState(t, repo, lineage))
 	if len(state.SelectedLenses) == 0 {
 		t.Fatal("mixed-outcome fixture unexpectedly selected no lenses")
 	}
@@ -196,4 +205,62 @@ func TestCorrectionPlanRequestAcceptsCompactAuthorizedInconclusiveFixFindings(t 
 			}
 		}
 	})
+}
+
+// TestCorrectionPlanRequestClassifiesUnbuildableRequestApartFromAuthority pins
+// issue #6086 step 1: a refusal raised by the request contract itself (here
+// the frozen budget bound) is classified as an unbuildable request, while a
+// refusal that re-checks authority keeps its unclassified shape. Messages are
+// byte-identical either way.
+func TestCorrectionPlanRequestClassifiesUnbuildableRequestApartFromAuthority(t *testing.T) {
+	state, _ := persistMixedOutcomeCorrectionAuthority(t, initSnapshotRepo(t), "correction-plan-unbuildable")
+
+	t.Run("request contract refusal: zero frozen budget", func(t *testing.T) {
+		// CompactCorrectionBudget(0) is 0: a candidate whose counted lines
+		// are all excluded (generated goldens, binary or mode-only paths)
+		// freezes a zero budget that CompactState.Validate accepts.
+		zero, _ := persistMixedOutcomeCorrectionAuthorityFrom(t, initSnapshotRepo(t), "correction-plan-zero-budget", func(start CompactState) CompactState {
+			start.OriginalChangedLines, start.CorrectionBudget = 0, 0
+			return start
+		})
+		if err := zero.Validate(); err != nil {
+			t.Fatalf("zero-budget fixture is not valid authority: %v", err)
+		}
+		_, err := BuildCorrectionPlanRequest(zero, zero.CapturePhaseRevision)
+		if err == nil || err.Error() != "correction plan request budget is invalid" {
+			t.Fatalf("BuildCorrectionPlanRequest error = %v, want the exact budget refusal", err)
+		}
+		if !errors.Is(err, ErrCorrectionPlanRequestUnbuildable) {
+			t.Fatalf("budget refusal %q is not classified as an unbuildable correction request", err)
+		}
+	})
+
+	injected := state
+	injected.FixFindingIDs = append(append([]string(nil), state.FixFindingIDs...), "R3-003")
+	consumed := state
+	consumed.FixFindingIDs = []string{}
+	for _, tc := range []struct {
+		name     string
+		state    CompactState
+		revision string
+		want     string
+	}{
+		{name: "stale capture phase", state: state, revision: "sha256:" + strings.Repeat("0", 64), want: "correction plan request requires the exact compact capture phase"},
+		{name: "empty fix set", state: consumed, revision: consumed.CapturePhaseRevision, want: "correction plan request requires an available compact correction"},
+		{name: "fix set outside admitted authority", state: injected, revision: injected.CapturePhaseRevision, want: "correction plan request findings are not satisfied by admitted compact authority"},
+	} {
+		t.Run("authority refusal: "+tc.name, func(t *testing.T) {
+			_, err := BuildCorrectionPlanRequest(tc.state, tc.revision)
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("BuildCorrectionPlanRequest error = %v, want %q", err, tc.want)
+			}
+			if errors.Is(err, ErrCorrectionPlanRequestUnbuildable) {
+				t.Fatalf("authority refusal %q was classified as an unbuildable request", err)
+			}
+		})
+	}
+
+	if _, err := BuildCorrectionPlanRequest(state, state.CapturePhaseRevision); err != nil {
+		t.Fatalf("valid authority no longer builds its correction request: %v", err)
+	}
 }
