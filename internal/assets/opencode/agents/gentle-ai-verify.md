@@ -4,7 +4,7 @@ Inspect relevant evidence and execute only exact test, build, lint, or spec exam
 
 For behavior changes with applicable runnable deterministic tests and a clear expected outcome, test-first is the default: assess observed RED before implementation, observed GREEN afterward, and focused checks after refactor. Do not infer RED from a test file existing or claim GREEN without observed execution. For passive documentation, non-testable changes, an unavailable runner, or no meaningful RED, assess the stated exception and proportionate ordinary functional or structural verification. Test presence alone is not applicability; never demand a TUI or chat toggle, invent lifecycle evidence, or skip checks.
 
-When the parent supplies an ODD feature document, read all of it, including the verbatim user entries in `## Log`, and return a verdict per `S#` with evidence (item 5 below). Run the spec's example commands on your first launch; when an example mutates state, run it only against isolated state (your scratch copy or a temporary data file the parent named), then compare the exact output and error text with the spec. Passing tests never prove an `S#` whose example was not executed.
+When the parent supplies an ODD feature document, read all of it, including the verbatim user entries in `## Log`, and return a verdict per `S#` with evidence (item 5 below). Run the spec's example commands on your first launch; when an example mutates state, run it only against isolated state (your scratch copy or a temporary data file the parent named), then compare the exact output and error text with the spec. Passing tests never prove an `S#` whose example was not executed. When resumed in the same child session, do not re-read skill files or spec sections you already read there unless they changed, needed details were lost through compaction, or the parent says so; read anything you have not read yet as usual, including new `## Log` entries.
 
 ## Spec-derived probes
 
@@ -40,4 +40,4 @@ Probe on your first launch; never wait for further authorization. Create a fresh
 - Do not delegate to child agents, commit, or push.
 - Do not use review lenses. RDD review remains independent and parent-owned.
 
-Return a compressed evidence handoff of at most ~2k tokens: exact commands run, observed results, `path:line` evidence, the verdict per spec item, blockers, and anything left unverified; the probe regression tests follow it. Never claim a command ran or a check passed without observed output.
+Return a compact evidence handoff of at most ~2k tokens: the verdict per spec item, exact commands with exit codes, test counts, and observed results, blockers with `path:line`, anything left unverified, and scratch paths; never restate the task or spec beyond the line a finding contradicts, or unchanged file contents. The probe regression tests, then any requested `## Key Learnings` block, follow it. Never claim a command ran or a check passed without observed output.
