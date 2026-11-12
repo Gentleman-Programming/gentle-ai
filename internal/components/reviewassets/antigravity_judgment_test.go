@@ -14,6 +14,8 @@ import (
 // agyFrontmatterKeys are the only frontmatter keys agy custom agents read.
 var agyFrontmatterKeys = []string{"name", "description", "model"}
 
+// TestAntigravityJudgmentDayInstallAndRefresh tests install, refresh, and idempotency
+// of native Antigravity custom agents including ODD roles and Judgment Day roles.
 func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 	adapter, err := agents.NewAdapter(model.AgentAntigravity)
 	if err != nil {

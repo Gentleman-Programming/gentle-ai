@@ -8,15 +8,27 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
+// TestRenderAntigravityModelPickerShowsTierPresets verifies that the preset selection
+// screen renders the expected titles, options, and host limitation notice.
 func TestRenderAntigravityModelPickerShowsTierPresets(t *testing.T) {
 	out := RenderAntigravityModelPicker(NewAntigravityModelPickerState(), 0)
-	for _, want := range []string{"Antigravity Model Assignments", "Choose the agy model tier for Antigravity subagents:", "inherit", "performance", "economy", "custom"} {
+	for _, want := range []string{
+		"Antigravity Model Assignments",
+		"Choose the agy model tier for Antigravity subagents:",
+		"Note: Antigravity native subagents support tiers (inherit/flash_lite/flash/pro); arbitrary model/provider/effort is unsupported by the host.",
+		"inherit",
+		"performance",
+		"economy",
+		"custom",
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
 	}
 }
 
+// TestHandleAntigravityModelPickerNavPresetDefaultsToInherit verifies preset navigation
+// and constructor mappings for inherit and performance presets.
 func TestHandleAntigravityModelPickerNavPresetDefaultsToInherit(t *testing.T) {
 	state := NewAntigravityModelPickerState()
 	handled, assignments := HandleAntigravityModelPickerNav("enter", &state, 0)
@@ -29,6 +41,8 @@ func TestHandleAntigravityModelPickerNavPresetDefaultsToInherit(t *testing.T) {
 	}
 }
 
+// TestHandleAntigravityModelPickerNavCustomCyclesTiers verifies custom mode entry,
+// role labels, host limitation note, and tier cycling across available model tiers.
 func TestHandleAntigravityModelPickerNavCustomCyclesTiers(t *testing.T) {
 	state := NewAntigravityModelPickerState()
 	customCursor := AntigravityModelPickerOptionCount(state) - 2
@@ -36,9 +50,17 @@ func TestHandleAntigravityModelPickerNavCustomCyclesTiers(t *testing.T) {
 		t.Fatalf("custom preset must open role rows without confirming: %+v", state)
 	}
 	out := RenderAntigravityModelPicker(state, 0)
-	for _, want := range []string{"ODD Explorer", "ODD Worker", "ODD Verify", "JD Judge A", "JD Judge B", "JD Fix Agent"} {
+	for _, want := range []string{
+		"ODD Explorer",
+		"ODD Worker",
+		"ODD Verify",
+		"JD Judge A",
+		"JD Judge B",
+		"JD Fix Agent",
+		"Note: Antigravity native subagents support tiers (inherit/flash_lite/flash/pro); arbitrary model/provider/effort is unsupported by the host.",
+	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("missing role %q in:\n%s", want, out)
+			t.Fatalf("missing %q in:\n%s", want, out)
 		}
 	}
 	if strings.Contains(out, "RDD") {
@@ -57,6 +79,8 @@ func TestHandleAntigravityModelPickerNavCustomCyclesTiers(t *testing.T) {
 	}
 }
 
+// TestNewAntigravityModelPickerStateFromAssignments verifies state restoration
+// from persisted custom assignments matching known presets and custom mappings.
 func TestNewAntigravityModelPickerStateFromAssignments(t *testing.T) {
 	if got := NewAntigravityModelPickerStateFromAssignments(model.AntigravityModelPresetEconomy()); got.Preset != AntigravityPresetEconomy {
 		t.Fatalf("economy assignments preset = %q", got.Preset)

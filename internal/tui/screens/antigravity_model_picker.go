@@ -122,6 +122,7 @@ func HandleAntigravityModelPickerNav(
 	return true, nil
 }
 
+// nextAntigravityTier returns the next tier in round-robin order when cycling in custom mode.
 func nextAntigravityTier(current model.AntigravityModelTier) model.AntigravityModelTier {
 	for i, tier := range antigravityTierOrder {
 		if tier == current {
@@ -146,6 +147,8 @@ func RenderAntigravityModelPicker(state AntigravityModelPickerState, cursor int)
 		b.WriteString(styles.TitleStyle.Render("Antigravity Model Assignments"))
 		b.WriteString("\n\n")
 		b.WriteString(styles.SubtextStyle.Render("Choose the agy model tier for Antigravity subagents:"))
+		b.WriteString("\n")
+		b.WriteString(styles.HelpStyle.Render("Note: Antigravity native subagents support tiers (inherit/flash_lite/flash/pro); arbitrary model/provider/effort is unsupported by the host."))
 		b.WriteString("\n\n")
 		for idx, preset := range antigravityPresetOrder {
 			b.WriteString(renderRadio(string(preset), preset == state.Preset, idx == cursor))
@@ -161,6 +164,8 @@ func RenderAntigravityModelPicker(state AntigravityModelPickerState, cursor int)
 	b.WriteString(styles.TitleStyle.Render("Custom Antigravity Model Assignments"))
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Press enter on a role to cycle: inherit → flash_lite → flash → pro"))
+	b.WriteString("\n")
+	b.WriteString(styles.HelpStyle.Render("Note: Antigravity native subagents support tiers (inherit/flash_lite/flash/pro); arbitrary model/provider/effort is unsupported by the host."))
 	b.WriteString("\n\n")
 	for idx, role := range model.AntigravityModelRoles {
 		roleLabel := antigravityRoleLabels[role]
