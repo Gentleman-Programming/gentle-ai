@@ -1,12 +1,14 @@
 package agentguidance_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 // TestAntigravityOrchestratorDelegationGuidance verifies that Antigravity orchestrator
@@ -63,34 +65,43 @@ func TestAntigravityOrchestratorDelegationGuidance(t *testing.T) {
 }
 
 // TestAntigravityPublishedRulesCarryPiBridgeSubagentBinding verifies that
-// when Antigravity rule files are rendered from the staged orchestrator asset,
-// the resulting rule files (03-orchestrator) carry the pi_subagent_run binding
-// and routing condition for Gentle Shell / pi-bridge delegation (#6011).
+// when Antigravity rule files are rendered from installed guidance
+// (via InjectRoutingWithOptions), the resulting rule files (03-orchestrator parts)
+// carry the pi_subagent_run binding and routing condition for Gentle Shell / pi-bridge
+// delegation across the collected parts (#6011).
 func TestAntigravityPublishedRulesCarryPiBridgeSubagentBinding(t *testing.T) {
-	orchestratorContent, err := assets.Read("antigravity/orchestrator.md")
+	home := t.TempDir()
+	_, err := agentguidance.InjectRoutingWithOptions(home, model.AgentAntigravity, agentguidance.RoutingOptions{})
 	if err != nil {
-		t.Fatalf("assets.Read(antigravity/orchestrator.md) error = %v", err)
+		t.Fatalf("InjectRoutingWithOptions(antigravity) error = %v", err)
 	}
 
-	staging := filemerge.InjectMarkdownSection("", "orchestrator", orchestratorContent)
-	rules := antigravityrules.Render(staging)
+	stagingPath := antigravityrules.StagingPath(home)
+	stagingBytes, err := os.ReadFile(stagingPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile(stagingPath) error = %v", err)
+	}
 
-	var orchestratorFound bool
+	rules := antigravityrules.Render(string(stagingBytes))
+
+	var orchestratorParts []string
 	for _, rule := range rules {
 		if strings.Contains(rule.Name, "orchestrator") {
-			orchestratorFound = true
-			if !strings.Contains(rule.Content, "pi_subagent_run") {
-				t.Errorf("rendered rule %s must contain pi_subagent_run binding", rule.Name)
-			}
-			if !strings.Contains(rule.Content, "When `pi-bridge` is active") {
-				t.Errorf("rendered rule %s must specify pi-bridge activity as the routing condition", rule.Name)
-			}
-			if !strings.Contains(rule.Content, "~/.pi/gentle-ai/models.json") {
-				t.Errorf("rendered rule %s must mention ~/.pi/gentle-ai/models.json", rule.Name)
-			}
+			orchestratorParts = append(orchestratorParts, rule.Content)
 		}
 	}
-	if !orchestratorFound {
-		t.Fatalf("expected to find at least one rendered orchestrator rule file")
+	if len(orchestratorParts) == 0 {
+		t.Fatalf("expected to find rendered orchestrator rule files, got none")
+	}
+
+	combined := strings.Join(orchestratorParts, "\n")
+	if !strings.Contains(combined, "pi_subagent_run") {
+		t.Errorf("collected orchestrator parts must contain pi_subagent_run binding")
+	}
+	if !strings.Contains(combined, "When `pi-bridge` is active") {
+		t.Errorf("collected orchestrator parts must specify pi-bridge activity as the routing condition")
+	}
+	if !strings.Contains(combined, "~/.pi/gentle-ai/models.json") {
+		t.Errorf("collected orchestrator parts must mention ~/.pi/gentle-ai/models.json")
 	}
 }
