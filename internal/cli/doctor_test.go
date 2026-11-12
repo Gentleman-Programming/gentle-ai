@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
@@ -984,6 +986,12 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Engram is registered for Claude Code, so the claude_auto_allow check applies;
+	// seed settings.json with the server-level allow rules so it passes.
+	allowSeed := `{"permissions":{"allow":["mcp__engram","mcp__plugin_engram_engram"]}}`
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(allowSeed), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	configPath := writeDoctorEngramConfig(t, homeDir, "engram", []string{"mcp", "--tools=agent"})
 
 	lookPathFn = func(name string) (string, error) {
@@ -1019,9 +1027,10 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
   [ok]  installed:asset_version        no installed binary version recorded in state file — check skipped
   [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake for persisted configuration: %s
+  [ok]  engram:claude_auto_allow       Engram's memory-write tools are allowlisted for Claude Code auto mode
   [ok]  disk:space                     1024 MB free on %s filesystem
 
-Summary: 8 passed, 0 failed, 0 warnings
+Summary: 9 passed, 0 failed, 0 warnings
 Status:  healthy
 `, configPath, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {
@@ -1805,5 +1814,177 @@ func TestCheckEngramReachable_PiWithUnconfiguredMCPAgentWarns(t *testing.T) {
 	}
 	if got.Remedy == nil {
 		t.Fatal("expected sync remedy when a non-Pi agent lacks Engram MCP")
+	}
+}
+
+// --- checkEngramClaudeAutoAllow ---
+
+func TestCheckEngramClaudeAutoAllow_NotClaudeCodePasses(t *testing.T) {
+	got := checkEngramClaudeAutoAllow(t.TempDir(), []string{"opencode"}, []model.ComponentID{model.ComponentEngram})
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("status = %q, detail = %q; want pass when Claude Code is not installed", got.Status, got.Detail)
+	}
+	if got.Remedy != nil {
+		t.Fatalf("remedy = %+v; want none when inapplicable", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_EngramNotConfiguredPasses(t *testing.T) {
+	got := checkEngramClaudeAutoAllow(t.TempDir(), []string{"claude-code"}, []model.ComponentID{model.ComponentPersona})
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("status = %q, detail = %q; want pass when Engram is not a configured component", got.Status, got.Detail)
+	}
+	if got.Remedy != nil {
+		t.Fatalf("remedy = %+v; want none when inapplicable", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_RulesPresentPasses(t *testing.T) {
+	home := t.TempDir()
+	if _, err := permissions.EnsureEngramClaudeAutoAllowRules(home); err != nil {
+		t.Fatalf("EnsureEngramClaudeAutoAllowRules() error = %v", err)
+	}
+
+	got := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentEngram})
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("status = %q, detail = %q; want pass once the allow rules are present", got.Status, got.Detail)
+	}
+	if got.Remedy != nil {
+		t.Fatalf("remedy = %+v; want none once the allow rules are present", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_RulesMissingWarns(t *testing.T) {
+	got := checkEngramClaudeAutoAllow(t.TempDir(), []string{"claude-code"}, []model.ComponentID{model.ComponentEngram})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("status = %q, detail = %q; want warn when the allow rules are missing", got.Status, got.Detail)
+	}
+	if got.Remedy == nil {
+		t.Fatal("expected a remedy when the allow rules are missing")
+	}
+	if got.Remedy.ID != doctor.RemedySync {
+		t.Fatalf("remedy = %+v; want RemedySync since sync rewrites the allow rules", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_PartiallyCoveredSettingsWarns(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Only the plain engram server is allowlisted; the plugin-prefixed
+	// server's tools are still missing.
+	if err := os.WriteFile(path, []byte(`{"permissions":{"allow":["mcp__engram"]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentEngram})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("status = %q, detail = %q; want warn when only one server is covered", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "plugin_engram_engram") {
+		t.Fatalf("detail = %q; want it to mention a still-missing plugin_engram_engram rule", got.Detail)
+	}
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedySync {
+		t.Fatalf("remedy = %+v; want RemedySync since at least one rule is genuinely missing", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_RestrictedByDenyWarnsWithoutSyncRemedy(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Every candidate rule is covered by one deny entry per server — nothing
+	// missing, but Claude Code evaluates deny before allow, so the tools stay
+	// blocked regardless.
+	seed := `{"permissions":{"deny":["mcp__engram","mcp__plugin_engram_engram"]}}`
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentEngram})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("status = %q, detail = %q; want warn when every rule is restricted by deny, not allowed", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "ask or deny") {
+		t.Fatalf("detail = %q; want it to explain the restriction", got.Detail)
+	}
+	if got.Remedy != nil {
+		t.Fatalf("remedy = %+v; want none: sync will not touch an explicit deny entry", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_UnparseableSettingsWarnsWithoutSyncRemedy(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`not valid json at all`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentEngram})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("status = %q, detail = %q; want warn when settings.json cannot be parsed", got.Status, got.Detail)
+	}
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedyInspectEngram {
+		t.Fatalf("remedy = %+v; want RemedyInspectEngram: sync leaves unparseable settings.json untouched, so RemedySync would be a dead end", got.Remedy)
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_IncompatibleShapeWarnsWithoutSyncRemedy(t *testing.T) {
+	for _, seed := range []string{`{"permissions":"x"}`, `{"permissions":{"allow":"x"}}`} {
+		t.Run(seed, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			got := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentEngram})
+
+			if got.Status != CheckStatusWarn {
+				t.Fatalf("status = %q, detail = %q; want warn", got.Status, got.Detail)
+			}
+			if got.Remedy == nil || got.Remedy.ID != doctor.RemedyInspectEngram {
+				t.Fatalf("remedy = %+v; want RemedyInspectEngram: sync refuses this shape without writing, so RemedySync would be a dead end", got.Remedy)
+			}
+		})
+	}
+}
+
+func TestCheckEngramClaudeAutoAllow_ApplicableViaPersistedMCPServerWithoutComponent(t *testing.T) {
+	home := t.TempDir()
+	// Engram is registered in Claude Code's own MCP config but was never
+	// selected as a gentle-ai component (e.g. added only as another
+	// component's SDD dependency) — components-only detection would miss it.
+	userConfig := filepath.Join(home, ".claude.json")
+	if err := os.WriteFile(userConfig, []byte(`{"mcpServers":{"engram":{"command":"engram"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentPersona})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("status = %q, detail = %q; want warn (the allow rules are missing) now that the persisted MCP server makes this applicable", got.Status, got.Detail)
+	}
+	// sync always selects the Engram step, so a plain sync does repair this
+	// (see TestRunSyncRepairsEngramAllowRulesForPersistedMCPRegistration).
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedySync {
+		t.Fatalf("remedy = %+v; want RemedySync", got.Remedy)
 	}
 }
