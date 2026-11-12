@@ -561,6 +561,11 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 		for _, path := range antigravityrules.ManagedPaths(s.homeDir) {
 			backupTargets[path] = struct{}{}
 		}
+		if s.workspaceDir != "" && s.workspaceDir != s.homeDir {
+			for _, path := range antigravityrules.ManagedPaths(s.workspaceDir) {
+				backupTargets[path] = struct{}{}
+			}
+		}
 	}
 	if retireLegacyAntigravity {
 		backupTargets[antigravityrules.LegacyPromptPath(s.homeDir)] = struct{}{}
@@ -855,11 +860,24 @@ func isPathWithinDir(dir, path string) bool {
 // file retires every owned rule. A complete removal also strips the sections
 // older releases appended to GEMINI.md.
 func (s *Service) publishAntigravityRules(result *Result, retireLegacy bool) error {
-	published, err := antigravityrules.Publish(s.homeDir)
+	published, err := antigravityrules.Publish(s.homeDir, antigravityrules.WithWorkspaceScope(false))
 	if err != nil {
 		return err
 	}
 	files := published.Files
+	if s.workspaceDir != "" && s.workspaceDir != s.homeDir {
+		wsPublished, err := antigravityrules.Publish(s.workspaceDir, antigravityrules.WithWorkspaceScope(true))
+		if err != nil {
+			return err
+		}
+		files = append(files, wsPublished.Files...)
+		if retireLegacy {
+			wsStagingDir := filepath.Dir(antigravityrules.StagingPath(s.workspaceDir))
+			if err := os.Remove(wsStagingDir); err == nil {
+				result.RemovedDirectories = append(result.RemovedDirectories, wsStagingDir)
+			}
+		}
+	}
 	if retireLegacy {
 		migrated, err := antigravityrules.MigrateLegacyPrompt(s.homeDir, antigravityrules.GeminiCLIManaged(s.homeDir, nil))
 		if err != nil {
@@ -1132,6 +1150,15 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 				updated, personaChanged := removeManagedPersonaPreamble(updated)
 				return updated, sectionsChanged || personaChanged
 			}))
+			if s.workspaceDir != "" && s.workspaceDir != s.homeDir && adapter.Agent() == model.AgentAntigravity {
+				wsPath := adapter.SystemPromptFile(s.workspaceDir)
+				targets = append(targets, wsPath)
+				ops = append(ops, rewriteMarkdownFile(wsPath, func(content string) (string, bool) {
+					updated, sectionsChanged := removeMarkdownSections(content, "persona")
+					updated, personaChanged := removeManagedPersonaPreamble(updated)
+					return updated, sectionsChanged || personaChanged
+				}))
+			}
 		}
 		if adapter.SupportsOutputStyles() {
 			path := filepath.Join(adapter.OutputStyleDir(homeDir), "gentleman.md")
@@ -1190,6 +1217,13 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, rewriteMarkdownFile(path, func(content string) (string, bool) {
 				return removeMarkdownSections(content, "engram-protocol")
 			}))
+			if s.workspaceDir != "" && s.workspaceDir != s.homeDir && adapter.Agent() == model.AgentAntigravity {
+				wsPath := adapter.SystemPromptFile(s.workspaceDir)
+				targets = append(targets, wsPath)
+				ops = append(ops, rewriteMarkdownFile(wsPath, func(content string) (string, bool) {
+					return removeMarkdownSections(content, "engram-protocol")
+				}))
+			}
 		}
 	case model.ComponentPermission:
 		for _, path := range settingsTargets(homeDir, adapter) {
