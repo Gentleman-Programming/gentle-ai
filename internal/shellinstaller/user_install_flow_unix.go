@@ -1040,6 +1040,27 @@ func userVerifyGlobalAction(ctx context.Context, root, prefix, agent, finalPrefi
 	return nil
 }
 
+// userReprovisionGlobal re-runs the canonical acquisition against the live
+// installation. It is only invoked after the launch drift probe decides the
+// installed graph no longer matches its recorded seal; the provisioner then
+// re-acquires the recorded lock from the registry, re-materializes the prefix
+// and re-writes the graph seal. The ordinary verify stays the launch gate.
+func userReprovisionGlobal(ctx context.Context, root string, manifest userManifest) error {
+	if err := userProvisionAssets(ctx, root, false); err != nil {
+		return err
+	}
+	helper := filepath.Join(root, "provision.mjs")
+	ctx, cancel := context.WithTimeout(ctx, userUnixProvisionBound)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/bin/node"), helper, root, manifest.Prefix, manifest.Agent, manifest.Prefix, root, manifest.Mode, "reprovision")
+	cmd.Dir, cmd.Env = filepath.Join(root, "project"), userEnvironment(root, manifest.Prefix, manifest.Agent)
+	output, err := userOwnedRun(ctx, cmd, cancel)
+	if err != nil {
+		return fmt.Errorf("%w; bounded output: %s", err, output)
+	}
+	return nil
+}
+
 func userNativeReadback(ctx context.Context, root string) error {
 	if _, err := privateDirectory(root); err != nil {
 		return err
@@ -1316,6 +1337,110 @@ func userRootRiskBannerUID(stderr io.Writer, uid int) {
 	_, _ = fmt.Fprintln(stderr, "WARNING: running as root; the private installation sandbox (capability drop, NoNewPrivileges, delegated unit limits) is disabled for this root-risk installation")
 }
 
+// userLaunchSealRead reads a small installer-owned JSON file with the same
+// physical custody discipline as the strict verifier, bounded to 1 MiB. The
+// drift probe only decides whether to re-provision; the strict verify stays
+// the final authority on the installed graph.
+func userLaunchSealRead(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	before, err := privatePhysical(path)
+	if err != nil {
+		return nil, err
+	}
+	if before.Size() > 1<<20 {
+		return nil, fmt.Errorf("seal %q exceeds the read bound", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	after, err := privatePhysical(path)
+	if err != nil || !os.SameFile(before, after) || privateStamp(before) != privateStamp(after) || int64(len(data)) != before.Size() {
+		return nil, errors.New("seal changed during read")
+	}
+	return data, nil
+}
+
+// userLaunchInstalledPiVersion returns the installed pi-coding-agent version
+// recorded by its own package.json, or ok=false when the read is inconclusive.
+func userLaunchInstalledPiVersion(ctx context.Context, prefix string) (version string, ok bool) {
+	data, err := userLaunchSealRead(ctx, filepath.Join(prefix, "lib/node_modules/@earendil-works/pi-coding-agent/package.json"))
+	if err != nil {
+		return "", false
+	}
+	var metadata struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(data, &metadata) != nil || metadata.Name != "@earendil-works/pi-coding-agent" || metadata.Version == "" {
+		return "", false
+	}
+	return metadata.Version, true
+}
+
+// userLaunchRecordedPiVersion returns the pi-coding-agent version sealed in the
+// installation's global graph, or ok=false when the seal is absent or malformed.
+func userLaunchRecordedPiVersion(ctx context.Context, root string) (version string, ok bool) {
+	data, err := userLaunchSealRead(ctx, filepath.Join(root, "state/global-graph.json"))
+	if err != nil {
+		return "", false
+	}
+	var observed []struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(data, &observed) != nil {
+		return "", false
+	}
+	for _, entry := range observed {
+		if entry.Name == "@earendil-works/pi-coding-agent" && entry.Version != "" {
+			return entry.Version, true
+		}
+	}
+	return "", false
+}
+
+// userLaunchGlobalDrift reports whether the installed pi-coding-agent version
+// no longer matches the recorded graph seal. Any read/parse failure leaves the
+// probe unknown (false) so the strict verify keeps its refusal.
+func userLaunchGlobalDrift(ctx context.Context, root, prefix string) bool {
+	installed, ok := userLaunchInstalledPiVersion(ctx, prefix)
+	if !ok {
+		return false
+	}
+	recorded, ok := userLaunchRecordedPiVersion(ctx, root)
+	if !ok {
+		return false
+	}
+	return installed != recorded
+}
+
+// userLaunchSeams let the launch repair sequence be observed without executing
+// Node or hitting the registry; production values run the real verifier and the
+// real canonical acquisition.
+var (
+	userLaunchVerify      = userVerifyInstalledGlobal
+	userLaunchReprovision = userReprovisionGlobal
+)
+
+// userLaunchPrepare runs the pre-exec verification for a stock launch,
+// re-provisioning the canonical acquisition first when the installed graph has
+// drifted (issue #5812). Main SDK installs verify through userReadManifest and
+// never reach this path.
+func userLaunchPrepare(ctx context.Context, root string, manifest userManifest) error {
+	if userLaunchGlobalDrift(ctx, root, manifest.Prefix) {
+		if err := userLaunchReprovision(ctx, root, manifest); err != nil {
+			return userGraphRepairError(root, manifest.Mode, err)
+		}
+	}
+	if err := userLaunchVerify(ctx, root, manifest); err != nil {
+		return userGraphRepairError(root, manifest.Mode, err)
+	}
+	return nil
+}
+
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	userRootRiskBanner(stderr)
 	ctx = userEngramLaunchScope(ctx, root, args)
@@ -1332,10 +1457,12 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	// stat/read operations ran since; re-running the provisioner here doubled
 	// every launch's verification cost while leaving the unverified window at
 	// least as wide as the one it closed. Stock-only installs keep their single
-	// pre-exec verification, which only this call performs.
+	// pre-exec verification, which only this call performs. A Pi self-update
+	// that rewrote the authenticated prefix is re-provisioned from the registry
+	// before that verification (issue #5812), never repaired inside verify.
 	if manifest.MainSDK == nil {
-		if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
-			return userGraphRepairError(root, manifest.Mode, err)
+		if err := userLaunchPrepare(ctx, root, manifest); err != nil {
+			return err
 		}
 	}
 	// S23/M1: a tree without a staged reviewed list keeps its supplier files

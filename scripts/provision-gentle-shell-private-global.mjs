@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 const [root, prefix, agent, finalPrefix, finalRoot, mode, requestedAction = 'install', recoveryAuthority] = process.argv.slice(2);
 const preparing = requestedAction === 'prepare-prior';
 const action = preparing ? 'install' : requestedAction;
+const reprovision = action === 'reprovision';
 const selectingSDK = action === 'select-main-sdk-package';
 const verifyingSelectedSDK = action === 'verify-main-sdk-selected';
 // Both launch-time verifications read the whole installed graph; the receipt
@@ -184,7 +185,7 @@ function writeExclusive(absolute, bytes, permissions = 0o600) {
 for (const value of [root, prefix, agent, finalPrefix, finalRoot]) {
   if (typeof value !== 'string' || !/^\/[A-Za-z0-9_./-]+$/.test(value) || path.resolve(value) !== value) reject('unsafe selection');
 }
-if (process.argv.length !== (requestedAction === 'restore' ? 10 : 9) || !['separate', 'shared', 'agent'].includes(mode) || !['install', 'verify', 'restore', 'prepare-prior', ...mainActions].includes(requestedAction) || uid === 0) reject('arguments or UID');
+if (process.argv.length !== (requestedAction === 'restore' ? 10 : 9) || !['separate', 'shared', 'agent'].includes(mode) || !['install', 'verify', 'reprovision', 'restore', 'prepare-prior', ...mainActions].includes(requestedAction) || uid === 0) reject('arguments or UID');
 physical(root, true);
 const state = path.join(root, 'state');
 physical(state, true);
@@ -350,6 +351,11 @@ if (action === 'restore') {
   // against its frozen lock as before, with supplier authentication enforced
   // at the Go launch boundary against the embedded list entry (S23/M1).
   const frozenLock = prior || reviewed === null;
+  // A drifted self-update is repaired only through the modern generated route
+  // (issue #5812): the frozen prior/legacy route has no staged reviewed list
+  // and its re-acquisition would restore the historical lock instead of the
+  // channel the install recorded.
+  if (reprovision && frozenLock) reject('reprovision requires the modern reviewed route');
   const versionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
   // Every per-package canonical-URL/SRI gate, shared by the frozen and the
   // generated lock route. The refusal slugs name the route that produced
@@ -403,12 +409,23 @@ if (action === 'restore') {
     // channel is the contract — resolve the lock at install time, and complete
     // its SRI records like the Windows provisioner. The resolved gentle-pi is
     // the install; no re-resolution ever rewrites it.
-    if (action === 'install') {
+    if (action === 'install' || reprovision) {
       physical(agent, true);
-      snapshot(preparing);
-      for (const directory of [cache, source]) {
-        absent(directory);
-        fs.mkdirSync(directory, { mode: 0o700 });
+      if (!reprovision) snapshot(preparing);
+      if (reprovision) {
+        // A drifted self-update is accepted by re-resolving the channel from
+        // scratch: preserve the prior acquisition as uncertain evidence, then
+        // rebuild runtime/project so the resolved lock and closure are fresh.
+        const previous = path.join(root, 'runtime', `.project-reprovision-${crypto.randomUUID()}`);
+        absent(previous);
+        fs.renameSync(source, previous);
+        sync(path.dirname(source));
+        fs.mkdirSync(source, { mode: 0o700 });
+      } else {
+        for (const directory of [cache, source]) {
+          absent(directory);
+          fs.mkdirSync(directory, { mode: 0o700 });
+        }
       }
       writeExclusive(path.join(source, 'package.json'), `${JSON.stringify(rootDeclaration('latest'))}\n`);
       stockNpm(['install', '--package-lock-only', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
@@ -462,9 +479,12 @@ if (action === 'restore') {
     else if (listed.integrity !== pins['gentle-pi'][1]) console.error(`global provision advisory: gentle-pi@${pins['gentle-pi'][0]} lock SRI differs from its reviewed entry; installing the channel resolution`);
   }
   if (frozenLock && !read(lockPath).equals(lockBytes)) reject('selected frozen lock differs');
-  if (action === 'install') {
+  if (action === 'install' || reprovision) {
     // The generated route resolves nothing new at ci time, so it mirrors the
     // Windows flags; the frozen prior route keeps its conservative profile.
+    // A reprovision re-runs this exact clean re-acquisition against the lock
+    // it just re-resolved above: registry tarballs only, never the drifted
+    // local prefix bytes.
     stockNpm(frozenLock
       ? ['ci', '--install-strategy=shallow', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=3', '--registry=https://registry.npmjs.org/']
       : ['ci', '--ignore-scripts', '--engine-strict', '--no-audit', '--no-fund', '--min-release-age=0', '--registry=https://registry.npmjs.org/']);
@@ -480,7 +500,7 @@ if (action === 'restore') {
   // Darwin arm64 has no libc family: like npm, any libc rule makes a record inapplicable there.
   const platform = process.platform === 'darwin' ? { os: 'darwin', cpu: 'arm64', libc: null } : { os: 'linux', cpu: 'x64', libc: 'glibc' };
   const applicable = record => [matches(record.os, platform.os), matches(record.cpu, platform.cpu), matches(record.libc, platform.libc)].every(Boolean);
-  if (action === 'install') {
+  if (action === 'install' || reprovision) {
     const actual = [];
     function acquiredPackages(directory) {
       physical(directory, true);
@@ -758,9 +778,12 @@ if (action === 'restore') {
     sync(parent);
     stockNpm(['rebuild', '--global', '--prefix', prefix, '--offline', '--ignore-scripts', '--bin-links=true', '--engine-strict', '--no-audit', '--no-fund'], source, 180000);
   }
-  if (action === 'install') {
+  if (action === 'install' || reprovision) {
     nativeState();
-    if (mode === 'shared' && !preparing) packages(modules);
+    // A reprovision is only reached after drift detection: the live prefix is
+    // expected to differ, so the shared pre-materialize walk (which refuses
+    // that exact drift) is skipped. The fresh prefix is re-walked below.
+    if (mode === 'shared' && !preparing && !reprovision) packages(modules);
     observed.length = 0;
     materializeGlobal();
   }
@@ -872,6 +895,14 @@ if (action === 'restore') {
     fs.renameSync(stage, settingsPath);
     sync(agent); // Complete settings publication before persisting its graph witness.
     writeExclusive(path.join(state, 'global-graph.json'), `${JSON.stringify(observed)}\n`);
+  } else if (reprovision) {
+    // The graph seal already exists (that is the drift the launch probe saw):
+    // replace it atomically after the fresh acquisition, without touching the
+    // settings declarations the following verify re-checks.
+    const stage = path.join(state, `.global-graph-reprovision-${crypto.randomUUID()}`);
+    writeExclusive(stage, `${JSON.stringify(observed)}\n`);
+    fs.renameSync(stage, graphPath);
+    sync(path.dirname(graphPath));
   } else {
     const selectedPackageRoot = verifyingSelectedSDK ? mainPackageRoot : packageRoot;
     const declaration = settings.packages?.some(entry => (typeof entry === 'string' ? entry : entry?.source) === selectedPackageRoot);
