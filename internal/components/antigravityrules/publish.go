@@ -1,6 +1,7 @@
 package antigravityrules
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -235,10 +236,11 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 
 		if isWorkspace {
 			if isManagedConfigLink || isLegacyGeminiLink {
-				original := ""
-				if raw, err := os.ReadFile(agentsPath); err == nil {
-					original = string(raw)
+				raw, err := os.ReadFile(agentsPath)
+				if err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("read %q: %w", agentsPath, err)
 				}
+				original := string(raw)
 
 				updated := reconcileAgentsMDContent(original, staging, baseDir, options)
 				if strings.TrimSpace(updated) == "" {
@@ -409,6 +411,20 @@ func replaceSymlinkWithRegularFile(path string, content []byte, perm os.FileMode
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("replace symlink with regular file %q: %w", path, err)
 	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("verify regular file replacement %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("replace symlink with regular file %q: destination is not a regular file", path)
+	}
+	readBack, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("verify regular file replacement %q: %w", path, err)
+	}
+	if !bytes.Equal(readBack, content) {
+		return fmt.Errorf("replace symlink with regular file %q: content mismatch after rename", path)
+	}
 	return nil
 }
 
@@ -424,6 +440,13 @@ func replaceSymlink(symlinkPath string, target string) error {
 
 	if err := os.Rename(tmpLink, symlinkPath); err != nil {
 		return fmt.Errorf("replace symlink %q: %w", symlinkPath, err)
+	}
+	got, err := os.Readlink(symlinkPath)
+	if err != nil {
+		return fmt.Errorf("verify symlink replacement %q: %w", symlinkPath, err)
+	}
+	if got != target {
+		return fmt.Errorf("replace symlink %q: link does not point to %q (got %q)", symlinkPath, target, got)
 	}
 	return nil
 }

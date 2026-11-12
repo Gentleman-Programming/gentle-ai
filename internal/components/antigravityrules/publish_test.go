@@ -519,3 +519,75 @@ func TestPublishPreservesOpenClawSectionsWhenOpenClawIsManaged(t *testing.T) {
 		t.Fatalf("expected OpenClaw agent-routing preserved, got:\n%s", content)
 	}
 }
+
+func TestPublishWorkspaceSymlinkReadErrorPropagates(t *testing.T) {
+	workspace := t.TempDir()
+	agentsPath := antigravityrules.AgentsMDPath(workspace)
+	configPath := antigravityrules.ConfigAgentsMDPath(workspace)
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	writeFile(t, configPath, "# Protected config\n")
+	if err := os.Chmod(configPath, 0o000); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(configPath, 0o644)
+	})
+	if _, err := os.ReadFile(configPath); err == nil {
+		t.Skip("current process can read mode-0000 files; skipping permission error test")
+	}
+
+	if err := os.Symlink(filepath.Join(".gemini", "config", "AGENTS.md"), agentsPath); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Workspace persona.\n")
+	writeFile(t, antigravityrules.StagingPath(workspace), staging)
+
+	_, err := antigravityrules.Publish(workspace, antigravityrules.WithWorkspaceScope(true))
+	if err == nil {
+		t.Fatal("expected Publish() error when owned symlink target is unreadable, got nil")
+	}
+
+	info, lstatErr := os.Lstat(agentsPath)
+	if lstatErr != nil {
+		t.Fatalf("Lstat() error = %v", lstatErr)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected symlink preserved on read error, got mode=%v", info.Mode())
+	}
+}
+
+func TestPublishWorkspaceDanglingOwnedSymlinkConvertsToRegularFile(t *testing.T) {
+	workspace := t.TempDir()
+	agentsPath := antigravityrules.AgentsMDPath(workspace)
+
+	if err := os.Symlink(filepath.Join(".gemini", "config", "AGENTS.md"), agentsPath); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Workspace persona.\n")
+	writeFile(t, antigravityrules.StagingPath(workspace), staging)
+
+	result, err := antigravityrules.Publish(workspace, antigravityrules.WithWorkspaceScope(true))
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	info, err := os.Lstat(agentsPath)
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("expected regular file after converting dangling owned symlink, mode=%v", info.Mode())
+	}
+	content := readFile(t, agentsPath)
+	if !strings.Contains(content, "Workspace persona.") {
+		t.Fatalf("expected staged persona written, got:\n%s", content)
+	}
+}
