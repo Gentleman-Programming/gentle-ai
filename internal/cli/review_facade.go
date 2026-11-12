@@ -1358,6 +1358,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							request, requestErr := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.State.CapturePhaseRevision)
 							if requestErr != nil {
 								artifactErr = requestErr
+								if errors.Is(requestErr, reviewtransaction.ErrCorrectionPlanRequestUnbuildable) {
+									if eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(ctx, root, native.LineageID); err == nil {
+										correctionReleaseEligibility = &eligibility
+									}
+								}
 							} else {
 								correctionRequest = &request
 							}

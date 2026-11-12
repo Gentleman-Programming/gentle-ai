@@ -87,7 +87,7 @@ A `stop` ends its transition, never approves delivery. Complete atomic inventory
 | `captured_artifacts_unverifiable` | Terminal — maintainer inspects B authority, or `D`. |
 | `captured_result_selection_unavailable` | Terminal — maintainer inspects lineage, or `D`. |
 | `missing_authority_binding` | Terminal — file a bounded defect with lineage, or `D`. |
-| `correction_request_unavailable` | Terminal — valid authority, but no correction plan request can be built (invalid budget or non-actionable finding); this lineage cannot be corrected. File a bounded defect with lineage, or `D`. |
+| `correction_request_unavailable` | Valid authority cannot build a correction request (invalid frozen budget or non-actionable finding). If eligible, the stop's `continuation` names the manual release command (`gentle-ai review abandon --cwd <B>`); obtain its binding template and explicit maintainer authorization, never invent authorization or abandon automatically. Release neither corrects nor approves the lineage; its forecast remains terminal. Without a continuation, stop and report the defect with the lineage. |
 | `corrupted_or_unverifiable_authority`, `manual_intervention_required`, `native_stop_required` | Terminal — maintainer inspects authority/lineage, or `D`. |
 | `empty_base_diff_bootstrap_required` | Terminal — authorized empty-root bootstrap for a new target, or `D`. |
 | `lens_context_budget_exceeded` | Terminal — reduce B scope and start a new transaction, or `D`. |

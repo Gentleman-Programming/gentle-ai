@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -74,19 +73,21 @@ func TestStatusReportsUnbuildableCorrectionRequestTruthfully(t *testing.T) {
 	}
 
 	status := negotiatedReviewStatusForLineage(t, repo, started.LineageID)
-	transition, err := json.Marshal(status.NextTransition)
-	if err != nil {
-		t.Fatal(err)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "correction_request_unavailable" {
+		t.Fatalf("next_transition = %#v, want correction_request_unavailable stop", status.NextTransition)
 	}
-	if want := `{"kind":"stop","reason_code":"correction_request_unavailable"}`; string(transition) != want {
-		t.Fatalf("next_transition = %s, want %s", transition, want)
+	eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(context.Background(), repo, started.LineageID)
+	if err != nil || !eligibility.Eligible {
+		t.Fatalf("fixture release eligibility = %#v, error = %v", eligibility, err)
+	}
+	if continuation := status.NextTransition.Continuation; continuation == nil || continuation.Operation != "abandon" || !strings.Contains(continuation.Detail, "--maintainer-authorization") {
+		t.Fatalf("eligible stop must offer authorization-aware manual release, got %#v", continuation)
 	}
 	if status.Forecast == nil || status.Forecast.Horizon != ForecastHorizonTerminal || len(status.Forecast.Steps) != 1 ||
 		status.Forecast.Steps[0].ReasonCode != "correction_request_unavailable" || status.ValidationRequest != nil {
 		t.Fatalf("forecast = %#v validation_request = %#v", status.Forecast, status.ValidationRequest)
 	}
-	// The stop invents no route: the authority is not repairable, and no
-	// recovery or other action is offered beside the stop.
+	// Manual release does not repair or approve the frozen authority.
 	if status.Repair.Status != reviewtransaction.AuthorityRepairUnsupported || status.Repair.Candidate != nil || status.Disposition != nil {
 		t.Fatalf("repair = %#v disposition = %#v, want the unsupported assessment every non-repairable authority reports", status.Repair, status.Disposition)
 	}
@@ -133,5 +134,37 @@ func TestCorrectionRequiredStopNamesOnlyAnUnbuildableRequest(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Eligibility is a read-only prediction, never permission to abandon.
+func TestUnavailableCorrectionReleaseRequiresEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		eligibility *reviewtransaction.CompactAbandonEligibility
+		want        bool
+	}{
+		{"unprobed or failed probe", nil, false},
+		{"ineligible", &reviewtransaction.CompactAbandonEligibility{}, false},
+		{"eligible", &reviewtransaction.CompactAbandonEligibility{Eligible: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status := ReviewTargetStatusResult{
+				Applicability:  reviewtransaction.TargetApplicabilityCurrent,
+				TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+				Authority:      &ReviewTargetStatusAuthority{LineageID: "release-prediction", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateCorrectionRequired},
+			}
+			status.repositoryRoot = "/review-release-repo"
+			got := newReviewNextTransition(status, nil, nil, reviewtransaction.ErrCorrectionPlanRequestUnbuildable, reviewNextTransitionInput{CorrectionReleaseEligibility: tc.eligibility})
+			if got.Kind != reviewNextTransitionStop || got.ReasonCode != "correction_request_unavailable" || (got.Continuation != nil) != tc.want {
+				t.Fatalf("transition = %#v, want manual release %v", got, tc.want)
+			}
+			if newReviewForecast(got).Horizon != ForecastHorizonTerminal {
+				t.Fatal("release must not make the frozen lineage resumable")
+			}
+			if tc.want && (got.Continuation.Operation != "abandon" || strings.Contains(got.Continuation.Command, "--maintainer-authorization")) {
+				t.Fatalf("must offer binding-template command, never invented authorization: %#v", got.Continuation)
+			}
+		})
 	}
 }
