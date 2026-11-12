@@ -26,7 +26,7 @@ const MaxRuleFileBytes = 24000
 // overflow to bare path pointers in its own order, which dropped the
 // orchestrator. On agy 1.4.12, 55,053 bytes of these rules stayed inline next
 // to a 242-byte GEMINI.md; this cap keeps headroom for a few user rules.
-const AlwaysOnBudgetBytes = 55000
+const AlwaysOnBudgetBytes = 54000
 
 // managedHeader makes a global rule load in every agy session.
 const (
