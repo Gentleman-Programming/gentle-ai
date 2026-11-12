@@ -2070,7 +2070,7 @@ func resolvedAgentContract(t *testing.T, path string) string {
 	if path != "opencode/agents/gentle-ai-verify.md" {
 		return body
 	}
-	for _, clause := range []string{"../skills/_shared/verify-method.md", "Read-only means no edits to the repository or its git state", "Do not delegate to child agents, commit, or push.", "Do not use review lenses. RDD review remains independent and parent-owned."} {
+	for _, clause := range []string{"~/.config/opencode/skills/_shared/verify-method.md", "Read-only means no edits to the repository or its git state", "Do not delegate to child agents, commit, or push.", "Do not use review lenses. RDD review remains independent and parent-owned."} {
 		if !strings.Contains(body, clause) {
 			t.Fatalf("verifier envelope missing %q", clause)
 		}
