@@ -4,8 +4,9 @@ import "github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 
 // ShellBackupsView is the complete render state of the Manage → Replaced
 // backups screen. Exactly one of Loading, Confirm, Working or Done is active;
-// otherwise the list (or its empty state) is rendered. Err carries the
-// preservation error shown on the result state.
+// otherwise the list (or its empty state) is rendered. LoadErr carries a
+// discovery failure and must render as an error, never as the empty list; Err
+// carries the preservation error shown on the result state.
 type ShellBackupsView struct {
 	Target  string
 	Mode    string
@@ -14,6 +15,7 @@ type ShellBackupsView struct {
 	Confirm bool
 	Working bool
 	Done    bool
+	LoadErr string
 	Err     string
 }
 

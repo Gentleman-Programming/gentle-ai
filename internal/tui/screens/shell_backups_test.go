@@ -28,18 +28,29 @@ func TestRenderShellBackups(t *testing.T) {
 		return view
 	}
 	tests := []struct {
-		name      string
-		view      ShellBackupsView
-		want      []string
-		noCleanup bool
+		name   string
+		view   ShellBackupsView
+		want   []string
+		forbid []string
 	}{
-		{"loading", mutate(func(v *ShellBackupsView) { v.Loading = true }), []string{"Loading replaced backups"}, false},
-		{"list", shellBackupsView(), []string{"Replaced backups", "install.replaced-20260101T110000Z", "install.replaced-20260101T120000Z", "Clean older backups"}, false},
-		{"empty", mutate(func(v *ShellBackupsView) { v.Backups = nil }), []string{"No replaced backups"}, true},
-		{"confirm", mutate(func(v *ShellBackupsView) { v.Confirm = true }), []string{"Clean older backups", "Back"}, false},
-		{"working", mutate(func(v *ShellBackupsView) { v.Working = true }), []string{"Working"}, false},
-		{"success", mutate(func(v *ShellBackupsView) { v.Done = true }), []string{"Older backups removed"}, false},
-		{"preservation error", mutate(func(v *ShellBackupsView) { v.Done = true; v.Err = "uncertain backup preserved" }), []string{"uncertain backup preserved"}, false},
+		{"loading", mutate(func(v *ShellBackupsView) { v.Loading = true }), []string{"Loading replaced backups"}, nil},
+		{"list", shellBackupsView(), []string{"Replaced backups", "install.replaced-20260101T110000Z", "install.replaced-20260101T120000Z", "Clean older backups"}, nil},
+		{"complete byte count", mutate(func(v *ShellBackupsView) {
+			v.Backups = []shellinstaller.UserReplacedBackup{
+				{Path: "/home/u/.local/share/gentle-shell/install.replaced-20260101T110000Z", Stamp: "20260101T110000Z", Bytes: 100, Complete: true},
+			}
+		}), []string{"20260101T110000Z", "100 B"}, nil},
+		{"incomplete lower bound", mutate(func(v *ShellBackupsView) {
+			v.Backups = []shellinstaller.UserReplacedBackup{
+				{Path: "/home/u/.local/share/gentle-shell/install.replaced-20260101T110000Z", Stamp: "20260101T110000Z", Bytes: 40, Complete: false},
+			}
+		}), []string{"20260101T110000Z", "≥ 40 B"}, nil},
+		{"empty", mutate(func(v *ShellBackupsView) { v.Backups = nil }), []string{"No replaced backups"}, []string{"Clean older backups"}},
+		{"confirm", mutate(func(v *ShellBackupsView) { v.Confirm = true }), []string{"Clean older backups", "Back"}, nil},
+		{"working", mutate(func(v *ShellBackupsView) { v.Working = true }), []string{"Working"}, nil},
+		{"success", mutate(func(v *ShellBackupsView) { v.Done = true }), []string{"Older backups removed"}, nil},
+		{"preservation error", mutate(func(v *ShellBackupsView) { v.Done = true; v.Err = "uncertain backup preserved" }), []string{"uncertain backup preserved"}, nil},
+		{"load error", mutate(func(v *ShellBackupsView) { v.LoadErr = "discovery failed"; v.Backups = nil }), []string{"discovery failed"}, []string{"No replaced backups", "Clean older backups"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -49,8 +60,10 @@ func TestRenderShellBackups(t *testing.T) {
 					t.Fatalf("lacks %q: %q", want, output)
 				}
 			}
-			if test.noCleanup && strings.Contains(output, "Clean older backups") {
-				t.Fatalf("offers cleanup: %q", output)
+			for _, forbid := range test.forbid {
+				if strings.Contains(output, forbid) {
+					t.Fatalf("contains %q: %q", forbid, output)
+				}
 			}
 		})
 	}

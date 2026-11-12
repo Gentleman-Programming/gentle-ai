@@ -125,3 +125,127 @@ func TestShellBackupsNonWindowsStub(t *testing.T) {
 		t.Fatal("non-Windows batch prune is not reported unsupported")
 	}
 }
+
+// (g) Enter on the Manage "Replaced backups" action enters the loading state
+// and returns a discovery command that yields shellBackupsLoaded.
+func TestShellManageReplacedBackupsActionEnter(t *testing.T) {
+	m := shellBackupsModel(t)
+	install := shellBackupsInstall()
+	m.shellManage = &shellManageState{install: install}
+	index := -1
+	for cursor, action := range manageActions(m.shellManage) {
+		if action == "Replaced backups" {
+			index = cursor
+		}
+	}
+	if index < 0 {
+		t.Fatalf("Manage actions lack %q: %v", "Replaced backups", manageActions(m.shellManage))
+	}
+	m.shellManage.cursor = index
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.shellManage == nil || m.shellManage.backups == nil || !m.shellManage.backups.loading {
+		t.Fatalf("Enter on %q did not enter loading: %+v", "Replaced backups", m.shellManage)
+	}
+	if cmd == nil {
+		t.Fatal("Enter on the replaced-backups action returned no discovery command")
+	}
+	msg := cmd()
+	if _, ok := msg.(shellBackupsLoaded); !ok {
+		t.Fatalf("discovery command yielded %T, want shellBackupsLoaded", msg)
+	}
+}
+
+// (h) Enter on the "Clean older backups" list action enters the confirmation
+// WITHOUT pruning: no prune command may be issued until the operator confirms.
+func TestShellBackupsCleanupEnterConfirmation(t *testing.T) {
+	m := shellBackupsModel(t)
+	install := shellBackupsInstall()
+	m.shellManage = &shellManageState{install: install, backups: &shellBackupsState{list: shellBackupsCandidates()}}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.shellManage == nil || m.shellManage.backups == nil || !m.shellManage.backups.confirm || m.shellManage.backups.working {
+		t.Fatalf("Enter on cleanup did not enter confirmation without working: %+v", m.shellManage)
+	}
+	if cmd != nil {
+		if _, ok := cmd().(shellBackupsPruned); ok {
+			t.Fatal("cleanup confirmation already issued a prune command")
+		}
+	}
+}
+
+// (i) Enter on the confirmed cleanup returns a prune command that yields
+// shellBackupsPruned carrying the preservation result.
+func TestShellBackupsConfirmEnterPrunes(t *testing.T) {
+	m := shellBackupsModel(t)
+	install := shellBackupsInstall()
+	m.shellManage = &shellManageState{install: install, backups: &shellBackupsState{list: shellBackupsCandidates(), confirm: true}}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.shellManage == nil || m.shellManage.backups == nil || !m.shellManage.backups.working {
+		t.Fatalf("confirmed cleanup did not start working: %+v", m.shellManage)
+	}
+	if cmd == nil {
+		t.Fatal("confirmed cleanup returned no prune command")
+	}
+	msg := cmd()
+	if _, ok := msg.(shellBackupsPruned); !ok {
+		t.Fatalf("prune command yielded %T, want shellBackupsPruned", msg)
+	}
+}
+
+// (j) While the prune is working, keys are suppressed: a second Enter must not
+// start another prune or mutate the in-flight state.
+func TestShellBackupsWorkingSuppressesKeys(t *testing.T) {
+	m := shellBackupsModel(t)
+	install := shellBackupsInstall()
+	m.shellManage = &shellManageState{install: install, backups: &shellBackupsState{list: shellBackupsCandidates(), working: true}}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.shellManage == nil || m.shellManage.backups == nil || !m.shellManage.backups.working {
+		t.Fatalf("working state was mutated by a key press: %+v", m.shellManage)
+	}
+	if cmd != nil {
+		if _, ok := cmd().(shellBackupsPruned); ok {
+			t.Fatal("double-enter issued a second prune command")
+		}
+	}
+}
+
+// (k) A failed discovery lands the load error on the state instead of a false
+// empty list, so the screen renders the error rather than "No replaced backups".
+func TestShellBackupsLoadError(t *testing.T) {
+	m := shellBackupsModel(t)
+	install := shellBackupsInstall()
+	m.shellManage = &shellManageState{install: install, backups: &shellBackupsState{loading: true}}
+	next, _ := m.Update(shellBackupsLoaded{err: errors.New("discovery failed")})
+	m = next.(Model)
+	if m.shellManage == nil || m.shellManage.backups == nil {
+		t.Fatalf("load error dropped the backups state: %+v", m.shellManage)
+	}
+	backups := m.shellManage.backups
+	if backups.loading {
+		t.Fatal("failed discovery left the loading state active")
+	}
+	if backups.err == nil || !strings.Contains(backups.err.Error(), "discovery failed") {
+		t.Fatalf("load error was not preserved: %v", backups.err)
+	}
+	if len(backups.list) != 0 {
+		t.Fatalf("failed discovery fabricated a list: %+v", backups.list)
+	}
+}
+
+// (l) The Manage view routes an active backups sub-flow to the replaced
+// backups screen rather than the Manage summary.
+func TestShellBackupsViewRoutesToScreen(t *testing.T) {
+	m := shellBackupsModel(t)
+	install := shellBackupsInstall()
+	m.shellManage = &shellManageState{install: install, backups: &shellBackupsState{list: shellBackupsCandidates()}}
+	output := m.View()
+	if !strings.Contains(output, "Replaced backups") {
+		t.Fatalf("Manage view did not route to the replaced-backups screen: %q", output)
+	}
+	if !strings.Contains(output, "install.replaced-20260101T110000Z") {
+		t.Fatalf("Manage view did not list the candidate: %q", output)
+	}
+}
