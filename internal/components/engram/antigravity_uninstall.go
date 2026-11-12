@@ -228,61 +228,26 @@ func resolveHomeDirFromPluginDir(pluginDir string) string {
 	return d
 }
 
-func isDefaultAntigravityEngramArgs(args any) bool {
-	switch v := args.(type) {
-	case []any:
-		if len(v) != 2 {
-			return false
-		}
-		a0, ok0 := v[0].(string)
-		a1, ok1 := v[1].(string)
-		return ok0 && ok1 && a0 == "mcp" && a1 == "--tools=agent"
-	case []string:
-		return len(v) == 2 && v[0] == "mcp" && v[1] == "--tools=agent"
-	default:
-		return false
-	}
-}
-
-func argsEqual(a, b any) bool {
-	toStrings := func(val any) ([]string, bool) {
-		switch s := val.(type) {
-		case []string:
-			return s, true
-		case []any:
-			res := make([]string, len(s))
-			for i, v := range s {
-				str, ok := v.(string)
-				if !ok {
-					return nil, false
-				}
-				res[i] = str
-			}
-			return res, true
-		default:
-			return nil, false
-		}
-	}
-	as, okA := toStrings(a)
-	bs, okB := toStrings(b)
-	if !okA || !okB {
-		return false
-	}
-	return slices.Equal(as, bs)
-}
-
-// migrateOrReconcilePluginMCP preserves customized MCP env, cwd, command, and args settings
+// migrateOrReconcilePluginMCP preserves customized MCP env, cwd, and command settings
 // from a plugin's mcp_config.json by migrating them to the global MCP config before retiring the manifest.
+// Canonical args ["mcp", "--tools=agent"] are enforced consistently across migration and Inject.
 // If conflicting settings exist in the global config or the file cannot be safely migrated,
 // it returns an error to stop retirement and prevent leaving the edited MCP file inactive.
 // On success, it returns the list of modified and removed paths.
 func migrateOrReconcilePluginMCP(homeDir, dir string) ([]string, error) {
 	pluginMCP := filepath.Join(dir, "mcp_config.json")
-	content, err := os.ReadFile(pluginMCP)
+	info, err := os.Lstat(pluginMCP)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+		return nil, fmt.Errorf("read plugin MCP config %q: %w", pluginMCP, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json is a symlink; plugin manifest preserved", dir)
+	}
+	content, err := os.ReadFile(pluginMCP)
+	if err != nil {
 		return nil, fmt.Errorf("read plugin MCP config %q: %w", pluginMCP, err)
 	}
 	if isManagedAntigravityPluginAsset("mcp_config.json", content) {
@@ -325,12 +290,8 @@ func migrateOrReconcilePluginMCP(homeDir, dir string) ([]string, error) {
 	if c, ok := pluginEngram["command"].(string); ok && c != "" {
 		customCmd = c
 	}
-	var customArgs []any
-	if a, ok := pluginEngram["args"].([]any); ok && !isDefaultAntigravityEngramArgs(a) {
-		customArgs = a
-	}
 
-	if customEnv == nil && customCwd == "" && (customCmd == "" || customCmd == "engram") && customArgs == nil {
+	if customEnv == nil && customCwd == "" && (customCmd == "" || customCmd == "engram") {
 		return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: mcp_config.json has customized settings; plugin manifest preserved", dir)
 	}
 
@@ -363,6 +324,7 @@ func migrateOrReconcilePluginMCP(homeDir, dir string) ([]string, error) {
 		}
 		globalServers["engram"] = globalEngram
 	}
+	globalEngram["args"] = []any{"mcp", "--tools=agent"}
 
 	// Check for env conflict without leaking env values in error messages (#5988).
 	if customEnv != nil {
@@ -401,17 +363,6 @@ func migrateOrReconcilePluginMCP(homeDir, dir string) ([]string, error) {
 		}
 	}
 
-	// Check for args conflict.
-	if customArgs != nil {
-		if gArgs, ok := globalEngram["args"]; ok && !isDefaultAntigravityEngramArgs(gArgs) {
-			if !argsEqual(gArgs, customArgs) {
-				return nil, fmt.Errorf("conflict retiring Antigravity plugin in %q: plugin args conflict with global args; plugin manifest preserved", dir)
-			}
-		} else {
-			globalEngram["args"] = customArgs
-		}
-	}
-
 	updatedJSON, err := json.MarshalIndent(globalRoot, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal updated global MCP config: %w", err)
@@ -421,7 +372,7 @@ func migrateOrReconcilePluginMCP(homeDir, dir string) ([]string, error) {
 		return nil, fmt.Errorf("create global config dir: %w", err)
 	}
 
-	targetMode := fs.FileMode(0o644)
+	targetMode := filemerge.ExistingFileMode(globalPath, 0o644)
 	if customEnv != nil {
 		targetMode = 0o600
 		if info, statErr := os.Stat(globalPath); statErr == nil {

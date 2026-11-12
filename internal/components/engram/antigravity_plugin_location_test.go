@@ -3,6 +3,7 @@ package engram
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -594,6 +595,9 @@ func TestRemoveManagedAntigravityPluginAssetReturnsReadErrorForUnreadableSibling
 	if err := os.WriteFile(mcpPath, []byte("{}"), 0o000); err != nil {
 		t.Fatalf("WriteFile(mcp_config.json) error = %v", err)
 	}
+	if _, err := os.ReadFile(mcpPath); err == nil {
+		t.Skip("skipping test: running as root/permission-bypass user that can read mode 0000 files")
+	}
 
 	removed, err := RemoveManagedAntigravityPluginAsset(pluginJSON)
 	if err == nil {
@@ -610,7 +614,7 @@ func TestRemoveManagedAntigravityPluginAssetReturnsReadErrorForUnreadableSibling
 	}
 }
 
-func TestRetireManagedAntigravityPluginsMigratesCustomArgs(t *testing.T) {
+func TestRetireManagedAntigravityPluginsNormalizesArgsToCanonicalDefaults(t *testing.T) {
 	home := t.TempDir()
 	pluginDir := AntigravityPluginDir(home)
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
@@ -623,7 +627,8 @@ func TestRetireManagedAntigravityPluginsMigratesCustomArgs(t *testing.T) {
   "mcpServers": {
     "engram": {
       "command": "engram",
-      "args": ["mcp", "--tools=custom", "--verbose"]
+      "args": ["mcp", "--tools=custom", "--verbose"],
+      "env": {"MIGRATED_ENV": "1"}
     }
   }
 }
@@ -657,23 +662,123 @@ func TestRetireManagedAntigravityPluginsMigratesCustomArgs(t *testing.T) {
 		t.Fatalf("RetireManagedAntigravityPlugins changed = %v, want globalMCP %q", changed, globalMCP)
 	}
 
-	// Verify migrated args.
+	// Verify migrated config preserves canonical default args.
 	data, err := os.ReadFile(globalMCP)
 	if err != nil {
 		t.Fatalf("ReadFile(globalMCP) error = %v", err)
 	}
 	var cfg struct {
 		MCPServers map[string]struct {
-			Args []string `json:"args"`
+			Args []string          `json:"args"`
+			Env  map[string]string `json:"env"`
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("Unmarshal error = %v", err)
 	}
 	server := cfg.MCPServers["engram"]
-	wantArgs := []string{"mcp", "--tools=custom", "--verbose"}
+	wantArgs := []string{"mcp", "--tools=agent"}
 	if !slices.Equal(server.Args, wantArgs) {
-		t.Fatalf("migrated args = %v, want %v", server.Args, wantArgs)
+		t.Fatalf("canonical args = %v, want %v", server.Args, wantArgs)
+	}
+	if server.Env["MIGRATED_ENV"] != "1" {
+		t.Fatalf("migrated env = %v, want MIGRATED_ENV=1", server.Env)
+	}
+}
+
+func TestInjectAntigravityIdempotentAcrossSuccessiveRuns(t *testing.T) {
+	home := t.TempDir()
+	binDir := t.TempDir()
+	customLauncher := filepath.Join(binDir, "custom-launcher")
+	if runtime.GOOS == "windows" {
+		customLauncher += ".exe"
+	}
+	if err := os.WriteFile(customLauncher, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", customLauncher, err)
+	}
+
+	pluginDir := AntigravityPluginDir(home)
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(antigravityEngramPluginJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin.json) error = %v", err)
+	}
+	pluginMCP := fmt.Sprintf(`{
+  "mcpServers": {
+    "engram": {
+      "command": %q,
+      "args": ["mcp", "--tools=agent"],
+      "env": {"CUSTOM_TOKEN": "secret123"}
+    }
+  }
+}
+`, customLauncher)
+	if err := os.WriteFile(filepath.Join(pluginDir, "mcp_config.json"), []byte(pluginMCP), 0o644); err != nil {
+		t.Fatalf("WriteFile(mcp_config.json) error = %v", err)
+	}
+
+	// First injection run: migrates plugin MCP to global and retires plugin.
+	if _, err := Inject(home, antigravityAdapter()); err != nil {
+		t.Fatalf("First Inject error = %v", err)
+	}
+
+	globalMCP := filepath.Join(home, antigravityGlobalMCPSuffix)
+	firstData, err := os.ReadFile(globalMCP)
+	if err != nil {
+		t.Fatalf("ReadFile after first Inject error = %v", err)
+	}
+
+	var firstCfg struct {
+		MCPServers map[string]struct {
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Env     map[string]string `json:"env"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(firstData, &firstCfg); err != nil {
+		t.Fatalf("Unmarshal first data error = %v", err)
+	}
+	s1 := firstCfg.MCPServers["engram"]
+	if s1.Command != customLauncher {
+		t.Fatalf("first run command = %q, want %q", s1.Command, customLauncher)
+	}
+	if !slices.Equal(s1.Args, []string{"mcp", "--tools=agent"}) {
+		t.Fatalf("first run args = %v, want [mcp --tools=agent]", s1.Args)
+	}
+	if s1.Env["CUSTOM_TOKEN"] != "secret123" {
+		t.Fatalf("first run env = %v, want CUSTOM_TOKEN=secret123", s1.Env)
+	}
+
+	// Second injection run: must be idempotent and keep exact same config.
+	if _, err := Inject(home, antigravityAdapter()); err != nil {
+		t.Fatalf("Second Inject error = %v", err)
+	}
+
+	secondData, err := os.ReadFile(globalMCP)
+	if err != nil {
+		t.Fatalf("ReadFile after second Inject error = %v", err)
+	}
+
+	var secondCfg struct {
+		MCPServers map[string]struct {
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Env     map[string]string `json:"env"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(secondData, &secondCfg); err != nil {
+		t.Fatalf("Unmarshal second data error = %v", err)
+	}
+	s2 := secondCfg.MCPServers["engram"]
+	if s2.Command != customLauncher {
+		t.Fatalf("second run command = %q, want %q", s2.Command, customLauncher)
+	}
+	if !slices.Equal(s2.Args, []string{"mcp", "--tools=agent"}) {
+		t.Fatalf("second run args = %v, want [mcp --tools=agent]", s2.Args)
+	}
+	if s2.Env["CUSTOM_TOKEN"] != "secret123" {
+		t.Fatalf("second run env = %v, want CUSTOM_TOKEN=secret123", s2.Env)
 	}
 }
 
@@ -782,6 +887,10 @@ func TestRetireManagedAntigravityPluginsRedactsEnvValuesInConflictError(t *testi
 }
 
 func TestRetireManagedAntigravityPluginsDoesNotConflictOnDefaultEngramCommand(t *testing.T) {
+	origResolves := engramCommandResolves
+	engramCommandResolves = func(cmd string) bool { return true }
+	t.Cleanup(func() { engramCommandResolves = origResolves })
+
 	home := t.TempDir()
 	pluginDir := AntigravityPluginDir(home)
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
@@ -823,5 +932,117 @@ func TestRetireManagedAntigravityPluginsDoesNotConflictOnDefaultEngramCommand(t 
 
 	if _, err := RetireManagedAntigravityPlugins(home); err != nil {
 		t.Fatalf("RetireManagedAntigravityPlugins error = %v, want success (engram vs /usr/local/bin/engram is not conflict)", err)
+	}
+
+	raw, err := os.ReadFile(globalMCP)
+	if err != nil {
+		t.Fatalf("ReadFile(globalMCP) error = %v", err)
+	}
+	var root struct {
+		MCPServers map[string]struct {
+			Command string            `json:"command"`
+			Env     map[string]string `json:"env"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("Unmarshal(globalMCP) error = %v", err)
+	}
+	server := root.MCPServers["engram"]
+	if server.Command != "/usr/local/bin/engram" {
+		t.Fatalf("global command = %q, want /usr/local/bin/engram", server.Command)
+	}
+	if server.Env["CUSTOM_ENV"] != "1" {
+		t.Fatalf("CUSTOM_ENV = %q, want 1", server.Env["CUSTOM_ENV"])
+	}
+}
+
+func TestRetireManagedAntigravityPluginsPreservesExistingRestrictedGlobalMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission checks rely on POSIX mode bits")
+	}
+	home := t.TempDir()
+	pluginDir := AntigravityPluginDir(home)
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), []byte(antigravityEngramPluginJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin.json) error = %v", err)
+	}
+	// Plugin with custom cwd only (no secrets/env).
+	pluginMCP := `{
+  "mcpServers": {
+    "engram": {
+      "command": "engram",
+      "args": ["mcp", "--tools=agent"],
+      "cwd": "/custom/plugin/cwd"
+    }
+  }
+}
+`
+	if err := os.WriteFile(filepath.Join(pluginDir, "mcp_config.json"), []byte(pluginMCP), 0o644); err != nil {
+		t.Fatalf("WriteFile(mcp_config.json) error = %v", err)
+	}
+
+	globalMCP := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	if err := os.MkdirAll(filepath.Dir(globalMCP), 0o755); err != nil {
+		t.Fatalf("MkdirAll(global) error = %v", err)
+	}
+	// Existing global config has restrictive 0600 mode.
+	if err := os.WriteFile(globalMCP, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(global) error = %v", err)
+	}
+
+	if _, err := RetireManagedAntigravityPlugins(home); err != nil {
+		t.Fatalf("RetireManagedAntigravityPlugins error = %v", err)
+	}
+
+	info, err := os.Stat(globalMCP)
+	if err != nil {
+		t.Fatalf("Stat(globalMCP) error = %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("globalMCP mode = %04o, want 0600 (must not widen to 0644)", perm)
+	}
+}
+
+func TestRetireManagedAntigravityPluginsStopsOnSymlinkMCP(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require admin privileges on Windows")
+	}
+	home := t.TempDir()
+	pluginDir := AntigravityPluginDir(home)
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	pluginJSON := filepath.Join(pluginDir, "plugin.json")
+	if err := os.WriteFile(pluginJSON, []byte(antigravityEngramPluginJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile(plugin.json) error = %v", err)
+	}
+
+	targetDir := t.TempDir()
+	targetFile := filepath.Join(targetDir, "custom_mcp.json")
+	if err := os.WriteFile(targetFile, []byte(`{"mcpServers":{"engram":{"command":"engram","args":["mcp"]}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(targetFile) error = %v", err)
+	}
+
+	symlinkMCP := filepath.Join(pluginDir, "mcp_config.json")
+	if err := os.Symlink(targetFile, symlinkMCP); err != nil {
+		t.Fatalf("Symlink error = %v", err)
+	}
+
+	_, err := RetireManagedAntigravityPlugins(home)
+	if err == nil {
+		t.Fatalf("RetireManagedAntigravityPlugins should fail on symlink mcp_config.json")
+	}
+	if !strings.Contains(err.Error(), "mcp_config.json is a symlink; plugin manifest preserved") {
+		t.Fatalf("error = %v, want 'mcp_config.json is a symlink; plugin manifest preserved'", err)
+	}
+
+	// Verify both symlink and plugin.json are preserved.
+	if _, err := os.Lstat(symlinkMCP); err != nil {
+		t.Fatalf("symlink must be preserved: %v", err)
+	}
+	if _, err := os.Stat(pluginJSON); err != nil {
+		t.Fatalf("plugin.json must be preserved: %v", err)
 	}
 }
