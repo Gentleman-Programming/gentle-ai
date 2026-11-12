@@ -522,10 +522,10 @@ func TestUserWindowsPruneReplacedBackupsBestEffort(t *testing.T) {
 	userWindowsRetentionAssertWhole(t, destination, "the active destination")
 }
 
-// (e) Clock-skew retention compares the full latest candidate name against the
-// bare keep timestamp, so a destination base that sorts below '2' (for example
-// "1install") orders the future candidate before the keep and deletes it. The
-// exact keep and the future latest candidate must both survive.
+// (e) Clock-skew retention compares canonical timestamps, never destination
+// names. A destination base that sorts below '2' (for example "1install")
+// regresses this if the full latest name is compared with the bare keep stamp.
+// The exact keep and the future latest candidate must both survive.
 func TestUserWindowsPruneReplacedBackupsClockSkewSortingBase(t *testing.T) {
 	root := t.TempDir()
 	if err := userWindowsPrivate(root); err != nil {
