@@ -1,6 +1,7 @@
 package antigravityrules_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -523,23 +524,23 @@ func TestPublishPreservesOpenClawSectionsWhenOpenClawIsManaged(t *testing.T) {
 func TestPublishWorkspaceSymlinkReadErrorPropagates(t *testing.T) {
 	workspace := t.TempDir()
 	agentsPath := antigravityrules.AgentsMDPath(workspace)
-	configPath := antigravityrules.ConfigAgentsMDPath(workspace)
+	legacyPath := antigravityrules.LegacyPromptPath(workspace)
 
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	writeFile(t, configPath, "# Protected config\n")
-	if err := os.Chmod(configPath, 0o000); err != nil {
+	writeFile(t, legacyPath, "# Protected legacy prompt\n")
+	if err := os.Chmod(legacyPath, 0o000); err != nil {
 		t.Fatalf("Chmod() error = %v", err)
 	}
 	t.Cleanup(func() {
-		_ = os.Chmod(configPath, 0o644)
+		_ = os.Chmod(legacyPath, 0o644)
 	})
-	if _, err := os.ReadFile(configPath); err == nil {
+	if _, err := os.ReadFile(legacyPath); err == nil {
 		t.Skip("current process can read mode-0000 files; skipping permission error test")
 	}
 
-	if err := os.Symlink(filepath.Join(".gemini", "config", "AGENTS.md"), agentsPath); err != nil {
+	if err := os.Symlink(filepath.Join(".gemini", "GEMINI.md"), agentsPath); err != nil {
 		t.Fatalf("Symlink() error = %v", err)
 	}
 
@@ -549,6 +550,9 @@ func TestPublishWorkspaceSymlinkReadErrorPropagates(t *testing.T) {
 	_, err := antigravityrules.Publish(workspace, antigravityrules.WithWorkspaceScope(true))
 	if err == nil {
 		t.Fatal("expected Publish() error when owned symlink target is unreadable, got nil")
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("expected permission error from reading %q, got: %v", agentsPath, err)
 	}
 
 	info, lstatErr := os.Lstat(agentsPath)
@@ -564,7 +568,7 @@ func TestPublishWorkspaceDanglingOwnedSymlinkConvertsToRegularFile(t *testing.T)
 	workspace := t.TempDir()
 	agentsPath := antigravityrules.AgentsMDPath(workspace)
 
-	if err := os.Symlink(filepath.Join(".gemini", "config", "AGENTS.md"), agentsPath); err != nil {
+	if err := os.Symlink(filepath.Join(".gemini", "GEMINI.md"), agentsPath); err != nil {
 		t.Fatalf("Symlink() error = %v", err)
 	}
 
