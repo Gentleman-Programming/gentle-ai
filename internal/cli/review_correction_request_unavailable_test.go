@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -73,6 +75,67 @@ func TestStatusReportsUnbuildableCorrectionRequestTruthfully(t *testing.T) {
 	}
 
 	status := negotiatedReviewStatusForLineage(t, repo, started.LineageID)
+	payload, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("v9 whole envelope", func(t *testing.T) {
+		schema := compileWholeNativeStatusSchema(t, "status-v9.schema.json")
+		validatePublishedReviewSchema(t, schema, payload)
+		for _, reason := range []string{"correction_request_unavailable", reviewCorrectionContextBudgetCode} {
+			for _, mutation := range []string{"absent", "wrong reason", "non-stop", "extra", "wrong operation", "missing detail", "blank detail", "multiline", "authorization"} {
+				t.Run(reason+"/"+mutation, func(t *testing.T) {
+					var doc map[string]any
+					if err := json.Unmarshal(payload, &doc); err != nil {
+						t.Fatal(err)
+					}
+					tr := doc["next_transition"].(map[string]any)
+					tr["reason_code"] = reason
+					c := tr["continuation"].(map[string]any)
+					switch mutation {
+					case "absent":
+						delete(tr, "continuation")
+					case "wrong reason":
+						tr["reason_code"] = "manual_intervention_required"
+					case "non-stop":
+						tr["kind"] = "execute"
+					case "extra":
+						c["stale_assets"] = []any{}
+					case "wrong operation":
+						c["operation"] = "sync"
+					case "missing detail":
+						delete(c, "detail")
+					case "blank detail":
+						c["detail"] = "  "
+					case "multiline":
+						c["command"] = c["command"].(string) + "\n"
+					case "authorization":
+						c["command"] = c["command"].(string) + " --maintainer-authorization invented"
+					}
+					err := schema.Validate(doc)
+					if mutation == "absent" && err != nil {
+						t.Fatal(err)
+					}
+					if mutation != "absent" && err == nil {
+						t.Fatal("invalid continuation accepted")
+					}
+				})
+			}
+		}
+	})
+	t.Run("frozen v1", func(t *testing.T) {
+		var output bytes.Buffer
+		if err := RunReview([]string{"status", "--cwd", repo, "--contract", "gentle-ai.review-integration/v1", "--next-transition", "--lineage", started.LineageID}, &output); err != nil {
+			t.Fatal(err)
+		}
+		var legacy ReviewTargetStatusResult
+		if err := json.Unmarshal(output.Bytes(), &legacy); err != nil {
+			t.Fatal(err)
+		}
+		if legacy.NextTransition == nil || legacy.NextTransition.ReasonCode != "correction_request_unavailable" || legacy.NextTransition.Continuation != nil {
+			t.Fatalf("frozen v1 must retain a compatible stop: %#v", legacy.NextTransition)
+		}
+	})
 	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "correction_request_unavailable" {
 		t.Fatalf("next_transition = %#v, want correction_request_unavailable stop", status.NextTransition)
 	}

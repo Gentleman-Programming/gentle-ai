@@ -741,6 +741,7 @@ func TestOverBudgetCorrectionStopCarriesTheReleaseContinuation(t *testing.T) {
 	}, &status); err != nil {
 		t.Fatalf("status on the over-budget correction failed: %v\n%s", err, status.String())
 	}
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), status.Bytes())
 	var parsed struct {
 		NextTransition struct {
 			Kind         string `json:"kind"`

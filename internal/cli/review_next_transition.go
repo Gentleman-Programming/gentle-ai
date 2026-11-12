@@ -199,6 +199,12 @@ type ReviewTransitionArtifact struct {
 
 func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, artifactErr error, input reviewNextTransitionInput) ReviewNextTransition {
 	transition := resolveReviewNextTransition(status, selectedLenses, artifacts, artifactErr, input)
+	// The frozen v1 STATUS shape has no correction-release continuation.
+	// Preserve its stop without widening that published schema.
+	if input.Contract == "gentle-ai.review-integration/v1" &&
+		(transition.ReasonCode == "correction_request_unavailable" || transition.ReasonCode == reviewCorrectionContextBudgetCode) {
+		transition.Continuation = nil
+	}
 	// Gate only active capture offers; recovery, acknowledgement, and existing
 	// stops retain their routing. Freshness never changes the bound authority.
 	if status.Applicability == reviewtransaction.TargetApplicabilityCurrent && status.Authority != nil && transition.Collect != nil {
