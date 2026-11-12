@@ -65,8 +65,27 @@ func AdvisoryFindings(state CompactState) []AdvisoryFinding {
 	if err != nil {
 		return nil
 	}
+	selected := nonBlockingFindingsOf(view)
+	if len(selected) == 0 {
+		return nil
+	}
+	advisory := make([]AdvisoryFinding, len(selected))
+	for index, finding := range selected {
+		advisory[index] = AdvisoryFinding{
+			ID: finding.ID, Lens: finding.Lens, Location: finding.Location,
+			Severity: finding.Severity, Disposition: finding.Disposition,
+		}
+	}
+	return advisory
+}
+
+// nonBlockingFindingsOf is the one selection both projections share: every
+// admitted finding outside the view's FixFindingIDs whose recorded outcome
+// advisoryDisposition names, sorted by finding ID. An inconclusive or
+// corroborated severe finding is never selected.
+func nonBlockingFindingsOf(view CompactReviewView) []NonBlockingFinding {
 	corrected := stringSet(view.FixFindingIDs)
-	advisory := make([]AdvisoryFinding, 0, len(view.Findings))
+	selected := make([]NonBlockingFinding, 0, len(view.Findings))
 	for _, finding := range view.Findings {
 		if _, blocked := corrected[finding.ID]; blocked {
 			continue
@@ -75,16 +94,37 @@ func AdvisoryFindings(state CompactState) []AdvisoryFinding {
 		if !ok {
 			continue
 		}
-		advisory = append(advisory, AdvisoryFinding{
+		selected = append(selected, NonBlockingFinding{
 			ID: finding.ID, Lens: finding.Lens, Location: finding.Location,
-			Severity: finding.Severity, Disposition: disposition,
+			Severity: finding.Severity, Disposition: disposition, Claim: finding.Claim,
 		})
 	}
-	if len(advisory) == 0 {
-		return nil
-	}
-	sort.Slice(advisory, func(left, right int) bool { return advisory[left].ID < advisory[right].ID })
-	return advisory
+	sort.Slice(selected, func(left, right int) bool { return selected[left].ID < selected[right].ID })
+	return selected
+}
+
+// NonBlockingStatement explains the non-blocking findings of a review that
+// stopped in correction_required or escalated. It never says the review
+// passed: the findings to correct and the unresolved findings travel
+// elsewhere, and none of them is listed here.
+const NonBlockingStatement = "Every finding listed here is non-blocking: it is not a finding to correct and not an unresolved finding that stopped this review, and it needs no correction in this review. A `follow_up` finding is separate later work; a `refuted` finding needs none."
+
+// NonBlockingFinding is one non-blocking finding of a stopped review, with the
+// reviewer's admitted claim text. The claim is data for the reader; nothing
+// routes on it.
+type NonBlockingFinding struct {
+	ID          string              `json:"id"`
+	Lens        string              `json:"lens,omitempty"`
+	Location    string              `json:"location,omitempty"`
+	Severity    string              `json:"severity"`
+	Disposition AdvisoryDisposition `json:"disposition"`
+	Claim       string              `json:"claim"`
+}
+
+// NonBlockingFindingSet pairs the findings with their statement.
+type NonBlockingFindingSet struct {
+	Statement string               `json:"statement"`
+	Findings  []NonBlockingFinding `json:"findings"`
 }
 
 // AdvisoryFindingSetFor pairs the projection with its statement, or reports
