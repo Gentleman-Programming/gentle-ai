@@ -465,17 +465,17 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			"`under_budget` stays pending in the slice until a later commit reaches the budget",
 			"`already_reviewed` means this exact range is already covered by terminal authority",
 		}},
-		// S14: commit per reviewable slice; a high-risk commit is reviewed
-		// alone only after the open medium slice before it is closed.
-		{"a high-risk unit closes the open slice first", []string{
-			"When a high-risk unit follows pending `under_budget` commits, close the open slice first, assessing and reviewing it as the slice, so the high-risk commit is then reviewed alone against the new boundary",
+		// A task boundary must preserve the provider's due decision and must not
+		// turn an unreviewed pending slice into a reviewed boundary.
+		{"a high-risk boundary preserves the provider due decision", []string{
+			"When a high-risk unit follows pending `under_budget` commits, assess the open slice first. Review the pending slice only when `review_due` is true or the user explicitly asks; otherwise preserve the pending boundary and proceed without starting review. A task boundary neither authorizes review nor advances a reviewed boundary",
 		}},
 		// S14: commit per reviewable slice; a commit may hold several tasks,
 		// so the assessment outcome is recorded per commit.
 		{"boundaries advance and outcomes are recorded per commit", []string{
 			"The first boundary is the branch point, and every reviewed boundary becomes the next base",
 			"Record per commit the assessed tier and outcome: granted, declined, passive, under budget, already reviewed, or unavailable",
-			"An unavailable or failed assessment never lowers the tier: treat the commit as due and run the preflight STATUS with `--base-ref <last reviewed boundary> --committed-only`",
+			"An unavailable or failed assessment never lowers the tier: report the missing assessment proof; never infer `review_due` or construct a preflight transition",
 			"Never infer low risk from a failed assessment",
 		}},
 	}
