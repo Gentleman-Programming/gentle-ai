@@ -26,7 +26,7 @@ func reviewStatusNonBlockingFindings(ctx context.Context, root string, native re
 		return nil, fmt.Errorf("read review lineage for non-blocking findings: %w", err)
 	}
 	if record.Revision != native.Revision {
-		return nil, fmt.Errorf("review lineage %s changed while STATUS read it; rerun the same STATUS", native.LineageID)
+		return nil, fmt.Errorf("review lineage %s changed while STATUS read it; rerun the same gentle-ai review status command with unchanged arguments", native.LineageID)
 	}
 	return reviewtransaction.NonBlockingFindingSetFor(record.State), nil
 }
