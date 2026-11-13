@@ -1,6 +1,8 @@
 package opencodeagents
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -27,6 +29,10 @@ func TestShapeVerifierOwnership(t *testing.T) {
 	legacy, _ := Entry(parity[1])
 	if legacy["prompt"], err = legacyVerifyPrompt(cur["prompt"].(string)); err != nil || legacy["prompt"].(string) != prereq {
 		t.Fatalf("legacy derivation drifted from prerequisite: %v", err)
+	}
+	// 3132b5bc6 installed this prompt; an asset edit that changes it must fail ownership.
+	if sum := fmt.Sprintf("%x", sha256.Sum256([]byte(prereq))); sum != "9e3cca49a957c420aafc482114300fb6bf6558ab556f72bfc300dac216d5b9a3" {
+		t.Fatalf("pre-refactor verifier prompt changed: %s", sum)
 	}
 	mod, _ := Entry(parity[1])
 	mod["prompt"] = strings.Replace(cur["prompt"].(string), "You", "We", 1)
