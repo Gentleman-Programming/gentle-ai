@@ -107,3 +107,13 @@ cosas a arreglar de gentle ai para codex: `[features].multi_agent` is deprecated
 - Fixture correction `49cf16996` exposed a conflict with the baseline already updated on current main `5e4227bf02cdf13de874fce17049b4a910300d33`. Integrated that main without rewriting the feature branch. The only conflict was the generated baseline JSON; other files merged automatically.
 - Regenerated from the integrated working tree, starting with main's baseline. The complete Linux matrix reproduced RED, then the official `-update` path, focused rerun and full Linux `agentguidance` suite all passed. Exactly the Codex row differs from current main; the other 22 variants and embedded review-contract measurements are unchanged.
 - The PR remains pending CI and automatic merge. No production behavior change was added by the snapshot correction.
+
+
+### L13 — Dead-code check correction during monitoring, 2026-11-13
+
+- User: "monitorea". The next CI execution passed unit tests, benchmark build/vet/tests and evidence, all required E2E jobs, and policy checks. The Unit Tests job failed its later dead-code ratchet, not its unit-test step.
+- The five new unreachable symbols were obsolete private Claude-only wrappers: `commitOrchestratorCore`, `commitObservedOrchestratorCore`, `commitPreparedOrchestratorCore`, `orchestratorCorePaths`, and `claudeGlobalModuleLedger`. CodeGraph identified only four test call sites for the first two; production already uses the generalized helpers.
+- Removed the five wrappers and updated the four test calls to pass the existing fixture core path to the unchanged generalized helpers. Preserved transaction/rollback behavior and comments. No exception was added to `.deadcode-baseline.txt`.
+- Observed the exact five-symbol RED using the CI-pinned `deadcode@v0.30.0` analyzer targeting Linux/amd64. After cleanup, the same normalized comparison reports zero new unreachable functions. Native macOS analysis also reports unrelated platform-only entries, so it is not claimed as a Linux-equivalent pass.
+- Focused transaction tests, the complete Linux `agentguidance` suite, Go format and diff checks passed. Risk: none for removal of unreachable private wrappers and equivalent test call rewiring; live helper implementations and public contracts are unchanged.
+- Push the correction and continue monitoring the already-authorized automatic merge. Do not bypass failed required checks.

@@ -64,7 +64,7 @@ func (f coreTransactionFixture) mergedCore() string { return f.merge(coreTransac
 
 func TestOrchestratorCoreTransactionPublishesCoreThenFinalizesModules(t *testing.T) {
 	f := newCoreTransactionFixture(t)
-	result, err := commitObservedOrchestratorCore(f.configDir, f.merge, f.bundle.modules, func() error {
+	result, err := commitObservedOrchestratorCoreAt(f.configDir, f.corePath, f.merge, f.bundle.modules, func() error {
 		// The new core is published while the old ledger and the unused
 		// module it may still reference stay in place.
 		assertModuleFile(t, f.corePath, f.mergedCore(), 0o600)
@@ -95,7 +95,7 @@ func TestOrchestratorCoreTransactionPublishesCoreThenFinalizesModules(t *testing
 func TestOrchestratorCoreTransactionRestoresCoreThenModules(t *testing.T) {
 	f := newCoreTransactionFixture(t)
 	before := snapshotModuleTree(t, f.configDir)
-	result, err := commitObservedOrchestratorCore(f.configDir, f.merge, f.bundle.modules, func() error {
+	result, err := commitObservedOrchestratorCoreAt(f.configDir, f.corePath, f.merge, f.bundle.modules, func() error {
 		assertModuleFile(t, f.corePath, f.mergedCore(), 0o600)
 		return errCoreTransactionInjected
 	})
@@ -110,7 +110,7 @@ func TestOrchestratorCoreTransactionRestoresCoreThenModules(t *testing.T) {
 func TestOrchestratorCoreTransactionKeepsModulesWhenCoreRestoreConflicts(t *testing.T) {
 	f := newCoreTransactionFixture(t)
 	const userEdit = "user edit during install\n"
-	result, err := commitObservedOrchestratorCore(f.configDir, f.merge, f.bundle.modules, func() error {
+	result, err := commitObservedOrchestratorCoreAt(f.configDir, f.corePath, f.merge, f.bundle.modules, func() error {
 		if err := os.WriteFile(f.corePath, []byte(userEdit), 0o600); err != nil {
 			t.Fatal(err)
 		}

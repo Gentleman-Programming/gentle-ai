@@ -49,7 +49,7 @@ func globalModulePaths(homeDir string, agent model.AgentID) ([]string, error) {
 //
 // It runs the install transaction with nothing referenced, so the monolith is
 // published before any module is removed and a failure restores the core
-// before any module; the same limits apply (see commitOrchestratorCore).
+// before any module; the same limits apply (see commitOrchestratorCoreAt).
 func RetireClaudeGlobalModules(homeDir string, contract ReviewContractSource) (Result, error) {
 	return retireGlobalModules(homeDir, model.AgentClaudeCode, contract)
 }
@@ -73,13 +73,6 @@ func retireGlobalModules(homeDir string, agent model.AgentID, contract ReviewCon
 	return commitPreparedOrchestratorCoreAt(configDir, corePath, merge, func() (*orchestratorModuleInstall, error) {
 		return prepareOrchestratorModuleRemoval(configDir)
 	}, func() error { return nil })
-}
-
-// claudeGlobalModuleLedger resolves the absolute Claude config directory under
-// homeDir and reports whether anything exists at its module ledger path.
-func claudeGlobalModuleLedger(homeDir string) (configDir string, present bool, err error) {
-	configDir, _, present, err = globalModuleLedger(homeDir, model.AgentClaudeCode)
-	return configDir, present, err
 }
 
 func globalModuleLedger(homeDir string, agent model.AgentID) (configDir, corePath string, present bool, err error) {
