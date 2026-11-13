@@ -257,8 +257,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "decline preserves ordinary delivery", text: "The result carries no lineage or receipt; ordinary delivery is unmanaged by the candidate choice, and the next candidate asks again."},
 		{name: "native negotiated status re-entry", text: "re-enter through native negotiated STATUS, then resume the already-held consumer continuation"},
 		{name: "continue paths reuse exact decline", text: "Both continue choices execute that exact captured decline invocation exactly once"},
-		{name: "review mode disable prohibition", text: "Do not invoke `gentle-ai review mode disable` at clone or global scope within this handoff."},
-		{name: "rdd mode preservation", text: "Do not turn RDD off or on within this handoff."},
+		{name: "review mode disable prohibition yields to explicit user request", text: "Unless the user explicitly asks, do not invoke `gentle-ai review mode disable` at clone or global scope or turn RDD off or on within this handoff."},
 		{name: "stop choice", text: "**Stop here**: Perform no GitHub operation and no decline invocation; preserve all consumer state and STOP."},
 		{name: "observed evidence", text: "Report observed evidence, not an unconfirmed root cause"},
 		{name: "sanitized diagnostics", text: "sanitized version/build, OS/architecture/client"},
@@ -288,6 +287,16 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 	semanticChoicePattern := regexp.MustCompile(`(?m)^[ \t]+[0-9]+\. \*\*[^*]+\*\*:`)
 	for _, path := range allPaths {
 		t.Run(path, func(t *testing.T) {
+			// An explicit user request to stop RDD must win over the handoff rule
+			// anywhere in the orchestrator, so the unscoped prohibition may not survive.
+			for _, unscoped := range []string{
+				"Do not invoke `gentle-ai review mode disable` at clone or global scope within this handoff.",
+				"Do not turn RDD off or on within this handoff.",
+			} {
+				if strings.Contains(MustRead(path), unscoped) {
+					t.Errorf("%s keeps the unscoped prohibition %q; an explicit user request must win", path, unscoped)
+				}
+			}
 			contract := providerDefectHandoffSection(t, path)
 			// Runtime-specific examples of client-owned failures may differ;
 			// the classification rule and the subsequent consent flow may not.
