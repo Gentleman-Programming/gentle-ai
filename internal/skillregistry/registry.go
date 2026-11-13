@@ -1,16 +1,13 @@
 package skillregistry
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
-	"encoding/json"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
@@ -19,7 +16,6 @@ import (
 const (
 	RegistryRelPath = ".atl/skill-registry.md"
 	CacheRelPath    = ".atl/.skill-registry.cache.json"
-	RegistrySchema  = 5
 	sectionMarker   = "## Skills"
 	atlIgnoreEntry  = ".atl/"
 )
@@ -53,10 +49,6 @@ type Result struct {
 	Reason      string
 	Registry    string
 	Cache       string
-}
-
-type cacheFile struct {
-	Fingerprint string `json:"fingerprint"`
 }
 
 // Keep these source roots in sync with the gentle-pi skill-registry extension.
@@ -99,6 +91,7 @@ func ProjectSkillDirs(cwd string) []string {
 		filepath.Join(cwd, ".opencode", "skills"),
 		filepath.Join(cwd, ".claude", "skills"),
 		filepath.Join(cwd, ".gemini", "skills"),
+		filepath.Join(cwd, ".trae", "skills"),
 		filepath.Join(cwd, ".cursor", "skills"),
 		filepath.Join(cwd, ".github", "skills"),
 		filepath.Join(cwd, ".codex", "skills"),
@@ -116,85 +109,76 @@ func ProjectSkillDirs(cwd string) []string {
 }
 
 func Regenerate(cwd, home string, force bool) (Result, error) {
-	cwd = filepath.Clean(cwd)
-	home = filepath.Clean(home)
-
-	existingDirs := uniqueExistingDirs(append(ProjectSkillDirs(cwd), UserSkillDirs(home)...))
-	files, err := findAllSkillFiles(existingDirs)
+	cwd, err := filepath.Abs(cwd)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("resolve cwd: %w", err)
 	}
-
-	registryPath := filepath.Join(cwd, RegistryRelPath)
-	cachePath := filepath.Join(cwd, CacheRelPath)
-	fp := Fingerprint(files)
-	cached := readCachedFingerprint(cachePath)
-	if !force && cached == fp && fileExists(registryPath) {
-		return Result{Regenerated: false, Reason: "cache-hit", Registry: registryPath, Cache: cachePath}, nil
+	home, err = filepath.Abs(home)
+	if err != nil {
+		return Result{}, fmt.Errorf("resolve home: %w", err)
 	}
-
-	entries := make([]SkillEntry, 0, len(files))
-	for _, file := range files {
-		entry, ok := LoadSkill(file)
-		if ok {
-			entries = append(entries, entry)
-		}
-	}
-	entries = dedupeBySkillName(entries, cwd)
-
-	sources := make([]string, 0, len(existingDirs))
-	for _, dir := range existingDirs {
-		rel, err := filepath.Rel(cwd, dir)
-		if err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+	// Force remains an accepted deliberate refresh; every refresh now scans and
+	// compares rendered bytes, so it does not rewrite an identical registry.
+	_ = force
+	dirs, entries := discover(cwd, home)
+	sources := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if rel, ok := relativeWithin(cwd, dir); ok {
 			sources = append(sources, rel)
-		} else if err == nil && rel == "." {
-			sources = append(sources, ".")
 		} else {
 			sources = append(sources, dir)
 		}
 	}
 
+	registryPath := filepath.Join(cwd, RegistryRelPath)
+	cachePath := filepath.Join(cwd, CacheRelPath)
 	if err := os.MkdirAll(filepath.Join(cwd, ".atl"), 0o755); err != nil {
 		return Result{}, fmt.Errorf("create .atl directory: %w", err)
 	}
-	md := RenderRegistry(cwd, sources, entries)
-	if _, err := filemerge.WriteFileAtomic(registryPath, []byte(md), 0o644); err != nil {
+	registryBytes := []byte(RenderRegistry(cwd, sources, entries))
+	written, err := filemerge.WriteFileAtomic(registryPath, registryBytes, 0o644)
+	if err != nil {
 		return Result{}, fmt.Errorf("write registry: %w", err)
 	}
-	cacheBytes, err := json.MarshalIndent(cacheFile{Fingerprint: fp}, "", "  ")
-	if err != nil {
-		return Result{}, err
-	}
-	cacheBytes = append(cacheBytes, '\n')
+	// This is a derived hint, never an authority for skipping a disk scan or
+	// registry comparison. Publish it only after the registry; the pair is not
+	// atomic, and the next refresh repairs any mismatch.
+	sum := sha256.Sum256(registryBytes)
+	cacheBytes := []byte(fmt.Sprintf("{\"schema\":1,\"registry_sha256\":\"%x\"}\n", sum))
 	if _, err := filemerge.WriteFileAtomic(cachePath, cacheBytes, 0o644); err != nil {
 		return Result{}, fmt.Errorf("write registry cache: %w", err)
 	}
-
-	reason := "fingerprint-changed"
-	if force {
-		reason = "forced"
+	reason := "unchanged"
+	if written.Changed {
+		reason = "content-changed"
 	}
-	return Result{Regenerated: true, SkillCount: len(entries), Reason: reason, Registry: registryPath, Cache: cachePath}, nil
+	return Result{Regenerated: written.Changed, SkillCount: len(entries), Reason: reason, Registry: registryPath, Cache: cachePath}, nil
 }
 
-// List resolves the deduplicated, sorted set of skills that Regenerate would
-// index, without writing the registry, cache, or .gitignore. It is the
-// read-only inspection path behind `gentle-ai skill-registry list`.
+// List resolves the same disk winners as Regenerate without writing files.
 func List(cwd, home string) []SkillEntry {
-	cwd = filepath.Clean(cwd)
-	home = filepath.Clean(home)
-	existingDirs := uniqueExistingDirs(append(ProjectSkillDirs(cwd), UserSkillDirs(home)...))
-	files, err := findAllSkillFiles(existingDirs)
+	cwd, err := filepath.Abs(cwd)
 	if err != nil {
 		return nil
 	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		return nil
+	}
+	_, entries := discover(cwd, home)
+	return entries
+}
+
+func discover(cwd, home string) ([]string, []SkillEntry) {
+	dirs := uniqueExistingDirs(append(ProjectSkillDirs(cwd), UserSkillDirs(home)...))
+	files := findAllSkillFiles(dirs)
 	entries := make([]SkillEntry, 0, len(files))
 	for _, file := range files {
 		if entry, ok := LoadSkill(file); ok {
 			entries = append(entries, entry)
 		}
 	}
-	return dedupeBySkillName(entries, cwd)
+	return dirs, dedupeBySkillName(entries, cwd)
 }
 
 func EnsureATLIgnored(cwd string) error {
@@ -226,28 +210,6 @@ func EnsureATLIgnored(cwd string) error {
 	return nil
 }
 
-func Fingerprint(files []string) string {
-	lines := make([]string, 0, len(files)+1)
-	lines = append(lines, fmt.Sprintf("schema:%d", RegistrySchema))
-	for _, file := range files {
-		info, err := os.Stat(file)
-		if err != nil {
-			lines = append(lines, file+":missing")
-			continue
-		}
-		data, err := os.ReadFile(file)
-		if err != nil {
-			lines = append(lines, file+":unreadable")
-			continue
-		}
-		contentSum := sha1.Sum(data)
-		lines = append(lines, fmt.Sprintf("%s:%d:%d:%x", file, info.ModTime().UnixNano(), info.Size(), contentSum))
-	}
-	sort.Strings(lines)
-	sum := sha1.Sum([]byte(strings.Join(lines, "\n")))
-	return hex.EncodeToString(sum[:])
-}
-
 func LoadSkill(file string) (SkillEntry, bool) {
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -267,14 +229,13 @@ func RenderRegistry(cwd string, sources []string, entries []SkillEntry) string {
 	projectName := filepath.Base(cwd)
 	var lines []string
 	lines = append(lines, "# Skill Registry — "+projectName, "")
-	lines = append(lines, "<!-- Auto-generated by gentle-ai skill-registry refresh. Run `gentle-ai skill-registry refresh --force` to regenerate. -->", "")
-	lines = append(lines, "Last updated: "+time.Now().UTC().Format("2006-01-02"), "")
+	lines = append(lines, "<!-- Shared disk skill registry; generated by Gentle Shell or Gentle AI. -->", "")
 	lines = append(lines, "## Sources scanned", "")
 	for _, src := range sources {
 		lines = append(lines, "- "+src)
 	}
 	lines = append(lines, "", "## Contract", "")
-	lines = append(lines, "**Delegator use only.** This registry is an index, not a summary. Any agent that launches subagents reads it to select relevant skills, then passes exact `SKILL.md` paths for the subagent to read before work.", "")
+	lines = append(lines, "**Delegator use only.** This disk index is not a summary and excludes session-only runtime skills. Pi delegators use their effective session view; other delegators use these rows. Pass exact `SKILL.md` paths to subagents.", "")
 	lines = append(lines, "`SKILL.md` remains the source of truth. Do not inject generated summaries or compact rules by default; pass paths so subagents load the full runtime contract and preserve author intent.", "")
 	lines = append(lines, sectionMarker, "")
 	lines = append(lines, "| Skill | Trigger / description | Scope | Path |")
@@ -284,40 +245,62 @@ func RenderRegistry(cwd string, sources []string, entries []SkillEntry) string {
 		lines = append(lines, fmt.Sprintf("| `%s` | %s | %s | `%s` |", markdownCell(entry.Name), markdownCell(entry.Description), markdownCell(scope), markdownCell(entry.Path)))
 	}
 	lines = append(lines, "", "## Loading protocol", "")
-	lines = append(lines, "1. Match task context and target files against the `Trigger / description` column.")
+	lines = append(lines, "1. Match task context and target files against the effective view's `Trigger / description` column.")
 	lines = append(lines, "2. Pass only the matching `Path` values to the subagent under `## Skills to load before work`.")
 	lines = append(lines, "3. Instruct the subagent to read those exact `SKILL.md` files before reading, writing, reviewing, testing, or creating artifacts.")
 	lines = append(lines, "4. If no matching skill exists, proceed without project skill injection and report `skill_resolution: none`.")
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
 }
 
-// findAllSkillFiles scans each root exactly one level deep for
-// <root>/<skill>/SKILL.md, the Agent Skills layout. A single-level scan is
-// deliberate: it follows symlinked skill directories (dotfiles/nix setups,
-// which filepath.WalkDir silently skips) and never indexes nested fixture or
-// example SKILL.md files that would otherwise pollute the registry with
-// phantom entries named after their parent directory.
-func findAllSkillFiles(dirs []string) ([]string, error) {
+// Direct skills precede all one-level category skills within each root.
+// Direct symlinks are followed, but categories and nested directories must be
+// real directories; never descend under a child with its own SKILL.md.
+func findAllSkillFiles(dirs []string) []string {
 	var out []string
 	for _, root := range dirs {
-		entries, err := os.ReadDir(root)
+		children, err := os.ReadDir(root)
 		if err != nil {
 			continue
 		}
-		for _, entry := range entries {
-			// dirExists/fileExists use os.Stat, so symlinked skill dirs and
-			// symlinked SKILL.md files are resolved instead of skipped.
-			skillDir := filepath.Join(root, entry.Name())
-			if !dirExists(skillDir) {
+		var direct, nested, categories []string
+		for _, child := range children {
+			if isExcluded(child.Name()) {
 				continue
 			}
-			candidate := filepath.Join(skillDir, "SKILL.md")
+			dir := filepath.Join(root, child.Name())
+			if !dirExists(dir) {
+				continue
+			}
+			candidate := filepath.Join(dir, "SKILL.md")
 			if fileExists(candidate) {
-				out = append(out, candidate)
+				direct = append(direct, candidate)
+			} else if child.IsDir() {
+				categories = append(categories, dir)
 			}
 		}
+		for _, category := range categories {
+			children, err := os.ReadDir(category)
+			if err != nil {
+				continue
+			}
+			for _, child := range children {
+				if !child.IsDir() || isExcluded(child.Name()) {
+					continue
+				}
+				candidate := filepath.Join(category, child.Name(), "SKILL.md")
+				if fileExists(candidate) {
+					nested = append(nested, candidate)
+				}
+			}
+		}
+		// Directory-name order is not necessarily full-path order: for
+		// example, foo-bar/SKILL.md precedes foo/SKILL.md by byte value.
+		sort.Strings(direct)
+		sort.Strings(nested)
+		out = append(out, direct...)
+		out = append(out, nested...)
 	}
-	return out, nil
+	return out
 }
 
 func uniqueExistingDirs(dirs []string) []string {
@@ -329,6 +312,9 @@ func uniqueExistingDirs(dirs []string) []string {
 			continue
 		}
 		seen[clean] = true
+		if _, err := os.ReadDir(clean); err != nil {
+			continue
+		}
 		out = append(out, clean)
 	}
 	return out
@@ -370,8 +356,8 @@ func parseFrontmatter(source string) (name, description string) {
 				i++
 			}
 			value = strings.Join(block, " ")
-		} else {
-			value = strings.Trim(value, `"'`)
+		} else if len(value) >= 2 && (value[0] == '\'' || value[0] == '"') && value[len(value)-1] == value[0] {
+			value = value[1 : len(value)-1]
 		}
 		switch m[1] {
 		case "name":
@@ -380,11 +366,10 @@ func parseFrontmatter(source string) (name, description string) {
 			description = value
 		}
 	}
-	return name, description
+	return name, strings.Join(strings.Fields(description), " ")
 }
 
 func dedupeBySkillName(entries []SkillEntry, cwd string) []SkillEntry {
-	projectPrefix := filepath.Clean(cwd) + string(os.PathSeparator)
 	buckets := map[string][]SkillEntry{}
 	for _, entry := range entries {
 		buckets[entry.Name] = append(buckets[entry.Name], entry)
@@ -393,7 +378,7 @@ func dedupeBySkillName(entries []SkillEntry, cwd string) []SkillEntry {
 	for _, list := range buckets {
 		chosen := list[0]
 		for _, entry := range list {
-			if strings.HasPrefix(filepath.Clean(entry.Path), projectPrefix) {
+			if ScopeForPath(cwd, entry.Path) == "project" {
 				chosen = entry
 				break
 			}
@@ -407,11 +392,18 @@ func dedupeBySkillName(entries []SkillEntry, cwd string) []SkillEntry {
 // ScopeForPath reports whether a skill path is project-local or user-global,
 // relative to cwd.
 func ScopeForPath(cwd, path string) string {
-	projectPrefix := filepath.Clean(cwd) + string(os.PathSeparator)
-	if strings.HasPrefix(filepath.Clean(path), projectPrefix) {
+	if rel, ok := relativeWithin(cwd, path); ok && rel != "." {
 		return "project"
 	}
 	return "user"
+}
+
+func relativeWithin(cwd, path string) (string, bool) {
+	rel, err := filepath.Rel(filepath.Clean(cwd), filepath.Clean(path))
+	if err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	return rel, true
 }
 
 func markdownCell(value string) string {
@@ -422,18 +414,6 @@ func markdownCell(value string) string {
 		return "—"
 	}
 	return trimmed
-}
-
-func readCachedFingerprint(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var cache cacheFile
-	if err := json.Unmarshal(data, &cache); err != nil {
-		return ""
-	}
-	return cache.Fingerprint
 }
 
 func isExcluded(name string) bool {

@@ -387,7 +387,7 @@ func TestOrchestratorsDelegateOnlyWhenATriggerTrulyHolds(t *testing.T) {
 		for _, required := range []string{
 			"#### Delegation Triggers",
 			"Each trigger holds only when its condition truly holds, and only then is it mandatory; no trigger holds by default, and when in doubt work inline.",
-			"parallel units launched together (two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work: several files or roughly 100+ changed lines, because a subagent spends one to two minutes reading before it writes) or the context backstop",
+			"parallel units launched together in one turn (two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work: several files or roughly 100+ changed lines, because a subagent spends one to two minutes reading before it writes) or the context backstop",
 			"A unit is one independent piece of behavior with its code, tests, and docs together: never split one behavior into test, docs, and code writers, and a delivery that depends on another is not independent; several small independent changes run inline, one after another.",
 		} {
 			if !strings.Contains(content, required) {
@@ -404,7 +404,7 @@ func TestOrchestratorsDelegateOnlyWhenATriggerTrulyHolds(t *testing.T) {
 	for _, required := range []string{
 		"only when a Delegation Trigger's condition truly holds and names a reason",
 		"A Delegation Trigger holds only when its condition truly holds; none holds by default, and when in doubt work inline. Once one holds, delegation is not optional",
-		"A writer reason is parallel units launched together (independent units of behavior, each with its code, tests, and docs and several minutes of work) or the context backstop",
+		"A writer reason is parallel units launched together in one turn (independent units of behavior, each with its code, tests, and docs and several minutes of work) or the context backstop",
 	} {
 		if !strings.Contains(shared, required) {
 			t.Errorf("shared orchestrator sections missing %q", required)
@@ -412,6 +412,38 @@ func TestOrchestratorsDelegateOnlyWhenATriggerTrulyHolds(t *testing.T) {
 	}
 	if strings.Contains(shared, "Mandatory Delegation Trigger") {
 		t.Error("shared orchestrator sections keep the retired Mandatory Delegation Trigger framing")
+	}
+}
+
+// gentle-ai#6067 (Gentle Shell parity): parallel writer units launch together
+// in one turn, or a parent launches one per turn and they run one after
+// another. "Background mode" is a Gentle Shell setting the hand-maintained
+// assets' runtimes do not define, so only Pi's routing render names it.
+func TestShippedAssetsLaunchParallelUnitsInOneTurn(t *testing.T) {
+	const launch = "launched together"
+	const backgroundMode = "in background when background mode is on"
+	err := fs.WalkDir(FS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return walkErr
+		}
+		content := MustRead(path)
+		for rest := content; ; {
+			i := strings.Index(rest, launch)
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(launch):]
+			if !strings.HasPrefix(rest, " in one turn") {
+				t.Errorf("%s says %q without \"in one turn\"", path, launch)
+			}
+		}
+		if strings.Contains(content, backgroundMode) {
+			t.Errorf("%s names %q, a setting its runtime does not define", path, backgroundMode)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -981,7 +1013,7 @@ func TestFourRReviewAgentAssets(t *testing.T) {
 	for _, dir := range nativeDirs {
 		for _, agent := range reviewAgents {
 			content := MustRead(dir + "/" + agent + ".md")
-			for _, want := range []string{"read-only reviewer", "severity: BLOCKER | CRITICAL | WARNING | SUGGESTION", "No findings."} {
+			for _, want := range []string{"read-only reviewer", "severity: BLOCKER | CRITICAL | WARNING | SUGGESTION", "If clean, return an empty `findings` array and a non-empty `evidence` array."} {
 				if !strings.Contains(content, want) {
 					t.Fatalf("%s/%s.md missing %q", dir, agent, want)
 				}
@@ -1656,10 +1688,7 @@ func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
 		},
 	}
 	for path, clauses := range want {
-		body, err := FS.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", path, err)
-		}
+		body := []byte(resolvedAgentContract(t, path))
 		for _, clause := range clauses {
 			if !strings.Contains(string(body), clause) {
 				t.Errorf("%s is missing %q", path, clause)
@@ -1673,15 +1702,37 @@ func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
 		"opencode/agents/gentle-ai-verify.md": {"NODE_COMPILE_CACHE", "NO_UPDATE_NOTIFIER", "--reflink"},
 	}
 	for path, phrases := range retired {
-		body, err := FS.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", path, err)
-		}
+		body := []byte(resolvedAgentContract(t, path))
 		for _, phrase := range phrases {
 			if strings.Contains(string(body), phrase) {
 				t.Errorf("%s still contains %q", path, phrase)
 			}
 		}
+	}
+}
+
+// gentle-ai#6067 (PD-50): the worker is the writer the parent delegates for a
+// named Writer trigger reason, never for size; the size wording contradicted it.
+// The Per-action rule also sends long suites, builds and installs to a fresh
+// worker, so the scope names that case too.
+func TestOpenCodeWorkerScopeFollowsTheWriterTrigger(t *testing.T) {
+	t.Parallel()
+
+	body, err := FS.ReadFile("opencode/agents/gentle-ai-worker.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, clause := range []string{
+		"Use this agent only for scoped, bounded work the parent delegates: implementation for a named Writer trigger reason (parallel units or the context backstop) that uses ODD task context, or a parent-authorized per-action command (a long suite, build, or install); never for Judgment Day artifact protocols.",
+		"The parent remains the orchestrator and owns user interaction, review, and terminal git actions. Never delegate to another agent.",
+	} {
+		if !strings.Contains(text, clause) {
+			t.Errorf("gentle-ai-worker.md is missing %q", clause)
+		}
+	}
+	if strings.Contains(text, "too large for the parent to execute inline") {
+		t.Error("gentle-ai-worker.md still scopes the worker by size")
 	}
 }
 
@@ -1716,10 +1767,7 @@ func TestOpenCodeGenericAgentsRemoveTheirScratchAfterUse(t *testing.T) {
 		"opencode/agents/gentle-ai-worker.md": "Tests delete the temp directories they create in teardown; name any scratch directory you created outside the worktree in `risks` so the parent removes it.",
 	}
 	for path, clause := range want {
-		body, err := FS.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", path, err)
-		}
+		body := []byte(resolvedAgentContract(t, path))
 		if !strings.Contains(string(body), clause) {
 			t.Errorf("%s is missing %q", path, clause)
 		}
@@ -1741,10 +1789,7 @@ func TestOpenCodeGenericAgentsReadTheFeatureSpecByReference(t *testing.T) {
 		"opencode/agents/gentle-ai-explore.md": {"until `## Log`"},
 	}
 	for path, clauses := range want {
-		body, err := FS.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", path, err)
-		}
+		body := []byte(resolvedAgentContract(t, path))
 		for _, clause := range clauses {
 			if !strings.Contains(string(body), clause) {
 				t.Errorf("%s is missing %q", path, clause)
@@ -1775,9 +1820,19 @@ func TestDelegationSkillsDelegateForReasonAndForwardTestDiscipline(t *testing.T)
 			retired: []string{"4+ files", "multi-file reads", "TDD mode", "strict TDD"},
 		},
 		{
-			path:     "skills/_shared/persistence-contract.md",
-			required: []string{"the applicable test-first policy and runner from `## Implementation Routing`"},
-			retired:  []string{"TDD mode", "strict TDD"},
+			path: "skills/_shared/persistence-contract.md",
+			required: []string{
+				"the applicable test-first policy and runner from `## Implementation Routing`",
+				// gentle-ai#6067 (GS-03, GS-10): plain read-back, file as source, never replay, mirror cadence.
+				"Read back both writes with the normal read tool; they are not atomic, but never author comparison or reconciliation scripts or gates for them.",
+				"After a partial or failed sync, check which writes already applied and continue from that state; never replay an applied write.",
+				"The document is the source: a mirror that differs from the document just written is refreshed from it, never a blocker.",
+				"Refresh the mirror once per task transition (a task starts, finishes, is blocked, reopened, or dropped) or material plan change, and at close; progress notes and evidence added between those points go to the document only and reach the mirror at the next one.",
+				// Sentences the port did not replace stay.
+				"If Engram is unavailable, preserve the local document and explicitly mark the mirror pending without blocking independent safe work.",
+				"On resume, retrieve the full observation (search results are truncated), read the document and reconcile them before modifying either.",
+			},
+			retired: []string{"TDD mode", "strict TDD"},
 		},
 	}
 	for _, tt := range tests {
@@ -1797,4 +1852,228 @@ func TestDelegationSkillsDelegateForReasonAndForwardTestDiscipline(t *testing.T)
 			}
 		})
 	}
+}
+
+// gentle-ai#6067 (gentle-shell#3101 parity): the verifier chooses its evidence
+// by change kind, never re-runs the writer's reported suite unless the parent
+// passes it as the user's failing command, reproduces a user-reported failure
+// with the exact command first and only counts it reproduced when the baseline
+// fails with the user's error, leaves adding probes to the writer and an
+// authorized commit to the parent, and corrects its own setup once. These rules
+// live in the installed shared method; both handoff variants reference it while
+// retaining the parent-owned authorization and correction boundaries.
+func TestVerifierChecksByChangeKind(t *testing.T) {
+	t.Parallel()
+
+	verifier := resolvedAgentContract(t, "opencode/agents/gentle-ai-verify.md")
+	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
+	gates := map[string]string{}
+	for _, name := range []string{"Delegated Verification Gate (MANDATORY)", "Delegated Verification Gate (MANDATORY) (ODD only)"} {
+		start := "<!-- odd-orchestrator-section:" + name + ":start -->"
+		end := "<!-- odd-orchestrator-section:" + name + ":end -->"
+		_, rest, ok := strings.Cut(shared, start)
+		body, _, ok2 := strings.Cut(rest, end)
+		if !ok || !ok2 {
+			t.Fatalf("shared section %q not found", name)
+		}
+		gates[name] = body
+	}
+
+	rules := []struct {
+		name     string
+		verifier []string
+	}{
+		{
+			name: "method by change kind",
+			verifier: []string{
+				"## Evidence by change kind",
+				"**External tool or environment** (package managers, CLIs, network services, operating-system behavior): reproduce the real case with the real tool and the configuration the change will meet, plus your own probes.",
+				"**Prompt or other contract text**: compare every removed or rewritten sentence with the baseline, one by one, and report each lost qualifier",
+				"**Other code**: probes aimed at what the change can break.",
+			},
+		},
+		{
+			name: "no re-run of the writer's suite, except the user's failing command",
+			verifier: []string{
+				"Do not re-run the suite the writer reported: the parent's spot check of one reported command covers the writer's results.",
+				"The exception is the command the parent passes as the user's failing command: run it even when it is the writer's reported suite. Run the commands the parent authorizes as your evidence and your own probes.",
+			},
+		},
+		{
+			name: "user-reported failure reproduced first",
+			verifier: []string{
+				"**A fix for a failure the user reported**: first run the user's exact failing command (the parent passes it verbatim, which authorizes it)",
+				"against the baseline and against the change, and compare its output with the user's error text.",
+				"The failure counts as reproduced only when that command fails on the baseline with the user's error; when it passes there or fails with a different error, report the fix unverified and say which, never verified.",
+				"When the handoff does not carry the failing command, report the fix unverified and name the missing command; never guess one.",
+				"report that check unverified with its exact command so the parent runs it",
+			},
+		},
+		{
+			name:     "writer adds probes, parent commits only when authorized",
+			verifier: []string{"for the parent to hand to the writer, who adds them; the parent commits them only when a commit is authorized, otherwise they stay uncommitted in the working tree; you never write them."},
+		},
+		{
+			name:     "one self-correction of the verifier's own setup",
+			verifier: []string{"make exactly one corrected attempt and report both attempts; at a second setup failure or a missing prerequisite, stop and report the checks left unrun as unverified, not passed."},
+		},
+	}
+	for _, rule := range rules {
+		for _, want := range rule.verifier {
+			if !strings.Contains(verifier, want) {
+				t.Errorf("%s: gentle-ai-verify.md is missing %q", rule.name, want)
+			}
+		}
+	}
+
+	// The shared handoff retains the authorized-commit sentence and points to the method.
+	for name, gate := range gates {
+		if !strings.Contains(gate, "The writer adds the probes as regression tests; the parent commits them when authorized.\n") {
+			t.Errorf("shared section %q is missing the authorized-commit probe sentence", name)
+		}
+		if strings.Contains(gate, "The writer commits the probes as regression tests.") {
+			t.Errorf("shared section %q keeps the unconditional probe-commit sentence", name)
+		}
+	}
+	if high := "a fresh read-only worker that re-runs the verification commands and inspects the diff without the writer's context."; !strings.Contains(gates["Delegated Verification Gate (MANDATORY) (ODD only)"], high) {
+		t.Errorf("ODD-only gate lost the main High bullet text %q", high)
+	}
+
+	// Replaced sentences are gone from the verifier, the shared sections, and
+	// every hand-maintained orchestrator copy.
+	retired := []string{
+		"for the parent to hand to the writer to commit",
+		"The writer commits the probes",
+		"who adds them; the parent commits; you never write them.",
+		"The writer adds the probes as regression tests; the parent commits.",
+	}
+	copies, err := fs.Glob(FS, "*/orchestrator.md")
+	if err != nil || len(copies) == 0 {
+		t.Fatalf("orchestrator copies: %v (%d)", err, len(copies))
+	}
+	for _, path := range append([]string{"opencode/agents/gentle-ai-verify.md", "skills/_shared/odd-orchestrator-sections.md"}, copies...) {
+		body := MustRead(path)
+		for _, phrase := range retired {
+			if strings.Contains(body, phrase) {
+				t.Errorf("%s still contains replaced sentence %q", path, phrase)
+			}
+		}
+	}
+
+	// Pi and Node scratch details stay out; untouched pinned sentences stay in.
+	for _, phrase := range []string{"NODE_COMPILE_CACHE", "NO_UPDATE_NOTIFIER", "env -i", "Setup pitfalls"} {
+		if strings.Contains(verifier, phrase) {
+			t.Errorf("gentle-ai-verify.md contains Pi/Node scratch detail %q", phrase)
+		}
+	}
+	for _, want := range []string{
+		"Read-only means no edits to the repository or its git state",
+		"Verify the request, not the writer's work",
+		"Do not use review lenses. RDD review remains independent and parent-owned.",
+		"Before returning, list every scratch directory you created by exact path in your result so the parent removes it; never delete it yourself.",
+		"one correction batch and one recheck limited to the reported blockers",
+	} {
+		if !strings.Contains(verifier, want) {
+			t.Errorf("gentle-ai-verify.md lost pinned sentence %q", want)
+		}
+	}
+	for name, gate := range gates {
+		for _, want := range []string{
+			"**Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms",
+			"`_shared/verify-method.md`",
+			"The parent spot check — re-running one reported command before delivery — stays in every tier.",
+		} {
+			if !strings.Contains(gate, want) {
+				t.Errorf("shared section %q lost pinned sentence %q", name, want)
+			}
+		}
+	}
+}
+
+// gentle-ai#6067 (GS-07, PD-74 parity): a child resumed in the same child
+// session does not re-read what it already read, every generic child returns a
+// compact report, the parent passes only the skills the delegated task needs,
+// and only the worker's three skill_resolution values are package values.
+func TestGenericAgentsResumeWithoutRereadsAndReportCompactly(t *testing.T) {
+	t.Parallel()
+
+	resume := "When resumed in the same child session, do not re-read skill files or spec sections you already read there unless they changed, needed details were lost through compaction, or the parent says so; read anything you have not read yet as usual"
+	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
+	tests := []struct {
+		path     string
+		body     string
+		required []string
+		retired  []string
+	}{
+		{
+			path: "opencode/agents/gentle-ai-worker.md",
+			required: []string{
+				resume + ". Do not read persistent memory for context. The parent selects and forwards relevant observations.",
+				"Return one compact handoff using the schema below; cite exact commands with exit codes and test counts, blockers with `path:line`, and scratch paths, and never restate the task, the spec text, or unchanged file contents. Any requested `## Key Learnings` block follows it.",
+				"Report `partial` or `blocked` honestly.",
+			},
+			retired: []string{"Return one concise handoff using this schema:", "A clean handoff is more valuable than pretending the task is complete."},
+		},
+		{
+			path: "opencode/agents/gentle-ai-explore.md",
+			required: []string{
+				"read it until `## Log` for the requirements. " + resume + ".",
+				"Return a compact handoff of at most ~2k tokens: `path:line` or source-URL/passage evidence, observed relationships, and remaining uncertainty; never restate the task, the spec text, or unchanged file contents. Any requested `## Key Learnings` block follows it. Never claim evidence you did not observe.",
+			},
+			retired: []string{"Return a compressed handoff with supporting paths, observed evidence and relationships, and remaining uncertainty."},
+		},
+		{
+			path: "opencode/agents/gentle-ai-verify.md",
+			required: []string{
+				"Passing tests never prove an `S#` whose example was not executed. " + resume + ", including new `## Log` entries.",
+				"Return a compact evidence handoff of at most ~2k tokens: the verdict per spec item, exact commands with exit codes, test counts, and observed results, blockers with `path:line`, anything left unverified, and scratch paths; never restate the task or spec beyond the line a finding contradicts, or unchanged file contents. The probe regression tests, then any requested `## Key Learnings` block, follow it. Never claim a command ran or a check passed without observed output.",
+			},
+			retired: []string{"Return a compressed evidence handoff of at most ~2k tokens: exact commands run, observed results, `path:line` evidence, the verdict per spec item, blockers, and anything left unverified; the probe regression tests follow it."},
+		},
+		{
+			path: "skills/_shared/odd-orchestrator-sections.md",
+			body: shared,
+			required: []string{
+				"3. Pass only matching `Path` values to subagents under `## Skills to load before work`, matching the delegated task's own files and actions, never a fixed set: a child that will not commit gets no commit skill, and one that writes no docs gets no docs skill.\n",
+				"`gentle-ai-worker` reports only `paths-injected`, `paths-invalid`, or `none`; the fallback values below come from other agents.\n",
+				"- `fallback-registry`: the subagent self-loaded skill paths from the registry because parent paths were missing; degraded but auditable.",
+			},
+			retired: []string{"3. Pass only matching `Path` values to subagents under `## Skills to load before work`.\n"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+
+			body := tt.body
+			if body == "" {
+				body = resolvedAgentContract(t, tt.path)
+			}
+			for _, want := range tt.required {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s is missing %q", tt.path, want)
+				}
+			}
+			for _, retired := range tt.retired {
+				if strings.Contains(body, retired) {
+					t.Errorf("%s keeps replaced %q", tt.path, retired)
+				}
+			}
+		})
+	}
+}
+
+// Agent permission envelopes stay local; method assertions follow the explicit reference.
+func resolvedAgentContract(t *testing.T, path string) string {
+	t.Helper()
+	body := MustRead(path)
+	if path != "opencode/agents/gentle-ai-verify.md" {
+		return body
+	}
+	for _, clause := range []string{"{{GENTLE_AI_VERIFY_METHOD}}", "Read-only means no edits to the repository or its git state", "Do not delegate to child agents, commit, or push.", "Do not use review lenses. RDD review remains independent and parent-owned."} {
+		if !strings.Contains(body, clause) {
+			t.Fatalf("verifier envelope missing %q", clause)
+		}
+	}
+	return strings.ReplaceAll(body, "{{GENTLE_AI_VERIFY_METHOD}}", MustRead("skills/_shared/verify-method.md"))
 }

@@ -134,6 +134,37 @@ func TestOrchestratorModulesCarryCanonicalBodies(t *testing.T) {
 	}
 }
 
+// gentle-ai#6067 (GS-03): every writer launch carries its edit surfaces and a
+// rejected launch is never repeated unchanged; the two sentences Gentle Shell
+// removed as redundant stay out of the writer module.
+func TestWriterModuleCarriesEditSurfacesOnEveryLaunch(t *testing.T) {
+	var writer string
+	for _, module := range buildClaudeTestModules(t).modules {
+		if module.name == "writer" {
+			writer = module.content
+		}
+	}
+	for _, want := range []string{
+		"Every new writer launch carries the section (a continuation inherits it); after a rejected launch, repair what the rejection names once, never relaunch the same prompt unchanged.",
+		"A bounded writer refuses to write outside the exact allowed edit surfaces and stops for interaction when they are missing. The parent owns that input.",
+		"If the surface genuinely cannot be derived, do not launch the writer, and do not ask the human to author paths.",
+		"present that enumerated list as an approve/decline choice under the Lossless Blocking Prompts rules.",
+		"Relay a writer's interaction request about edit surfaces the same way",
+	} {
+		if !strings.Contains(writer, want) {
+			t.Errorf("writer module is missing %q", want)
+		}
+	}
+	for _, removed := range []string{
+		"Deriving it is part of planning the delegation",
+		"is never a valid escalation",
+	} {
+		if strings.Contains(writer, removed) {
+			t.Errorf("writer module still carries %q", removed)
+		}
+	}
+}
+
 func TestOrchestratorModuleCoreKeepsAuthorityAndSafety(t *testing.T) {
 	core := buildClaudeTestModules(t).core
 	for _, required := range []string{

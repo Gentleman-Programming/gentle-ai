@@ -208,11 +208,16 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 		t.Run(string(agent), func(t *testing.T) {
 			t.Parallel()
 
-			result, err := InjectRoutingWithOptions(t.TempDir(), agent, RoutingOptions{})
+			home := t.TempDir()
+			result, err := InjectRoutingWithOptions(home, agent, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("InjectRouting(%q) error = %v", agent, err)
 			}
 			prompt := deliveredGuidance(t, result.Files[0])
+			if !strings.Contains(prompt, "_shared/verify-method.md") {
+				t.Fatal("missing installed method pointer")
+			}
+			prompt += "\n" + installedVerifierMethod(t, home, agent)
 
 			required := []string{
 				// S1 writer by reason.
@@ -239,10 +244,12 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 				"the applicable test-first policy and runner from `## Implementation Routing`",
 				// S7 verify handoff.
 				"**Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms",
-				"a fresh scratch copy created with `mktemp -d` under the system temp dir, never inside the workspace, and leaves no new file in the workspace",
-				"the data hash is unchanged after a rejected command, and prior commands' output is identical to the baseline",
-				"silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker",
-				"The writer commits the probes as regression tests.",
+				"`mktemp -d` under the system temp directory, never inside the workspace",
+				"Check that stored data stays byte-identical after every rejected or failing command",
+				"Silently ignoring an option or value the user passed explicitly, with a success exit, is always a blocker",
+				"An unrequested change to the output, error text, or line numbering of a command that existed at the baseline is change-caused and a blocker",
+				"Check that commands that existed before the change produce the same output as at the baseline commit",
+				"The writer adds the probes as regression tests; the parent commits them when authorized.",
 			}
 			if model.SupportsReceiptDrivenDevelopment(agent) {
 				// Native RDD review allows exactly one correction attempt
@@ -288,11 +295,16 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 func TestInstalledSmallGenericOrchestratorCarriesVerificationDiscipline(t *testing.T) {
 	t.Parallel()
 
-	result, err := InjectRoutingWithOptions(t.TempDir(), model.AgentVSCodeCopilot, RoutingOptions{OrchestratorCapability: "small"})
+	home := t.TempDir()
+	result, err := InjectRoutingWithOptions(home, model.AgentVSCodeCopilot, RoutingOptions{OrchestratorCapability: "small"})
 	if err != nil {
 		t.Fatalf("InjectRouting(small) error = %v", err)
 	}
 	prompt := deliveredGuidance(t, result.Files[0])
+	if !strings.Contains(prompt, "_shared/verify-method.md") {
+		t.Fatal("missing installed method pointer")
+	}
+	prompt += "\n" + installedVerifierMethod(t, home, model.AgentVSCodeCopilot)
 	if !strings.Contains(prompt, "Orchestrator Instructions (Small Model)") {
 		t.Fatal("small capability did not select the small-model variant")
 	}
@@ -306,7 +318,7 @@ func TestInstalledSmallGenericOrchestratorCarriesVerificationDiscipline(t *testi
 		"**Verify handoff**",
 		"mktemp -d",
 		"never inside the workspace",
-		"silently ignoring an explicit option",
+		"Silently ignoring an option or value the user passed explicitly",
 		// S8 timing and bounds; pain-point-iteration S9 C1 dropped "the same
 		// model" because the writer's model no longer decides verification.
 		"**Verification timing**: when several deliveries of one feature were written inline, run one independent verifier at the feature's end",

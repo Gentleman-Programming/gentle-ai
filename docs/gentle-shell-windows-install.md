@@ -35,6 +35,23 @@ already contains this unreleased installer.
 | Processes | Suspended child bound before resume; Job Object CPU/memory/process readback, inherited console, bounded cleanup |
 | Preservation | Isolated HOME/agent/config, caller CWD inherited; console modes saved/restored; personal PATH unchanged |
 
+## Replaced-backup retention
+
+A reconfigure that retires the installed tree renames it to a sibling
+`TARGET.replaced-<UTC>` backup (for example
+`C:\Users\...\gentle-shell.replaced-20260101T130000Z`) before publishing the
+replacement. After the new installation is published, verified and its
+launchers are confirmed, the installer bounds those backups to **one recent
+tree**: the backup it just created is always retained, and when the system
+clock has drifted the lexically latest candidate is retained as well, so clock
+skew never deletes the genuinely most recent tree. Every older candidate is
+removed only through the same positive validation as a single removal
+(canonical manifest, original active destination, current SID and physical
+identity, rechecked immediately before deletion). Unrelated folders, wrong
+markers and noncanonical timestamps are ignored; an invalid or uncertain
+candidate is preserved whole and reported. Retention failure is a warning and
+never retracts a valid installation.
+
 ## Persistent memory (Engram)
 
 Separate provisions Engram from the gentle-pi it installs, never from a
@@ -72,15 +89,19 @@ retained authorities. There is no size/mtime shortcut.
 
 **Runtime state** written after publication by the owned tools is not an
 artefact: `home` (GOPATH/GOMODCACHE, set explicitly), `state` (GOCACHE),
-`tmp`, `runtime\cache` (npm) and `agent\sessions` (Pi names sessions after the
-caller CWD). Launch walks them recursively with the same per-entry owner,
-DACL, reparse, hard-link, regular-file and resource checks as artefacts; the
-file-count, per-file (32 MiB) and aggregate (2 GiB) bounds include them. The
-only difference is naming: names strictly **below** these fixed roots are data
-and may contain `!`, `%`, `&` or `^` (Go's escaped module paths, CWD-named
-sessions). The roots, their ancestors, artefacts and bindings keep the strict
-names. Large real caches beyond those bounds are not yet qualified and fail
-closed.
+`tmp`, `runtime\cache` (npm), `agent\sessions` (Pi names sessions after the
+caller CWD) and `agent\npm` (the agent's own npm package tree, where
+user-installed Pi extensions place their native binaries). Launch walks them
+recursively with the same per-entry owner,
+DACL, reparse, hard-link, regular-file and resource checks as artefacts. The
+single file-count bound includes them; the per-file (32 MiB) and aggregate
+(2 GiB) byte bounds count installed artefacts only — runtime state below
+these fixed roots is exempt, because caches, sessions and agent-managed
+packages are not installed artefacts and grow with use. The only remaining
+difference is naming: names
+strictly **below** these fixed roots are data and may contain `!`, `%`, `&`
+or `^` (Go's escaped module paths, CWD-named sessions). The roots, their
+ancestors, artefacts and bindings keep the strict names.
 
 `agent\settings.json` keeps exact `packages`/`npmCommand` and the codemode
 exclusion. Following the pinned Pi 1.0.0 `SettingsManager`, it also accepts
@@ -102,7 +123,8 @@ Ownership controls assume cooperative same-account actors; they are not
 hostile same-SID custody, loaded-byte attestation or escaped-descendant immunity.
 
 Bootstrap bounds: Node ZIP 64 MiB, Go ZIP 128 MiB, tools 32 MiB; authenticated
-bootstrap executables up to 128 MiB; complete Windows inventory up to 2 GiB.
+bootstrap executables up to 128 MiB; complete Windows inventory up to 2 GiB of
+installed artefacts (runtime state below its fixed roots is exempt).
 The old Linux controls and frozen Linux work are unchanged.
 
 ## Acceptance still required

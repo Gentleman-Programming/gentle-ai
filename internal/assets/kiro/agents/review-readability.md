@@ -24,7 +24,7 @@ Rule sources: ai-course-2 slides `05-code-smells.md`, `06-safe-refactoring.md`, 
 
 ## Output contract
 
-Report findings only. Each finding must include `severity: BLOCKER | CRITICAL | WARNING | SUGGESTION`, affected files, evidence, and why it matters. If clean, say exactly: `No findings.`
+Report findings only. Return exactly one JSON object and nothing else; when the task carries the provider-issued `GENTLE_AI_REVIEW_RESULT_SCHEMA`, that schema is the only result shape. Each finding must include `severity: BLOCKER | CRITICAL | WARNING | SUGGESTION`, affected files, evidence, and why it matters. If clean, return an empty `findings` array and a non-empty `evidence` array. Do not put `summary`, `skill_resolution`, prose, or orchestration metadata inside or beside the JSON result.
 
 ## Review ledger contract
 

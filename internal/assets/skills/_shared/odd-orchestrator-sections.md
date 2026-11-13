@@ -18,7 +18,7 @@ Verification of a delegated writer's work follows the same rule whether receipt-
 - The parent spot check — re-running one reported command before delivery — stays in every tier.
 - **Verification timing**: when several deliveries of one feature were written inline, run one independent verifier at the feature's end instead of one per delivery; verify per unit only when that unit names a high-risk item (its Risk line or the escalation over its actual diff), never because of the model or effort that wrote the code.
 - **Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers, never a new full sweep. A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one. Blockers still open after that become one **Needs your decision** result. A writer's self-review follows the same bound, then reports `partial`.
-- **Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms. On its first launch the verifier runs probes in a fresh scratch copy created with `mktemp -d` under the system temp dir, never inside the workspace, and leaves no new file in the workspace. Probes derive from the specs, plus invariants: the data hash is unchanged after a rejected command, and prior commands' output is identical to the baseline. Severity: a blocker is a change-caused defect or unmet spec item that reproduces with realistic input and did not already reproduce at the baseline; defects already present at the baseline and out-of-domain values are advisories; silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker. The writer commits the probes as regression tests.
+- **Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms. The parent names the change kind and pastes or references `_shared/verify-method.md` from the runtime's installed skills directory, then hands returned probes to the writer. The writer adds the probes as regression tests; the parent commits them when authorized.
 - The writer receives `## Verification` naming the exact commands to run, and may receive `## Known environmental failures` naming exact test names or command lines already failing on the base as evidence; any other failing required command still forces `partial`.
 - Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to whoever makes that write, and the parent never explores files it will read anyway before writing inline.
 <!-- odd-orchestrator-section:Delegated Verification Gate (MANDATORY):end -->
@@ -32,7 +32,7 @@ Verification of a delegated writer's work is proportionate to the risk of the ch
 - The parent spot check — re-running one reported command before delivery — stays in every tier.
 - **Verification timing**: when several deliveries of one feature were written inline, run one independent verifier at the feature's end instead of one per delivery; verify per unit only when that unit names a high-risk item (its Risk line or the escalation over its actual diff), never because of the model or effort that wrote the code.
 - **Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers, never a new full sweep. A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one. Blockers still open after that become one **Needs your decision** result. A writer's self-review follows the same bound, then reports `partial`.
-- **Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms. On its first launch the verifier runs probes in a fresh scratch copy created with `mktemp -d` under the system temp dir, never inside the workspace, and leaves no new file in the workspace. Probes derive from the specs, plus invariants: the data hash is unchanged after a rejected command, and prior commands' output is identical to the baseline. Severity: a blocker is a change-caused defect or unmet spec item that reproduces with realistic input and did not already reproduce at the baseline; defects already present at the baseline and out-of-domain values are advisories; silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker. The writer commits the probes as regression tests.
+- **Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms. The parent names the change kind and pastes or references `_shared/verify-method.md` from the runtime's installed skills directory, then hands returned probes to the writer. The writer adds the probes as regression tests; the parent commits them when authorized.
 - The writer receives `## Verification` naming the exact commands to run, and may receive `## Known environmental failures` naming exact test names or command lines already failing on the base as evidence; any other failing required command still forces `partial`.
 - Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to whoever makes that write, and the parent never explores files it will read anyway before writing inline.
 <!-- odd-orchestrator-section:Delegated Verification Gate (MANDATORY) (ODD only):end -->
@@ -67,7 +67,7 @@ The active persona and output style are installed separately and define reply vo
 
 ### Core Role
 
-You orchestrate and work inline by default, following your logbook. Delegate through the runtime's subagent/delegation mechanism, when available, only when a Delegation Trigger's condition truly holds and names a reason: a map you need to decide or route, a writer reason (parallel units launched together, or the context backstop), or an independent verifier for a change that names a high-risk item. Maintain one thin conversation thread and synthesize results for the user.
+You orchestrate and work inline by default, following your logbook. Delegate through the runtime's subagent/delegation mechanism, when available, only when a Delegation Trigger's condition truly holds and names a reason: a map you need to decide or route, a writer reason (parallel units launched together in one turn, or the context backstop), or an independent verifier for a change that names a high-risk item. Maintain one thin conversation thread and synthesize results for the user.
 
 Keep synthesis short by default: decision, outcome, next action. Expand only when the user asks or the situation requires detail.
 
@@ -109,7 +109,7 @@ Inline evidence uses one parallel batch, at most 3 calls and approximately 10k t
 
 #### 2. Simple Delegation
 
-Delegate when a mechanism's own trigger fires, within the ODD workflow: understanding an unfamiliar module beyond the inline batch budget (explore), implementing a unit with a writer reason (writer), or checking a change that names a high-risk item (independent verifier). A writer reason is parallel units launched together (independent units of behavior, each with its code, tests, and docs and several minutes of work) or the context backstop, never size, a large task alone, file count, or a price ratio; without one, the parent writes inline, following its logbook.
+Delegate when a mechanism's own trigger fires, within the ODD workflow: understanding an unfamiliar module beyond the inline batch budget (explore), implementing a unit with a writer reason (writer), or checking a change that names a high-risk item (independent verifier). A writer reason is parallel units launched together in one turn (independent units of behavior, each with its code, tests, and docs and several minutes of work) or the context backstop, never size, a large task alone, file count, or a price ratio; without one, the parent writes inline, following its logbook.
 
 Route exploration to a read-only exploration worker, each unit with a writer reason to one bounded writer, and verification of a named high-risk item to a verification worker, all through the runtime's subagent/delegation mechanism. The delegation trigger stays mandatory; a missing named worker changes the runtime used, not the requirement to delegate. If no delegation mechanism is available, follow this runtime's documented degradation path, or stop and explain the blocker instead of silently continuing inline.
 
@@ -148,7 +148,7 @@ stop writes → parent captures git status → diagnose affected repositories/wo
 ### Allowed edit surfaces (MANDATORY)
 
 <!-- odd-orchestrator-fragment:writer.edit-surfaces:start -->
-A bounded writer refuses to write outside the exact allowed edit surfaces and stops for interaction when they are missing. The parent owns that input. Deriving it is part of planning the delegation, not something the writer or the human can be left to supply.
+A bounded writer refuses to write outside the exact allowed edit surfaces and stops for interaction when they are missing. The parent owns that input. Every new writer launch carries the section (a continuation inherits it); after a rejected launch, repair what the rejection names once, never relaunch the same prompt unchanged.
 
 Before launching a bounded writer through the runtime's delegation mechanism, derive the allowed edit surface from the task being delegated — the files the planned change must touch, plus the directories where the task authorizes new files — and pass it in the delegated prompt under an `## Allowed edit surfaces` heading:
 
@@ -158,7 +158,7 @@ Before launching a bounded writer through the runtime's delegation mechanism, de
 - the directories where new files are authorized, when the task requires new files;
 - nothing beyond the delegated task — a surface wider than the task is the same defect as no surface at all.
 
-If the surface genuinely cannot be derived, do not launch the writer, and do not ask the human to author paths. Derive a candidate set first — the exact paths this task would touch — and present that enumerated list as an approve/decline choice under the Lossless Blocking Prompts rules. A free-text question asking which paths or globs to authorize is never a valid escalation.
+If the surface genuinely cannot be derived, do not launch the writer, and do not ask the human to author paths. Derive a candidate set first — the exact paths this task would touch — and present that enumerated list as an approve/decline choice under the Lossless Blocking Prompts rules.
 
 Relay a writer's interaction request about edit surfaces the same way: present its derived candidate paths as the choice, and add or drop paths only on the human's explicit instruction.
 <!-- odd-orchestrator-fragment:writer.edit-surfaces:end -->
@@ -212,11 +212,13 @@ The parent resolves skills once per session or before first delegation:
 
 1. Read `.atl/skill-registry.md` if present.
 2. Match task context and target files against the `Trigger / description` column.
-3. Pass only matching `Path` values to subagents under `## Skills to load before work`.
+3. Pass only matching `Path` values to subagents under `## Skills to load before work`, matching the delegated task's own files and actions, never a fixed set: a child that will not commit gets no commit skill, and one that writes no docs gets no docs skill.
 4. Tell subagents to read those exact `SKILL.md` files before reading, writing, reviewing, testing, or creating artifacts.
 5. If the registry is absent, continue but mention that project-specific skill paths were unavailable.
 
 Subagents receive exact indexed paths and do not rediscover the registry or additional project/user `SKILL.md` files during normal runtime.
+
+`gentle-ai-worker` reports only `paths-injected`, `paths-invalid`, or `none`; the fallback values below come from other agents.
 
 If a subagent reports `skill_resolution`, interpret it as project/user skill resolution:
 

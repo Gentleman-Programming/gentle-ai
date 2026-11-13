@@ -61,7 +61,7 @@ For the next PR, add links to the previous and following PRs so the chain stays 
 ### Ask for split
 
 ```markdown
-This PR exceeds the 400-line budget, so we need to split it or justify `size:exception`.
+This PR is large for one review (about 600 changed lines). Could we split it, or follow the repo's size policy if it allows one PR?
 
 Suggested order: foundation + tests first, then integration, then docs. That gives each review a clear start and end.
 ```

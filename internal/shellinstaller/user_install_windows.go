@@ -242,6 +242,16 @@ func userWindowsReconfigureTarget() string {
 }
 
 func userWindowsManifestRead(root string) (userWindowsManifest, error) {
+	return userWindowsManifestReadAs(root, root)
+}
+
+// userWindowsManifestReadAs validates the tree at root against the original
+// active destination it was published for. The active-tree path keeps
+// userWindowsManifestRead (root and destination are the same); a replaced
+// backup validates the selection and manifest against the destination the
+// retired tree still records, while its physical identity is re-read from
+// wherever the tree now lives.
+func userWindowsManifestReadAs(root, destination string) (userWindowsManifest, error) {
 	var manifest userWindowsManifest
 	data, err := userWindowsRead(filepath.Join(root, "manifest.json"), 4096)
 	if err != nil {
@@ -254,7 +264,7 @@ func userWindowsManifestRead(root string) (userWindowsManifest, error) {
 	if selectionErr != nil || userWindowsSHA(selection) != manifest.SelectionSHA {
 		return manifest, errors.Join(selectionErr, errors.New("Windows selection binding differs"))
 	}
-	selected, err := userWindowsSelection(selection, root)
+	selected, err := userWindowsSelection(selection, destination)
 	if err != nil {
 		return manifest, err
 	}
@@ -272,7 +282,7 @@ func userWindowsManifestRead(root string) (userWindowsManifest, error) {
 	canonical, _ := json.Marshal(manifest)
 	identity, identityErr := userWindowsIdentity(root, true)
 	sid, sidErr := userWindowsSID()
-	if string(data) != string(canonical)+"\n" || manifest.Schema != userWindowsSchema || manifest.Destination != root || manifest.SID != sid || manifest.Identity != identity || identityErr != nil || sidErr != nil {
+	if string(data) != string(canonical)+"\n" || manifest.Schema != userWindowsSchema || manifest.Destination != destination || manifest.SID != sid || manifest.Identity != identity || identityErr != nil || sidErr != nil {
 		return manifest, errors.Join(identityErr, sidErr, errors.New("Windows manifest/physical owner differs"))
 	}
 	return manifest, nil
@@ -353,9 +363,10 @@ func userWindowsProvision(ctx context.Context, root, action string, stdout, stde
 }
 
 // Runtime state written after publication by the owned Go, npm, Node and Pi
-// processes: GOPATH/GOMODCACHE, GOCACHE, TEMP, the npm cache and Pi sessions
-// named after the caller CWD. It is not an installed artefact.
-var userWindowsMutableState = []string{"home", "state", "tmp", "runtime/cache", "agent/sessions"}
+// processes: GOPATH/GOMODCACHE, GOCACHE, TEMP, the npm cache, the agent's own
+// npm package tree written when the user installs Pi extensions, and Pi
+// sessions named after the caller CWD. None of it is an installed artefact.
+var userWindowsMutableState = []string{"home", "state", "tmp", "runtime/cache", "agent/sessions", "agent/npm"}
 
 type userWindowsInventoryMode int
 
@@ -371,11 +382,30 @@ const (
 )
 
 func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
+	// Runtime state is not an installed artefact: caches and sessions written
+	// after publication legitimately grow past the artefact byte bounds. Only
+	// the fresh pre-publication stage keeps every one of its bytes bounded.
+	state := map[string]bool{}
+	if mode != userWindowsInventoryInstalled {
+		for _, relative := range userWindowsMutableState {
+			state[filepath.Join(root, filepath.FromSlash(relative))] = true
+		}
+	}
+	// Launch additionally treats names below these roots as data names.
 	mutable := map[string]bool{}
 	if mode == userWindowsInventoryLaunch {
-		for _, relative := range userWindowsMutableState {
-			mutable[filepath.Join(root, filepath.FromSlash(relative))] = true
+		mutable = state
+	}
+	stateDescendant := func(path string) bool {
+		if len(state) == 0 {
+			return false
 		}
+		for current := filepath.Dir(path); len(current) > len(root); current = filepath.Dir(current) {
+			if state[current] {
+				return true
+			}
+		}
+		return false
 	}
 	dataRoot := func(path string) string {
 		if mode == userWindowsInventoryCleanup {
@@ -411,6 +441,11 @@ func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
 		if !info.IsDir() {
 			if !info.Mode().IsRegular() {
 				return errors.New("Windows inventory contains nonregular objects")
+			}
+			if stateDescendant(path) {
+				// Runtime data keeps the per-entry guards above, but its size
+				// belongs to no installed artefact bound.
+				return nil
 			}
 			total += info.Size()
 			bound := int64(32 << 20)
@@ -900,6 +935,16 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	// Failure is reported but never retracts the published installation.
 	if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "Windows installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
+	}
+	// A reconfigure retired the previous installation to its .replaced-
+	// backup. Bound those backups to one recent tree now that the replacement
+	// is published, verified and launched. Retention failure is reported but
+	// never retracts the valid installation; uncertain candidates are
+	// preserved whole and named.
+	if backup != "" {
+		if retentionErr := userWindowsPruneReplacedBackups(req.Destination, backup); retentionErr != nil {
+			fmt.Fprintf(os.Stderr, "Windows installation is published and verified, but replaced-backup retention failed; older backups may remain beside %q: %v\n", req.Destination, retentionErr)
+		}
 	}
 	return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "installed", result.LauncherNote}, nil
 }

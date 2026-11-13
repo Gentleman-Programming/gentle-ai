@@ -22,6 +22,7 @@ j123-rejected-provider-validator-starts-fresh-high-risk-review
 j125-claude-code-stop-hook-reminds-once-per-candidate
 j126-selected-untracked-terminal-status-resumes-without-flags
 j127-customizable-install-rdd-choice
+j129-correction-request-unavailable-zero-budget
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
 j1658-native-status-recovery-executes-without-authored-authorization

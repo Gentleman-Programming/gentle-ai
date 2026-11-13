@@ -100,3 +100,10 @@ cosas a arreglar de gentle ai para codex: `[features].multi_agent` is deprecated
 - Used the existing `-update` path on the complete baseline matrix. Focused rerun without `-update` and the full `agentguidance` package suite passed in Linux. Only the Codex snapshot row changed; the other 22 variants and the embedded review-contract hash/length remain unchanged. The drift comes from the intended Codex capability asset change, not a new runtime change.
 - Copied only the generated baseline file back. `git diff --check` passed. No production code changed in this correction. Risk: none for this fixture-only correction; the feature's existing items 1, 3 and 5 remain as documented.
 - Updated PR CI must pass before automatic merge. No merged outcome is claimed until target-host readback confirms it.
+
+
+### L12 — Main integration for generated baseline, 2026-11-13
+
+- Fixture correction `49cf16996` exposed a conflict with the baseline already updated on current main `5e4227bf02cdf13de874fce17049b4a910300d33`. Integrated that main without rewriting the feature branch. The only conflict was the generated baseline JSON; other files merged automatically.
+- Regenerated from the integrated working tree, starting with main's baseline. The complete Linux matrix reproduced RED, then the official `-update` path, focused rerun and full Linux `agentguidance` suite all passed. Exactly the Codex row differs from current main; the other 22 variants and embedded review-contract measurements are unchanged.
+- The PR remains pending CI and automatic merge. No production behavior change was added by the snapshot correction.
