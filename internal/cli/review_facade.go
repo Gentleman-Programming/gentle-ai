@@ -970,6 +970,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// committed-range projection instead of silently defaulting to
 		// current-changes (gentle-pi#569, gentle-shell#2379).
 		var pendingApprovedTerminalTarget *reviewtransaction.Snapshot
+		// frozenCommittedCorrectionTarget carries the frozen committed-range
+		// target of a correction_required lineage whose untracked selection is
+		// empty, so an explicit re-entry naming that same base can keep the
+		// frozen exclusion instead of demanding a fresh live declaration
+		// (#6058).
+		var frozenCommittedCorrectionTarget *reviewtransaction.Snapshot
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 				return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review status --projection staged`"))
@@ -1007,9 +1013,16 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					resumeCorrectionUntracked := false
 					declaredUntracked := record.State.InitialSnapshot.IntendedUntracked
 					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) == 0 &&
-						record.State.CurrentSnapshot.Kind == reviewtransaction.TargetBaseDiff &&
-						selectedBaseRef == "" && !*workspaceOverlay {
-						resumeCorrectionUntracked = true
+						record.State.CurrentSnapshot.Kind == reviewtransaction.TargetBaseDiff && !*workspaceOverlay {
+						// The frozen empty selection is the immutable committed-range
+						// decision. A selectorless re-entry resumes it through the
+						// frozen base tree; an explicit re-entry must first prove it
+						// names that same tree (the assessment below does).
+						terminal := record.State.CurrentSnapshot
+						frozenCommittedCorrectionTarget = &terminal
+						if selectedBaseRef == "" {
+							resumeCorrectionUntracked = true
+						}
 					} else if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) != 0 {
 						inventory, _, inventoryErr := builder.IntendedUntrackedInventory(ctx)
 						if inventoryErr != nil {
@@ -1241,6 +1254,26 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if err != nil {
 				return fmt.Errorf("reassess negotiated review target: %w", err)
 			}
+		}
+		// #6058: the exact bound continuation spells the frozen committed range
+		// as `--base-ref <frozen tree> --committed-only`, and an operator may
+		// replay the commit START was pinned to instead. Once the assessed live
+		// target resolves to that same frozen base tree and projection, it is
+		// the same committed range, so the frozen EXCLUDE remains the
+		// authority's immutable decision: an unrelated untracked file must not
+		// replace it with a fresh live declaration. A different base tree stays
+		// a different target and never inherits this decision.
+		// guard:population committed-correction-frozen-exclusion too-loose: only a current, stop-routed correction_required base-diff whose assessed live base tree and projection equal the frozen target and whose frozen intended-untracked selection is empty reuses that exclusion; a different base tree or projection, a declared selection, another lineage, state, or action still takes its own declaration path
+		if frozenCommittedCorrectionTarget != nil && !intendedScope.Declared &&
+			native.Applicability == reviewtransaction.TargetApplicabilityCurrent &&
+			native.LineageID == requestedLineage && native.State == reviewtransaction.StateCorrectionRequired &&
+			native.Action == reviewtransaction.TargetStatusActionStop &&
+			native.Projection.Kind == reviewtransaction.TargetBaseDiff &&
+			native.Projection.BaseTree == frozenCommittedCorrectionTarget.BaseTree &&
+			native.Projection.Projection == frozenCommittedCorrectionTarget.Projection &&
+			len(native.Projection.IntendedUntracked) == 0 {
+			intendedScope.Declared = true
+			intendedScope.NeedsSelection = false
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		if *nonBlockingFindings {

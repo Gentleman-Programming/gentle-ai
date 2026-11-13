@@ -13,9 +13,11 @@ import (
 // closeCommittedBaseDiffLineageIntoCorrectionRequired starts a committed-range
 // (base-diff, committed-only) review on a committed candidate.go with no
 // intended untracked selection, captures one CRITICAL finding on the first
-// lens and clean results on the rest, and returns the lineage sitting in
-// correction_required with no correction plan captured yet.
-func closeCommittedBaseDiffLineageIntoCorrectionRequired(t *testing.T, repo, lineage string) {
+// lens and clean results on the rest, and returns the final reviewer capture's
+// closure so callers can replay its exact bound STATUS continuation. The
+// lineage is left sitting in correction_required with no correction plan
+// captured yet.
+func closeCommittedBaseDiffLineageIntoCorrectionRequired(t *testing.T, repo, lineage string) *reviewLastEventClosureResult {
 	t.Helper()
 	const baseRef = "frozen-base"
 	runReviewCLIGit(t, repo, "branch", baseRef, "HEAD")
@@ -34,6 +36,7 @@ func closeCommittedBaseDiffLineageIntoCorrectionRequired(t *testing.T, repo, lin
 	if len(started.SelectedLenses) == 0 {
 		t.Fatalf("committed base-diff START selected no lenses: %#v", started)
 	}
+	var closure *reviewLastEventClosureResult
 	for order := range started.SelectedLenses {
 		findings := []facadeFinding{}
 		if order == 0 {
@@ -43,13 +46,19 @@ func closeCommittedBaseDiffLineageIntoCorrectionRequired(t *testing.T, repo, lin
 				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 			}}
 		}
-		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &bytes.Buffer{})
+		var captureOutput bytes.Buffer
+		captureCLIReviewerResultWithFindings(t, repo, started, order, findings, &captureOutput)
+		if order == len(started.SelectedLenses)-1 {
+			closure = &reviewLastEventClosureResult{}
+			decodeStrictReviewJSON(t, captureOutput.Bytes(), closure)
+		}
 	}
 	corroborateRefuterClaimsForTest(t, repo, lineage)
 
 	// Only the committed range moves the base branch afterwards; the frozen
 	// tree, never the mutable ref, is what a selectorless re-entry resumes.
 	runReviewCLIGit(t, repo, "branch", "-f", baseRef, "HEAD")
+	return closure
 }
 
 func loadCompactReviewRecordForTest(t *testing.T, repo, lineage string) reviewtransaction.CompactRecord {
