@@ -22,8 +22,9 @@ import (
 // so the supervisor's own limits never change:
 //
 //	KillMode=control-group  -> kill(-pgid) on cancel/deadline, then userReapGroup
-//	TasksMax=64             -> RLIMIT_NPROC = real-uid process count + 64,
-//	                           capped at the inherited hard limit
+//	TasksMax=512            -> RLIMIT_NPROC = real-uid process count +
+//	                           userUnitTasksMax, capped at the inherited hard
+//	                           limit; one shared budget with Linux (#5815)
 //	CPUQuota=100%           -> RLIMIT_CPU = deadline seconds per process (one CPU
 //	                           over the wall-clock deadline); no deadline inherits
 //	UMask=0077              -> umask 077
@@ -39,7 +40,6 @@ const userSupervisionLimitation = "darwin containment is one process group plus 
 	"there is no NoNewPrivileges or capability drop"
 
 const (
-	userTasksMax       = 64
 	userFileBytes      = 4 << 30
 	userDescriptors    = 1024
 	userDescriptorsMax = 524288
@@ -85,7 +85,7 @@ func userDarwinLimits(deadline time.Duration) (userLimits, error) {
 		return userLimits{}, privateError("unavailable", err)
 	}
 	limits := userLimits{
-		Processes:      min(uint64(processes)+userTasksMax, nproc.Max),
+		Processes:      min(uint64(processes)+userUnitTasksMax, nproc.Max),
 		FileBytes:      userFileBytes,
 		DescriptorsMax: min(userDescriptorsMax, nofile.Max),
 		Deadline:       deadline,
