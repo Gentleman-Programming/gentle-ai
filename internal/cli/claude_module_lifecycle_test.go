@@ -129,13 +129,24 @@ func TestClaudeInstalledModulePilotLeavesOtherRoutingUnchanged(t *testing.T) {
 			want:   func(t *testing.T, _, workspace string) []string { return prompt(t, workspace, model.AgentClaudeCode) },
 		},
 		{
-			name:   "other global agents beside an installed pilot",
+			name:   "global Codex modules and other agents beside an installed Claude pilot",
 			pilot:  true,
 			agents: []model.AgentID{model.AgentCodex, model.AgentGeminiCLI},
 			scope:  ScopeGlobal,
 			want: func(t *testing.T, home, _ string) []string {
-				return append(prompt(t, home, model.AgentCodex), prompt(t, home, model.AgentGeminiCLI)...)
+				codex, err := agentguidance.RoutingPathsWithOptions(home, model.AgentCodex, agentguidance.RoutingOptions{CodexGlobalModules: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return append(codex, prompt(t, home, model.AgentGeminiCLI)...)
 			},
+		},
+		{
+			name:   "workspace Codex stays monolithic beside an installed Claude pilot",
+			pilot:  true,
+			agents: []model.AgentID{model.AgentCodex},
+			scope:  ScopeWorkspace,
+			want:   func(t *testing.T, _, workspace string) []string { return prompt(t, workspace, model.AgentCodex) },
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

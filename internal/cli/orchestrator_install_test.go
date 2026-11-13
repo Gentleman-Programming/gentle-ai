@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -68,6 +70,76 @@ func installedGuidance(t *testing.T, home string, agent model.AgentID) (string, 
 	return paths[0], settings.Agent[opencodedefault.ManagedAgent].Prompt
 }
 
+// reconstructCodexInstalledGuidance resolves every installed Codex core
+// pointer through the exact module path and section it names. It fails on an
+// unreachable pointer, a missing or duplicate section, or an installed module
+// that the core never references.
+func reconstructCodexInstalledGuidance(t *testing.T, home, core string) string {
+	t.Helper()
+	paths, err := agentguidance.CodexGlobalModulePaths(home)
+	if err != nil || len(paths) < 3 {
+		t.Fatalf("CodexGlobalModulePaths() = %v, %v", paths, err)
+	}
+	known := map[string]bool{}
+	for _, path := range paths[1 : len(paths)-1] {
+		known[path] = true
+	}
+
+	reconstructed := core
+	used := map[string]bool{}
+	usedPath := map[string]bool{}
+	for _, line := range strings.SplitAfter(core, "\n") {
+		pathStart := strings.Index(line, "read `")
+		sectionStart := strings.Index(line, ", section \"")
+		if !strings.HasPrefix(line, "On demand: when ") || pathStart < 0 || sectionStart < 0 {
+			continue
+		}
+		pathStart += len("read `")
+		pathEnd := strings.Index(line[pathStart:], "`")
+		if pathEnd < 0 {
+			t.Fatalf("malformed Codex module pointer %q", line)
+		}
+		modulePath := line[pathStart : pathStart+pathEnd]
+		sectionStart += len(", section \"")
+		sectionEnd := strings.Index(line[sectionStart:], "\"")
+		if sectionEnd < 0 || !known[modulePath] {
+			t.Fatalf("unreachable Codex module pointer %q", line)
+		}
+		title := line[sectionStart : sectionStart+sectionEnd]
+		key := modulePath + "\x00" + title
+		if used[key] {
+			t.Fatalf("duplicate Codex module pointer for %s section %q", modulePath, title)
+		}
+		used[key] = true
+		usedPath[modulePath] = true
+
+		module := readTextFile(t, modulePath)
+		heading := "\n## " + title + "\n\n"
+		if strings.Count(module, heading) != 1 {
+			t.Fatalf("%s carries section %q %d times, want 1", modulePath, title, strings.Count(module, heading))
+		}
+		body := strings.SplitN(module, heading, 2)[1]
+		if next := strings.Index(body, "\n## "); next >= 0 {
+			body = body[:next]
+		}
+		reconstructed = strings.Replace(reconstructed, line, body, 1)
+	}
+
+	for path := range known {
+		if _, err := os.Lstat(path); err == nil {
+			if !usedPath[path] {
+				t.Fatalf("installed Codex module %s has no reachable core pointer", path)
+			}
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat Codex module %s: %v", path, err)
+		}
+	}
+	if strings.Contains(reconstructed, "read `"+filepath.Join(filepath.Dir(paths[len(paths)-1]), "orchestrator-")) {
+		t.Fatal("reconstructed Codex guidance still carries a module pointer")
+	}
+	return reconstructed
+}
+
 func TestInstallAndSyncSelectGenericOrchestratorVariant(t *testing.T) {
 	asset, err := assets.Read("generic/orchestrator.md")
 	if err != nil {
@@ -132,7 +204,11 @@ func TestInstallAndSyncDeliverOrchestratorOnceForEveryRuntime(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RenderOrchestrator(%q) error = %v", agent, err)
 			}
-			if got := strings.Count(prompt, strings.TrimSpace(rendered)); got != 1 {
+			guidance := prompt
+			if agent == model.AgentCodex {
+				guidance = reconstructCodexInstalledGuidance(t, home, prompt)
+			}
+			if got := strings.Count(guidance, strings.TrimSpace(rendered)); got != 1 {
 				t.Fatalf("installed prompt carries the orchestrator %d times, want 1:\n%s", got, prompt)
 			}
 			if got := strings.Count(prompt, orchestratorOpenMarker); got != 1 {
