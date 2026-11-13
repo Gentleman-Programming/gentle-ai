@@ -111,6 +111,21 @@ func Entry(spec Spec) (map[string]any, error) {
 	return map[string]any{"mode": "subagent", "hidden": true, "description": spec.Description, "prompt": prompt, "permission": spec.Permission}, nil
 }
 
+// legacyVerifyPrompt derives the pre-refactor verifier prompt from the current
+// expanded prompt and the canonical method asset.
+func legacyVerifyPrompt(prompt string) (string, error) {
+	method, err := assets.Read("skills/_shared/verify-method.md")
+	if err != nil {
+		return "", err
+	}
+	prompt = strings.ReplaceAll(prompt, "plus the scratch-copy probes in the shared method.", "plus the scratch-copy probes below.")
+	body := strings.Index(method, "For behavior changes")
+	if body <= 0 {
+		return "", fmt.Errorf("verification method lost its body marker")
+	}
+	return strings.ReplaceAll(prompt, method[:body], ""), nil
+}
+
 func Refuter() map[string]any {
 	return map[string]any{"mode": "subagent", "hidden": true, "description": "Read-only refuter for provider-issued review findings", "prompt": "Evaluate only the Go-issued review refuter task. Inspect only the frozen candidate through the provided commands. Do not edit files or delegate. Return only the requested result.", "permission": map[string]any{"write": "deny", "edit": "deny", "task": "deny"}}
 }
@@ -197,6 +212,16 @@ func Shape(name string, entry map[string]any) (bool, error) {
 	expected, err := json.Marshal(want)
 	if err != nil {
 		return false, err
+	}
+	if !bytes.Equal(got, expected) && name == "gentle-ai-verify" {
+		if legacy, err := legacyVerifyPrompt(want["prompt"].(string)); err != nil {
+			return false, err
+		} else {
+			want["prompt"] = legacy
+		}
+		if expected, err = json.Marshal(want); err != nil {
+			return false, err
+		}
 	}
 	return bytes.Equal(got, expected), nil
 }
