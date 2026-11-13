@@ -1688,10 +1688,7 @@ func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
 		},
 	}
 	for path, clauses := range want {
-		body, err := FS.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", path, err)
-		}
+		body := []byte(resolvedAgentContract(t, path))
 		for _, clause := range clauses {
 			if !strings.Contains(string(body), clause) {
 				t.Errorf("%s is missing %q", path, clause)
@@ -1705,10 +1702,7 @@ func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
 		"opencode/agents/gentle-ai-verify.md": {"NODE_COMPILE_CACHE", "NO_UPDATE_NOTIFIER", "--reflink"},
 	}
 	for path, phrases := range retired {
-		body, err := FS.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", path, err)
-		}
+		body := []byte(resolvedAgentContract(t, path))
 		for _, phrase := range phrases {
 			if strings.Contains(string(body), phrase) {
 				t.Errorf("%s still contains %q", path, phrase)
@@ -1773,10 +1767,7 @@ func TestOpenCodeGenericAgentsRemoveTheirScratchAfterUse(t *testing.T) {
 		"opencode/agents/gentle-ai-worker.md": "Tests delete the temp directories they create in teardown; name any scratch directory you created outside the worktree in `risks` so the parent removes it.",
 	}
 	for path, clause := range want {
-		body, err := FS.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", path, err)
-		}
+		body := []byte(resolvedAgentContract(t, path))
 		if !strings.Contains(string(body), clause) {
 			t.Errorf("%s is missing %q", path, clause)
 		}
@@ -1798,10 +1789,7 @@ func TestOpenCodeGenericAgentsReadTheFeatureSpecByReference(t *testing.T) {
 		"opencode/agents/gentle-ai-explore.md": {"until `## Log`"},
 	}
 	for path, clauses := range want {
-		body, err := FS.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", path, err)
-		}
+		body := []byte(resolvedAgentContract(t, path))
 		for _, clause := range clauses {
 			if !strings.Contains(string(body), clause) {
 				t.Errorf("%s is missing %q", path, clause)
@@ -1872,12 +1860,12 @@ func TestDelegationSkillsDelegateForReasonAndForwardTestDiscipline(t *testing.T)
 // with the exact command first and only counts it reproduced when the baseline
 // fails with the user's error, leaves adding probes to the writer and an
 // authorized commit to the parent, and corrects its own setup once. These rules
-// live in the verifier body only; the shared Verify handoff keeps its main text
-// plus the authorized-commit sentence, which fits the Antigravity budget.
+// live in the installed shared method; both handoff variants reference it while
+// retaining the parent-owned authorization and correction boundaries.
 func TestVerifierChecksByChangeKind(t *testing.T) {
 	t.Parallel()
 
-	verifier := MustRead("opencode/agents/gentle-ai-verify.md")
+	verifier := resolvedAgentContract(t, "opencode/agents/gentle-ai-verify.md")
 	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
 	gates := map[string]string{}
 	for _, name := range []string{"Delegated Verification Gate (MANDATORY)", "Delegated Verification Gate (MANDATORY) (ODD only)"} {
@@ -1938,9 +1926,9 @@ func TestVerifierChecksByChangeKind(t *testing.T) {
 		}
 	}
 
-	// The shared handoff keeps its main text; only the probe sentence changes.
+	// The shared handoff retains the authorized-commit sentence and points to the method.
 	for name, gate := range gates {
-		if !strings.Contains(gate, "is always a blocker. The writer adds the probes as regression tests; the parent commits them when authorized.\n") {
+		if !strings.Contains(gate, "The writer adds the probes as regression tests; the parent commits them when authorized.\n") {
 			t.Errorf("shared section %q is missing the authorized-commit probe sentence", name)
 		}
 		if strings.Contains(gate, "The writer commits the probes as regression tests.") {
@@ -1992,7 +1980,7 @@ func TestVerifierChecksByChangeKind(t *testing.T) {
 	for name, gate := range gates {
 		for _, want := range []string{
 			"**Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms",
-			"silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker",
+			"`_shared/verify-method.md`",
 			"The parent spot check — re-running one reported command before delivery — stays in every tier.",
 		} {
 			if !strings.Contains(gate, want) {
@@ -2059,7 +2047,7 @@ func TestGenericAgentsResumeWithoutRereadsAndReportCompactly(t *testing.T) {
 
 			body := tt.body
 			if body == "" {
-				body = MustRead(tt.path)
+				body = resolvedAgentContract(t, tt.path)
 			}
 			for _, want := range tt.required {
 				if !strings.Contains(body, want) {
@@ -2073,4 +2061,19 @@ func TestGenericAgentsResumeWithoutRereadsAndReportCompactly(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Agent permission envelopes stay local; method assertions follow the explicit reference.
+func resolvedAgentContract(t *testing.T, path string) string {
+	t.Helper()
+	body := MustRead(path)
+	if path != "opencode/agents/gentle-ai-verify.md" {
+		return body
+	}
+	for _, clause := range []string{"{{GENTLE_AI_VERIFY_METHOD}}", "Read-only means no edits to the repository or its git state", "Do not delegate to child agents, commit, or push.", "Do not use review lenses. RDD review remains independent and parent-owned."} {
+		if !strings.Contains(body, clause) {
+			t.Fatalf("verifier envelope missing %q", clause)
+		}
+	}
+	return strings.ReplaceAll(body, "{{GENTLE_AI_VERIFY_METHOD}}", MustRead("skills/_shared/verify-method.md"))
 }

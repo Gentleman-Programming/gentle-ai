@@ -100,6 +100,14 @@ func Entry(spec Spec) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read embedded prompt for %q: %w", spec.Name, err)
 	}
+	if spec.Name == "gentle-ai-verify" {
+		// Inline carriers must work even when no skills component is selected.
+		method, err := assets.Read("skills/_shared/verify-method.md")
+		if err != nil {
+			return nil, fmt.Errorf("read shared verification method: %w", err)
+		}
+		prompt = strings.ReplaceAll(prompt, "{{GENTLE_AI_VERIFY_METHOD}}", method)
+	}
 	return map[string]any{"mode": "subagent", "hidden": true, "description": spec.Description, "prompt": prompt, "permission": spec.Permission}, nil
 }
 
