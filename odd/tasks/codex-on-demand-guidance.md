@@ -10,7 +10,7 @@ Delivery: single-pr, exception-ok (user selected "Un solo pr size exception"; fo
 
 ## Tasks
 
-- T1 [S2, S3] — Codex core/module delivery and lifecycle integration, including regression tests and docs. Route: delegated; two independent behavior units with disjoint module/config edit surfaces launched together. Status: implemented and functionally verified; local delivery authorized by the user despite unresolved advisory RDD. Commit: none. Risk: items 1, 3, 5 (managed-file lifecycle, shipped instruction contracts, installer behavior).
+- T1 [S2, S3] — Codex core/module delivery and lifecycle integration, including regression tests and docs. Route: delegated; two independent behavior units with disjoint module/config edit surfaces launched together. Status: implemented and functionally verified; local delivery authorized by the user despite unresolved advisory RDD. Commit: `75bfa6b2f`. Risk: items 1, 3, 5 (managed-file lifecycle, shipped instruction contracts, installer behavior).
 - T2 [S1] — Modern multi-agent migration and capability guidance, including tests and docs. Route: delegated; parallel with T1, owning config injection and Codex capability asset only. Status: implemented and functionally verified; native severe findings remain unresolved. Commit: `0dbb87fce`. Risk: items 3, 5 (config compatibility and installer behavior).
 - T3 [S1–S3] — Cross-runtime regression checks, isolated independent verifier, and native review assessment. Route: delegated verification due to named high-risk items; native review only through provider transitions and candidate consent. Status: functional and independent verification passed; native correction plan unavailable. Commit: verification accompanies each behavior unit.
 
@@ -90,3 +90,13 @@ cosas a arreglar de gentle ai para codex: `[features].multi_agent` is deprecated
 - This explicitly authorizes local delivery, push, PR creation and merge subject to ordinary repository requirements. The user accepts proceeding on functional verification without resolving this candidate's advisory RDD. RDD remains globally unchanged and no approval receipt is claimed.
 - Preserve the existing review state as historical unresolved evidence; do not start another review for this delivery. Earlier L8/L9 delivery holds are superseded by this explicit instruction, not by a fabricated PASS.
 - Base-repository issue #5256 is approved and already closed; it covers Codex core/module lifecycle. Human selection of closing/non-closing PR reference remains pending under repository policy.
+
+
+### L11 — Linux-only baseline correction after CI, 2026-11-13
+
+- PR #6121 links `Refs #5256` by the user's explicit selection. The user explicitly authorized `type:feature` and `size:exception` on #6121; both were applied and read back on the exact target. Native GitHub squash auto-merge was enabled without bypassing required checks.
+- CI Unit Tests failed `TestOrchestratorModuleBaseline`. All three required Linux E2E jobs and policy checks passed. The full CLI package passed in CI. The baseline test skips on non-Linux; prior successful macOS package and `-update` commands did not execute this snapshot check. Earlier claims of baseline coverage were incomplete.
+- Reproduced RED on Linux arm64 using a locally cross-compiled package test binary in an isolated Alpine container with no network, read-only root filesystem, temporary HOME, and no personal configuration mounts.
+- Used the existing `-update` path on the complete baseline matrix. Focused rerun without `-update` and the full `agentguidance` package suite passed in Linux. Only the Codex snapshot row changed; the other 22 variants and the embedded review-contract hash/length remain unchanged. The drift comes from the intended Codex capability asset change, not a new runtime change.
+- Copied only the generated baseline file back. `git diff --check` passed. No production code changed in this correction. Risk: none for this fixture-only correction; the feature's existing items 1, 3 and 5 remain as documented.
+- Updated PR CI must pass before automatic merge. No merged outcome is claimed until target-host readback confirms it.
