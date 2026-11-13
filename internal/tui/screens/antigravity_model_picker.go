@@ -9,6 +9,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
 )
 
+// AntigravityModelPreset represents a named tier configuration preset for Antigravity subagents.
 type AntigravityModelPreset string
 
 const (
@@ -20,9 +21,18 @@ const (
 
 var antigravityPresetDescriptions = map[AntigravityModelPreset]string{
 	AntigravityPresetInherit:     "Subagents use the session model (agy default)",
-	AntigravityPresetPerformance: "pro tier for Judgment Day judges and the fix agent",
-	AntigravityPresetEconomy:     "flash judges and a flash_lite fix agent",
-	AntigravityPresetCustom:      "Pick the agy tier for each Judgment Day role individually",
+	AntigravityPresetPerformance: "pro tier for workers, verifiers, judges, and fix agents; flash for explorer",
+	AntigravityPresetEconomy:     "flash workers, verifiers, and judges; flash_lite for explorer and fixes",
+	AntigravityPresetCustom:      "Pick the agy tier for each ODD and Judgment Day role individually",
+}
+
+var antigravityRoleLabels = map[string]string{
+	"gentle-ai-explore": "ODD Explorer",
+	"gentle-ai-worker":  "ODD Worker",
+	"gentle-ai-verify":  "ODD Verify",
+	"jd-judge-a":        "JD Judge A",
+	"jd-judge-b":        "JD Judge B",
+	"jd-fix-agent":      "JD Fix Agent",
 }
 
 var antigravityPresetOrder = []AntigravityModelPreset{
@@ -52,6 +62,7 @@ type AntigravityModelPickerState struct {
 	InCustomMode      bool
 }
 
+// NewAntigravityModelPickerState returns an initial picker state with the inherit preset selected.
 func NewAntigravityModelPickerState() AntigravityModelPickerState {
 	return AntigravityModelPickerState{
 		Preset:            AntigravityPresetInherit,
@@ -59,6 +70,7 @@ func NewAntigravityModelPickerState() AntigravityModelPickerState {
 	}
 }
 
+// NewAntigravityModelPickerStateFromAssignments restores picker state from previously saved custom assignments.
 func NewAntigravityModelPickerStateFromAssignments(assignments map[string]model.AntigravityModelTier) AntigravityModelPickerState {
 	if len(assignments) == 0 {
 		return NewAntigravityModelPickerState()
@@ -72,6 +84,7 @@ func NewAntigravityModelPickerStateFromAssignments(assignments map[string]model.
 	return state
 }
 
+// HandleAntigravityModelPickerNav handles navigation keys (up/down/enter/esc) for the Antigravity model picker.
 func HandleAntigravityModelPickerNav(
 	key string,
 	state *AntigravityModelPickerState,
@@ -109,6 +122,7 @@ func HandleAntigravityModelPickerNav(
 	return true, nil
 }
 
+// nextAntigravityTier returns the next tier in round-robin order when cycling in custom mode.
 func nextAntigravityTier(current model.AntigravityModelTier) model.AntigravityModelTier {
 	for i, tier := range antigravityTierOrder {
 		if tier == current {
@@ -118,6 +132,7 @@ func nextAntigravityTier(current model.AntigravityModelTier) model.AntigravityMo
 	return antigravityTierOrder[1]
 }
 
+// AntigravityModelPickerOptionCount returns the number of selectable options for the current picker state.
 func AntigravityModelPickerOptionCount(state AntigravityModelPickerState) int {
 	if state.InCustomMode {
 		return len(model.AntigravityModelRoles) + 2 // role rows + Confirm + Back
@@ -125,12 +140,62 @@ func AntigravityModelPickerOptionCount(state AntigravityModelPickerState) int {
 	return len(antigravityPresetOrder) + 1 // presets + Back
 }
 
-func RenderAntigravityModelPicker(state AntigravityModelPickerState, cursor int) string {
+const antigravityHostLimitationNotice = "Note: Antigravity native subagents support tiers (inherit/flash_lite/flash/pro); arbitrary model/provider/effort is unsupported by the host."
+
+// renderAntigravityNotice renders the host limitation notice, wrapping by words
+// when a positive terminal width is provided so it fits 80-column and narrower terminals.
+func renderAntigravityNotice(width int) string {
+	if width <= 0 {
+		return styles.HelpStyle.Render(antigravityHostLimitationNotice)
+	}
+
+	words := strings.Fields(antigravityHostLimitationNotice)
+	if len(words) == 0 {
+		return ""
+	}
+
+	var lines []string
+	var cur strings.Builder
+	for _, w := range words {
+		if cur.Len() == 0 {
+			cur.WriteString(w)
+			continue
+		}
+		if cur.Len()+1+len(w) > width {
+			lines = append(lines, cur.String())
+			cur.Reset()
+			cur.WriteString(w)
+		} else {
+			cur.WriteString(" ")
+			cur.WriteString(w)
+		}
+	}
+	if cur.Len() > 0 {
+		lines = append(lines, cur.String())
+	}
+
+	var rendered []string
+	for _, l := range lines {
+		rendered = append(rendered, styles.HelpStyle.Render(l))
+	}
+	return strings.Join(rendered, "\n")
+}
+
+// RenderAntigravityModelPicker renders the Antigravity model picker screen for the given state and cursor index.
+// If an optional width is provided, long notices are wrapped to fit the available terminal width.
+func RenderAntigravityModelPicker(state AntigravityModelPickerState, cursor int, width ...int) string {
+	targetWidth := 0
+	if len(width) > 0 {
+		targetWidth = width[0]
+	}
+
 	var b strings.Builder
 	if !state.InCustomMode {
 		b.WriteString(styles.TitleStyle.Render("Antigravity Model Assignments"))
 		b.WriteString("\n\n")
 		b.WriteString(styles.SubtextStyle.Render("Choose the agy model tier for Antigravity subagents:"))
+		b.WriteString("\n")
+		b.WriteString(renderAntigravityNotice(targetWidth))
 		b.WriteString("\n\n")
 		for idx, preset := range antigravityPresetOrder {
 			b.WriteString(renderRadio(string(preset), preset == state.Preset, idx == cursor))
@@ -146,9 +211,18 @@ func RenderAntigravityModelPicker(state AntigravityModelPickerState, cursor int)
 	b.WriteString(styles.TitleStyle.Render("Custom Antigravity Model Assignments"))
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Press enter on a role to cycle: inherit → flash_lite → flash → pro"))
+	b.WriteString("\n")
+	b.WriteString(renderAntigravityNotice(targetWidth))
 	b.WriteString("\n\n")
 	for idx, role := range model.AntigravityModelRoles {
-		label := fmt.Sprintf("%-20s [%s]", claudePhaseLabels[role], model.AntigravityModelID(state.CustomAssignments[role]))
+		roleLabel := antigravityRoleLabels[role]
+		if roleLabel == "" {
+			roleLabel = claudePhaseLabels[role]
+		}
+		if roleLabel == "" {
+			roleLabel = role
+		}
+		label := fmt.Sprintf("%-20s [%s]", roleLabel, model.AntigravityModelID(state.CustomAssignments[role]))
 		if idx == cursor {
 			b.WriteString(styles.SelectedStyle.Render(styles.Cursor+label) + "\n")
 		} else {

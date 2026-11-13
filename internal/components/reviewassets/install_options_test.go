@@ -328,8 +328,11 @@ func TestNativeAgentModelsAndUnrelatedFiles(t *testing.T) {
 	}{
 		{model.AgentClaudeCode, reviewassets.InstallOptions{ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{"jd-judge-a": {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortHigh}}}, "jd-judge-a.md", "model: opus"},
 		{model.AgentKiroIDE, reviewassets.InstallOptions{KiroModelAssignments: map[string]model.KiroModelAlias{"jd-judge-a": model.KiroModelOpus}}, "jd-judge-a.md", "model: claude-opus"},
+		{model.AgentAntigravity, reviewassets.InstallOptions{AntigravityModelAssignments: map[string]model.AntigravityModelTier{"gentle-ai-worker": model.AntigravityModelFlash}}, "gentle-ai-worker.md", "model: flash"},
+		{model.AgentAntigravity, reviewassets.InstallOptions{AntigravityModelAssignments: map[string]model.AntigravityModelTier{"gentle-ai-explore": model.AntigravityModelFlashLite}}, "gentle-ai-explore.md", "model: flash_lite"},
+		{model.AgentAntigravity, reviewassets.InstallOptions{AntigravityModelAssignments: map[string]model.AntigravityModelTier{"gentle-ai-verify": model.AntigravityModelPro}}, "gentle-ai-verify.md", "model: pro"},
 	} {
-		t.Run(string(tc.agent), func(t *testing.T) {
+		t.Run(string(tc.agent)+"/"+tc.name, func(t *testing.T) {
 			adapter, err := agents.NewAdapter(tc.agent)
 			if err != nil {
 				t.Fatal(err)
@@ -350,7 +353,7 @@ func TestNativeAgentModelsAndUnrelatedFiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(content), tc.want) || strings.Contains(string(content), "{{KIRO_MODEL}}") || strings.Contains(string(content), "{{CLAUDE_MODEL}}") {
+			if !strings.Contains(string(content), tc.want) || strings.Contains(string(content), "{{KIRO_MODEL}}") || strings.Contains(string(content), "{{CLAUDE_MODEL}}") || strings.Contains(string(content), "{{ANTIGRAVITY_MODEL}}") {
 				t.Errorf("model placeholder not resolved: %s", content[:min(250, len(content))])
 			}
 			if tc.agent == model.AgentClaudeCode && !strings.Contains(string(content), "effort: high") {

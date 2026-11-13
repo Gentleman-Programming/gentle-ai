@@ -16,14 +16,24 @@ import (
 // publish the Judgment Day agents where agy 1.4 discovers custom agents, and
 // that both flows snapshot those files before writing them.
 func TestAntigravityInstallAndSyncWriteJudgmentDayAgents(t *testing.T) {
-	names := []string{"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"}
+	names := []string{
+		"gentle-ai-explore.md",
+		"gentle-ai-verify.md",
+		"gentle-ai-worker.md",
+		"jd-fix-agent.md",
+		"jd-judge-a.md",
+		"jd-judge-b.md",
+	}
 	for _, flow := range []string{"install", "sync"} {
 		t.Run(flow, func(t *testing.T) {
 			home := t.TempDir()
 			dir := filepath.Join(home, ".gemini", "config", "agents")
 			selection := model.Selection{
-				Agents:                      []model.AgentID{model.AgentAntigravity},
-				AntigravityModelAssignments: map[string]model.AntigravityModelTier{"jd-judge-a": model.AntigravityModelPro},
+				Agents: []model.AgentID{model.AgentAntigravity},
+				AntigravityModelAssignments: map[string]model.AntigravityModelTier{
+					"jd-judge-a":       model.AntigravityModelPro,
+					"gentle-ai-worker": model.AntigravityModelFlash,
+				},
 			}
 
 			var targets []string
@@ -61,6 +71,8 @@ func TestAntigravityInstallAndSyncWriteJudgmentDayAgents(t *testing.T) {
 				wantModel := "\nmodel: inherit\n"
 				if name == "jd-judge-a.md" {
 					wantModel = "\nmodel: pro\n"
+				} else if name == "gentle-ai-worker.md" {
+					wantModel = "\nmodel: flash\n"
 				}
 				if !strings.Contains(string(data), wantModel) {
 					t.Errorf("%s %s does not render %q", flow, name, strings.TrimSpace(wantModel))

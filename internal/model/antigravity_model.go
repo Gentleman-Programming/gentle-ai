@@ -12,7 +12,14 @@ const (
 
 // AntigravityModelRoles are the roles with a native agy agent whose `model:`
 // frontmatter Gentle AI renders. Antigravity has no RDD review agents.
-var AntigravityModelRoles = []string{"jd-judge-a", "jd-judge-b", "jd-fix-agent"}
+var AntigravityModelRoles = []string{
+	"gentle-ai-explore",
+	"gentle-ai-worker",
+	"gentle-ai-verify",
+	"jd-judge-a",
+	"jd-judge-b",
+	"jd-fix-agent",
+}
 
 // Valid reports whether the tier is one agy accepts in agent frontmatter.
 func (t AntigravityModelTier) Valid() bool {
@@ -35,21 +42,46 @@ func AntigravityModelID(tier AntigravityModelTier) string {
 
 // AntigravityModelPresetInherit keeps every native agent on the session model.
 func AntigravityModelPresetInherit() map[string]AntigravityModelTier {
-	return antigravityModelPreset(AntigravityModelInherit, AntigravityModelInherit)
+	return antigravityModelPreset(
+		AntigravityModelInherit,
+		AntigravityModelInherit,
+		AntigravityModelInherit,
+		AntigravityModelInherit,
+		AntigravityModelInherit,
+	)
 }
 
-// AntigravityModelPresetPerformance runs judges and the fix agent on pro.
+// AntigravityModelPresetPerformance runs workers, verifiers, judges and fix agents on pro, with flash for exploration.
 func AntigravityModelPresetPerformance() map[string]AntigravityModelTier {
-	return antigravityModelPreset(AntigravityModelPro, AntigravityModelPro)
+	return antigravityModelPreset(
+		AntigravityModelFlash,
+		AntigravityModelPro,
+		AntigravityModelPro,
+		AntigravityModelPro,
+		AntigravityModelPro,
+	)
 }
 
-// AntigravityModelPresetEconomy runs judges on flash and fixes on flash_lite.
+// AntigravityModelPresetEconomy runs workers, verifiers, and judges on flash, and exploration and fixes on flash_lite.
 func AntigravityModelPresetEconomy() map[string]AntigravityModelTier {
-	return antigravityModelPreset(AntigravityModelFlash, AntigravityModelFlashLite)
+	return antigravityModelPreset(
+		AntigravityModelFlashLite,
+		AntigravityModelFlash,
+		AntigravityModelFlash,
+		AntigravityModelFlash,
+		AntigravityModelFlashLite,
+	)
 }
 
-func antigravityModelPreset(judges, fix AntigravityModelTier) map[string]AntigravityModelTier {
-	return map[string]AntigravityModelTier{"jd-judge-a": judges, "jd-judge-b": judges, "jd-fix-agent": fix}
+func antigravityModelPreset(explore, worker, verify, judges, fix AntigravityModelTier) map[string]AntigravityModelTier {
+	return map[string]AntigravityModelTier{
+		"gentle-ai-explore": explore,
+		"gentle-ai-worker":  worker,
+		"gentle-ai-verify":  verify,
+		"jd-judge-a":        judges,
+		"jd-judge-b":        judges,
+		"jd-fix-agent":      fix,
+	}
 }
 
 // AntigravityModelTiersToStrings converts tiers for state.json.

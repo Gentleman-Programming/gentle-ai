@@ -14,6 +14,8 @@ import (
 // agyFrontmatterKeys are the only frontmatter keys agy custom agents read.
 var agyFrontmatterKeys = []string{"name", "description", "model"}
 
+// TestAntigravityJudgmentDayInstallAndRefresh tests install, refresh, and idempotency
+// of native Antigravity custom agents including ODD roles and Judgment Day roles.
 func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 	adapter, err := agents.NewAdapter(model.AgentAntigravity)
 	if err != nil {
@@ -21,7 +23,7 @@ func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 	}
 	home := t.TempDir()
 	dir := filepath.Join(home, ".gemini", "config", "agents")
-	names := []string{"jd-judge-a.md", "jd-judge-b.md", "jd-fix-agent.md"}
+	allNames := reviewassets.NativeAgentManifest[model.AgentAntigravity]
 	for _, flow := range []string{"fresh", "refresh", "idempotent"} {
 		t.Run(flow, func(t *testing.T) {
 			opts := reviewassets.InstallOptions{}
@@ -35,7 +37,7 @@ func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 			if result.Changed != (flow != "idempotent") {
 				t.Fatalf("%s: unexpected result %+v", flow, result)
 			}
-			for _, name := range names {
+			for _, name := range allNames {
 				data, err := os.ReadFile(filepath.Join(dir, name))
 				if err != nil {
 					t.Fatal(err)
@@ -65,14 +67,26 @@ func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 							t.Errorf("%s missing judge contract %q", name, want)
 						}
 					}
-				} else {
+				} else if name == "jd-fix-agent.md" {
 					for _, want := range []string{"Fix ONLY the confirmed issues", "Only the parent may launch"} {
 						if !strings.Contains(text, want) {
 							t.Errorf("%s missing fix contract %q", name, want)
 						}
 					}
+				} else if name == "gentle-ai-explore.md" {
+					for _, want := range []string{"Read and search only. Do not edit, write, run commands, or mutate state.", "Do not fix findings, delegate to child agents, commit, or push."} {
+						if !strings.Contains(text, want) {
+							t.Errorf("%s missing explorer read-only contract %q", name, want)
+						}
+					}
+				} else if name == "gentle-ai-verify.md" {
+					for _, want := range []string{"Read-only means no edits to the repository or its git state", "Do not edit, write, or fix findings."} {
+						if !strings.Contains(text, want) {
+							t.Errorf("%s missing verifier read-only contract %q", name, want)
+						}
+					}
 				}
-				if flow != "fresh" && !strings.Contains(text, opts.CodeGraphGuidanceMarkdown) {
+				if flow != "fresh" && strings.HasPrefix(name, "jd-") && !strings.Contains(text, opts.CodeGraphGuidanceMarkdown) {
 					t.Errorf("%s was not refreshed", name)
 				}
 			}
@@ -80,8 +94,8 @@ func TestAntigravityJudgmentDayInstallAndRefresh(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(entries) != len(names)+1 {
-				t.Fatalf("got %d entries, want three JD agents plus ownership ledger", len(entries))
+			if len(entries) != len(allNames)+1 {
+				t.Fatalf("got %d entries, want %d agents plus ownership ledger", len(entries), len(allNames))
 			}
 			for _, entry := range entries {
 				if strings.HasPrefix(entry.Name(), "review-") {
