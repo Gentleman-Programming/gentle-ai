@@ -4371,10 +4371,6 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					if p := adapter.SettingsPath(homeDir); p != "" {
 						paths = append(paths, p)
 					}
-					// Engram registration is plugin-owned (#797); declaring
-					// the assets snapshots them, so sync reports only plugin
-					// files whose bytes really changed (#5614).
-					paths = append(paths, engram.AntigravityPluginAssetPaths(targetDir)...)
 				}
 			case model.StrategyMergeIntoYAML:
 				if p := adapter.MCPConfigPath(targetDir, "engram"); p != "" {
@@ -4636,13 +4632,15 @@ func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScop
 }
 
 // antigravityLegacyEngramPluginPaths returns the Engram plugin assets older
-// gentle-ai versions wrote under antigravity-cli/plugins. Engram injection
-// retires them (#5930), so they are backup-only targets: never verified.
+// gentle-ai versions wrote under antigravity-cli/plugins or plugins/gentle-ai-engram.
+// Engram injection retires them (#5930, #5988), so they are backup-only targets: never verified.
 func antigravityLegacyEngramPluginPaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
 	var paths []string
 	for _, adapter := range adapters {
 		if adapter.Agent() == model.AgentAntigravity {
-			paths = append(paths, engram.AntigravityLegacyPluginAssetPaths(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))...)
+			dir := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
+			paths = append(paths, engram.AntigravityLegacyPluginAssetPaths(dir)...)
+			paths = append(paths, engram.AntigravityPluginAssetPaths(dir)...)
 		}
 	}
 	return paths
@@ -4736,14 +4734,12 @@ func openCodeSDDPluginPaths(adapter agents.Adapter, targetDir string) []string {
 	return paths
 }
 
-// verificationComponentPaths excludes retired Codex SDD profiles, Pi's
-// mcp.json, and Antigravity's global mcp_config.json from active health checks.
-// Pi Engram is native-only (gentle-engram), so Engram provisioning writes
-// mcp.json only to migrate mcp-adapter.json servers and its absence is healthy
-// (#5103). Antigravity Engram registration is plugin-owned (#797): Engram only
-// removes a managed duplicate from the global config and never creates it. The
-// shared component path inventory retains them for snapshots and rollback of
-// user-owned files.
+// verificationComponentPaths excludes retired Codex SDD profiles and Pi's
+// mcp.json from active health checks. Pi Engram is native-only (gentle-engram),
+// so Engram provisioning writes mcp.json only to migrate mcp-adapter.json servers
+// and its absence is healthy (#5103). Antigravity Engram registration uses
+// global stdio mcp_config.json (#5988). The shared component path inventory
+// retains them for snapshots and rollback of user-owned files.
 func verificationComponentPaths(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component)
 	if component != model.ComponentEngram {
@@ -4759,7 +4755,7 @@ func verificationComponentPaths(homeDir, workspaceDir string, scope InstallScope
 					excluded[profile] = true
 				}
 			}
-		case model.AgentPi, model.AgentAntigravity:
+		case model.AgentPi:
 			if config := adapter.MCPConfigPath(targetDir, "engram"); config != "" {
 				excluded[config] = true
 			}
