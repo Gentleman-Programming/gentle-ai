@@ -242,6 +242,8 @@ The role submission descriptor is a negotiated status contract change, so the ne
 
 Native Go alone selects lenses, classifies candidate causality, performs refutation, derives repository evidence, and permits at most one bounded correction. A validator that cannot inspect its immutable trees has no verdict; report that block rather than submitting a failed validation.
 
+A committed-range correction re-entered with the exact selector the final capture returned (`--base-ref <frozen tree> --committed-only`), or with the commit START was pinned to, keeps its frozen empty intended-untracked exclusion. Unrelated untracked files do not reopen that decision or require a new `--untracked-scope` declaration. A different base tree names a different target and never inherits the frozen decision.
+
 ### Non-blocking findings of a stopped review (`--non-blocking-findings`)
 
 If the authority revision changes during this read, STATUS refuses rather than mixing revisions. Rerun the same `gentle-ai review status` command with unchanged arguments; the refusal grants no new authority.
