@@ -29,17 +29,23 @@ func (a KiroModelAlias) Valid() bool {
 // in the `model:` field of a custom agent frontmatter.
 //
 // Kiro model IDs do not include a provider prefix — they are passed directly
-// as the `model` key in ~/.kiro/agents/*.md frontmatter.
+// as the `model` key in ~/.kiro/agents/*.md frontmatter. Every non-auto ID
+// below appears in `kiro-cli chat --list-models`; the Claude 5.5 IDs are
+// listed only for paid plans, so Kiro Free users should pick the open-weight
+// preset or open-weight custom assignments.
+//
+// Kiro rejects an agent whose pinned model is unknown or unavailable instead
+// of falling back, so unknown aliases resolve to auto.
 //
 // References: https://kiro.dev/docs/models/
 func KiroModelID(alias KiroModelAlias) string {
 	switch alias {
-	case KiroModelAuto:
-		return "auto"
 	case KiroModelOpus:
-		return "claude-opus-4.8"
+		return "claude-opus-5.5"
+	case KiroModelSonnet:
+		return "claude-sonnet-5.5"
 	case KiroModelHaiku:
-		return "claude-haiku-4.5"
+		return "claude-haiku-5.5"
 	case KiroModelMiniMax:
 		return "minimax-m2.5"
 	case KiroModelGLM:
@@ -49,31 +55,36 @@ func KiroModelID(alias KiroModelAlias) string {
 	case KiroModelQwen:
 		return "qwen3-coder-next"
 	default:
-		return "claude-sonnet-4.6"
+		return "auto"
 	}
 }
 
-// KiroModelPresetBalanced lets Kiro route ODD and review roles automatically.
+// Paid presets use only Claude 5.5. GPT-5.6 Sol (4.40x credits) and Terra
+// (2.20x) cost more than Opus 5.5 (2.00x), and Haiku 5.5 (0.06x) is both
+// cheaper and stronger than GPT-5.6 Luna (0.60x) and the open-weight models.
+
+// KiroModelPresetBalanced uses Claude Sonnet 5.5 for reasoning-heavy roles and
+// Claude Haiku 5.5 for exploration, implementation, and the second judge.
 func KiroModelPresetBalanced() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelAuto,
-		"odd-explorer": KiroModelAuto,
-		"odd-worker":   KiroModelAuto,
-		"odd-verify":   KiroModelAuto,
-		"jd-judge-a":   KiroModelAuto,
-		"jd-judge-b":   KiroModelAuto,
-		"jd-fix-agent": KiroModelAuto,
-		"risk":         KiroModelAuto,
-		"readability":  KiroModelAuto,
-		"reliability":  KiroModelAuto,
-		"resilience":   KiroModelAuto,
-		"refuter":      KiroModelAuto,
-		"validator":    KiroModelAuto,
+		"odd-explorer": KiroModelHaiku,
+		"odd-worker":   KiroModelHaiku,
+		"odd-verify":   KiroModelSonnet,
+		"jd-judge-a":   KiroModelSonnet,
+		"jd-judge-b":   KiroModelHaiku,
+		"jd-fix-agent": KiroModelSonnet,
+		"risk":         KiroModelSonnet,
+		"readability":  KiroModelHaiku,
+		"reliability":  KiroModelSonnet,
+		"resilience":   KiroModelSonnet,
+		"refuter":      KiroModelSonnet,
+		"validator":    KiroModelSonnet,
 		"default":      KiroModelAuto,
 	}
 }
 
-// KiroModelPresetPerformance prioritizes frontier Claude-family models.
+// KiroModelPresetPerformance prioritizes Claude Opus 5.5 and Sonnet 5.5.
 func KiroModelPresetPerformance() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelOpus,
@@ -93,17 +104,38 @@ func KiroModelPresetPerformance() map[string]KiroModelAlias {
 	}
 }
 
-// KiroModelPresetEconomy prioritizes Kiro's low-credit open-weight options.
+// KiroModelPresetEconomy uses Claude Haiku 5.5, Kiro's cheapest strong model,
+// for every role except the auto-routed orchestrator.
 func KiroModelPresetEconomy() map[string]KiroModelAlias {
 	return map[string]KiroModelAlias{
 		"orchestrator": KiroModelAuto,
+		"odd-explorer": KiroModelHaiku,
+		"odd-worker":   KiroModelHaiku,
+		"odd-verify":   KiroModelHaiku,
+		"jd-judge-a":   KiroModelHaiku,
+		"jd-judge-b":   KiroModelHaiku,
+		"jd-fix-agent": KiroModelHaiku,
+		"risk":         KiroModelHaiku,
+		"readability":  KiroModelHaiku,
+		"reliability":  KiroModelHaiku,
+		"resilience":   KiroModelHaiku,
+		"refuter":      KiroModelHaiku,
+		"validator":    KiroModelHaiku,
+		"default":      KiroModelHaiku,
+	}
+}
+
+// KiroModelPresetOpenWeight uses only Kiro's open-weight model families.
+func KiroModelPresetOpenWeight() map[string]KiroModelAlias {
+	return map[string]KiroModelAlias{
+		"orchestrator": KiroModelGLM,
 		"odd-explorer": KiroModelQwen,
 		"odd-worker":   KiroModelQwen,
-		"odd-verify":   KiroModelDeepSeek,
-		"jd-judge-a":   KiroModelDeepSeek,
+		"odd-verify":   KiroModelMiniMax,
+		"jd-judge-a":   KiroModelGLM,
 		"jd-judge-b":   KiroModelQwen,
 		"jd-fix-agent": KiroModelQwen,
-		"risk":         KiroModelDeepSeek,
+		"risk":         KiroModelGLM,
 		"readability":  KiroModelQwen,
 		"reliability":  KiroModelMiniMax,
 		"resilience":   KiroModelMiniMax,
@@ -111,14 +143,4 @@ func KiroModelPresetEconomy() map[string]KiroModelAlias {
 		"validator":    KiroModelDeepSeek,
 		"default":      KiroModelQwen,
 	}
-}
-
-// KiroModelPresetOpenWeight favors Kiro's non-Claude model families.
-func KiroModelPresetOpenWeight() map[string]KiroModelAlias {
-	base := KiroModelPresetEconomy()
-	base["orchestrator"] = KiroModelGLM
-	base["odd-verify"] = KiroModelMiniMax
-	base["jd-judge-a"] = KiroModelGLM
-	base["risk"] = KiroModelGLM
-	return base
 }

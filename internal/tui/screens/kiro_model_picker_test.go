@@ -22,8 +22,10 @@ func TestRenderKiroModelPicker_ShowsRequestedCopy(t *testing.T) {
 			t.Fatalf("expected preset %q in output, got:\n%s", want, out)
 		}
 	}
-	if !strings.Contains(out, "Kiro Auto") {
-		t.Fatalf("expected Kiro-native Auto copy in output, got:\n%s", out)
+	for _, want := range []string{"Sonnet 5.5 and Haiku 5.5", "Opus 5.5", "Haiku 5.5 for every role"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected preset description %q in output, got:\n%s", want, out)
+		}
 	}
 }
 
@@ -46,8 +48,11 @@ func TestHandleKiroModelPickerNav_SelectsKiroNativePreset(t *testing.T) {
 			t.Fatalf("preset exposes retired role %q", key)
 		}
 	}
-	if got := assignments["odd-explorer"]; got != model.KiroModelAuto {
-		t.Fatalf("odd-explorer assignment = %q, want auto", got)
+	if got := assignments["odd-explorer"]; got != model.KiroModelHaiku {
+		t.Fatalf("odd-explorer assignment = %q, want haiku", got)
+	}
+	if got := assignments["jd-judge-a"]; got != model.KiroModelSonnet {
+		t.Fatalf("jd-judge-a assignment = %q, want sonnet", got)
 	}
 }
 
@@ -72,6 +77,7 @@ func TestHandleKiroModelPickerNav_CustomCyclesAcrossKiroOptions(t *testing.T) {
 	if !handled || assignments != nil || !state.InCustomMode {
 		t.Fatalf("expected custom preset to enter custom mode, handled=%v assignments=%v inCustom=%v", handled, assignments, state.InCustomMode)
 	}
+	state.CustomAssignments["odd-explorer"] = model.KiroModelAuto
 
 	handled, assignments = HandleKiroModelPickerNav("enter", &state, 0)
 	if !handled || assignments != nil {
@@ -98,6 +104,46 @@ func TestHandleKiroModelPickerNav_CustomCyclesAcrossKiroOptions(t *testing.T) {
 			t.Fatalf("cycled assignment = %q, want %q", got, want)
 		}
 	}
+}
+
+func TestRenderKiroCustomPicker_ShowsKiroModelIDs(t *testing.T) {
+	state := NewKiroModelPickerState()
+	HandleKiroModelPickerNav("enter", &state, 4)
+	state.CustomAssignments["odd-explorer"] = model.KiroModelGLM
+	state.CustomAssignments["odd-worker"] = "luna"
+	state.CustomAssignments["jd-judge-b"] = model.KiroModelOpus
+	state.CustomAssignments["default"] = model.KiroModelAuto
+	out := RenderKiroModelPicker(state, 0)
+
+	if !strings.Contains(out, "auto → opus → sonnet → haiku → minimax → glm → deepseek → qwen") {
+		t.Fatalf("expected full Kiro cycle in help text, got:\n%s", out)
+	}
+	for _, row := range []struct{ label, tag string }{
+		{"ODD Explorer", "[glm-5]"},
+		{"ODD Worker", "[unrecognized: auto]"},
+		{"JD Judge B", "[claude-opus-5.5]"},
+		{"General delegation", "[auto]"},
+	} {
+		line := kiroPickerRow(t, out, row.label)
+		if !strings.Contains(line, row.tag) {
+			t.Fatalf("row %q = %q, want tag %q", row.label, line, row.tag)
+		}
+	}
+	if strings.Contains(out, "ID pending") {
+		t.Fatalf("verified aliases must not render as pending, got:\n%s", out)
+	}
+}
+
+// kiroPickerRow returns the rendered line for the role with the given label.
+func kiroPickerRow(t *testing.T, out, label string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, label) {
+			return line
+		}
+	}
+	t.Fatalf("row %q not found in output:\n%s", label, out)
+	return ""
 }
 
 func TestKiroNamedPresetPreservesPersistedLegacyKeys(t *testing.T) {
