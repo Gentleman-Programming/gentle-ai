@@ -583,6 +583,17 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 			backupTargets[path] = struct{}{}
 		}
 	}
+	if slices.Contains(agentIDs, model.AgentCodex) && removesAllAgentComponents(componentIDs) {
+		// Global Codex guidance uses modules by default. Only a complete Codex
+		// removal retires them; component-only uninstall preserves the ledger.
+		paths, err := agentguidance.CodexGlobalModulePaths(s.homeDir)
+		if err != nil {
+			return plan{}, err
+		}
+		for _, path := range paths {
+			backupTargets[path] = struct{}{}
+		}
+	}
 	if slices.Contains(agentIDs, model.AgentOpenCode) && removesAllAgentComponents(componentIDs) {
 		adapter, _ := s.registry.Get(model.AgentOpenCode)
 		// Only a complete OpenCode removal rolls back defaults owned by an
@@ -783,6 +794,16 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 			})
 		}
 	}
+	if slices.Contains(agentsToRemove, model.AgentCodex) {
+		if err := s.retireCodexGlobalModules(&result); err != nil {
+			adapter, _ := s.registry.Get(model.AgentCodex)
+			failures = append(failures, operationFailure{
+				path:   adapter.GlobalConfigDir(s.homeDir),
+				agents: []model.AgentID{model.AgentCodex},
+				err:    fmt.Errorf("retire Codex orchestrator modules: %w", err),
+			})
+		}
+	}
 
 	if slices.Contains(agentsToRemove, model.AgentPi) {
 		result.RetainedPiResources = retainedPiResources(s.homeDir, s.workspaceDir)
@@ -912,17 +933,37 @@ func (s *Service) retireClaudeGlobalModules(result *Result) error {
 	return reportClaudeModuleRetirement(result, paths, retired, err)
 }
 
+func (s *Service) retireCodexGlobalModules(result *Result) error {
+	paths, err := agentguidance.CodexGlobalModulePaths(s.homeDir)
+	if err != nil || paths == nil {
+		return err
+	}
+	retired, err := agentguidance.RetireCodexGlobalModules(s.homeDir, reviewassets.ReviewExecutionContractFor)
+	return reportOrchestratorModuleRetirement(result, model.AgentCodex, paths, retired, err)
+}
+
 // reportClaudeModuleRetirement records in result what retiring the module
 // pilot did to paths, the files ClaudeGlobalModulePaths planned. A failed
 // retirement that still reports Changed did not finish its rollback, so which
 // files it left changed is unknown: none is reported as removed or changed,
 // and the user is asked to inspect the core and the module directory.
 func reportClaudeModuleRetirement(result *Result, paths []string, retired agentguidance.Result, err error) error {
+	return reportOrchestratorModuleRetirement(result, model.AgentClaudeCode, paths, retired, err)
+}
+
+func reportOrchestratorModuleRetirement(result *Result, agent model.AgentID, paths []string, retired agentguidance.Result, err error) error {
 	if err != nil {
 		if retired.Changed {
+			label := string(agent)
+			switch agent {
+			case model.AgentClaudeCode:
+				label = "Claude"
+			case model.AgentCodex:
+				label = "Codex"
+			}
 			result.ManualActions = append(result.ManualActions, fmt.Sprintf(
-				"Inspect %s and %s before rerunning the uninstall: the failed Claude orchestrator module retirement did not finish its rollback, so they may be partially changed",
-				paths[0], filepath.Dir(paths[len(paths)-1])))
+				"Inspect %s and %s before rerunning the uninstall: the failed %s orchestrator module retirement did not finish its rollback, so they may be partially changed",
+				paths[0], filepath.Dir(paths[len(paths)-1]), label))
 		}
 		return err
 	}

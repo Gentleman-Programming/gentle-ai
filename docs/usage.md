@@ -239,6 +239,8 @@ gentle-ai sync --agent openclaw
 
 Sync is safe and idempotent — running it twice produces no changes the second time. When files change, the summary reports the changed file count and lists the changed file paths.
 
+For Codex, user-global install and sync keep the always-loaded core in `~/.codex/AGENTS.md` and place the referenced on-demand orchestrator modules under `~/.codex/gentle-ai/orchestrator/`. This is the default global layout; there is no extra flag. Workspace-scoped Codex guidance remains one monolithic `<workspace>/.codex/AGENTS.md`. See [Codex orchestrator modules](rollback.md#codex-orchestrator-modules) for ownership and rollback behavior.
+
 OpenCode sync keeps retired SDD prompt files while remaining settings entries still reference them, including customized agents. It validates `{file:...}` references in the selected settings document and, for global sync, both global `opencode.json` and `opencode.jsonc` files. Relative paths resolve beside their settings document; `~/` resolves under your home directory. An empty `{file:}` stays literal text, not a file reference. Windows UNC, device-namespace (`\\.\`, `\\?\`), and NT object-manager (`\??\`) paths are rejected before their targets are inspected. A missing target or rejected reference fails sync and rolls back its managed changes. Restore the named file or correct its reference, then rerun `gentle-ai sync --agent opencode`.
 
 `sync` refreshes the managed component set for the selected agents. It does not support `--component`; use `--include-permissions` or `--include-theme` for the opt-in components that are excluded from the default sync scope.
@@ -283,7 +285,7 @@ If no `--component` flag is provided for a partial uninstall, `gentle-ai` remove
 
 An uninstall that removes every component of an agent (`--all`, or no `--component` flag) also retires what releases before v4.0.0 installed for the retired SDD workflow, with the same ownership proof as install and sync (see [Components](components.md)): `sdd-*` skills, commands, native agents, Codex profiles, the Kimi module, OpenCode and Kilocode agent entries and prompts, the Claude Code preflight hook, and the `<!-- gentle-ai:sdd-orchestrator -->` block of the agent's prompt files, including its active prompt, since uninstall delivers no routing guidance that would migrate it. Files whose bytes no release wrote are kept and reported: move or delete them yourself. A directory that is a symlink is never entered, Pi files are never touched, and everything uninstall changes is in its backup snapshot.
 
-A complete Claude Code uninstall also retires the optional orchestrator modules pilot and keeps module files Gentle AI does not own; see [Claude Code orchestrator modules](rollback.md#claude-code-orchestrator-modules-pilot).
+A complete Claude Code uninstall retires the optional orchestrator modules pilot. A complete Codex uninstall retires its default global modules. Both keep module files Gentle AI does not own; component-only uninstall preserves the module layout. See [Claude Code orchestrator modules](rollback.md#claude-code-orchestrator-modules-pilot) and [Codex orchestrator modules](rollback.md#codex-orchestrator-modules).
 
 ### update / upgrade
 

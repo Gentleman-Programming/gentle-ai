@@ -16,10 +16,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/managedownership"
 )
 
-// #5256 U1a: the private installer for the user-global Claude orchestrator
-// modules, driven only by the core transaction (commitPreparedOrchestratorCore)
-// for the explicit global opt-in and for uninstall. It owns only the module
-// files and their ledger under <Claude config dir>/gentle-ai/orchestrator; the
+// #5256 U1a: the private installer for user-global orchestrator modules,
+// driven only by the core transaction for global delivery and uninstall. It
+// owns only the module files and their ledger under
+// <runtime config dir>/gentle-ai/orchestrator; the
 // core that points at them, its ownership and the cross-file ordering belong
 // to that transaction.
 //
@@ -59,7 +59,7 @@ type orchestratorModuleWrite struct {
 }
 
 // orchestratorModuleInstall is a preflighted module mutation. Its journal is
-// rooted at the Claude config directory and holds the before-image of the
+// rooted at the runtime config directory and holds the before-image of the
 // ledger and of every known module path.
 type orchestratorModuleInstall struct {
 	dir, ledgerPath   string
@@ -74,7 +74,7 @@ type orchestratorModuleInstall struct {
 }
 
 // prepareOrchestratorModuleInstall plans installing modules under configDir,
-// the absolute Claude config directory. configDir may itself be or sit under
+// the absolute runtime config directory. configDir may itself be or sit under
 // a symlink, as the atomic writer allows; the gentle-ai/orchestrator
 // directories this installer owns must be real directories when present.
 //

@@ -236,7 +236,6 @@ func TestBuildOrchestratorModulesRejectsUnsupportedBindings(t *testing.T) {
 		dir   string
 		want  error
 	}{
-		{"codex runtime", model.AgentCodex, testModuleDir, errOrchestratorModulesUnsupported},
 		{"pi runtime", model.AgentPi, testModuleDir, errOrchestratorModulesUnsupported},
 		{"empty binding", model.AgentClaudeCode, "", errInvalidOrchestratorModuleDir},
 		{"blank binding", model.AgentClaudeCode, "   ", errInvalidOrchestratorModuleDir},

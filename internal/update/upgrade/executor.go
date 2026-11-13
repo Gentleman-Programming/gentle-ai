@@ -293,6 +293,15 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		}
 		// Owned and to-be-written modules, the manifest, staging and root.
 		add(presentPaths(geminimodules.ManagedPaths(homeDir))...)
+	case model.AgentCodex:
+		// Global Codex sync uses a core plus on-demand modules by default. Plan
+		// every known path, present or not, so rollback removes files created by
+		// the upgraded binary and restores the prior monolithic core.
+		modulePaths, err := agentguidance.RoutingPathsWithOptions(homeDir, model.AgentCodex, agentguidance.RoutingOptions{CodexGlobalModules: true})
+		if err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: skipping Codex module paths: %v", err)
+		}
+		add(modulePaths...)
 	case model.AgentClaudeCode:
 		add(claude.UserConfigPath(homeDir))
 		add(theme.VisualThemePaths(homeDir, adapter)...)
