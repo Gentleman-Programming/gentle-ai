@@ -20,9 +20,10 @@ func TestShapeVerifierOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	body := method[strings.Index(method, "For behavior changes"):]
 	prereq := strings.ReplaceAll(strings.ReplaceAll(tpl,
 		"plus the scratch-copy probes in the shared method.", "plus the scratch-copy probes below."),
-		"{{GENTLE_AI_VERIFY_METHOD}}", method[strings.Index(method, "For behavior changes"):])
+		"{{GENTLE_AI_VERIFY_METHOD}}", body)
 	legacy, _ := Entry(parity[1])
 	if legacy["prompt"], err = legacyVerifyPrompt(cur["prompt"].(string)); err != nil || legacy["prompt"].(string) != prereq {
 		t.Fatalf("legacy derivation drifted from prerequisite: %v", err)
@@ -38,6 +39,20 @@ func TestShapeVerifierOwnership(t *testing.T) {
 	} {
 		if got, err := Shape("gentle-ai-verify", tc.e); err != nil || got != tc.want {
 			t.Fatalf("%s: %v, %v", tc.name, got, err)
+		}
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"trailing whitespace": func(e map[string]any) { e["prompt"] = e["prompt"].(string) + " " },
+		"added line":          func(e map[string]any) { e["prompt"] = e["prompt"].(string) + "\n" },
+		"permission map": func(e map[string]any) {
+			e["permission"] = map[string]any{"write": "allow", "edit": "deny", "task": "deny"}
+		},
+		"body without header": func(e map[string]any) { e["prompt"] = body },
+	} {
+		e, _ := Entry(parity[1])
+		mutate(e)
+		if got, err := Shape("gentle-ai-verify", e); err != nil || got {
+			t.Fatalf("%s: %v, %v", name, got, err)
 		}
 	}
 	for _, s := range parity {

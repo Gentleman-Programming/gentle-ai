@@ -119,7 +119,11 @@ func legacyVerifyPrompt(prompt string) (string, error) {
 		return "", err
 	}
 	prompt = strings.ReplaceAll(prompt, "plus the scratch-copy probes in the shared method.", "plus the scratch-copy probes below.")
-	return strings.ReplaceAll(prompt, method[:strings.Index(method, "For behavior changes")], ""), nil
+	body := strings.Index(method, "For behavior changes")
+	if body <= 0 {
+		return "", fmt.Errorf("verification method lost its body marker")
+	}
+	return strings.ReplaceAll(prompt, method[:body], ""), nil
 }
 
 func Refuter() map[string]any {
