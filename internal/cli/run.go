@@ -2737,7 +2737,10 @@ func antigravityRulesSteps(id, homeDir, workspaceDir string, scope InstallScope,
 		paths:        func() []string { return antigravityRulesBackupPaths(homeDir, workspaceDir, scope, agentIDs) },
 		changedFiles: changedFiles,
 		publish: func() ([]string, error) {
-			published, err := antigravityrules.Publish(baseDir)
+			published, err := antigravityrules.Publish(baseDir,
+				antigravityrules.WithWorkspaceScope(scope == ScopeWorkspace),
+				antigravityrules.WithActiveAgents(agentIDs),
+			)
 			if err != nil {
 				return nil, fmt.Errorf("publish Antigravity rules: %w", err)
 			}
