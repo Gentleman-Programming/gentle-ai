@@ -203,6 +203,33 @@ type shellManageState struct {
 	backup       string
 	uninstallErr error
 	fromConfig   bool
+	backups      *shellBackupsState
+}
+
+// shellBackupsState holds the Manage → Replaced backups sub-flow state. It is
+// populated by the shellBackupsLoaded/shellBackupsPruned messages and by the
+// list/confirmation key handling in updateShellBackups.
+type shellBackupsState struct {
+	loading bool
+	list    []shellinstaller.UserReplacedBackup
+	cursor  int
+	confirm bool
+	working bool
+	done    bool
+	err     error
+}
+
+// shellBackupsLoaded delivers the discovery result: the sorted candidates and
+// any discovery error.
+type shellBackupsLoaded struct {
+	list []shellinstaller.UserReplacedBackup
+	err  error
+}
+
+// shellBackupsPruned delivers the batch-prune result. A non-nil err is a
+// preservation error that must be shown, never retracted.
+type shellBackupsPruned struct {
+	err error
 }
 
 func (m Model) beginShellUpdate(config shellExperienceConfig) (tea.Model, tea.Cmd) {
@@ -508,6 +535,10 @@ func manageActions(manage *shellManageState) []string {
 	if manage.install.Mode == "separate" || manage.install.Mode == "agent" {
 		actions = append(actions, "Uninstall this installation")
 	}
+	// Only a Separate install retires trees as <target>.replaced-<UTC>.
+	if manage.install.Mode == "separate" {
+		actions = append(actions, "Replaced backups")
+	}
 	return actions
 }
 
@@ -526,6 +557,9 @@ func (m Model) updateShellManage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	manage := m.shellManage
 	if manage == nil {
 		return m, nil
+	}
+	if manage.backups != nil {
+		return m.updateShellBackups(msg)
 	}
 	if result, ok := msg.(shellUninstallResult); ok {
 		manage.working = false
@@ -631,9 +665,112 @@ func (m Model) updateShellManage(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return planned, nil
 		case "Uninstall this installation":
 			manage.confirm, manage.cursor = true, 0
+		case "Replaced backups":
+			manage.backups = &shellBackupsState{loading: true}
+			return m, shellBackupsList(manage.install)
 		default:
 			m.shellExperience, m.shellManage = &manage.config, nil
 			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// shellBackupsList discovers the replaced-backup candidates off the UI thread.
+func shellBackupsList(install shellinstaller.UserShellInstall) tea.Cmd {
+	return func() tea.Msg {
+		list, err := shellinstaller.UserReplacedBackups(install)
+		return shellBackupsLoaded{list: list, err: err}
+	}
+}
+
+// shellBackupsView maps the sub-flow state onto its render state. A
+// discovery error is a load error unless a cleanup result is being shown.
+func shellBackupsView(manage *shellManageState) screens.ShellBackupsView {
+	backups := manage.backups
+	view := screens.ShellBackupsView{
+		Target: manage.install.Target, Mode: manage.install.Mode, Backups: backups.list,
+		Loading: backups.loading, Confirm: backups.confirm, Working: backups.working, Done: backups.done,
+	}
+	if backups.err != nil {
+		if backups.done {
+			view.Err = backups.err.Error()
+		} else {
+			view.LoadErr = backups.err.Error()
+		}
+	}
+	return view
+}
+
+// updateShellBackups drives Manage → Replaced backups. Cleanup always passes
+// through the confirmation, keys are ignored while it runs, and Esc from the
+// list returns to the Manage summary rather than leaving Manage.
+func (m Model) updateShellBackups(msg tea.Msg) (tea.Model, tea.Cmd) {
+	manage := m.shellManage
+	backups := manage.backups
+	switch msg := msg.(type) {
+	case shellBackupsLoaded:
+		backups.loading, backups.confirm, backups.list = false, false, msg.list
+		if msg.err != nil {
+			// A failed discovery is shown as an error, never as an empty list;
+			// it keeps any cleanup error that preceded the re-list.
+			backups.list, backups.done, backups.err = nil, false, errors.Join(backups.err, msg.err)
+		}
+		backups.cursor = 0
+		return m, nil
+	case shellBackupsPruned:
+		// Re-list after every cleanup: even a partial one changes the set. Keys
+		// stay suppressed until it lands, so a stale list is never confirmed.
+		backups.working, backups.confirm, backups.loading = false, false, true
+		backups.done, backups.err, backups.cursor = true, msg.err, 0
+		return m, shellBackupsList(manage.install)
+	case tea.KeyMsg:
+		if backups.working {
+			return m, nil
+		}
+		key := msg.String()
+		switch {
+		case backups.loading:
+			if !backups.done && (key == "esc" || key == "ctrl+c") {
+				manage.backups = nil
+			}
+			return m, nil
+		case backups.done:
+			if key == "enter" || key == "esc" || key == "ctrl+c" {
+				backups.done, backups.err, backups.cursor = false, nil, 0
+			}
+			return m, nil
+		}
+		actions := screens.ShellBackupsActions(shellBackupsView(manage))
+		last := len(actions) - 1
+		switch key {
+		case "j", "down":
+			backups.cursor = min(last, backups.cursor+1)
+		case "k", "up":
+			backups.cursor = max(0, backups.cursor-1)
+		case "esc", "ctrl+c":
+			if backups.confirm {
+				backups.confirm, backups.cursor = false, 0
+				return m, nil
+			}
+			manage.backups = nil
+		case "enter":
+			action := actions[min(max(0, backups.cursor), last)]
+			switch {
+			case action == "Clean older backups" && backups.confirm:
+				backups.confirm, backups.working = false, true
+				install := manage.install
+				return m, func() tea.Msg {
+					return shellBackupsPruned{err: shellinstaller.UserPruneReplacedBackups(install)}
+				}
+			case action == "Clean older backups":
+				// Open on Back: one extra Enter must never delete.
+				backups.confirm, backups.cursor = true, 1
+			case backups.confirm:
+				backups.confirm, backups.cursor = false, 0
+			default:
+				manage.backups = nil
+			}
 		}
 	}
 	return m, nil
