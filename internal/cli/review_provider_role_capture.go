@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
@@ -26,12 +25,10 @@ type reviewProviderRoleCaptureArtifact struct {
 	Captured       bool   `json:"captured"`
 }
 
-// reviewProviderRoleCaptureTimeout bounds one role capture operation so a full
-// Go-owned adversarial pi run fits while a stalled provider cannot hang --execute
-// forever: on expiry the adapter surfaces its typed transport refusal,
-// nothing is captured, and STATUS reoffers the same collection input. A var
-// only as the test seam.
-var reviewProviderRoleCaptureTimeout = 600 * time.Second
+// The relay timeout is now configurable via GENTLE_AI_RELAY_TIMEOUT (with a
+// 10-minute default) through reviewtransaction.GetRelayTimeout(). This allows
+// the Pi host relay timeout to be calibrated for slow children
+// (BLA-26 → BLA-63 → L6 → #63).
 
 // reviewProviderRoleCaptureBinding is the parsed, mode-validated invocation of
 // one non-lens provider role capture command. Both commands share exactly two
@@ -187,7 +184,7 @@ func RunReviewCaptureRefuter(args []string, stdout io.Writer) error {
 	if err != nil || binding == nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), reviewProviderRoleCaptureTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), reviewtransaction.GetRelayTimeout())
 	defer cancel()
 	store, record, err := binding.discover(ctx)
 	if err != nil {
@@ -260,7 +257,7 @@ func RunReviewCaptureValidation(args []string, stdout io.Writer) error {
 	if err != nil || binding == nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), reviewProviderRoleCaptureTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), reviewtransaction.GetRelayTimeout())
 	defer cancel()
 	store, record, err := binding.discover(ctx)
 	if err != nil {
