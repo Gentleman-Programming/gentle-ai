@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
@@ -172,10 +173,9 @@ type InjectOptions struct {
 	// OpenCodeSettingsPath overrides only the OpenCode MCP settings merge target.
 	// Empty preserves adapter resolution for other callers and agents.
 	OpenCodeSettingsPath string
-	// CodexMultiAgent controls whether features.multi_agent is written as true
-	// in ~/.codex/config.toml. Default (false) writes multi_agent = false, which
-	// is the safe no-op value for the experimental Codex multi-agent tool set.
-	// Set to true only when the user explicitly opts in via a CLI flag or TUI choice.
+	// CodexMultiAgent is retained for source compatibility with older callers.
+	// Codex now uses agents.enabled; the zero value must not disable existing
+	// installations, so this legacy option no longer changes config.toml.
 	CodexMultiAgent bool
 
 	// CodexOrchestratorAssignment updates top-level model settings when non-nil.
@@ -211,9 +211,8 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	return injectWithOptions(homeDir, homeDir, adapter, InjectOptions{}, true)
 }
 
-// InjectWithOptions is like Inject but accepts additional options such as the
-// Codex multi-agent opt-in flag. Use this when the caller has a model.Selection
-// and needs to forward user-chosen configuration into the injection pass.
+// InjectWithOptions is like Inject but accepts additional user-selected model
+// and service-tier settings.
 func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
 	return injectWithOptions(homeDir, homeDir, adapter, opts, true)
 }
@@ -904,21 +903,22 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		// Read existing config and apply all mutations in a single pass.
 		//
 		// Mutation order (matters for idempotency):
-		//   1. UpsertTOMLTableKey for [features] and [agents] — these are
+		//   1. Migrate the retired [features].multi_agent key to the current
+		//      [agents].enabled key, then upsert the [agents] limits. These are
 		//      applied FIRST so that the section headers are present before
 		//      UpsertTopLevelTOMLString and UpsertCodexEngramBlock run. When
 		//      the sections already exist, their keys are replaced in place.
 		//   2. UpsertTopLevelTOMLString for instruction-file keys — places
 		//      top-level keys before the first [section] header (i.e., before
-		//      [features]). Running model→experimental in this order is
+		//      the first table). Running model→experimental in this order is
 		//      self-correcting on re-runs (the pair of calls always produces
 		//      the same final ordering).
 		//   3. UpsertCodexEngramBlock — strips the [mcp_servers.engram] block
 		//      and re-appends it at EOF on every call. Running last ensures
 		//      engram always ends up at the bottom of the file. On re-runs,
-		//      UpsertCodexEngramBlock stops at [features] (the next section
-		//      header after engram on disk), so [features] and [agents] are
-		//      preserved above engram — the stable layout is:
+		//      UpsertCodexEngramBlock stops at the next section header after
+		//      engram on disk, so [features] and [agents] are preserved above
+		//      engram — the stable layout is:
 		//        model_instructions_file / experimental_compact_prompt_file
 		//        [features] / [agents]
 		//        [mcp_servers.engram]
@@ -927,13 +927,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			return InjectionResult{}, err
 		}
 
-		// Step 1 — multi-agent ODD delegation keys ([features] and [agents]).
-		// features.multi_agent is enabled by default for bounded ODD workers. The
-		// orchestrator asset gracefully falls back to solo execution if the multi-agent
-		// tools are unavailable in the session. agents.max_threads/max_depth carry
-		// conservative defaults.
-		withFeatures := upsertCodexTableKeyBeforeMCPServers(existing, "features", "multi_agent", "true")
-		withMaxThreads := upsertCodexTableKeyBeforeMCPServers(withFeatures, "agents", "max_threads", "4")
+		// Step 1 — current multi-agent ODD delegation keys ([agents]). Remove the
+		// deprecated V1 feature key on every sync. A legacy false value migrates
+		// to agents.enabled=false only when the user has not already set the
+		// current key. Fresh installs use the current default-on switch. The V2
+		// feature key, when present, is an explicit user choice and is untouched.
+		withAgents := migrateCodexMultiAgentConfig(existing)
+		withMaxThreads := upsertCodexTableKeyBeforeMCPServers(withAgents, "agents", "max_threads", "4")
 		withMaxDepth := upsertCodexTableKeyBeforeMCPServers(withMaxThreads, "agents", "max_depth", "2")
 
 		// Step 2 — top-level instruction-file keys (before the first section header).
@@ -1035,6 +1035,98 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 	}
 
 	return InjectionResult{Changed: changed, Files: files, CodexServiceTier: codexServiceTier}, nil
+}
+
+// migrateCodexMultiAgentConfig removes the retired V1 feature switch and
+// establishes the current agents.enabled switch without overriding an explicit
+// modern value. The narrow bool read intentionally accepts only the simple TOML
+// assignment shape that Codex and older gentle-ai versions wrote; ambiguous or
+// malformed legacy values are not reinterpreted as an opt-out.
+func migrateCodexMultiAgentConfig(content string) string {
+	hasModernValue := codexTOMLTableHasKey(content, "agents", "enabled")
+	legacyValue, hasValidLegacyValue := codexTOMLTableBool(content, "features", "multi_agent")
+
+	updated := filemerge.RemoveTOMLTableKeys(content, "features", []string{"multi_agent"})
+	if hasModernValue {
+		return updated
+	}
+
+	desired := "true"
+	if hasValidLegacyValue && !legacyValue {
+		desired = "false"
+	}
+	return upsertCodexTableKeyBeforeMCPServers(updated, "agents", "enabled", desired)
+}
+
+func codexTOMLTableHasKey(content, section, key string) bool {
+	var decoded map[string]any
+	if _, err := toml.Decode(content, &decoded); err == nil {
+		table, ok := decoded[section].(map[string]any)
+		if !ok {
+			return false
+		}
+		_, ok = table[key]
+		return ok
+	}
+
+	// Keep the narrow string fallback for malformed user configuration. It
+	// preserves the explicit simple-key form that older injection already
+	// recognized instead of silently overwriting it while Codex diagnoses the
+	// surrounding parse error.
+	normalized := filemerge.RemoveTOMLTableKeys(content, section, nil)
+	withoutKey := filemerge.RemoveTOMLTableKeys(content, section, []string{key})
+	return normalized != withoutKey
+}
+
+// codexTOMLTableBool reads only a unique, bare boolean assignment from one
+// table. It reuses the shared multiline-string scanner so examples embedded in
+// developer instructions are never mistaken for configuration.
+func codexTOMLTableBool(content, section, key string) (bool, bool) {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	header := "[" + section + "]"
+	inSection := false
+	found := false
+	value := false
+	var multiline byte
+
+	for _, line := range strings.Split(content, "\n") {
+		wasInString := multiline != 0
+		multiline = filemerge.ScanTOMLMultilineString(line, multiline)
+		if wasInString {
+			continue
+		}
+
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inSection = trimmed == header
+			continue
+		}
+		if !inSection || !(strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")) {
+			continue
+		}
+		if found {
+			return false, false
+		}
+		assignment := strings.TrimSpace(strings.TrimPrefix(trimmed, key))
+		if !strings.HasPrefix(assignment, "=") {
+			return false, false
+		}
+		raw := strings.TrimSpace(strings.TrimPrefix(assignment, "="))
+		if comment := strings.IndexByte(raw, '#'); comment >= 0 {
+			raw = strings.TrimSpace(raw[:comment])
+		}
+		switch raw {
+		case "true":
+			value = true
+		case "false":
+			value = false
+		default:
+			return false, false
+		}
+		found = true
+	}
+
+	return value, found
 }
 
 // upsertCodexTableKeyBeforeMCPServers behaves like filemerge.UpsertTOMLTableKey,

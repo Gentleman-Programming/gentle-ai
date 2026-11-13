@@ -127,19 +127,22 @@ The canonical native bounded-review contract is injected from the shared provide
 
 ## Capability Check (run once, at session start)
 
-Check `~/.codex/config.toml` for `features.multi_agent` and confirm that the
-session exposes the Codex multi-agent v2 collaboration surface:
+Confirm that the session exposes the Codex collaboration surface. The tools
+actually available in the session are authoritative; never gate delegation on
+the deprecated `features.multi_agent` setting:
 
-- If `features.multi_agent = true` **AND** the tools `spawn_agent`, `wait_agent`,
-  and `list_agents` are available in this session → use the **Delegated Path**
-  below.
+- If the tools `spawn_agent`, `wait_agent`, and `list_agents` are available in
+  this session → use the **Delegated Path** below.
 - Otherwise → use the **Graceful Degradation Path** below.
 
-`features.multi_agent` is enabled by default (gentle-ai writes `multi_agent = true` during installation). Setting `multi_agent = false` disables the normal delegated path; it does not bypass mandatory delegation gates.
+`agents.enabled = false` normally suppresses the collaboration tools, but an
+explicit `features.multi_agent_v2` choice can change what Codex exposes. Gentle
+AI preserves both explicit choices, so inspect the live tool surface instead of
+inferring capability from configuration.
 
 ---
 
-## Delegated Path (default, requires features.multi_agent = true)
+## Delegated Path (default when collaboration tools are available)
 
 When multi-agent tools are available, delegate bounded ODD tasks using Codex's native tool set:
 
