@@ -84,9 +84,12 @@ func TestDarwinServiceLimitsMirrorLinuxUnit(t *testing.T) {
 		t.Fatalf("file limits = %+v", limits)
 	}
 	// RLIMIT_NPROC counts every process of the real uid on darwin, so the
-	// TasksMax=64 budget is headroom above the current population.
-	if limits.Processes < uint64(processes)+userTasksMax-16 || limits.Processes > uint64(processes)+userTasksMax+16 || limits.Processes > before[unix.RLIMIT_NPROC].Max {
-		t.Fatalf("process limit %d not uid population %d + %d", limits.Processes, processes, userTasksMax)
+	// shared TasksMax=512 budget is headroom above the current population. The
+	// managed runtime alone uses ~61 tasks, so 64 left no room to fork (#5815).
+	const headroom = 512
+	want := min(uint64(processes)+headroom, before[unix.RLIMIT_NPROC].Max)
+	if limits.Processes+16 < want || limits.Processes > want+16 || limits.Processes > before[unix.RLIMIT_NPROC].Max {
+		t.Fatalf("process limit %d not uid population %d + %d (hard %d)", limits.Processes, processes, headroom, before[unix.RLIMIT_NPROC].Max)
 	}
 	open, err := userDarwinLimits(0)
 	if err != nil || open.CPUSeconds != 0 || open.Deadline != 0 {
