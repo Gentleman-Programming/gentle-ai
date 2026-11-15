@@ -170,12 +170,17 @@ func TestRenderRoutingSucceedsForEverySupportedAgent(t *testing.T) {
 			}
 
 			// The rendered thresholds must come from the canonical manifest, not
-			// from prose invented by the renderer.
+			// from prose invented by the renderer. Pi names its measured lookup
+			// gate instead (TestRenderRoutingNamesPiMeasuredExplorationGate).
+			lookups := fmt.Sprintf("more than approximately %d sequential lookups", routing.DelegatedDirect.ApproxSequentialLookupLimit)
+			if agent.ID == model.AgentPi {
+				lookups = "more than 3 lookups (the runtime's exploration notice fires past 3 lookups or 40,000 output bytes)"
+			}
 			for _, want := range []string{
 				fmt.Sprintf("one parallel batch (%d maximum)", routing.DirectInline.MaxEvidenceBatches),
 				fmt.Sprintf("at most %d calls", routing.DirectInline.MaxEvidenceCalls),
 				fmt.Sprintf("approximately %dk tokens", routing.DirectInline.ApproxEvidenceTokens/1000),
-				fmt.Sprintf("more than approximately %d sequential lookups", routing.DelegatedDirect.ApproxSequentialLookupLimit),
+				lookups,
 				fmt.Sprintf("at most approximately %dk tokens", routing.DelegatedDirect.ApproxHandoffTokens/1000),
 				fmt.Sprintf("one parent spot check (%d maximum)", routing.DelegatedDirect.MaxParentSpotChecks),
 				fmt.Sprintf("approximately %dk parent-context tokens", routing.DelegatedDirect.ApproxParentContextTokens/1000),

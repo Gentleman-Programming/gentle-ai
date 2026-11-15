@@ -42,7 +42,7 @@ type orchestratorFragmentSpec struct{ id, title, reason string }
 // RDD/consent fallback, prelaunch verification, mandatory delegation and
 // incident handling must apply before a pointer could fire.
 var orchestratorFragmentSpecs = []orchestratorFragmentSpec{
-	{id: "writer.edit-surfaces", title: "Allowed edit surfaces", reason: "you prepare a bounded writer or relay its edit-surface request"},
+	{id: "writer.edit-surfaces", title: "Allowed edit surfaces", reason: "you prepare a bounded writer or adjudicate its edit-surface request (relay only human-owned scope)"},
 	{id: "skills.discovery", title: "Intent-Driven Skill Discovery", reason: "a request is skill-shaped or names a known workflow"},
 	{id: "skills.registry", title: "Skill Registry Protocol", reason: "you resolve skills before a first delegation or a subagent reports skill_resolution"},
 }

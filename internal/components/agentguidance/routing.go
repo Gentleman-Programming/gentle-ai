@@ -154,11 +154,19 @@ func RenderRouting(agent model.AgentID) (string, error) {
 		routing.DirectInline.MaxEvidenceCalls,
 		routing.DirectInline.ApproxEvidenceTokens/1000,
 	)
-	_, _ = fmt.Fprintf(
-		&output,
-		"- **Delegated direct:** understanding that needs more evidence or more than approximately %d sequential lookups takes one read-only explorer, then task size is re-evaluated; a writer is delegated only by the Writer trigger.\n",
-		routing.DelegatedDirect.ApproxSequentialLookupLimit,
-	)
+	// Pi measures exploration and the context backstop (Gentle Shell
+	// lib/exploration-budget.ts and lib/context-backstop.ts), so its rendering
+	// names those measured values; every other runtime keeps the unmeasured
+	// approximate wording. No threshold changes here.
+	lookupLimit := fmt.Sprintf("approximately %d sequential lookups", routing.DelegatedDirect.ApproxSequentialLookupLimit)
+	mappingLookups := lookupLimit
+	backstop := fmt.Sprintf("at approximately %dk parent-context tokens, pause and delegate the next bounded unit. This is advisory context guidance, not mechanically observed or enforced; do not claim runtime telemetry or enforcement.", routing.DelegatedDirect.ApproxParentContextTokens/1000)
+	if agent == model.AgentPi {
+		lookupLimit = "3 lookups"
+		mappingLookups = "3 lookups (the runtime's exploration notice fires past 3 lookups or 40,000 output bytes)"
+		backstop = fmt.Sprintf("when the runtime signals it, at the lower of approximately %dk parent-context tokens or 15%% of the context window, pause and delegate the next bounded unit.", routing.DelegatedDirect.ApproxParentContextTokens/1000)
+	}
+	output.WriteString("- **Delegated direct:** understanding that needs more evidence or more than " + lookupLimit + " takes one read-only explorer, then task size is re-evaluated; a writer is delegated only by the Writer trigger.\n")
 	output.WriteString("- File count, changed lines, size, or perceived risk alone never forces a heavier route.\n")
 	if rdd {
 		output.WriteString("- These are implementation routes, not a ban on per-action delegation. Tests, builds, installs, and review actors may still use fresh workers without changing the selected route.\n")
@@ -173,7 +181,7 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	output.WriteString("\n### Delegation Triggers\n\n")
 	output.WriteString("Each trigger holds only when its condition truly holds, and only then is it mandatory, not advisory; no trigger holds by default, and when in doubt work inline. Each mechanism turns on only by its own trigger. When one fires, stop and delegate through the runtime's subagent mechanism before continuing; executing past a fired trigger inline is a routing defect even if the work succeeds. When it resolves, re-evaluate task size and stay small while the three criteria hold. Delegation keeps the parent context thin enough to orchestrate; it does not slow the work down.\n\n")
 	output.WriteString("- **Ask trigger:** only a genuinely open clarification or a human decision no usable compatible interface can represent gets one focused text question; stop and wait.\n")
-	_, _ = fmt.Fprintf(&output, "- **Mapping trigger:** when understanding exceeds the inline batch budget or needs more than approximately %d sequential lookups, delegate one read-only explorer before deciding or writing anything. Return a handoff of at most approximately %dk tokens with path:line evidence; use one parent spot check (%d maximum). Do not reread the entire mapped evidence. Never explore to read files you will read anyway before writing inline.\n", routing.DelegatedDirect.ApproxSequentialLookupLimit, routing.DelegatedDirect.ApproxHandoffTokens/1000, routing.DelegatedDirect.MaxParentSpotChecks)
+	_, _ = fmt.Fprintf(&output, "- **Mapping trigger:** when understanding exceeds the inline batch budget or needs more than %s, delegate one read-only explorer before deciding or writing anything. Return a handoff of at most approximately %dk tokens with path:line evidence; use one parent spot check (%d maximum). Do not reread the entire mapped evidence. Never explore to read files you will read anyway before writing inline.\n", mappingLookups, routing.DelegatedDirect.ApproxHandoffTokens/1000, routing.DelegatedDirect.MaxParentSpotChecks)
 	output.WriteString("- **Verification trigger:** only a change whose Risk line names a high-risk item gets an independent verifier after the change's own checks, as rarely as possible; a native tier, an unclear or failed assessment, and the writer's model or effort never add one by themselves. Otherwise whoever made the change runs its focused test and suite inline, small tasks included.\n")
 	output.WriteString("- **Tracking trigger:** a large task gets the feature document, its mirror, and work-unit commits.\n")
 	// Parallel units launch together in one turn (gentle-ai#6067). Pi's
@@ -188,7 +196,7 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	output.WriteString("- **Invariants:** each writer prompt names the existing helpers its unit must reuse for shared state (for example the function that adds an entry other commands also add) and the invariants they keep (ordering, uniqueness, validation, normalization); units built in parallel cannot see each other, so the prompt is the only place they learn them. Whoever writes, inline or delegated, reuses the existing function for shared state and never re-implements that step with a different shape.\n")
 	output.WriteString("- **Preparation trigger:** when the Writer trigger delegates a write, reading that prepares it, and broad research or context compression, delegate together with or ahead of the write instead of filling the parent context. Inline writes read inline.\n")
 	output.WriteString("- **Output budget:** keep parent bash output bounded to counts, --stat, tail, or summaries. On a large task, delegate long suites and builds and return concise observed results, including failures.\n")
-	_, _ = fmt.Fprintf(&output, "- **Long-session backstop:** at approximately %dk parent-context tokens, pause and delegate the next bounded unit. This is advisory context guidance, not mechanically observed or enforced; do not claim runtime telemetry or enforcement.\n", routing.DelegatedDirect.ApproxParentContextTokens/1000)
+	output.WriteString("- **Long-session backstop:** " + backstop + "\n")
 	output.WriteString("- **Route declaration:** for large work, record the chosen route per task (inline or delegated) and the trigger evidence in the feature document, so skipped delegation is observable instead of silent.\n")
 	output.WriteString("- These triggers only choose between direct inline and delegated direct inside the organic flow.\n")
 

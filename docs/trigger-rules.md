@@ -66,6 +66,12 @@ large task without a writer reason stays inline, following its logbook. When rec
 decides native review and the agent may only raise it; it never adds an
 independent verifier by itself.
 
+Pi measures two of these limits itself, so its routing names the measured
+values: a one-shot exploration notice past 3 lookups or 40,000 output bytes,
+and a context backstop at the lower of approximately 150k parent-context tokens
+or 15% of the context window. Every other runtime keeps the approximate,
+unmeasured wording; no threshold changes.
+
 A delegation trigger holds only when its condition truly holds; none holds by
 default, and when in doubt the parent works inline. A writer unit is one
 independent piece of behavior with its code, tests, and docs together: one
