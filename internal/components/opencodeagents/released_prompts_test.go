@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
 )
 
 // releasedAgentAssets are the exact agent templates v4.5.0
@@ -22,24 +20,32 @@ var releasedAgentAssets = map[string]string{
 	"gentle-ai-verify":  "980896ec5384109fb14b834027d94937a3355d637680ac6930b6ba52e2d8231b",
 }
 
-// releasedEntry renders a v4.5.0 template exactly as Entry renders the current
-// one: the verifier's method placeholder expands to the shared method, which
-// v4.5.0 shipped byte-identical.
-func releasedEntry(t *testing.T, spec Spec) map[string]any {
+// releasedVerifyMethod is the shared verification method v4.5.0 expanded into
+// the verifier prompt, pinned like the templates: rendering the released
+// verifier with the current method would hide a method edit that stops
+// recognizing v4.5.0 installs.
+const releasedVerifyMethod = "3f85280bdaf8097b0382da5eebe25be3d2e1507f8a71da2099caad2a18645857"
+
+// releasedFixture reads one byte-pinned v4.5.0 fixture.
+func releasedFixture(t *testing.T, name, sum string) string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "v4.5.0", spec.Name+".md"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "v4.5.0", name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum := fmt.Sprintf("%x", sha256.Sum256(raw)); sum != releasedAgentAssets[spec.Name] {
-		t.Fatalf("%s v4.5.0 fixture changed: %s", spec.Name, sum)
+	if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != sum {
+		t.Fatalf("%s v4.5.0 fixture changed: %s", name, got)
 	}
-	prompt := string(raw)
+	return string(raw)
+}
+
+// releasedEntry renders a v4.5.0 template exactly as the v4.5.0 installer did:
+// the verifier's method placeholder expands to the method v4.5.0 shipped.
+func releasedEntry(t *testing.T, spec Spec) map[string]any {
+	t.Helper()
+	prompt := releasedFixture(t, spec.Name+".md", releasedAgentAssets[spec.Name])
 	if spec.Name == "gentle-ai-verify" {
-		method, err := assets.Read("skills/_shared/verify-method.md")
-		if err != nil {
-			t.Fatal(err)
-		}
+		method := releasedFixture(t, "verify-method.md", releasedVerifyMethod)
 		prompt = strings.ReplaceAll(prompt, "{{GENTLE_AI_VERIFY_METHOD}}", method)
 	}
 	entry, err := Entry(spec)
@@ -79,5 +85,45 @@ func TestShapeRecognizesTheReleasedAgentPrompts(t *testing.T) {
 	}
 	if len(releasedAgentAssets) != 3 {
 		t.Fatalf("released fixtures = %d, want explore, worker, and verify", len(releasedAgentAssets))
+	}
+}
+
+// TestReleasedPromptRequiresEachSnippetOnce: the derivation edits only text it
+// can place exactly; a current snippet that is missing or duplicated derives
+// nothing, so no unrelated prompt is ever claimed as a released one.
+func TestReleasedPromptRequiresEachSnippetOnce(t *testing.T) {
+	for _, spec := range parity {
+		edits, ok := releasedPromptEdits[spec.Name]
+		if !ok {
+			continue
+		}
+		t.Run(spec.Name, func(t *testing.T) {
+			entry, err := Entry(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current := entry["prompt"].(string)
+			for _, edit := range edits {
+				if count := strings.Count(current, edit[0]); count != 1 {
+					t.Errorf("current snippet %q appears %d times, want 1", edit[0], count)
+				}
+			}
+			released, ok := releasedPrompt(spec.Name, current)
+			if !ok || released != releasedEntry(t, spec)["prompt"].(string) {
+				t.Fatalf("derived %s prompt differs from the v4.5.0 install (ok = %v)", spec.Name, ok)
+			}
+			first := edits[0][0]
+			for name, prompt := range map[string]string{
+				"missing snippet":    strings.Replace(current, first, "", 1),
+				"duplicated snippet": current + "\n" + first,
+			} {
+				if got, ok := releasedPrompt(spec.Name, prompt); ok {
+					t.Errorf("%s derived a released prompt (%d bytes); want none", name, len(got))
+				}
+			}
+		})
+	}
+	if _, ok := releasedPrompt("jd-judge-a", "any prompt"); ok {
+		t.Error("an agent without released edits derived a prompt")
 	}
 }
