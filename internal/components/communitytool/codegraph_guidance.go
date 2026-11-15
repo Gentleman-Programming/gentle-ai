@@ -36,7 +36,7 @@ func CodeGraphGuidanceMarkdown() string {
 		"",
 		"When answering show, what, where, structural, or codebase questions, use CodeGraph before broad filesystem searches. This is a hard ordering rule for repo maps, architecture, call flow, dependencies, symbol references, impact analysis, and “show”, “what”, “where”, and “how does X work” questions.",
 		"",
-		"Trust by calling, not by checking: never probe for `.codegraph/` or daemon state before the first CodeGraph call — file tools are gitignore-blind there and liveness is unknowable in advance. The `codegraph_explore` MCP tool and the read-only CLI answer on their own; only a failed CodeGraph call (step 8) is the signal to fall back to normal filesystem tools.",
+		"Trust by calling, not by checking: never probe daemon state before the first CodeGraph call — liveness is unknowable in advance. Apart from the shell-based `.codegraph/` index checks in steps 1 and 3 (file tools are gitignore-blind there), the `codegraph_explore` MCP tool and the read-only CLI answer on their own. Only a failed CodeGraph call, or one that returns no results for the question (step 8), is the signal to fall back to normal filesystem tools.",
 		"",
 		"CodeGraph-aware worktree placement:",
 		"",
@@ -60,7 +60,7 @@ func CodeGraphGuidanceMarkdown() string {
 		"5. Missing .codegraph/ is the trigger to initialize, not a reason to skip CodeGraph. Do not fall back just because `.codegraph/` is missing; a missing index is the trigger to lazy-initialize, not a reason to skip CodeGraph.",
 		"6. MCP auto-sync requires a running daemon with an active file watcher. CLI intelligence commands read the existing index as-is and do not auto-sync. Before CLI intelligence reads, run `codegraph sync -q <project-root>`, including after edits. If sync fails, do not treat the existing index as current; explain the failure and fall back to normal filesystem tools. The presence of `.codegraph/` alone does not guarantee freshness. For MCP, run `codegraph sync -q <project-root>` when the watcher is disabled or stale files do not refresh normally.",
 		"7. Use `codegraph_explore` after initialization, or the read-only upstream CLI commands when MCP tools are absent.",
-		"8. Only fall back to normal filesystem tools after CodeGraph initialization or use fails, and briefly explain the fallback.",
+		"8. Only fall back to normal filesystem tools after CodeGraph initialization or use fails or returns no results for the question, and briefly explain the fallback.",
 		"",
 		"Broad Read/Glob/Grep exploration before this CodeGraph check is explicitly discouraged for show, what, where, structural, or codebase questions.",
 	}, "\n")
