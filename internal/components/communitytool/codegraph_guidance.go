@@ -34,7 +34,9 @@ func CodeGraphGuidanceMarkdown() string {
 	return strings.Join([]string{
 		"## CodeGraph",
 		"",
-		"When answering structural or codebase questions, use CodeGraph before broad filesystem searches. This is a hard ordering rule for repo maps, architecture, call flow, dependencies, symbol references, impact analysis, and “how does X work” questions.",
+		"When answering show, what, where, structural, or codebase questions, use CodeGraph before broad filesystem searches. This is a hard ordering rule for repo maps, architecture, call flow, dependencies, symbol references, impact analysis, and “show”, “what”, “where”, and “how does X work” questions.",
+		"",
+		"Trust by calling, not by checking: never probe for `.codegraph/` or daemon state before the first CodeGraph call — file tools are gitignore-blind there and liveness is unknowable in advance. The `codegraph_explore` MCP tool and the read-only CLI answer on their own; only a failed CodeGraph call (step 8) is the signal to fall back to normal filesystem tools.",
 		"",
 		"CodeGraph-aware worktree placement:",
 		"",
@@ -48,7 +50,7 @@ func CodeGraphGuidanceMarkdown() string {
 		"- Do not use `gentle-ai codegraph` as a general proxy. Its `init` command exists only to validate the project root before initialization; intelligence queries belong to the upstream CLI.",
 		"- Never run or recommend destructive or administrative lifecycle commands: `codegraph uninit`, `codegraph install`, `codegraph uninstall`, or `codegraph upgrade`. Reserve `codegraph index` for explicit index-corruption recovery, never routine use.",
 		"",
-		"Required order for structural/codebase questions:",
+		"Required order for show, what, where, structural, or codebase questions:",
 		"",
 		"1. For project initialization, the explicit agent working directory is authoritative: use that directory as `<project-root>` (run `pwd` with the agent's shell tool if needed). Check `<cwd>/.git` (directory or worktree file) and `<cwd>/.codegraph/` before ancestor discovery. Never replace an initialization target with an enclosing repository. Only for an already-selected existing repository, resolve its root with `git rev-parse --show-toplevel || pwd`.",
 		"   If the explicit initialization target is not a Git root, stop CodeGraph initialization and explain that local Git initialization is required (`git -C <cwd> init`); never retry initialization against the parent. Do not initialize Git merely to answer a structural/codebase question.",
@@ -60,7 +62,7 @@ func CodeGraphGuidanceMarkdown() string {
 		"7. Use `codegraph_explore` after initialization, or the read-only upstream CLI commands when MCP tools are absent.",
 		"8. Only fall back to normal filesystem tools after CodeGraph initialization or use fails, and briefly explain the fallback.",
 		"",
-		"Broad Read/Glob/Grep exploration before this CodeGraph check is explicitly discouraged for structural/codebase questions.",
+		"Broad Read/Glob/Grep exploration before this CodeGraph check is explicitly discouraged for show, what, where, structural, or codebase questions.",
 	}, "\n")
 }
 
