@@ -5,8 +5,10 @@ reported blocker never converts authorized work into a question for the human:
 the agent continues the runnable in-scope work and reports what is actually
 outstanding.
 
-This page describes the rule the ODD close of every runtime states, and the
-Native Checking Contract each installed orchestrator carries. It is shipped
+This page describes the rule the ODD close of every runtime states. Each
+installed orchestrator states its first sentence under Authorized work
+continuity, and its Native Checking Contract points at the close instead of
+restating it, because the close is installed beside it. It is shipped
 policy text, not a claim about model behavior; the rule is not enforced by a
 runtime watchdog.
 
@@ -71,8 +73,9 @@ abandoning runnable work or presenting an unverified outcome as final.
 |---------|---------|
 | ODD close, Pi | `internal/components/agentguidance/routing.go` (rendered as the provider contract bundle's `routing/pi.md`) |
 | ODD close, every other runtime | The shared close gate in the same file, rendered into each runtime's routing block |
-| Native Checking Contract, runtimes with receipt-driven development | The inline section of each `internal/assets/<runtime>/orchestrator.md` |
-| Native Checking Contract, every other runtime | `internal/assets/skills/_shared/odd-orchestrator-sections.md`, `Native Checking Contract (ODD only)` |
+| Authorized work continuity (first sentence of the rule) | `internal/assets/skills/_shared/odd-orchestrator-sections.md`, `Orchestrator Identity and Role` |
+| Native Checking Contract pointer to the close, runtimes with receipt-driven development | The inline section of each `internal/assets/<runtime>/orchestrator.md` |
+| Native Checking Contract pointer to the close, every other runtime | `internal/assets/skills/_shared/odd-orchestrator-sections.md`, `Native Checking Contract (ODD only)` |
 | Installed orchestrator carriers, compact variants | Generated from the same sources; never hand-edited copies |
 
 ## Boundaries

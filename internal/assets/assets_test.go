@@ -403,7 +403,11 @@ func TestOrchestratorsDelegateOnlyWhenATriggerTrulyHolds(t *testing.T) {
 	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
 	for _, required := range []string{
 		"only when a Delegation Trigger's condition truly holds and names a reason",
-		"A Delegation Trigger holds only when its condition truly holds; none holds by default, and when in doubt work inline. Once one holds, delegation is not optional",
+		// The trigger-holds rule (only when its condition truly holds, then
+		// mandatory, none by default, inline when in doubt) is pinned once per
+		// asset under #### Delegation Triggers above; the shared section keeps
+		// only the clause no asset restates.
+		"Delegation follows named reasons, never size or complexity alone.",
 		"A writer reason is parallel units launched together in one turn (independent units of behavior, each with its code, tests, and docs and several minutes of work) or the context backstop",
 	} {
 		if !strings.Contains(shared, required) {
@@ -1589,9 +1593,10 @@ func TestODDOrchestratorsProjectNativeCheckingWithoutPromptOwnedLenses(t *testin
 			"never invent PASS, retry indefinitely, or escalate into extra ceremony",
 			"quick check runs once",
 			"Long or very-long work gets one cost/side-effect forecast",
-			// harness-continuity S3: authorized work continues, and a pending
-			// child is a wait event, never a generic decision license.
-			"Authorized work continues: runnable in-scope steps run, a pending child is a wait event",
+			// harness-continuity S3: continuity and missing proof are stated
+			// once, in the ODD Close; checking points at it and never keeps a
+			// generic decision license.
+			"Continuity and missing proof follow the ODD Close (step 7).",
 			"Functional proof and adversarial review both project as **Checking**",
 			"at most one scoped correction",
 			"never reopen review for unchanged content",

@@ -203,10 +203,18 @@ func TestRenderRoutingContinuesAuthorizedWork(t *testing.T) {
 	}
 }
 
-// TestInstalledNativeCheckingContinuesAuthorizedWork proves the same canon
-// reaches the installed orchestrator's Native Checking Contract on every
-// runtime, RDD or not: a non-RDD runtime receives the shared ordinary section,
-// an RDD runtime its own inline one.
+// nativeCheckingClosePointer is the one line the Native Checking Contract keeps
+// for continuity and missing proof: the canon itself lives once in the ODD
+// Close of the routing block installed beside every orchestrator, so the
+// always-on guidance does not carry it twice.
+const nativeCheckingClosePointer = "Continuity and missing proof follow the ODD Close (step 7)."
+
+// TestInstalledNativeCheckingContinuesAuthorizedWork proves the S3 canon still
+// governs checking on every runtime, RDD or not: the Native Checking Contract
+// points at the ODD Close instead of restating it, and that Close, rendered for
+// the same runtime, states every continuity and missing-proof rule. Delivery of
+// both into the same installed guidance is pinned by
+// TestInstalledNativeCheckingPointsAtDeliveredClose.
 func TestInstalledNativeCheckingContinuesAuthorizedWork(t *testing.T) {
 	t.Parallel()
 
@@ -226,15 +234,23 @@ func TestInstalledNativeCheckingContinuesAuthorizedWork(t *testing.T) {
 			if section == "" {
 				t.Fatalf("RenderOrchestratorWithSource(%q) has no Native Checking Contract", agent.ID)
 			}
+			if !strings.Contains(section, nativeCheckingClosePointer) {
+				t.Errorf("installed %q Native Checking Contract does not point at the ODD Close", agent.ID)
+			}
+			routing, err := agentguidance.RenderRouting(agent.ID)
+			if err != nil {
+				t.Fatalf("RenderRouting(%q) error = %v", agent.ID, err)
+			}
 			for _, want := range []string{
 				continueAuthorizedWorkRule,
+				trackedTaskRule,
 				missingProofRule,
 				noSelfRepromptRule,
 				"stop checking only inside an exhausted or denied boundary",
 				"never invent a pass",
 			} {
-				if !strings.Contains(section, want) {
-					t.Errorf("installed %q Native Checking Contract is missing %q", agent.ID, want)
+				if !strings.Contains(routing, want) {
+					t.Errorf("ODD Close the %q Native Checking Contract points at is missing %q", agent.ID, want)
 				}
 			}
 			if strings.Contains(section, genericDecisionLicense) {

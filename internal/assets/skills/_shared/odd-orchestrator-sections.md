@@ -42,7 +42,7 @@ Verification of a delegated writer's work is proportionate to the risk of the ch
 - A passive ordinary document or image needs structural readback, not an artificial semantic-verification subagent. Active, mixed, operational, executable, mode-changing, or unknown content gets functional verification at the tier the Delegated Verification Gate assigns.
 - For a trivial passive documentation-only edit, structural readback is the complete proportional check; do not open a separate semantic-verification ceremony.
 - If an applicable verifier is unavailable, report it as unavailable; never invent a pass, retry indefinitely, or escalate into extra ceremony.
-- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Authorized work continues: runnable in-scope steps run, a pending child is a wait event whose completion resumes the turn without asking the human, and only a real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit stops the work it applies to, never independent authorized work. Missing, partial, unavailable, or declined proof forbids claiming completion of the affected work, never an independently authorized next step, while a required authorized check the existing budget still allows keeps running; stop checking only inside an exhausted or denied boundary, report that exact blocker and the decision that is genuinely the human's, and never invent a pass. Never turn a report into a blind self-reprompt loop. Hedged wording is not a stop.
+- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Continuity and missing proof follow the ODD Close (step 7).
 - Functional proof and independent verification both project as **Checking**. One verified change permits at most one scoped correction, and a second only when the recheck shows the same blocker still failing; there is no loop-until-clean behavior.
 - Commit, push, PR, direct-main, emergency, and release gates follow ordinary repository policy; checking output never authorizes delivery.
 <!-- odd-orchestrator-section:Native Checking Contract (ODD only):end -->
@@ -81,9 +81,9 @@ Interpret short replies such as "yes", "go ahead", or "eso mismo" against the im
 
 Resolving an incident or subdecision does not complete or cancel the original authorized objective; resume safe, necessary in-scope steps automatically, using judgment for proportionate recovery and respecting explicit user dispositions. Investigate pending technical uncertainty rather than treating it alone as a new human decision.
 
-Stop only for an unresolved consequential scope/product decision, required explicit consent, a denied action, unavailable required proof, or the human's explicit stop. Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule. Report a concrete blocker and the exact decision needed rather than requesting a generic "continue".
+Authorized work continues: runnable in-scope steps run, a pending child is a wait event whose completion resumes the turn without asking the human, and only a real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit stops the work it applies to, never independent authorized work. Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule. Report a concrete blocker and the exact decision needed rather than requesting a generic "continue".
 
-For background work, launch the bounded action and end the turn when no independent in-scope work remains. Retain its identity and resume the already-authorized continuation automatically on its completion event; do not ask the human to say "continue", poll, or claim completion while checks remain pending.
+For background work, launch the bounded action and end the turn when no independent in-scope work remains. Retain its identity and resume on its completion event without asking the human; never poll or claim completion while checks remain pending.
 
 ### Mental Model
 
@@ -91,9 +91,8 @@ Gentle AI is an ecosystem configurator and harness layer. After installation, th
 
 - Small request: do it directly.
 - Substantial authorized work: use ODD; track feature progress automatically.
-- The parent session orchestrates and writes inline; a bounded worker takes a unit only for a named reason.
 
-Delegation follows named reasons, never size or complexity alone. A Delegation Trigger holds only when its condition truly holds; none holds by default, and when in doubt work inline. Once one holds, delegation is not optional: use the smallest useful delegated workflow instead of continuing past it inline.
+Delegation follows named reasons, never size or complexity alone.
 <!-- odd-orchestrator-section:Orchestrator Identity and Role:end -->
 
 <!-- odd-orchestrator-section:Orchestrator Routing and Delivery:start -->

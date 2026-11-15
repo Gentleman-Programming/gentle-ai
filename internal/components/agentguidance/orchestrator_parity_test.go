@@ -1,6 +1,7 @@
 package agentguidance
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -114,6 +115,68 @@ func TestInstalledApprovalContinuity(t *testing.T) {
 						t.Errorf("%s guidance missing %q", phase, want)
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestInstalledNativeCheckingPointsAtDeliveredClose is the precondition of the
+// harness-continuity S3 deduplication: the Native Checking Contract points at
+// the ODD Close instead of restating continuity and missing proof, which is
+// only sound because that Close is written into the same installed guidance as
+// the orchestrator on every runtime and carrier, global modules included. No
+// carrier may still stop for unavailable required proof. Shipped-policy text,
+// not model-compliance proof.
+func TestInstalledNativeCheckingPointsAtDeliveredClose(t *testing.T) {
+	type carrier struct {
+		name    string
+		agent   model.AgentID
+		options RoutingOptions
+	}
+	var carriers []carrier
+	for _, agent := range orchestratorRuntimes(t) {
+		carriers = append(carriers, carrier{string(agent), agent, RoutingOptions{}})
+	}
+	carriers = append(carriers,
+		carrier{"small-generic", model.AgentVSCodeCopilot, RoutingOptions{OrchestratorCapability: "small"}},
+		carrier{"claude-global-modules", model.AgentClaudeCode, RoutingOptions{ClaudeGlobalModules: true}},
+		carrier{"codex-global-modules", model.AgentCodex, RoutingOptions{CodexGlobalModules: true}},
+	)
+
+	for _, carrier := range carriers {
+		t.Run(carrier.name, func(t *testing.T) {
+			result, err := InjectRoutingWithOptions(t.TempDir(), carrier.agent, carrier.options)
+			if err != nil {
+				t.Fatalf("InjectRoutingWithOptions(%q) error = %v", carrier.agent, err)
+			}
+			var delivered strings.Builder
+			for _, path := range result.Files {
+				if _, err := os.Stat(path); err != nil {
+					continue
+				}
+				if strings.HasSuffix(path, ".json") && !strings.HasSuffix(path, "opencode.json") {
+					delivered.WriteString(readFile(t, path))
+				} else {
+					delivered.WriteString(deliveredGuidance(t, path))
+				}
+				delivered.WriteString("\n")
+			}
+			guidance := delivered.String()
+
+			if strings.Contains(guidance, "unavailable required proof") {
+				t.Error("installed guidance still stops for unavailable required proof")
+			}
+			for _, want := range []string{"## Implementation Routing", continueAuthorizedWorkRule, trackedTaskRule, missingProofRule, noSelfRepromptRule} {
+				if !strings.Contains(guidance, want) {
+					t.Errorf("installed guidance is missing the ODD Close rule %q", want)
+				}
+			}
+			if !strings.Contains(guidance, "#### Native Checking Contract") {
+				// The small generic variant carries no checking section to point.
+				return
+			}
+			if !strings.Contains(guidance, "Continuity and missing proof follow the ODD Close (step 7).") {
+				t.Error("installed Native Checking Contract does not point at the ODD Close")
 			}
 		})
 	}
