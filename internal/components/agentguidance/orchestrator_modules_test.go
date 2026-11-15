@@ -149,7 +149,7 @@ func TestWriterModuleCarriesEditSurfacesOnEveryLaunch(t *testing.T) {
 		"A bounded writer refuses to write outside the exact allowed edit surfaces and stops for interaction when they are missing. The parent owns that input.",
 		"If the surface genuinely cannot be derived, do not launch the writer, and do not ask the human to author paths.",
 		"present that enumerated list as an approve/decline choice under the Lossless Blocking Prompts rules.",
-		"Relay a writer's interaction request about edit surfaces the same way",
+		"Adjudicate a writer's edit-surface request yourself first",
 	} {
 		if !strings.Contains(writer, want) {
 			t.Errorf("writer module is missing %q", want)

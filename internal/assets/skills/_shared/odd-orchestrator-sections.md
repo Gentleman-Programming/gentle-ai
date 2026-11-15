@@ -148,7 +148,7 @@ stop writes → parent captures git status → diagnose affected repositories/wo
 ### Allowed edit surfaces (MANDATORY)
 
 <!-- odd-orchestrator-fragment:writer.edit-surfaces:start -->
-A bounded writer refuses to write outside the exact allowed edit surfaces and stops for interaction when they are missing. The parent owns that input. Every new writer launch carries the section (a continuation inherits it); after a rejected launch, repair what the rejection names once, never relaunch the same prompt unchanged.
+A bounded writer refuses to write outside the exact allowed edit surfaces and stops for interaction when they are missing. The parent owns that input. A writer that needs a route beyond its surface never widens it on its own: it reports the necessary exact candidate paths with their reasons and waits for the parent-issued declaration. Every new writer launch carries the section (a continuation inherits it); after a rejected launch, repair what the rejection names once, never relaunch the same prompt unchanged. A continuation continues the same writer, and the section you pass replaces the inherited one rather than adding to it: carry every still-needed path, including the unchanged ones, and the concise reason for the addition. Dropping a needed path is the same defect as no surface, and an extension never widens to a repository-wide surface or resets a budget.
 
 Before launching a bounded writer through the runtime's delegation mechanism, derive the allowed edit surface from the task being delegated — the files the planned change must touch, plus the directories where the task authorizes new files — and pass it in the delegated prompt under an `## Allowed edit surfaces` heading:
 
@@ -158,9 +158,9 @@ Before launching a bounded writer through the runtime's delegation mechanism, de
 - the directories where new files are authorized, when the task requires new files;
 - nothing beyond the delegated task — a surface wider than the task is the same defect as no surface at all.
 
-If the surface genuinely cannot be derived, do not launch the writer, and do not ask the human to author paths. Derive a candidate set first — the exact paths this task would touch — and present that enumerated list as an approve/decline choice under the Lossless Blocking Prompts rules.
+If the surface genuinely cannot be derived, do not launch the writer, and do not ask the human to author paths. Derive a candidate set first — the exact paths this task would touch — and present that enumerated list as an approve/decline choice under the Lossless Blocking Prompts rules. Investigate a technical uncertainty about the route inside the authorized work; it is not a human question by itself.
 
-Relay a writer's interaction request about edit surfaces the same way: present its derived candidate paths as the choice, and add or drop paths only on the human's explicit instruction.
+Adjudicate a writer's edit-surface request yourself first: add a necessary path to its declaration without asking the human, when the route serves the objective already authorized in the same repository and you have checked ownership, preservation of existing work, risk, and concurrency with other writers and units. An optional or cosmetic refactor is not that necessary path, and an unresolved overlap or ownership conflict blocks the addition until it is settled. Only a real new objective or product scope, an unapproved repository, private material, a destructive or otherwise prohibited operation, missing consent, a denied action, or an exhausted limit goes to the human, under the existing protocols; for that human choice, present the writer's derived candidate paths under the Lossless Blocking Prompts rules. A surface entry never substitutes for repository or worktree authority and never authorizes an operation the rules prohibit.
 <!-- odd-orchestrator-fragment:writer.edit-surfaces:end -->
 
 ### Key Learnings closing block
