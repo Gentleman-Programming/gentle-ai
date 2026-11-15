@@ -162,7 +162,7 @@ This path exists only when Codex sub-agent tooling is unavailable or blocked. It
 
 When a Delegation Trigger fires and sub-agent tooling is unavailable:
 
-1. Stop the delegated work that triggered the gate.
+1. Stop the delegated work whose Delegation Trigger fired.
 2. Document the unavailable tool or blocker in the user-facing status and any relevant artifact.
 3. Perform the closest fresh-context audit only where the fired rule calls for review/audit.
 4. Ask the user to enable sub-agent tooling or narrow the task so no Delegation Trigger fires before implementation continues.

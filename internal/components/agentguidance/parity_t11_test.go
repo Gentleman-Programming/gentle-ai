@@ -114,7 +114,8 @@ func TestSmallGenericStopListIsScopedToTheAffectedWork(t *testing.T) {
 		t.Error("small variant keeps the unscoped stop list")
 	}
 	for _, want := range []string{
-		"An open human decision, missing consent, a denial, or an explicit stop halts only the work it names; independent authorized work continues.",
+		// The canon names the exhausted limit beside the other stops.
+		"An open human decision, missing consent, a denial, an exhausted limit, or an explicit stop halts only the work it names; independent authorized work continues.",
 		// PRESERVE: the guards beside it.
 		"Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule.",
 		"Report a concrete blocker and the exact decision needed rather than requesting a generic \"continue\".",
@@ -134,7 +135,7 @@ func TestCodexOrchestratorNamesExistingDelegationGates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, missing := range []string{"hard gate", "hard-gate", "hard delegation gate", "delegation-required"} {
+	for _, missing := range []string{"hard gate", "hard-gate", "hard delegation gate", "delegation-required", "triggered the gate"} {
 		if strings.Contains(strings.ToLower(rendered), missing) {
 			t.Errorf("Codex orchestrator names a nonexistent %q", missing)
 		}
@@ -145,6 +146,7 @@ func TestCodexOrchestratorNamesExistingDelegationGates(t *testing.T) {
 		"Do not present inline execution past a fired Delegation Trigger as normal behavior.",
 		"It is not the default and it is not a bypass for a fired Delegation Trigger.",
 		"When a Delegation Trigger fires and sub-agent tooling is unavailable:",
+		"1. Stop the delegated work whose Delegation Trigger fired.",
 		"narrow the task so no Delegation Trigger fires before implementation continues.",
 		"Do not run triggered work inline as a fallback.",
 	} {
