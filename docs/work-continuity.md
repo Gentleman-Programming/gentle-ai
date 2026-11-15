@@ -91,8 +91,12 @@ abandoning runnable work or presenting an unverified outcome as final.
 - Genuinely exhausted limits, denied actions, and consent boundaries keep their
   existing authority; the continuity rule never reopens them.
 - The generic "Needs your decision" terminal phrase is retired from the close
-  gate and from Native Checking: a concrete blocker with the exact human
-  decision is reported instead.
+  gate, from Native Checking, and from the Delegated Verification Gate's
+  correction bounds: blockers still open after the bounded correction leave the
+  unit `status: partial`, naming any genuine human decision, while independent
+  authorized work continues.
+- Worker, setup, recheck, native, and user budgets stay separate; changed state
+  earns a fresh check, not a budget reset.
 
 ## Checklist
 

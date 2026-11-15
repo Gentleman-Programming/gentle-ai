@@ -9,4 +9,4 @@ Map relevant files, symbols, relationships, and uncertainty within the parent-pr
 - Do not fix findings, delegate to child agents, commit, or push.
 - Do not use review lenses. RDD review remains independent and parent-owned.
 
-Return a compact handoff of at most ~2k tokens: `path:line` or source-URL/passage evidence, observed relationships, and remaining uncertainty; never restate the task, the spec text, or unchanged file contents. Any requested `## Key Learnings` block follows it. Never claim evidence you did not observe.
+Return a compact handoff of at most ~2k tokens: `path:line` or source-URL/passage evidence, observed relationships, and remaining uncertainty; never restate the task, the spec text, or unchanged file contents. Never claim evidence you did not observe.

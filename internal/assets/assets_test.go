@@ -2019,7 +2019,7 @@ func TestGenericAgentsResumeWithoutRereadsAndReportCompactly(t *testing.T) {
 			path: "opencode/agents/gentle-ai-worker.md",
 			required: []string{
 				resume + ". Do not read persistent memory for context. The parent selects and forwards relevant observations.",
-				"Return one compact handoff using the schema below; cite exact commands with exit codes and test counts, blockers with `path:line`, and scratch paths, and never restate the task, the spec text, or unchanged file contents. Any requested `## Key Learnings` block follows it.",
+				"Return one compact handoff using the schema below; cite exact commands with exit codes and test counts, blockers with `path:line`, and scratch paths, and never restate the task, the spec text, or unchanged file contents.",
 				"Report `partial` or `blocked` honestly.",
 			},
 			retired: []string{"Return one concise handoff using this schema:", "A clean handoff is more valuable than pretending the task is complete."},
@@ -2028,7 +2028,7 @@ func TestGenericAgentsResumeWithoutRereadsAndReportCompactly(t *testing.T) {
 			path: "opencode/agents/gentle-ai-explore.md",
 			required: []string{
 				"read it until `## Log` for the requirements. " + resume + ".",
-				"Return a compact handoff of at most ~2k tokens: `path:line` or source-URL/passage evidence, observed relationships, and remaining uncertainty; never restate the task, the spec text, or unchanged file contents. Any requested `## Key Learnings` block follows it. Never claim evidence you did not observe.",
+				"Return a compact handoff of at most ~2k tokens: `path:line` or source-URL/passage evidence, observed relationships, and remaining uncertainty; never restate the task, the spec text, or unchanged file contents. Never claim evidence you did not observe.",
 			},
 			retired: []string{"Return a compressed handoff with supporting paths, observed evidence and relationships, and remaining uncertainty."},
 		},
@@ -2036,7 +2036,7 @@ func TestGenericAgentsResumeWithoutRereadsAndReportCompactly(t *testing.T) {
 			path: "opencode/agents/gentle-ai-verify.md",
 			required: []string{
 				"Passing tests never prove an `S#` whose example was not executed. " + resume + ", including new `## Log` entries.",
-				"Return a compact evidence handoff of at most ~2k tokens: the verdict per spec item, exact commands with exit codes, test counts, and observed results, blockers with `path:line`, anything left unverified, and scratch paths; never restate the task or spec beyond the line a finding contradicts, or unchanged file contents. The probe regression tests, then any requested `## Key Learnings` block, follow it. Never claim a command ran or a check passed without observed output.",
+				"Return a compact evidence handoff of at most ~2k tokens: the verdict per spec item, exact commands with exit codes, test counts, and observed results, blockers with `path:line`, anything left unverified, and scratch paths; never restate the task or spec beyond the line a finding contradicts, or unchanged file contents. The probe regression tests follow it. Never claim a command ran or a check passed without observed output.",
 			},
 			retired: []string{"Return a compressed evidence handoff of at most ~2k tokens: exact commands run, observed results, `path:line` evidence, the verdict per spec item, blockers, and anything left unverified; the probe regression tests follow it."},
 		},

@@ -66,13 +66,15 @@ func TestBuildOrchestratorModulesReconstructsPublicRender(t *testing.T) {
 		t.Logf("module %s: %d bytes", module.file, len(module.content))
 	}
 	t.Logf("core: %d bytes; public: %d bytes; fake contract: %d bytes", len(bundle.core), len(public), len(testModuleContract))
-	wantIDs := []string{"writer.edit-surfaces", "delegation.key-learnings", "skills.discovery", "skills.registry"}
+	// harness-continuity S8 retired delegation.key-learnings, the generic
+	// Key Learnings ritual, and with it the delegation module.
+	wantIDs := []string{"writer.edit-surfaces", "skills.discovery", "skills.registry"}
 	if !reflect.DeepEqual(ids, wantIDs) {
 		t.Fatalf("fragment order = %q, want %q", ids, wantIDs)
 	}
-	// Modules without a relevant body (verification, tracking, memory, prompts)
+	// Modules without a relevant body (delegation, verification, tracking, memory, prompts)
 	// are not built.
-	if want := []string{"delegation", "writer", "skills"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"writer", "skills"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("modules = %q, want %q", names, want)
 	}
 
@@ -85,7 +87,7 @@ func TestBuildOrchestratorModulesReconstructsPublicRender(t *testing.T) {
 		}
 	}
 	for file, want := range map[string]int{
-		"orchestrator-delegation.md": 1, "orchestrator-verification.md": 0, "orchestrator-writer.md": 1, "orchestrator-skills.md": 2,
+		"orchestrator-delegation.md": 0, "orchestrator-verification.md": 0, "orchestrator-writer.md": 1, "orchestrator-skills.md": 2,
 	} {
 		if got := strings.Count(bundle.core, "read `"+testModuleDir+"/"+file+"`"); got != want {
 			t.Errorf("core references %s %d times, want %d", file, got, want)
@@ -123,9 +125,9 @@ func TestOrchestratorModulesCarryCanonicalBodies(t *testing.T) {
 		}
 	}
 
-	delegation := modules["delegation"].content
-	if !strings.HasPrefix(delegation, "# Gentle AI Orchestrator — Delegation Module\n") {
-		t.Errorf("delegation module heading = %q", strings.SplitN(delegation, "\n", 2)[0])
+	writer := modules["writer"].content
+	if !strings.HasPrefix(writer, "# Gentle AI Orchestrator — Writer Module\n") {
+		t.Errorf("writer module heading = %q", strings.SplitN(writer, "\n", 2)[0])
 	}
 	for _, module := range bundle.modules {
 		if strings.Contains(module.content, orchestratorFragmentMarkerToken) || strings.Contains(module.content, "{{GENTLE_AI_") {

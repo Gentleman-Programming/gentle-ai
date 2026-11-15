@@ -15,7 +15,9 @@ import (
 // `assets/orchestrator-skills.md` at 89b8de3b5). When Gentle Shell adds a
 // runtime-agnostic section, port it into
 // `internal/assets/skills/_shared/odd-orchestrator-sections.md` and add its
-// heading here deliberately.
+// heading here deliberately. harness-continuity S8 retired the Key Learnings
+// closing block on both sides; TestRenderedOrchestratorsCarryNoKeyLearningsRitual
+// pins its absence.
 //
 // The list carries ODD and orchestration sections only: receipt-driven
 // development applies to a subset of runtimes, so RDD sections (Provider Defect
@@ -42,7 +44,6 @@ var gentleShellParityHeadings = []string{
 	"Work Routing Ladder",
 	"Canonical Lightweight Workflows",
 	"Allowed edit surfaces",
-	"Key Learnings closing block",
 	"Delivery strategy",
 	// assets/orchestrator-skills.md
 	"Intent-Driven Skill Discovery",
@@ -302,7 +303,8 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 				"verify per unit only when that unit names a high-risk item",
 				"**Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers",
 				"A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one.",
-				"A writer's self-review follows the same bound, then reports `partial`.",
+				// harness-continuity S6: what stays open ends the unit partial.
+				"Blockers still open after that, and a writer's self-review under the same bound, leave the unit `status: partial`, naming any genuine human decision; independent authorized work continues.",
 				// S6 test discipline reaches every handoff.
 				"the applicable test-first policy and runner from `## Implementation Routing`",
 				// S7 verify handoff.
@@ -323,7 +325,9 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 					t.Errorf("installed orchestrator for %q grants native RDD review a second correction", agent)
 				}
 			} else {
-				required = append(required, "One verified change permits at most one scoped correction, and a second only when the recheck shows the same blocker still failing")
+				// The checking contract points at the gate's bound instead of
+				// restating it; the bound itself is pinned above.
+				required = append(required, "Functional proof and independent verification both project as **Checking**; corrections follow the gate's **Correction bounds**, with no loop-until-clean behavior.")
 			}
 			for _, want := range required {
 				if !strings.Contains(prompt, want) {

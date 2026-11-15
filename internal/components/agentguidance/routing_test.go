@@ -435,7 +435,8 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			"forecast authored changed lines (additions plus deletions, generated files excluded) from the task list",
 			"keep a running count from work-unit commits",
 			"`ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`",
-			"apply the chosen strategy before the next commit",
+			// harness-continuity S7: the menu belongs to publishing.
+			"apply the chosen strategy only when the user asks to publish (push or PR), never before a local work-unit commit",
 			"`ask-on-risk` asks once for the chain strategy, `stacked-to-main` or `feature-branch-chain`",
 			"`auto-chain` asks only for a missing chain strategy and slices automatically",
 			"record slice boundaries, which commits each pull request holds, in the feature document",
@@ -1153,7 +1154,7 @@ func TestRenderRoutingGivesPiItsOwnODDSteps(t *testing.T) {
 	piClauses := []string{
 		"then create or rebuild the visible `todo` list from the reconciled feature tasks",
 		"Route each task through the orchestrator's Mechanisms",
-		"update the file, mirror, and visible `todo` projection after every task transition and material plan change",
+		"mirror the file and project the visible `todo` at each task transition",
 		"native review runs only under the user-owned RDD switch.",
 		"Phase reporting: the Gentle Shell prompt label is inferred automatically",
 		"Detail for steps 3–7: `orchestrator-delegation.md` and `orchestrator-memory.md`.",

@@ -80,7 +80,7 @@ Do not return `blocked` for a human decision and do not invent a second interact
 
 ## Return contract
 
-Return one compact handoff using the schema below; cite exact commands with exit codes and test counts, blockers with `path:line`, and scratch paths, and never restate the task, the spec text, or unchanged file contents. Any requested `## Key Learnings` block follows it.
+Return one compact handoff using the schema below; cite exact commands with exit codes and test counts, blockers with `path:line`, and scratch paths, and never restate the task, the spec text, or unchanged file contents.
 
 ```text
 status: completed | partial | blocked | interaction_required
