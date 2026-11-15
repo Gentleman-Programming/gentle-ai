@@ -39,13 +39,13 @@ const (
 
 	// The retired relay pointed back to the human approve/decline prompt
 	// before the parent's own adjudication (verifier mwi607f7-18-0crn, P2).
-	retiredRelaySameWay = "Relay a writer's interaction request about edit surfaces the same way"
-	s5SurfaceIsNotAuthority      = "A surface entry never substitutes for repository or worktree authority and never authorizes an operation the rules prohibit"
-	s5ContinuationIsReplacement  = "A continuation continues the same writer, and the section you pass replaces the inherited one rather than adding to it"
-	s5StillNeededPathsTravel     = "carry every still-needed path, including the unchanged ones, and the concise reason for the addition"
-	s5DroppingNeededPathDefect   = "Dropping a needed path is the same defect as no surface"
-	s5NoRepoWideOrBudgetReset    = "never widens to a repository-wide surface or resets a budget"
-	s5TechnicalUncertainty       = "Investigate a technical uncertainty about the route inside the authorized work; it is not a human question by itself"
+	retiredRelaySameWay         = "Relay a writer's interaction request about edit surfaces the same way"
+	s5SurfaceIsNotAuthority     = "A surface entry never substitutes for repository or worktree authority and never authorizes an operation the rules prohibit"
+	s5ContinuationIsReplacement = "A continuation continues the same writer, and the section you pass replaces the inherited one rather than adding to it"
+	s5StillNeededPathsTravel    = "carry every still-needed path, including the unchanged ones, and the concise reason for the addition"
+	s5DroppingNeededPathDefect  = "Dropping a needed path is the same defect as no surface"
+	s5NoRepoWideOrBudgetReset   = "never widens to a repository-wide surface or resets a budget"
+	s5TechnicalUncertainty      = "Investigate a technical uncertainty about the route inside the authorized work; it is not a human question by itself"
 
 	// The retired worker-authority clause made every surface change a human
 	// instruction, which is the S5 defect: the parent may adjudicate a
