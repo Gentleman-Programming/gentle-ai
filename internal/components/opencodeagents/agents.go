@@ -108,7 +108,7 @@ func Entry(spec Spec) (map[string]any, error) {
 		}
 		prompt = strings.ReplaceAll(prompt, "{{GENTLE_AI_VERIFY_METHOD}}", method)
 	}
-	return map[string]any{"mode": "subagent", "hidden": true, "description": spec.Description, "prompt": prompt, "permission": spec.Permission}, nil
+	return map[string]any{"mode": "subagent", "hidden": !strings.HasPrefix(spec.Name, "gentle-ai-"), "description": spec.Description, "prompt": prompt, "permission": spec.Permission}, nil
 }
 
 // legacyVerifyPrompt derives the pre-refactor verifier prompt from the current
@@ -204,6 +204,11 @@ func Shape(name string, entry map[string]any) (bool, error) {
 		if k != "model" && k != "variant" {
 			comparable[k] = v
 		}
+	}
+	// Pre-#5703 installs emitted ODD subagents with hidden: true; normalize so
+	// uninstall and upgrade checks keep recognizing earlier managed entries.
+	if strings.HasPrefix(name, "gentle-ai-") && comparable["hidden"] == true {
+		comparable["hidden"] = false
 	}
 	got, err := json.Marshal(comparable)
 	if err != nil {
