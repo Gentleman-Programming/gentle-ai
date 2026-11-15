@@ -53,8 +53,10 @@ func installFullGentleman(t *testing.T, agent model.AgentID) string {
 // guidance, or skill text points to must exist in the runtime's skills
 // directory, and no retired SDD-only shared file may be installed.
 func TestInstallLeavesNoDanglingSharedReferences(t *testing.T) {
-	// Preserve the historical inventory and explicitly include the new ODD method.
-	wantShared := append(append([]string{}, v370SharedReferences...), "verify-method.md")
+	// Preserve the historical inventory and explicitly include the new ODD
+	// method and the provider-defect report workflow (harness-continuity S9).
+	wantShared := append(append([]string{}, v370SharedReferences...), "verify-method.md", "provider-defect-report.md")
+	sort.Strings(wantShared)
 	for _, agent := range skillRuntimes {
 		t.Run(string(agent), func(t *testing.T) {
 			home := installFullGentleman(t, agent)
@@ -110,7 +112,7 @@ func TestInstallLeavesNoDanglingSharedReferences(t *testing.T) {
 			}
 			sort.Strings(installed)
 			if strings.Join(installed, ",") != strings.Join(wantShared, ",") {
-				t.Errorf("installed _shared = %v, want the historical non-SDD set plus the ODD method %v", installed, wantShared)
+				t.Errorf("installed _shared = %v, want the historical non-SDD set plus the ODD method and the provider-defect report %v", installed, wantShared)
 			}
 			ledger, err := os.ReadFile(filepath.Join(sharedDir, "review-ledger-contract.md"))
 			if err != nil {
