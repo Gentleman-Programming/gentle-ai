@@ -23,11 +23,20 @@ func TestShapeVerifierOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := method[strings.Index(method, "For behavior changes"):]
+	// 3132b5bc6 predates v4.5.0: derive it from the template v4.5.0 shipped.
+	tpl, ok := releasedPrompt("gentle-ai-verify", tpl)
+	if !ok {
+		t.Fatal("v4.5.0 verifier template derivation failed")
+	}
+	released, ok := releasedPrompt("gentle-ai-verify", cur["prompt"].(string))
+	if !ok {
+		t.Fatal("v4.5.0 verifier prompt derivation failed")
+	}
 	prereq := strings.ReplaceAll(strings.ReplaceAll(tpl,
 		"plus the scratch-copy probes in the shared method.", "plus the scratch-copy probes below."),
 		"{{GENTLE_AI_VERIFY_METHOD}}", body)
 	legacy, _ := Entry(parity[1])
-	if legacy["prompt"], err = legacyVerifyPrompt(cur["prompt"].(string)); err != nil || legacy["prompt"].(string) != prereq {
+	if legacy["prompt"], err = legacyVerifyPrompt(released); err != nil || legacy["prompt"].(string) != prereq {
 		t.Fatalf("legacy derivation drifted from prerequisite: %v", err)
 	}
 	// 3132b5bc6 installed this prompt; an asset edit that changes it must fail ownership.

@@ -403,7 +403,11 @@ func TestOrchestratorsDelegateOnlyWhenATriggerTrulyHolds(t *testing.T) {
 	shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
 	for _, required := range []string{
 		"only when a Delegation Trigger's condition truly holds and names a reason",
-		"A Delegation Trigger holds only when its condition truly holds; none holds by default, and when in doubt work inline. Once one holds, delegation is not optional",
+		// The trigger-holds rule (only when its condition truly holds, then
+		// mandatory, none by default, inline when in doubt) is pinned once per
+		// asset under #### Delegation Triggers above; the shared section keeps
+		// only the clause no asset restates.
+		"Delegation follows named reasons, never size or complexity alone.",
 		"A writer reason is parallel units launched together in one turn (independent units of behavior, each with its code, tests, and docs and several minutes of work) or the context backstop",
 	} {
 		if !strings.Contains(shared, required) {
@@ -1589,7 +1593,10 @@ func TestODDOrchestratorsProjectNativeCheckingWithoutPromptOwnedLenses(t *testin
 			"never invent PASS, retry indefinitely, or escalate into extra ceremony",
 			"quick check runs once",
 			"Long or very-long work gets one cost/side-effect forecast",
-			"Needs your decision",
+			// harness-continuity S3: continuity and missing proof are stated
+			// once, in the ODD Close; checking points at it and never keeps a
+			// generic decision license.
+			"Continuity and missing proof follow the ODD Close (step 7).",
 			"Functional proof and adversarial review both project as **Checking**",
 			"at most one scoped correction",
 			"never reopen review for unchanged content",
@@ -1597,6 +1604,9 @@ func TestODDOrchestratorsProjectNativeCheckingWithoutPromptOwnedLenses(t *testin
 			if !strings.Contains(section, required) {
 				t.Fatalf("%s native checking contract missing %q", path, required)
 			}
+		}
+		if strings.Contains(section, "**Needs your decision**") {
+			t.Fatalf("%s native checking contract keeps the retired generic decision license", path)
 		}
 		for _, retired := range []string{
 			"Review Lens Selection", "review-risk", "review-readability",
@@ -2009,7 +2019,7 @@ func TestGenericAgentsResumeWithoutRereadsAndReportCompactly(t *testing.T) {
 			path: "opencode/agents/gentle-ai-worker.md",
 			required: []string{
 				resume + ". Do not read persistent memory for context. The parent selects and forwards relevant observations.",
-				"Return one compact handoff using the schema below; cite exact commands with exit codes and test counts, blockers with `path:line`, and scratch paths, and never restate the task, the spec text, or unchanged file contents. Any requested `## Key Learnings` block follows it.",
+				"Return one compact handoff using the schema below; cite exact commands with exit codes and test counts, blockers with `path:line`, and scratch paths, and never restate the task, the spec text, or unchanged file contents.",
 				"Report `partial` or `blocked` honestly.",
 			},
 			retired: []string{"Return one concise handoff using this schema:", "A clean handoff is more valuable than pretending the task is complete."},
@@ -2018,7 +2028,7 @@ func TestGenericAgentsResumeWithoutRereadsAndReportCompactly(t *testing.T) {
 			path: "opencode/agents/gentle-ai-explore.md",
 			required: []string{
 				"read it until `## Log` for the requirements. " + resume + ".",
-				"Return a compact handoff of at most ~2k tokens: `path:line` or source-URL/passage evidence, observed relationships, and remaining uncertainty; never restate the task, the spec text, or unchanged file contents. Any requested `## Key Learnings` block follows it. Never claim evidence you did not observe.",
+				"Return a compact handoff of at most ~2k tokens: `path:line` or source-URL/passage evidence, observed relationships, and remaining uncertainty; never restate the task, the spec text, or unchanged file contents. Never claim evidence you did not observe.",
 			},
 			retired: []string{"Return a compressed handoff with supporting paths, observed evidence and relationships, and remaining uncertainty."},
 		},
@@ -2026,7 +2036,7 @@ func TestGenericAgentsResumeWithoutRereadsAndReportCompactly(t *testing.T) {
 			path: "opencode/agents/gentle-ai-verify.md",
 			required: []string{
 				"Passing tests never prove an `S#` whose example was not executed. " + resume + ", including new `## Log` entries.",
-				"Return a compact evidence handoff of at most ~2k tokens: the verdict per spec item, exact commands with exit codes, test counts, and observed results, blockers with `path:line`, anything left unverified, and scratch paths; never restate the task or spec beyond the line a finding contradicts, or unchanged file contents. The probe regression tests, then any requested `## Key Learnings` block, follow it. Never claim a command ran or a check passed without observed output.",
+				"Return a compact evidence handoff of at most ~2k tokens: the verdict per spec item, exact commands with exit codes, test counts, and observed results, blockers with `path:line`, anything left unverified, and scratch paths; never restate the task or spec beyond the line a finding contradicts, or unchanged file contents. The probe regression tests follow it. Never claim a command ran or a check passed without observed output.",
 			},
 			retired: []string{"Return a compressed evidence handoff of at most ~2k tokens: exact commands run, observed results, `path:line` evidence, the verdict per spec item, blockers, and anything left unverified; the probe regression tests follow it."},
 		},

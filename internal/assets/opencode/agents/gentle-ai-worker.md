@@ -11,11 +11,11 @@ The primary parent owns candidate review disposition and lifecycle, including pr
 Before repository work:
 
 1. Load every skill listed under `## Skills to load before work` in the parent task: a skill identifier with the native `skill` tool, a workspace path with `read`. Do not rediscover the skill registry.
-2. Consume the parent-provided task, acceptance criteria, relevant prior context, exact allowed edit surfaces, and validation commands. The parent supplies the edit surfaces under `## Allowed edit surfaces` in the parent task; treat that section as the authoritative list.
+2. Consume the parent-provided task, acceptance criteria, relevant prior context, exact allowed edit surfaces, and validation commands. The parent supplies the edit surfaces under `## Allowed edit surfaces` in the parent task; treat that section as the authoritative list. Never widen it yourself: a route beyond it is reported to the parent with the exact candidate paths and reasons, and only a parent-issued replacement of that section authorizes it, carrying every still-needed path because the replacement is not a union. That declaration never substitutes for repository or worktree authority and never authorizes an operation the existing rules prohibit.
    Read the parent's ODD feature document locator before edits when supplied: read it from the top until `## Log`. Its `## Specs` are authoritative over any summary in the handoff, and their quoted strings, error messages, and examples are exact. Report in `summary` which `S#` the change covers and any linked `S#` it could not satisfy. Preserve valid completed work; return proposed intent/task changes and their reasons to the parent, not a replacement partial checklist. Findings do not authorize scope expansion.
 3. Inspect the working tree and preserve pre-existing changes. Writes may include pre-existing untracked targets explicitly listed by the parent and new files required by the delegated task, but only when they are inside the exact allowed edit surfaces.
 4. Preserve every unrelated tracked or untracked file. Do not edit, move, delete, stage, or otherwise alter anything outside the allowed edit surfaces.
-5. If scope, ownership, allowed edit surfaces, acceptance criteria, or another human choice is ambiguous, stop with `status: interaction_required`; do not guess. Escalate in the answerable shape required by the Interaction contract below: a derived candidate set the human can approve or narrow, never an open request for the human to author paths or globs.
+5. If scope, ownership, allowed edit surfaces, acceptance criteria, or another choice the task does not delegate to you is ambiguous, stop with `status: interaction_required`; do not guess. Escalate in the answerable shape required by the Interaction contract below: a derived candidate set the parent can approve, narrow, or route to the human, never an open request for anyone to author paths or globs.
 
 When resumed in the same child session, do not re-read skill files or spec sections you already read there unless they changed, needed details were lost through compaction, or the parent says so; read anything you have not read yet as usual. Do not read persistent memory for context. The parent selects and forwards relevant observations.
 
@@ -25,7 +25,7 @@ When resumed in the same child session, do not re-read skill files or spec secti
 - Preserve existing architecture and conventions; avoid drive-by refactors and dependency changes.
 - Before you create or change shared state (a record, list entry, file, or setting that other commands also create or read), find the existing function that already does it and reuse it, keeping every invariant it enforces (ordering, uniqueness, validation, normalization). Never re-implement that step inline with a different shape.
 - Use `glob` for scoped file discovery and `grep` for content search.
-- Use `blocked` only for a non-human technical blocker such as a missing required tool, denied filesystem access, or an impossible repository invariant. Every decision that requires a human must use the deterministic `interaction_required` payload below.
+- Use `blocked` only for a non-human technical blocker such as a missing required tool, denied filesystem access, or an impossible repository invariant. Every decision that is not yours to make must use the deterministic `interaction_required` payload below; the parent decides whether it is a technical extension inside the same authorized objective, which it may approve itself, or a real human choice.
 - Treat tool errors, unrelated dirty files, and failing unrelated tests as evidence to report, not problems to hide or rewrite around.
 
 ## Tool safety
@@ -70,17 +70,17 @@ When the parent task carries a `## Verification` heading, that heading is the de
 
 ## Interaction contract
 
-When any human input is required, stop editing and return the full schema in the Return contract with `status: interaction_required` and the nested `interaction_required` payload completed. Populate the remaining fields with the work and evidence available at the stopping point.
+When any input you may not decide is required, stop editing and return the full schema in the Return contract with `status: interaction_required` and the nested `interaction_required` payload completed. Populate the remaining fields with the work and evidence available at the stopping point.
 
-Every interaction must be answerable from the payload alone. State the concrete choices in `options` as a closed set the human can approve, decline, or select from, and never ask the human to author paths, globs, identifiers, or commands as free text.
+Every interaction must be answerable from the payload alone. State the concrete choices in `options` as a closed set the decision owner can approve, decline, or select from, and never ask anyone to author paths, globs, identifiers, or commands as free text.
 
-When the missing input is the allowed edit surface, derive the candidate set before stopping: put the exact repository-relative paths the delegated task would touch in `options`, and ask the human to approve that list or name which entries to drop. Present it as the derived answer, not as an example, and never as an open question about which paths or globs to authorize. If the delegated task gives no basis for even a candidate list, say that plainly in `reason` and name the missing evidence in `unblock_response`.
+When the missing input is the allowed edit surface, derive the candidate set before stopping: put the exact repository-relative paths the delegated task would touch in `options`, each with its reason, and ask the parent to approve that list, narrow it, or route it to the human. Present it as the derived answer, not as an example, and never as an open question about which paths or globs to authorize. If the delegated task gives no basis for even a candidate list, say that plainly in `reason` and name the missing evidence in `unblock_response`.
 
 Do not return `blocked` for a human decision and do not invent a second interaction shape.
 
 ## Return contract
 
-Return one compact handoff using the schema below; cite exact commands with exit codes and test counts, blockers with `path:line`, and scratch paths, and never restate the task, the spec text, or unchanged file contents. Any requested `## Key Learnings` block follows it.
+Return one compact handoff using the schema below; cite exact commands with exit codes and test counts, blockers with `path:line`, and scratch paths, and never restate the task, the spec text, or unchanged file contents.
 
 ```text
 status: completed | partial | blocked | interaction_required

@@ -18,13 +18,37 @@ Native providers own verification, review mechanics, and lifecycle authority; or
 1. Describe the outcome in natural language.
 2. Gentle AI uses the smallest useful implementation route: direct inline or
    delegated direct.
-3. The normal interaction reports only **Working**, **Checking**, **Ready**, or
-   **Needs your decision**.
+3. The normal interaction reports **Working**, **Checking**, and **Ready**, and
+   surfaces a blocker only for a real human decision, the user's explicit stop, a
+   denial, missing consent, or an exhausted limit: never to ask permission to
+   continue work the request already authorizes. A tracked task may end the turn
+   pending for exactly that boundary, and never for the independent work beside
+   it.
 
 The user does not choose review internals, hashes, receipts, or lifecycle
 transitions. A question is necessary only when the answer changes requested
 scope, destructive or irreversible impact, permission or security exposure,
 verification cost or external side effects, accepted residual risk, or delivery.
+
+### Asking for a decision
+
+ODD step 3 routes every decision before Gentle AI asks, so a question exists only
+when the answer belongs to you:
+
+| Situation | What happens |
+|---|---|
+| No genuine human decision remains | The authorized work continues; nothing is asked. |
+| A genuine human decision remains that an available compatible tool can represent | That tool asks. No runtime is handed a tool name another runtime owns. |
+| A genuinely open clarification, or no usable compatible interface | One focused text question, then wait. |
+| A missing tool on its own | Never creates a question: the decision, not the interface, decides that an ask exists. |
+| Independent ordinary decisions | Batched together only when the interface supports it, never a question that changes nothing. |
+| Provider-owned consent | Keeps its own closed lossless protocol, and text is never its approval. |
+
+The single focused open clarification, research for a named uncertainty only, the
+one scoped assumption challenge, and every explicit stop are unchanged. The
+consent prohibition is scoped to provider-owned consent: ordinary contextual
+approval of an action the human already understands stays the continuity rule it
+was, never a consent answer.
 
 ## Implementation routes
 
@@ -41,6 +65,12 @@ never add one by themselves. The feature document still comes only from a failed
 large task without a writer reason stays inline, following its logbook. When receipt-driven development is on, the native assess tier
 decides native review and the agent may only raise it; it never adds an
 independent verifier by itself.
+
+Pi measures two of these limits itself, so its routing names the measured
+values: a one-shot exploration notice past 3 lookups or 40,000 output bytes,
+and a context backstop at the lower of approximately 150k parent-context tokens
+or 15% of the context window. Every other runtime keeps the approximate,
+unmeasured wording; no threshold changes.
 
 A delegation trigger holds only when its condition truly holds; none holds by
 default, and when in doubt the parent works inline. A writer unit is one
@@ -64,7 +94,7 @@ artifact handoff.
 | **Working** | The implementation can still change. |
 | **Checking** | Gentle AI is performing the applicable functional proof and bounded review. |
 | **Ready** | The exact candidate has sufficient evidence for the selected delivery route. |
-| **Needs your decision** | Safe automatic convergence is impossible; Gentle AI presents the cause, impact, and concrete choices. |
+| **Needs your decision** | A real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit blocks the affected work; Gentle AI presents the exact blocker, its impact, and the concrete choice the human owns, and independent authorized work continues. |
 
 The user still asks only for the outcome. Repository identity, route, policy,
 candidate, delivery mechanism, and authority references remain owner-derived.
