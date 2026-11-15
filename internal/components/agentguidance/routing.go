@@ -11,8 +11,38 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
+// The harness-continuity S4 canon below is the one decision-routing rule every
+// ODD step 3 states, composed once so no consumer restates a variant of it. It
+// draws the routes in the order a decision meets them: no genuine human decision
+// left continues the authorized work, a remaining decision asks through the
+// available compatible tool that represents it, and text is the restricted
+// fallback for a genuinely open clarification or a missing usable interface, so
+// the tool outranks text rather than sharing the choice with it. Independent
+// ordinary decisions batch only when the interface supports it, and
+// provider-owned consent keeps its own closed lossless protocol, so text is never
+// its approval. The consent protocol itself is owned by the blocking-prompt
+// contract every runtime already carries; this rule points at it instead of
+// restating it, which keeps the paid primary prompt inside its existing budgets.
+// The research limit and the single assumption challenge stay beside it,
+// unchanged. Every condition above is stated in the rendered step, never only
+// here.
+const (
+	noHumanDecisionRule = "Continue when no human decision remains"
+	decisionToolRule    = "ask with the available compatible tool"
+	decisionTextRule    = "text only for a genuinely open clarification or no usable compatible interface"
+	decisionBatchRule   = "batch independent ordinary decisions when the interface supports it"
+	decisionWaitRule    = "wait"
+	decisionConsentRule = "Provider consent keeps its closed lossless protocol; text is never its approval"
+
+	// decisionDetailRule keeps the Organic reference detail from reading as a
+	// free-text-only restatement of the route above.
+	decisionDetailRule = "Step 3 decides whether that question is a tool ask or text."
+
+	decisionCanon = noHumanDecisionRule + "; " + decisionToolRule + "; " + decisionTextRule + "; " + decisionBatchRule + "; " + decisionWaitRule + ". " + decisionConsentRule + "."
+)
+
 // resolveUncertaintyStep is ODD step 3, shared verbatim by every runtime.
-const resolveUncertaintyStep = "3. **Resolve uncertainty.** Recommend optional research only for a named uncertainty; ask one focused user question only for a real unresolved product decision, then stop and wait; use at most one scoped read-only assumption challenge for a high-consequence unproven premise.\n"
+const resolveUncertaintyStep = "3. **Resolve uncertainty.** Recommend optional research only for a named uncertainty, and use at most one scoped read-only assumption challenge for a high-consequence unproven premise. " + decisionCanon + "\n"
 
 // The harness-continuity S3 canon below is the one continuity rule every ODD
 // close states, composed once so no consumer restates a variant of it. An
@@ -142,7 +172,7 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	// framing instead of being buried pages away from it.
 	output.WriteString("\n### Delegation Triggers\n\n")
 	output.WriteString("Each trigger holds only when its condition truly holds, and only then is it mandatory, not advisory; no trigger holds by default, and when in doubt work inline. Each mechanism turns on only by its own trigger. When one fires, stop and delegate through the runtime's subagent mechanism before continuing; executing past a fired trigger inline is a routing defect even if the work succeeds. When it resolves, re-evaluate task size and stay small while the three criteria hold. Delegation keeps the parent context thin enough to orchestrate; it does not slow the work down.\n\n")
-	output.WriteString("- **Ask trigger:** an open product or design decision gets one focused user question; stop and wait.\n")
+	output.WriteString("- **Ask trigger:** only a genuinely open clarification or a human decision no usable compatible interface can represent gets one focused text question; stop and wait.\n")
 	_, _ = fmt.Fprintf(&output, "- **Mapping trigger:** when understanding exceeds the inline batch budget or needs more than approximately %d sequential lookups, delegate one read-only explorer before deciding or writing anything. Return a handoff of at most approximately %dk tokens with path:line evidence; use one parent spot check (%d maximum). Do not reread the entire mapped evidence. Never explore to read files you will read anyway before writing inline.\n", routing.DelegatedDirect.ApproxSequentialLookupLimit, routing.DelegatedDirect.ApproxHandoffTokens/1000, routing.DelegatedDirect.MaxParentSpotChecks)
 	output.WriteString("- **Verification trigger:** only a change whose Risk line names a high-risk item gets an independent verifier after the change's own checks, as rarely as possible; a native tier, an unclear or failed assessment, and the writer's model or effort never add one by themselves. Otherwise whoever made the change runs its focused test and suite inline, small tasks included.\n")
 	output.WriteString("- **Tracking trigger:** a large task gets the feature document, its mirror, and work-unit commits.\n")
@@ -166,7 +196,7 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	output.WriteString("Use this flow for direct and delegated work. Explore the existing code and requirements first, proportionately to the request; the mutation-authorization guard above still applies.\n\n")
 	output.WriteString("This section is the reference detail for the protocol above.\n\n")
 	output.WriteString("- Recommend optional research only for a named uncertainty. If declined, continue within authorized scope only where safe without the missing evidence; disclose unresolved uncertainty and pause affected unsafe decisions. Offer a concise proposal only when a real scope or product decision needs it. Neither research nor a proposal is mandatory.\n")
-	output.WriteString("- Establish the problem, intended outcome, constraints, and current evidence; inspect relevant code. Adapt depth to uncertainty and consequence, not a fixed questionnaire or mandatory rounds. The parent owns product decisions: ask one focused user question only for a real unresolved product decision, then stop and wait. Workers return gaps to the parent rather than assuming choices.\n")
+	output.WriteString("- Establish the problem, intended outcome, constraints, and current evidence; inspect relevant code. Adapt depth to uncertainty and consequence, not a fixed questionnaire or mandatory rounds. The parent owns product decisions: ask one focused user question only for a real unresolved product decision, then stop and wait. " + decisionDetailRule + " Workers return gaps to the parent rather than assuming choices.\n")
 	output.WriteString("- When the question needs external evidence, use available authorized documentation/web tools and prefer primary sources. Attribute material claims to source URLs or code locations; distinguish verified facts, assumptions, contradictions, freshness, and gaps. If tools are unavailable, disclose limitations without inventing access or evidence; pause only unsafe decisions dependent on missing evidence.\n")
 	output.WriteString("- Return concise findings, recommendation, tradeoffs, open questions, and implementation implications. When delegating research, forward these research instructions to a fresh general exploration/research worker through existing delegation; do not create a specialized research agent. Keep research read-only; its findings do not authorize implementation or require new persistence or readiness machinery.\n")
 	output.WriteString("- Use at most one scoped independent read-only assumption challenge for a high-consequence unproven premise, even in a small security-critical change. Name the premise, evidence, and consequence; do not start a debate loop. Deterministic failures need fixes, not model debate.")
