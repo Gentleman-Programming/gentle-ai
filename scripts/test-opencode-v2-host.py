@@ -150,7 +150,7 @@ def validate_host_version(stdout, selector):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary")
-    parser.add_argument("dependencies", help="existing isolated node_modules with SDK 2.0.4")
+    parser.add_argument("dependencies", help="existing isolated node_modules (SDK 2.0.4 unless an installed no-SDK mode is selected)")
     parser.add_argument("--host-version", required=True)
     parser.add_argument("--temp-root", default=os.environ.get("TMPDIR"))
     modes = parser.add_mutually_exclusive_group()
@@ -166,8 +166,11 @@ def parse_args(argv=None):
                         help="review mode: whether the relay stand-in stubs the capability gate (default) or keeps it real")
     for name in ("root", "config", "workspace"):
         parser.add_argument("--installed-" + name)
-    parser.add_argument("--installed-sdk-missing", action="store_true",
-                        help="negative control: the installed SDK was removed after Apply")
+    sdk_modes = parser.add_mutually_exclusive_group()
+    sdk_modes.add_argument("--installed-sdk-missing", action="store_true",
+                           help="negative control: the installed SDK was removed after Apply")
+    sdk_modes.add_argument("--installed-host-sdk", action="store_true",
+                           help="positive control: --installed-activation-only with no local SDK; require host-provided SDK activation and restart")
     args = parser.parse_args(argv)
     if args.host_version != "2.x" and not re.fullmatch(r"2\.[0-9]+\.[0-9]+", args.host_version):
         parser.error("--host-version must be 2.x or an exact V2 release, such as 2.0.18")
@@ -188,7 +191,8 @@ def parse_args(argv=None):
                 or args.installed_workspace != args.installed_root / "workspace"
                 or args.dependencies != args.installed_config / "node_modules"):
             parser.error("installed paths must match the existing Go fixture layout")
-    elif any((args.installed_root, args.installed_config, args.installed_workspace, args.installed_sdk_missing)):
+    elif any((args.installed_root, args.installed_config, args.installed_workspace,
+              args.installed_sdk_missing, args.installed_host_sdk)):
         parser.error("installed paths require --installed-activation-only")
     review = (args.gentle_ai, args.host_project, args.evidence, args.capability_gate)
     if args.review_scenario:
@@ -316,8 +320,9 @@ def installed_activation(args):
     # Deny writes outside this fixture, including binary auto-update locations.
     prefix = network_prefix(root)  # Mandatory even for the version probe.
     missing = args.installed_sdk_missing
-    before = installed_hashes(config, require_sdk=not missing)
-    if not missing:
+    no_sdk = missing or args.installed_host_sdk
+    before = installed_hashes(config, require_sdk=not no_sdk)
+    if not no_sdk:
         package = json.loads((args.dependencies / "@opencode/plugin/package.json").read_text())
         if package["version"] != "2.0.4":
             raise ValueError("installed activation requires SDK 2.0.4")
@@ -374,13 +379,13 @@ def installed_activation(args):
             # installed_process reaps the whole group; never relaunch over a live host.
             if process.poll() is None:
                 raise RuntimeError("host still running after " + cycle + " activation")
-            if installed_hashes(config, require_sdk=not missing) != before:
+            if installed_hashes(config, require_sdk=not no_sdk) != before:
                 raise RuntimeError("installed input hashes changed during " + cycle + " activation")
     finally:
         signal.alarm(0)
         for sig, handler in handlers.items():
             signal.signal(sig, handler)
-        if installed_hashes(config, require_sdk=not missing) != before:
+        if installed_hashes(config, require_sdk=not no_sdk) != before:
             raise RuntimeError("installed input hashes changed during " + phase + " activation")
     if missing:
         # The API reports only an opaque ref; its log cause must name the SDK.
@@ -393,6 +398,9 @@ def installed_activation(args):
             reasons.append(f"REASON: {name}: {state['error']} ({state['ref']}); log {cause}")
         print(f"PASS: missing SDK refused: host opencode v{host_version}; four managed plugins failed, none active; installed settings/assets hashes unchanged")
         print("\n".join(reasons))
+    elif args.installed_host_sdk:
+        print(f"PASS: installed host SDK activation: host opencode v{host_version}; no local SDK; four managed plugins active; installed settings/assets hashes unchanged")
+        print(f"PASS: installed host SDK restart: host opencode v{host_version}; no local SDK; same installed root relaunched; four managed plugins active again; installed settings/assets hashes unchanged")
     else:
         print(f"PASS: installed activation: host opencode v{host_version}; four managed plugins active; installed settings/SDK/assets hashes unchanged")
         print(f"PASS: installed restart: host opencode v{host_version}; same installed root relaunched; four managed plugins active again; installed settings/SDK/assets hashes unchanged")

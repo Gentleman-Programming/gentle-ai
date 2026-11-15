@@ -266,14 +266,16 @@ class RequestBoundaryTests(unittest.TestCase):
 
 
 class InstalledActivationTests(unittest.TestCase):
-    def fixture(self, root):
+    def fixture(self, root, with_sdk=True):
         root = Path(root).resolve()
         for name in ('home', 'config/opencode/plugins', 'data', 'state', 'cache', 'tmp', 'run', 'workspace'):
             (root / name).mkdir(parents=True, exist_ok=True)
         config = root / 'config/opencode'
         package = config / 'node_modules/@opencode/plugin'
-        package.mkdir(parents=True)
-        (package / 'package.json').write_text('{"version":"2.0.4"}')
+        (config / 'node_modules').mkdir()
+        if with_sdk:
+            package.mkdir(parents=True)
+            (package / 'package.json').write_text('{"version":"2.0.4"}')
         (config / 'opencode.json').write_text('{"default_agent":"gentle-orchestrator"}')
         for name in host.PLUGIN_IDS:
             (config / 'plugins' / (name.removeprefix('gentle-ai.') + '.ts')).write_text(name)
@@ -523,19 +525,24 @@ class InstalledRestartAndMissingSDKTests(unittest.TestCase):
     def source(self, root, name):
         return str(Path(root).resolve() / 'config/opencode/plugins' / (name.removeprefix('gentle-ai.') + '.ts'))
 
-    def run_main(self, args, request, extra_patches=()):
-        with patch.object(host, 'network_prefix', return_value=['sandbox']), \
+    def run_main(self, args, request, extra_patches=(), host_version='2.0.19'):
+        with patch.object(host, 'network_prefix', return_value=['sandbox']) as guard, \
              patch.object(host.subprocess, 'Popen') as launch, patch.object(host, 'stop') as stop, \
              patch.object(host, 'read_address', return_value='http://127.0.0.1:1234'), \
-             patch.object(host, 'fixture_request', return_value=request), patch.object(host.os, 'killpg'), \
-             patch('sys.stdout', new_callable=io.StringIO) as output:
-            launch.return_value.communicate.return_value = ('opencode v2.0.19', '')
+             patch.object(host, 'fixture_request', return_value=request), patch.object(host.os, 'killpg') as kill, \
+             patch('sys.stdout', new_callable=io.StringIO) as output, \
+             patch('sys.stderr', new_callable=io.StringIO) as errors:
+            launch.return_value.communicate.return_value = ('opencode v' + host_version, '')
             launch.return_value.returncode = 0
             launch.return_value.poll.return_value = -15
             try:
-                host.main(args)
+                self.result = host.main(args)
             finally:
                 self.launches, self.stops, self.output = launch.call_count, stop.call_count, output.getvalue()
+                self.errors, self.kills = errors.getvalue(), kill.call_count
+                self.commands = [call.args[0] for call in launch.call_args_list]
+                self.environments = [call.kwargs['env'] for call in launch.call_args_list]
+                self.guard_calls = guard.call_args_list
 
     def inventory(self, root, status='active', ids=True, error='Plugin failed to load'):
         state = {'status': status}
@@ -648,6 +655,148 @@ class InstalledRestartAndMissingSDKTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 host.parse_args(['host', 'deps', '--host-version', '2.x', '--temp-root', directory,
                                  '--installed-sdk-missing'])
+
+
+class InstalledHostSDKTests(unittest.TestCase):
+    fixture = InstalledActivationTests.fixture
+    source = InstalledRestartAndMissingSDKTests.source
+    inventory = InstalledRestartAndMissingSDKTests.inventory
+    counting_request = InstalledRestartAndMissingSDKTests.counting_request
+    run_main = InstalledRestartAndMissingSDKTests.run_main
+
+    def host_fixture(self, directory):
+        args = self.fixture(directory, with_sdk=False) + ['--installed-host-sdk']
+        args[args.index('--host-version') + 1] = '2.3.0'
+        return args
+
+    def test_default_sdk_backed_mode_retains_exact_output_and_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.fixture(directory)
+            config = Path(directory).resolve() / 'config/opencode'
+            before = host.installed_hashes(config)
+            self.run_main(args, self.counting_request(lambda n: self.inventory(directory)))
+            self.assertIsNone(self.result)
+            self.assertEqual(self.errors, '')
+            self.assertEqual(self.output,
+                'PASS: installed activation: host opencode v2.0.19; four managed plugins active; installed settings/SDK/assets hashes unchanged\n'
+                'PASS: installed restart: host opencode v2.0.19; same installed root relaunched; four managed plugins active again; installed settings/SDK/assets hashes unchanged\n'
+                'NOT PROVEN: reviewer/refuter/validator; native admission/receipt/capability\n')
+            self.assertEqual((self.launches, self.stops, self.kills), (3, 3, 3))
+            self.assertEqual(host.installed_hashes(config), before)
+
+    def test_host_sdk_activates_and_restarts_without_sdk_with_exact_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.host_fixture(directory)
+            root = Path(directory).resolve()
+            config = root / 'config/opencode'
+            before = host.installed_hashes(config, require_sdk=False)
+            self.run_main(args, self.counting_request(lambda n: self.inventory(directory)), host_version='2.3.0')
+            self.assertIsNone(self.result)  # main returns success, as in the existing modes.
+            self.assertEqual(self.errors, '')
+            self.assertEqual(self.output,
+                'PASS: installed host SDK activation: host opencode v2.3.0; no local SDK; four managed plugins active; installed settings/assets hashes unchanged\n'
+                'PASS: installed host SDK restart: host opencode v2.3.0; no local SDK; same installed root relaunched; four managed plugins active again; installed settings/assets hashes unchanged\n'
+                'NOT PROVEN: reviewer/refuter/validator; native admission/receipt/capability\n')
+            self.assertEqual((self.launches, self.stops, self.kills), (3, 3, 3))
+            self.assertEqual(self.commands, [['sandbox', args[0], '--version']] +
+                [['sandbox', args[0], 'serve', '--stdio', '--port', '0']] * 2)
+            self.assertEqual(self.guard_calls[0].args, (root,))
+            for env in self.environments:
+                self.assertEqual(env['HOME'], str(root / 'home'))
+                self.assertEqual(env['OPENCODE_CONFIG_DIR'], str(config))
+                self.assertEqual(env['PATH'], '/usr/bin:/bin')
+                self.assertNotIn('OPENCODE_CONFIG_CONTENT', env)
+                self.assertNotIn('HTTP_PROXY', env)
+            self.assertEqual(host.installed_hashes(config, require_sdk=False), before)
+
+    def test_host_sdk_requires_all_four_active_correct_sources_on_both_launches(self):
+        for cycle in (1, 2):
+            for failure in ('failed', 'missing', 'source', 'settings', 'asset', 'sdk-added'):
+                with self.subTest(cycle=cycle, failure=failure), tempfile.TemporaryDirectory() as directory:
+                    args = self.host_fixture(directory)
+                    config = Path(directory).resolve() / 'config/opencode'
+                    before = host.installed_hashes(config, require_sdk=False)
+                    def replies(n):
+                        reply = self.inventory(directory)
+                        if n != cycle:
+                            return reply
+                        if failure == 'failed':
+                            reply['data'][0]['state']['status'] = 'failed'
+                        elif failure == 'missing':
+                            reply['data'].pop()
+                        elif failure == 'source':
+                            reply['data'][0]['source']['path'] = '/wrong'
+                        elif failure in ('settings', 'asset'):
+                            target = config / 'opencode.json' if failure == 'settings' else Path(self.source(directory, 'gentle-ai.skill-registry'))
+                            target.write_text('changed')
+                        else:
+                            (config / 'node_modules/@opencode/plugin').mkdir(parents=True)
+                        return reply
+                    poll = host.wait_for_plugins
+                    def bounded(fetch, expected):
+                        clock = iter((0, 0, 16))
+                        return poll(fetch, expected, clock=lambda: next(clock), sleep=lambda _: None)
+                    with patch.object(host, 'wait_for_plugins', side_effect=bounded):
+                        with self.assertRaises((RuntimeError, TimeoutError, ValueError)):
+                            self.run_main(args, self.counting_request(replies), host_version='2.3.0')
+                    self.assertEqual((self.launches, self.stops, self.kills), (cycle + 1,) * 3)
+                    self.assertEqual((self.output, self.errors), ('', ''))
+                    if failure not in ('settings', 'asset', 'sdk-added'):
+                        self.assertEqual(host.installed_hashes(config, require_sdk=False), before)
+
+    def test_host_sdk_rejects_present_sdk_or_unavailable_guard_before_launch(self):
+        for failure in ('sdk-present', 'no-sandbox'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                args = self.fixture(directory, with_sdk=failure == 'sdk-present') + ['--installed-host-sdk']
+                config = Path(directory).resolve() / 'config/opencode'
+                before = host.installed_hashes(config, require_sdk=failure == 'sdk-present')
+                with patch.object(host, 'network_prefix', side_effect=RuntimeError('network denial unavailable')
+                                  if failure == 'no-sandbox' else None), \
+                     patch.object(host.subprocess, 'Popen') as launch:
+                    with self.assertRaisesRegex((ValueError, RuntimeError), 'SDK to be absent|network denial'):
+                        host.main(args)
+                    launch.assert_not_called()
+                self.assertEqual(host.installed_hashes(config, require_sdk=failure == 'sdk-present'), before)
+
+    def test_host_sdk_uses_existing_version_validation_before_server(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.host_fixture(directory)
+            config = Path(directory).resolve() / 'config/opencode'
+            before = host.installed_hashes(config, require_sdk=False)
+            with self.assertRaisesRegex(RuntimeError, 'unexpected host version'):
+                self.run_main(args, Mock(), host_version='2.0.19')
+            self.assertEqual((self.launches, self.stops, self.kills), (1, 1, 1))
+            self.assertEqual((self.output, self.errors), ('', ''))
+            self.assertEqual(host.installed_hashes(config, require_sdk=False), before)
+
+    def test_host_sdk_flag_rejects_other_modes_and_negative_control(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installed = self.host_fixture(directory)
+            base = ['host', 'deps', '--host-version', '2.x', '--temp-root', directory]
+            for args, message in (
+                (installed + ['--installed-sdk-missing'], 'not allowed with argument'),
+                (base + ['--installed-host-sdk'], 'require --installed-activation-only'),
+                (base + ['--generic-task-only', '--installed-host-sdk'], 'require --installed-activation-only'),
+                (base + ['--loopback', 'native', '--installed-host-sdk'], 'require --installed-activation-only'),
+                (base + ['--review-scenario', 'scenario', '--installed-host-sdk'], 'require --installed-activation-only')):
+                with self.subTest(args=args), patch.object(host.subprocess, 'Popen') as launch, \
+                     patch('sys.stdout', new_callable=io.StringIO) as output, \
+                     patch('sys.stderr', new_callable=io.StringIO) as errors:
+                    with self.assertRaises(SystemExit) as caught:
+                        host.main(args)
+                    self.assertEqual(caught.exception.code, 2)
+                    self.assertEqual(output.getvalue(), '')
+                    self.assertIn(message, errors.getvalue())
+                    launch.assert_not_called()
+
+    def test_help_describes_host_sdk_as_positive_installed_only_mode(self):
+        with patch('sys.stdout', new_callable=io.StringIO) as output:
+            with self.assertRaises(SystemExit) as caught:
+                host.parse_args(['--help'])
+        self.assertEqual(caught.exception.code, 0)
+        self.assertIn('--installed-host-sdk', output.getvalue())
+        self.assertIn('positive control', output.getvalue())
+        self.assertIn('no local SDK', ' '.join(output.getvalue().split()))
 
 
 class MissingSDKRefusalPollTests(unittest.TestCase):

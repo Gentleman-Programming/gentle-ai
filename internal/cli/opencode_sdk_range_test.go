@@ -16,7 +16,7 @@ import (
 // owned by manifest and, when version is non-empty, already holds that SDK.
 func sdkRangeConfig(t *testing.T, manifest, version string) (string, string) {
 	t.Helper()
-	home := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home with spaces")
 	setOpenCodeTestHome(t, home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	oldVersion := opencodeactivation.VersionRunnerOverride

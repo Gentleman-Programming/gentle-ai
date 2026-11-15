@@ -19,6 +19,44 @@ func TestRuntimeMajor(t *testing.T) {
 		})
 	}
 }
+func TestRuntimeProvidesPluginSDK(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		want    bool
+	}{
+		{"1.18.30", false}, {"2.0.4", false}, {"2.0.24", false},
+		{"2.0.25", true}, {"2.3.0", true}, {"2.10.0", true},
+		{"opencode v2.3.0\n", true}, {"OpenCode 2.3.0", true},
+		{"", false}, {"3.0.0", false}, {"2.3.0-rc.1", false}, {"failure 2.3.0", false},
+	} {
+		t.Run(tc.version, func(t *testing.T) {
+			if got := RuntimeProvidesPluginSDK(tc.version); got != tc.want {
+				t.Errorf("host SDK capability = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDetectRuntimeVersionRetainsEvidenceWithOneProbe(t *testing.T) {
+	old := VersionRunnerOverride
+	t.Cleanup(func() { VersionRunnerOverride = old })
+	calls := 0
+	VersionRunnerOverride = func(ctx context.Context, command Command) (CommandOutput, error) {
+		calls++
+		if _, bounded := ctx.Deadline(); !bounded || command.Path != "opencode" || len(command.Args) != 1 || command.Args[0] != "--version" || command.OutputLimit != 4096 {
+			t.Fatalf("unsafe version probe: %+v", command)
+		}
+		return CommandOutput{Stdout: []byte("opencode v2.3.0\n")}, nil
+	}
+	if version, err := DetectRuntimeVersion(context.Background()); version != (RuntimeVersion{Major: RuntimeV2, Version: "2.3.0"}) || err != nil || calls != 1 {
+		t.Fatalf("version = %+v, error = %v, probes = %d", version, err, calls)
+	}
+	calls = 0
+	if major, err := DetectRuntimeMajor(context.Background()); major != RuntimeV2 || err != nil || calls != 1 {
+		t.Fatalf("major = %v, error = %v, probes = %d", major, err, calls)
+	}
+}
+
 func TestDetectRuntimeMajorBounded(t *testing.T) {
 	old := VersionRunnerOverride
 	t.Cleanup(func() { VersionRunnerOverride = old })

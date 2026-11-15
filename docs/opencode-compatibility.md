@@ -202,17 +202,23 @@ escaped key spelling or a comment inside a value a selected writer touches. Move
 the comment outside that value, or spell the key plainly, and retry. Kilocode
 goes through the same writers, but its `opencode.json` is strict JSON.
 
-Before writing V2 managed plugins, install and sync check the SDK installed in
-the OpenCode config directory. Any 2.x release at or above 2.0.4 is accepted, so
-an SDK that matches a newer OpenCode runtime is kept as is. A missing SDK, an older
-release, a prerelease or another major is refused, and the refusal names the
-version it found. `gentle-ai sync --dry-run` reports the same refusal as a
-`Would stop:` line without installing anything. The printed command pins the minimum exactly
-(`npm install --save-exact ... @opencode/plugin@2.0.4` or
-`bun add --exact @opencode/plugin@2.0.4`), so a later routine install or update in
-that directory cannot float it. Newer 2.x releases are accepted by semantic
-versioning; the managed assets only call `Plugin.define`, but SDK type contracts
-are checked against 2.0.4 only.
+Stable OpenCode **2.x hosts from 2.0.25 onward**, including 2.3.0, provide
+`@opencode/plugin` through their runtime. Install and sync therefore do not require
+a local SDK or propose installing one on these hosts, even when the configuration
+has Bun ownership markers. A local SDK remains optional for plugin development,
+type-checking and local tests; Gentle AI does not change that package tree.
+
+Older V2 hosts still require a stable local SDK from **2.0.4 onward within 2.x**.
+A missing SDK, an older release, a prerelease or another SDK major is refused,
+and the refusal names the version it found. `gentle-ai sync --dry-run` reports it
+as a `Would stop:` line without installing anything. The manual command pins
+`@opencode/plugin@2.0.4` exactly; Bun-owned packages are never provisioned
+automatically. Unknown, unsupported or prerelease host versions retain their
+existing refusal rather than assuming host module availability.
+
+The host capability threshold is not a claim that every managed-plugin API has
+been certified on every later release or operating system. Released SDK type
+contracts and actual host activation remain separate verification boundaries.
 
 A config directory that predates V2 can still hold the V1 SDK
 `@opencode-ai/plugin` and its peer-installed `@opentui` packages. Those conflict
@@ -262,3 +268,25 @@ the foreground child returned the expected raw output, hook ordering and
 instruction inheritance matched expectations, and the deny-all child exposed
 no tools. External network access was blocked. This does not prove the TUI
 installation path or positive native review admission.
+
+For an opt-in **no-local-SDK activation check**, use an existing disposable root
+with `config/opencode/opencode.json`, the four managed `plugins/*.ts` assets,
+an existing empty `config/opencode/node_modules`, and isolated `home`, `workspace`,
+`data`, `state`, `cache`, `tmp`, and `run` directories (no real user configuration):
+
+```sh
+python3 -B scripts/test-opencode-v2-host.py /path/to/opencode "$ROOT/config/opencode/node_modules" \
+  --host-version 2.3.0 --temp-root "$ROOT" --installed-activation-only \
+  --installed-root "$ROOT" --installed-config "$ROOT/config/opencode" \
+  --installed-workspace "$ROOT/workspace" --installed-host-sdk
+```
+
+`ROOT` must be an approved existing writable absolute fixture directory. This
+mode requires the local SDK to be absent, checks all four plugins' activation and
+installed-source provenance on initial launch and restart, and checks unchanged
+installed settings/assets. The mandatory Darwin network/write sandbox, bounded
+process cleanup and GET-only inventory remain in force; no provider is called.
+Without this flag, installed activation still requires SDK 2.0.4;
+`--installed-sdk-missing` remains the mutually exclusive failure control.
+A passing run names the actual host version and no-SDK scope, not multiplatform
+certification or native review admission.

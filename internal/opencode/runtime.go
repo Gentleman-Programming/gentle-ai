@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -46,6 +47,20 @@ func parseRuntimeVersion(version string) RuntimeVersion {
 
 func ParseRuntimeMajor(version string) RuntimeMajor {
 	return parseRuntimeVersion(version).Major
+}
+
+// RuntimeProvidesPluginSDK identifies stable V2 hosts with built-in plugin modules.
+// OpenCode 2.0.25 introduced host-provided @opencode/plugin; a local SDK is
+// optional tooling on these hosts, not a prerequisite for loading plugins.
+func RuntimeProvidesPluginSDK(version string) bool {
+	if ParseRuntimeMajor(version) != RuntimeV2 {
+		return false
+	}
+	fields := strings.Fields(version)
+	parts := strings.Split(strings.TrimPrefix(fields[len(fields)-1], "v"), ".")
+	minor, minorErr := strconv.ParseUint(parts[1], 10, 64)
+	patch, patchErr := strconv.ParseUint(parts[2], 10, 64)
+	return minorErr == nil && patchErr == nil && (minor > 0 || patch >= 25)
 }
 
 type VersionCommandRunner func(context.Context, Command) (CommandOutput, error)
