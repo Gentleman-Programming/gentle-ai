@@ -75,7 +75,7 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 | Focused test and suite of the change being made | ✅ once each | — |
 | High-risk change, or long suites, builds, installs, or native review actions of a large task | — | ✅ independent verifier or fresh per-action worker |
 
-Windsurf has no subagents: keep the same bounded scope as an isolated inline step. Report **Needs your decision** only when the bounded action cannot be performed safely.
+Windsurf has no subagents: keep the same bounded scope as an isolated inline step. Report the exact blocker only when the bounded action cannot be performed safely.
 
 Keep each delegated writer bounded, with a short synthesized handoff. Without subagents, isolate mapping, writing, preparation, and research into bounded steps.
 
@@ -104,7 +104,7 @@ These are parent-orchestrator routing boundaries. Each trigger holds only when i
 - A passive ordinary document or image needs structural readback, not an artificial semantic-verification subagent. Active, mixed, operational, executable, mode-changing, or unknown content fails closed into the applicable native plan.
 - For a trivial passive documentation-only edit, structural readback is the complete proportional check; do not open a separate semantic-verification or heavy review ceremony.
 - If an applicable verifier is unavailable, preserve the typed unavailable result; never invent PASS, retry indefinitely, or escalate into extra ceremony.
-- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Unavailable, partial, declined, or exhausted proof becomes one actionable **Needs your decision** result.
+- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Authorized work continues: runnable in-scope steps run, a pending child is a wait event whose completion resumes the turn without asking the human, and only a real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit stops the work it applies to, never independent authorized work. Missing, partial, unavailable, or declined proof forbids claiming completion of the affected work, never an independently authorized next step, while a required authorized check the existing budget still allows keeps running; stop checking only inside an exhausted or denied boundary, report that exact blocker and the decision that is genuinely the human's, and never invent a pass. Never turn a report into a blind self-reprompt loop. Hedged wording is not a stop.
 - Functional proof and adversarial review both project as **Checking**. One immutable candidate permits at most one scoped correction; there is no loop-until-clean behavior.
 - Commit, push, PR, direct-main, emergency, and release gates are informational and unmanaged; ordinary repository policy decides delivery and they never reopen review for unchanged content.
 

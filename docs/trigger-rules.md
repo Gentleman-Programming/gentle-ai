@@ -18,8 +18,12 @@ Native providers own verification, review mechanics, and lifecycle authority; or
 1. Describe the outcome in natural language.
 2. Gentle AI uses the smallest useful implementation route: direct inline or
    delegated direct.
-3. The normal interaction reports only **Working**, **Checking**, **Ready**, or
-   **Needs your decision**.
+3. The normal interaction reports **Working**, **Checking**, and **Ready**, and
+   surfaces a blocker only for a real human decision, the user's explicit stop, a
+   denial, missing consent, or an exhausted limit: never to ask permission to
+   continue work the request already authorizes. A tracked task may end the turn
+   pending for exactly that boundary, and never for the independent work beside
+   it.
 
 The user does not choose review internals, hashes, receipts, or lifecycle
 transitions. A question is necessary only when the answer changes requested
@@ -64,7 +68,7 @@ artifact handoff.
 | **Working** | The implementation can still change. |
 | **Checking** | Gentle AI is performing the applicable functional proof and bounded review. |
 | **Ready** | The exact candidate has sufficient evidence for the selected delivery route. |
-| **Needs your decision** | Safe automatic convergence is impossible; Gentle AI presents the cause, impact, and concrete choices. |
+| **Needs your decision** | A real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit blocks the affected work; Gentle AI presents the exact blocker, its impact, and the concrete choice the human owns, and independent authorized work continues. |
 
 The user still asks only for the outcome. Repository identity, route, policy,
 candidate, delivery mechanism, and authority references remain owner-derived.

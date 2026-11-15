@@ -1009,8 +1009,28 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 		}},
 		{"S4 no self-pause", []string{
 			"Hedged wording is not a stop",
-			"A tracked task ends pending only with the user's explicit stop or one **Needs your decision** result naming the open blockers or missing proof",
-		}, nil},
+			// harness-continuity S3: an authorized outcome continues; a pending
+			// child is a wait event that resumes on completion, never a synthetic
+			// human decision, and waiting on launched work never licenses
+			// abandonment or a fake final delivery.
+			"a pending child is a wait event whose completion resumes the turn without asking the human",
+			"A tracked task ends the turn pending only while it waits on already-launched work",
+			// A decided denial or an exhausted limit is not "still outstanding",
+			// so the rule names it as its own pending state of the affected work.
+			"for the affected work a denial, missing consent, the user's explicit stop, or an exhausted limit applies to",
+			"independent authorized work continues",
+			"never abandons runnable work or presents an unverified outcome as final",
+			// S3: an explicit stop bounds the work it applies to even when the
+			// task is small or untracked, beside denial, consent, exhaustion.
+			"only a real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit stops the work it applies to, never independent authorized work",
+			// S3: missing proof forbids the completion claim, not a required
+			// authorized check the existing budget still allows.
+			"a required authorized check the existing budget still allows keeps running",
+			"stop checking only inside an exhausted or denied boundary",
+		}, []string{
+			"**Needs your decision**",
+			"never more verification",
+		}},
 		{"S5 explore only to decide or route", []string{
 			"Explore only for a map you need to decide or route, never to read files you will read anyway before writing inline",
 			"when the Writer trigger delegates a write, reading that prepares it",
@@ -1134,7 +1154,6 @@ func TestRenderRoutingGivesPiItsOwnODDSteps(t *testing.T) {
 		"then create or rebuild the visible `todo` list from the reconciled feature tasks",
 		"Route each task through the orchestrator's Mechanisms",
 		"update the file, mirror, and visible `todo` projection after every task transition and material plan change",
-		"Never end with a tracked task pending unless you quote the user's explicit stop.",
 		"native review runs only under the user-owned RDD switch.",
 		"Phase reporting: the Gentle Shell prompt label is inferred automatically",
 		"Detail for steps 3–7: `orchestrator-delegation.md` and `orchestrator-memory.md`.",
@@ -1163,15 +1182,13 @@ func TestRenderRoutingGivesPiItsOwnODDSteps(t *testing.T) {
 // rule in Pi's own steps (piODDSteps), so the clause tests above hold every
 // runtime to the rule while Pi keeps Gentle Shell's phrasing.
 var piStepWording = map[string]string{
-	"1. **Authorize.** First establish whether the requested outcome explicitly authorizes a change.":                      "1. **Authorize.** Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
-	"First establish whether the requested outcome explicitly authorizes a change.":                                        "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
-	"Investigation, explanation, review, audit, comparison, and solution-proposal or planning-only requests are read-only": "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
-	"must not write or edit files, delegate a writer, invoke apply, or create implementation artifacts":                    "no writer, apply, or implementation artifacts",
-	"If change intent is ambiguous or conditional, ask one clarification and remain read-only until answered.":             "Ambiguous or conditional change intent (unclear whether a change is authorized at all) gets one clarification; stop and wait.",
-	"Size the task by the Task Size section below":                                                                         "Size the task by the orchestrator's Task Size section",
-	"push, pull request creation, and merge remain the user's decisions under ordinary repository policy":                  "push, pull request creation, and merge remain the user's decisions.",
-	"Hedged wording is not a stop": "that result is a valid stop, hedged wording is not",
-	"A tracked task ends pending only with the user's explicit stop or one **Needs your decision** result naming the open blockers or missing proof":                           "Never end with a tracked task pending unless you quote the user's explicit stop. An applicable quick check runs once; an unavailable verifier or subagent is reported as unavailable, never retried or escalated into extra ceremony. Partial, blocked, unavailable, or exhausted proof becomes one **Needs your decision** result naming the open blockers or missing proof",
+	"1. **Authorize.** First establish whether the requested outcome explicitly authorizes a change.":                                                                          "1. **Authorize.** Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"First establish whether the requested outcome explicitly authorizes a change.":                                                                                            "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"Investigation, explanation, review, audit, comparison, and solution-proposal or planning-only requests are read-only":                                                     "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"must not write or edit files, delegate a writer, invoke apply, or create implementation artifacts":                                                                        "no writer, apply, or implementation artifacts",
+	"If change intent is ambiguous or conditional, ask one clarification and remain read-only until answered.":                                                                 "Ambiguous or conditional change intent (unclear whether a change is authorized at all) gets one clarification; stop and wait.",
+	"Size the task by the Task Size section below":                                                                                                                             "Size the task by the orchestrator's Task Size section",
+	"push, pull request creation, and merge remain the user's decisions under ordinary repository policy":                                                                      "push, pull request creation, and merge remain the user's decisions.",
 	"Explore only for a map you need to decide or route, never to read files you will read anyway before writing inline":                                                       "Do not delegate exploration of files you will read anyway to work inline; explore only for a map you need to decide or route.",
 	"Each test asserts every observable effect of the rule (output, exit code, persisted data), covers the cases the rule itself names, and goes through the public interface": "Each test asserts every observable effect of the rule it covers (exit code, exact stdout and stderr, and that rejected input leaves stored data and counters unchanged), covers the cases the rule itself names (its examples, boundaries, and errors), and checks through the public interface, never internal storage.",
 }

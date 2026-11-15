@@ -1589,7 +1589,9 @@ func TestODDOrchestratorsProjectNativeCheckingWithoutPromptOwnedLenses(t *testin
 			"never invent PASS, retry indefinitely, or escalate into extra ceremony",
 			"quick check runs once",
 			"Long or very-long work gets one cost/side-effect forecast",
-			"Needs your decision",
+			// harness-continuity S3: authorized work continues, and a pending
+			// child is a wait event, never a generic decision license.
+			"Authorized work continues: runnable in-scope steps run, a pending child is a wait event",
 			"Functional proof and adversarial review both project as **Checking**",
 			"at most one scoped correction",
 			"never reopen review for unchanged content",
@@ -1597,6 +1599,9 @@ func TestODDOrchestratorsProjectNativeCheckingWithoutPromptOwnedLenses(t *testin
 			if !strings.Contains(section, required) {
 				t.Fatalf("%s native checking contract missing %q", path, required)
 			}
+		}
+		if strings.Contains(section, "**Needs your decision**") {
+			t.Fatalf("%s native checking contract keeps the retired generic decision license", path)
 		}
 		for _, retired := range []string{
 			"Review Lens Selection", "review-risk", "review-readability",
