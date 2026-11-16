@@ -688,6 +688,114 @@ func TestPiCodeGraphDeselectionPreservesDriftedForeignAgentDir(t *testing.T) {
 	}
 }
 
+// A manifest that records paths outside the home directory is untrusted
+// input: backup snapshots, refresh, and uninstall must all skip it (Copilot).
+func TestForeignPiCodeGraphWalkRejectsPathsOutsideHome(t *testing.T) {
+	home := t.TempDir()
+	outside := t.TempDir()
+	outsideMCP := filepath.Join(outside, "agent", "mcp.json")
+	writePiFile(t, outsideMCP, `{ "mcpServers": { "codegraph": { "command": "codegraph", "args": [ "serve", "--mcp" ] } } }`)
+	manifestPath := piagent.CodeGraphPathsForAgent(home, filepath.Dir(outsideMCP)).Manifest
+	record := piCodeGraphManifest{MCPPath: outsideMCP, Children: map[string]piCodeGraphOwnedFile{}}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePiFile(t, manifestPath, string(encoded))
+	if err := os.Chmod(manifestPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range ForeignPiCodeGraphBackupPaths(home) {
+		if strings.HasPrefix(path, outside) {
+			t.Fatalf("backup paths include an out-of-home path: %v", ForeignPiCodeGraphBackupPaths(home))
+		}
+	}
+	if _, err := UninstallAllPiCodeGraph(home); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(manifestPath); os.IsNotExist(statErr) {
+		t.Fatal("uninstall consumed an untrusted out-of-home manifest")
+	}
+	if _, statErr := os.Stat(outsideMCP); statErr != nil {
+		t.Fatal("uninstall touched a file outside the managed home")
+	}
+}
+
+// Recorded children must stay inside their agent directory (Copilot).
+func TestForeignPiCodeGraphBackupPathsRejectChildrenOutsideAgentDir(t *testing.T) {
+	home := t.TempDir()
+	shellAgentDir := filepath.Join(home, ".gentle-shell", "agent")
+	shellMCP := filepath.Join(shellAgentDir, "mcp.json")
+	writePiFile(t, shellMCP, `{ "mcpServers": { "codegraph": { "command": "codegraph", "args": [ "serve", "--mcp" ] } } }`)
+	escapeChild := filepath.Join(home, ".pi", "escape.md")
+	manifestPath := piagent.CodeGraphPathsForAgent(home, shellAgentDir).Manifest
+	record := piCodeGraphManifest{MCPPath: shellMCP, Children: map[string]piCodeGraphOwnedFile{escapeChild: {After: "x", AfterHash: "x"}}}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePiFile(t, manifestPath, string(encoded))
+	if err := os.Chmod(manifestPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths := ForeignPiCodeGraphBackupPaths(home)
+	if !containsPiPath(paths, shellMCP) {
+		t.Fatalf("legit foreign MCP config missing from backup paths: %v", paths)
+	}
+	if containsPiPath(paths, escapeChild) {
+		t.Fatalf("child outside its agent dir included in backup paths: %v", paths)
+	}
+}
+
+// Uninstall is driven by manifest ownership, not by a live canonical entry:
+// a foreign dir whose entry the user replaced is still cleaned up, with the
+// drifted file preserved (Copilot).
+func TestPiCodeGraphDeselectionUninstallsForeignDirWithoutLiveEntry(t *testing.T) {
+	home := t.TempDir()
+	defaultMCP := filepath.Join(home, ".pi", "agent", "mcp.json")
+	shellAgentDir := filepath.Join(home, ".gentle-shell", "agent")
+	shellMCP := filepath.Join(shellAgentDir, "mcp.json")
+	canonical := `{ "mcpServers": { "codegraph": { "command": "codegraph", "args": [ "serve", "--mcp" ] } } }`
+	writePiFile(t, defaultMCP, canonical)
+	writePiFile(t, shellMCP, canonical)
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	shellResult, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, AgentDir: shellAgentDir, EffectiveMCPProbe: piProbeForTest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced := `{ "mcpServers": { "user": { "command": "user" } } }`
+	writePiFile(t, shellMCP, replaced)
+	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted := false
+	for _, action := range result.ManualActions {
+		if strings.Contains(action, "drifted") {
+			drifted = true
+		}
+	}
+	if !drifted {
+		t.Fatalf("deselection = %#v, want drift preserved action for the replaced foreign entry", result)
+	}
+	if got := string(mustReadPiFile(t, shellMCP)); got != replaced {
+		t.Fatalf("replaced foreign entry was not preserved: %s", got)
+	}
+	for _, file := range shellResult.Files {
+		if !strings.HasPrefix(filepath.Base(file), "pi-codegraph") {
+			continue
+		}
+		if _, statErr := os.Stat(file); !os.IsNotExist(statErr) {
+			t.Fatalf("foreign manifest %s survived deselection", file)
+		}
+	}
+	if got := string(mustReadPiFile(t, defaultMCP)); got != canonical {
+		t.Fatalf("current dir was not uninstalled: %s", got)
+	}
+}
+
 func TestPiCodeGraphDeselectionRemovesOnlyOwnedIntegration(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")

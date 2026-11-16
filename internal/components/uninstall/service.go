@@ -492,6 +492,9 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 		for _, target := range communitytool.PiCodeGraphPaths(s.homeDir, s.workspaceDir) {
 			backupTargets[target] = struct{}{}
 		}
+		for _, target := range communitytool.ForeignPiCodeGraphBackupPaths(s.homeDir) {
+			backupTargets[target] = struct{}{}
+		}
 		if piAdapter, ok := s.registry.Get(model.AgentPi); ok {
 			backupTargets[piAdapter.SystemPromptFile(s.homeDir)] = struct{}{}
 		}

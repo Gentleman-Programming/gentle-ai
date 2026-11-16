@@ -887,7 +887,7 @@ func RefreshAllPiCodeGraphIfConfigured(homeDir, workspaceDir string) (PiCodeGrap
 	if err != nil {
 		return result, configured, err
 	}
-	err = forEachForeignPiCodeGraphAgentDir(homeDir, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
+	err = forEachForeignPiCodeGraphAgentDir(homeDir, true, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
 		foreign, foreignErr := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: homeDir, WorkspaceDir: workspaceDir, Selected: true, AgentDir: agentDir})
 		if foreignErr != nil {
 			return foreignErr
@@ -908,11 +908,12 @@ func RefreshAllPiCodeGraphIfConfigured(homeDir, workspaceDir string) (PiCodeGrap
 }
 
 // forEachForeignPiCodeGraphAgentDir invokes visit for every foreign agent
-// directory registered by a pi-codegraph*.json manifest in the state dir
-// whose recorded mcpPath still holds a canonical codegraph entry. It mirrors
-// the refresh guards so callers never act on a directory Gentle AI is not
-// managing, and stops at the first error visit reports.
-func forEachForeignPiCodeGraphAgentDir(homeDir string, visit func(record piCodeGraphManifest, manifestPath, agentDir string) error) error {
+// directory registered by a pi-codegraph*.json manifest in the state dir.
+// The recorded agent directory must resolve under homeDir, and — unless
+// requireLiveEntry is false, as for uninstall, where the manifest itself is
+// the ownership record — its mcpPath must still hold a canonical codegraph
+// entry. It stops at the first error visit reports.
+func forEachForeignPiCodeGraphAgentDir(homeDir string, requireLiveEntry bool, visit func(record piCodeGraphManifest, manifestPath, agentDir string) error) error {
 	current := piagent.CodeGraphPaths(homeDir)
 	manifests, err := filepath.Glob(filepath.Join(filepath.Dir(current.Manifest), "pi-codegraph*.json"))
 	if err != nil {
@@ -930,7 +931,14 @@ func forEachForeignPiCodeGraphAgentDir(homeDir string, visit func(record piCodeG
 		if filepath.Clean(piagent.CodeGraphPathsForAgent(homeDir, agentDir).Manifest) != filepath.Clean(manifestPath) {
 			continue
 		}
-		if !hasAdoptablePiCodeGraphEntry(record.MCPPath) {
+		// The manifest file is the only untrusted input here: without this
+		// check a hostile or corrupted manifest could aim backup snapshots,
+		// refresh writes, or uninstall restores at paths outside the home
+		// directory Gentle AI manages.
+		if !piCodeGraphPathWithinRoots(agentDir, []string{homeDir}) {
+			continue
+		}
+		if requireLiveEntry && !hasAdoptablePiCodeGraphEntry(record.MCPPath) {
 			continue
 		}
 		if err := visit(record, manifestPath, agentDir); err != nil {
@@ -948,10 +956,12 @@ func forEachForeignPiCodeGraphAgentDir(homeDir string, visit func(record piCodeG
 // callers already snapshot it through PiCodeGraphPaths.
 func ForeignPiCodeGraphBackupPaths(homeDir string) []string {
 	var collected []string
-	err := forEachForeignPiCodeGraphAgentDir(homeDir, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
+	err := forEachForeignPiCodeGraphAgentDir(homeDir, true, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
 		collected = append(collected, manifestPath, record.MCPPath)
 		for child := range record.Children {
-			collected = append(collected, child)
+			if piCodeGraphPathWithinRoots(child, []string{agentDir}) {
+				collected = append(collected, child)
+			}
 		}
 		return nil
 	})
@@ -981,7 +991,7 @@ func UninstallAllPiCodeGraph(homeDir string) (PiCodeGraphResult, error) {
 	if err != nil {
 		return result, err
 	}
-	err = forEachForeignPiCodeGraphAgentDir(homeDir, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
+	err = forEachForeignPiCodeGraphAgentDir(homeDir, false, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
 		foreign, foreignErr := uninstallPiCodeGraphForAgent(homeDir, agentDir)
 		if foreignErr != nil {
 			return foreignErr

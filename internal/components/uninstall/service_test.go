@@ -836,6 +836,32 @@ func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
 // managed blocks in ~/.pi/agent/APPEND_SYSTEM.md. Since adapter.SupportsSystemPrompt()
 // is false, componentOperations() never queues a rewrite op for that file, so
 // uninstall must retire the stale blocks directly.
+func TestBuildPlanSnapshotsForeignPiDirectories(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shellAgentDir := filepath.Join(homeDir, ".gentle-shell", "agent")
+	shellMCP := filepath.Join(shellAgentDir, "mcp.json")
+	if err := os.MkdirAll(shellAgentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shellMCP, []byte(`{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: homeDir, Selected: true, AgentDir: shellAgentDir, EffectiveMCPProbe: piCodeGraphProbeForServiceTest}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentPi}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(plan.backupTargets, shellMCP) {
+		t.Fatalf("backup targets = %v, missing foreign Pi MCP config %q", plan.backupTargets, shellMCP)
+	}
+}
+
 func TestExecutePlanRetiresStalePiSystemPromptBlocks(t *testing.T) {
 	home := t.TempDir()
 	svc, err := NewService(home, t.TempDir(), "dev")
