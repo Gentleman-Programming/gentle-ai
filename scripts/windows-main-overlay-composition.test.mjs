@@ -33,8 +33,9 @@ assert.ok(source.includes('Main snapshot requires node'), 'engines preflight gat
 const failures = [];
 const check = (name, observed, want) => { if (!Object.is(observed, want)) failures.push(`${name}: expected ${want}, observed ${observed}`); };
 
-// Range satisfaction: `*` and `>=x.y.z` only; everything else is undefined so
-// the caller refuses explicitly instead of guessing.
+// Range satisfaction: `||` of `*`, `>=x.y.z` and `^x.y.z` only; any empty or
+// other alternative makes the whole range undefined so the caller refuses
+// explicitly instead of guessing.
 const ranges = [
   ['1.2.0', '*', true],
   ['1.2.0', '>=0.99.1', true],
@@ -46,12 +47,38 @@ const ranges = [
   ['1.2.0+build.7', '>=1.2.0', true],
   ['10.0.0', '>=9.10.11', true],
   ['1.2', '>=1.0.0', undefined],
-  ['1.2.0', '^1.0.0', undefined],
   ['1.2.0', '~1.2', undefined],
   ['1.2.0', '>=1.x', undefined],
   ['1.2.0', '', undefined],
   ['v1.2.0', '>=1.0.0', undefined],
   ['latest', '>=1.0.0', undefined],
+  // #6135: the Main snapshot's engines.node against the shipped node runtime.
+  ['24.18.0', '^22.19.0 || >=23.6.0', true],
+  ['22.19.0', '^22.19.0 || >=23.6.0', true],
+  ['22.18.9', '^22.19.0 || >=23.6.0', false],
+  ['23.5.9', '^22.19.0 || >=23.6.0', false],
+  // npm caret bounds: ^1.2.3 is >=1.2.3 <2.0.0, ^0.2.3 is >=0.2.3 <0.3.0,
+  // ^0.0.3 is >=0.0.3 <0.0.4.
+  ['1.2.3', '^1.2.3', true],
+  ['1.9.9', '^1.2.3', true],
+  ['1.2.2', '^1.2.3', false],
+  ['2.0.0', '^1.2.3', false],
+  ['0.2.3', '^0.2.3', true],
+  ['0.2.9', '^0.2.3', true],
+  ['0.2.2', '^0.2.3', false],
+  ['0.3.0', '^0.2.3', false],
+  ['0.0.3', '^0.0.3', true],
+  ['0.0.2', '^0.0.3', false],
+  ['0.0.4', '^0.0.3', false],
+  // An empty or unrecognized alternative makes the whole range unsupported,
+  // even when another alternative would match.
+  ['24.18.0', '>=23.6.0 ||', undefined],
+  ['24.18.0', '|| >=23.6.0', undefined],
+  ['24.18.0', '>=23.6.0 || ~1.0.0', undefined],
+  ['1.0.0', '~1.0.0', undefined],
+  ['1.2.0', '^1.2', undefined],
+  ['1.2.0', '^1.x', undefined],
+  ['1.2.0', '^v1.2.0', undefined],
 ];
 for (const [version, range, want] of ranges) check(`range ${version} ${range}`, satisfiesVersionRange(version, range), want);
 
@@ -113,8 +140,12 @@ check('compose peer absent', compose(stagedRecord(), frozen, '4.5.1', { typebox:
 assert.match(composeMessage(stagedRecord(), frozen, '4.5.1', { typebox: '1.3.27' }), /@earendil-works\/pi-coding-agent@>=1\.2\.0 is absent from the staged graph/);
 check('compose optional peer absent', compose(stagedRecord(), frozen, '4.5.1', stagedPeers,
   { ...frozen, peerDependencies: { ...frozen.peerDependencies, 'extra-peer': '*' }, peerDependenciesMeta: { 'extra-peer': { optional: true } } }), 'accept');
-check('compose unsupported range', compose(stagedRecord(), frozen, '4.5.1', stagedPeers,
-  { ...frozen, peerDependencies: { ...frozen.peerDependencies, 'extra-peer': '^1.0.0' } }), 'reject');
+check('compose unsupported range', compose(stagedRecord(), frozen, '4.5.1', { ...stagedPeers, 'extra-peer': '1.2.0' },
+  { ...frozen, peerDependencies: { ...frozen.peerDependencies, 'extra-peer': '~1.2' } }), 'reject');
+assert.match(composeMessage(stagedRecord(), { ...frozen, peerDependencies: { ...frozen.peerDependencies, 'extra-peer': '~1.2' } },
+  '4.5.1', { ...stagedPeers, 'extra-peer': '1.2.0' }), /extra-peer@"~1\.2" declares an unsupported range \(staged extra-peer@1\.2\.0\)/);
+check('compose caret peer satisfied', compose(stagedRecord(), frozen, '4.5.1', { ...stagedPeers, 'extra-peer': '1.4.0' },
+  { ...frozen, peerDependencies: { ...frozen.peerDependencies, 'extra-peer': '^1.2.0' } }), 'accept');
 check('compose metadata drift', compose(stagedRecord({ version: '4.5.0' }), frozen), 'reject');
 check('compose engines drift', compose(stagedRecord({ engines: { node: '>=20.0.0' } }), frozen), 'reject');
 check('compose dependencies drift', compose(stagedRecord({ dependencies: {} }), frozen), 'reject');
@@ -123,7 +154,7 @@ check('compose lock drift', compose(stagedRecord(), frozen, '4.4.0'), 'reject');
 assert.match(composeMessage(stagedRecord(), frozen, '4.4.0'), /is not the locked reviewed gentle-pi 4\.4\.0/);
 check('compose missing record', compose(null, frozen), 'reject');
 
-const total = ranges.length + 9 + 12;
+const total = ranges.length + 9 + 13;
 console.log(`windows-main-overlay-composition: ${total - failures.length}/${total} passed`);
 for (const failure of failures) console.log(`FAIL ${failure}`);
 process.exitCode = failures.length === 0 ? 0 : 1;
