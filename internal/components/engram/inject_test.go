@@ -2991,9 +2991,9 @@ func TestInjectCodexInvalidRuntimeDoesNotMutateFiles(t *testing.T) {
 
 // ─── Codex multi-agent config injection tests ────────────────────────────────
 
-// TestInjectCodexMultiAgentDefaultOn asserts that after a plain Inject call,
-// config.toml contains [features] with multi_agent = true. Codex SDD enables
-// multi-agent delegation by default so the per-phase reasoning_effort table applies.
+// TestInjectCodexMultiAgentDefaultOn asserts that a plain Inject call uses the
+// current [agents].enabled switch and does not recreate the deprecated
+// [features].multi_agent key.
 func TestInjectCodexMultiAgentDefaultOn(t *testing.T) {
 	validCodexRuntime(t)
 	home := t.TempDir()
@@ -3008,19 +3008,16 @@ func TestInjectCodexMultiAgentDefaultOn(t *testing.T) {
 		t.Fatalf("ReadFile(config.toml) error = %v", err)
 	}
 	text := string(content)
-	if !strings.Contains(text, "[features]") {
-		t.Fatalf("config.toml missing [features] section; got:\n%s", text)
+	if strings.Contains(text, "multi_agent =") {
+		t.Fatalf("config.toml contains deprecated multi_agent key; got:\n%s", text)
 	}
-	if !strings.Contains(text, "multi_agent = true") {
-		t.Fatalf("config.toml missing multi_agent = true (enabled by default); got:\n%s", text)
-	}
-	if strings.Contains(text, "multi_agent = false") {
-		t.Fatalf("config.toml must NOT have multi_agent = false by default; got:\n%s", text)
+	if !strings.Contains(text, "enabled = true") {
+		t.Fatalf("config.toml missing agents.enabled = true (enabled by default); got:\n%s", text)
 	}
 }
 
-// TestInjectCodexMultiAgentOptIn asserts that InjectWithOptions with
-// CodexMultiAgent=true writes multi_agent = true in [features].
+// TestInjectCodexMultiAgentOptIn asserts that the retained compatibility flag
+// cannot recreate the deprecated [features].multi_agent key.
 func TestInjectCodexMultiAgentOptIn(t *testing.T) {
 	validCodexRuntime(t)
 	home := t.TempDir()
@@ -3036,8 +3033,11 @@ func TestInjectCodexMultiAgentOptIn(t *testing.T) {
 		t.Fatalf("ReadFile(config.toml) error = %v", err)
 	}
 	text := string(content)
-	if !strings.Contains(text, "multi_agent = true") {
-		t.Fatalf("config.toml missing multi_agent = true after opt-in; got:\n%s", text)
+	if strings.Contains(text, "multi_agent =") {
+		t.Fatalf("compatibility option recreated deprecated multi_agent key; got:\n%s", text)
+	}
+	if !strings.Contains(text, "enabled = true") {
+		t.Fatalf("config.toml missing agents.enabled = true after compatibility option; got:\n%s", text)
 	}
 }
 
@@ -3095,14 +3095,17 @@ func TestInjectCodexMultiAgentIdempotent(t *testing.T) {
 	}
 	text := string(content)
 
-	if count := strings.Count(text, "[features]"); count != 1 {
-		t.Fatalf("expected 1 [features] section, got %d; config.toml:\n%s", count, text)
+	if count := strings.Count(text, "[features]"); count != 0 {
+		t.Fatalf("expected no generated [features] section, got %d; config.toml:\n%s", count, text)
 	}
 	if count := strings.Count(text, "[agents]"); count != 1 {
 		t.Fatalf("expected 1 [agents] section, got %d; config.toml:\n%s", count, text)
 	}
-	if count := strings.Count(text, "multi_agent"); count != 1 {
-		t.Fatalf("expected 1 multi_agent key, got %d; config.toml:\n%s", count, text)
+	if count := strings.Count(text, "multi_agent ="); count != 0 {
+		t.Fatalf("expected no deprecated multi_agent key, got %d; config.toml:\n%s", count, text)
+	}
+	if count := strings.Count(text, "enabled = true"); count != 1 {
+		t.Fatalf("expected 1 agents.enabled key, got %d; config.toml:\n%s", count, text)
 	}
 	if count := strings.Count(text, "max_threads"); count != 1 {
 		t.Fatalf("expected 1 max_threads key, got %d; config.toml:\n%s", count, text)
