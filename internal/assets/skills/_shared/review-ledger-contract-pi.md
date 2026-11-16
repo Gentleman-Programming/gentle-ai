@@ -68,4 +68,4 @@ A `stop` ends its transition, never approves delivery. `D` means the human disab
 
 ## Delivery follows ordinary repository policy
 
-After exact acknowledgement burns terminal `approved` authority, the review lifecycle stops. Commit, push, PR, and release remain separate human decisions under ordinary repository policy. A review outcome is informational and never authorizes delivery.
+After exact acknowledgement burns terminal `approved` authority, the review lifecycle stops. Commit, push, PR, and release remain separate human decisions under ordinary repository policy. A review outcome is informational and never authorizes delivery. With RDD on, the pre-delivery guard still blocks a foreground push or PR until the committed range is assessed and any due review is resolved, and never runs it beside candidate-changing or background commands.

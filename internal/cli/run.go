@@ -4303,7 +4303,8 @@ func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adap
 }
 
 // routingGuidancePathsWithClaudeModules also takes install's explicit Claude
-// module opt-in, which the routing step receives too.
+// module opt-in. Global Codex modules need no flag and are selected by the
+// scoped options resolver.
 func routingGuidancePathsWithClaudeModules(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter, claudeModules bool) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
@@ -4587,13 +4588,11 @@ func routingGuidanceOptions(homeDir, workspaceDir string, adapter agents.Adapter
 	return options
 }
 
-// scopedRoutingGuidanceOptions extends routingGuidanceOptions with the one
-// scope-dependent choice: a global Claude install continues the module pilot
-// whose ledger is already installed under homeDir (#5256), and creates it only
-// when claudeModules carries install's explicit opt-in. Otherwise, in the
-// workspace scope and for every other agent the options are unchanged. The
-// ledger is always looked up, so a ledger that cannot be inspected is an error
-// with or without the opt-in.
+// scopedRoutingGuidanceOptions extends routingGuidanceOptions with global-only
+// module delivery. Codex uses modules by default in global install and sync,
+// while workspace Codex stays monolithic. Claude continues its explicit pilot
+// opt-in and any installed pilot. The Claude ledger is always looked up, so a
+// ledger that cannot be inspected is an error with or without the opt-in.
 //
 // The routing step and the install/sync snapshot planner both resolve through
 // here, so the snapshot covers the core, every module and the ledger. After a
@@ -4603,7 +4602,14 @@ func routingGuidanceOptions(homeDir, workspaceDir string, adapter agents.Adapter
 // safe or atomic.
 func scopedRoutingGuidanceOptions(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter, claudeModules bool) (agentguidance.RoutingOptions, error) {
 	options := routingGuidanceOptions(homeDir, workspaceDir, adapter)
-	if scope != ScopeGlobal || adapter.Agent() != model.AgentClaudeCode {
+	if scope != ScopeGlobal {
+		return options, nil
+	}
+	if adapter.Agent() == model.AgentCodex {
+		options.CodexGlobalModules = true
+		return options, nil
+	}
+	if adapter.Agent() != model.AgentClaudeCode {
 		return options, nil
 	}
 	pilot, err := agentguidance.ClaudeGlobalModulePaths(homeDir)

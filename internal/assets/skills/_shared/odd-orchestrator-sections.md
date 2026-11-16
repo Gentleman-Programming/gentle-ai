@@ -17,8 +17,8 @@ Verification of a delegated writer's work follows the same rule whether receipt-
 - **RDD on**: the native review is an additional outside view of the change, from the lenses pertinent to what was touched; it never replaces or skips the tier's verification, and the tier's verifier runs before review. A runtime that renders an RDD status line reads it from there; otherwise read `gentle-ai review mode status` (read-only) and treat a failure as `unknown`. A declined consent, a disabled clone, or a refused START or STATUS changes nothing about verification.
 - The parent spot check — re-running one reported command before delivery — stays in every tier.
 - **Verification timing**: when several deliveries of one feature were written inline, run one independent verifier at the feature's end instead of one per delivery; verify per unit only when that unit names a high-risk item (its Risk line or the escalation over its actual diff), never because of the model or effort that wrote the code.
-- **Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers, never a new full sweep. A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one. Blockers still open after that become one **Needs your decision** result. A writer's self-review follows the same bound, then reports `partial`.
-- **Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms. On its first launch the verifier runs probes in a fresh scratch copy created with `mktemp -d` under the system temp dir, never inside the workspace, and leaves no new file in the workspace. Probes derive from the specs, plus invariants: the data hash is unchanged after a rejected command, and prior commands' output is identical to the baseline. Severity: a blocker is a change-caused defect or unmet spec item that reproduces with realistic input and did not already reproduce at the baseline; defects already present at the baseline and out-of-domain values are advisories; silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker. The writer adds the probes as regression tests; the parent commits them when authorized.
+- **Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers, never a new full sweep. A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one. Blockers still open after that, and a writer's self-review under the same bound, leave the unit `status: partial`, naming any genuine human decision; independent authorized work continues. Worker, setup, recheck, native, and user budgets stay separate; changed state earns a fresh check, not a reset.
+- **Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms. The parent names the change kind and pastes or references `_shared/verify-method.md` from the runtime's installed skills directory, then hands returned probes to the writer. The writer adds the probes as regression tests; the parent commits them when authorized.
 - The writer receives `## Verification` naming the exact commands to run, and may receive `## Known environmental failures` naming exact test names or command lines already failing on the base as evidence; any other failing required command still forces `partial`.
 - Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to whoever makes that write, and the parent never explores files it will read anyway before writing inline.
 <!-- odd-orchestrator-section:Delegated Verification Gate (MANDATORY):end -->
@@ -31,8 +31,8 @@ Verification of a delegated writer's work is proportionate to the risk of the ch
 - **High**, only through a named high-risk item: writer self-verification plus an independent verifier — a fresh read-only worker that re-runs the verification commands and inspects the diff without the writer's context. An unclear change keeps writer self-verification until the parent names the item that applies.
 - The parent spot check — re-running one reported command before delivery — stays in every tier.
 - **Verification timing**: when several deliveries of one feature were written inline, run one independent verifier at the feature's end instead of one per delivery; verify per unit only when that unit names a high-risk item (its Risk line or the escalation over its actual diff), never because of the model or effort that wrote the code.
-- **Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers, never a new full sweep. A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one. Blockers still open after that become one **Needs your decision** result. A writer's self-review follows the same bound, then reports `partial`.
-- **Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms. On its first launch the verifier runs probes in a fresh scratch copy created with `mktemp -d` under the system temp dir, never inside the workspace, and leaves no new file in the workspace. Probes derive from the specs, plus invariants: the data hash is unchanged after a rejected command, and prior commands' output is identical to the baseline. Severity: a blocker is a change-caused defect or unmet spec item that reproduces with realistic input and did not already reproduce at the baseline; defects already present at the baseline and out-of-domain values are advisories; silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker. The writer adds the probes as regression tests; the parent commits them when authorized.
+- **Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers, never a new full sweep. A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one. Blockers still open after that, and a writer's self-review under the same bound, leave the unit `status: partial`, naming any genuine human decision; independent authorized work continues. Worker, setup, recheck, native, and user budgets stay separate; changed state earns a fresh check, not a reset.
+- **Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms. The parent names the change kind and pastes or references `_shared/verify-method.md` from the runtime's installed skills directory, then hands returned probes to the writer. The writer adds the probes as regression tests; the parent commits them when authorized.
 - The writer receives `## Verification` naming the exact commands to run, and may receive `## Known environmental failures` naming exact test names or command lines already failing on the base as evidence; any other failing required command still forces `partial`.
 - Exploration stays a separate delegation only when the parent needs the map to decide or route; reading that prepares a write belongs to whoever makes that write, and the parent never explores files it will read anyway before writing inline.
 <!-- odd-orchestrator-section:Delegated Verification Gate (MANDATORY) (ODD only):end -->
@@ -42,8 +42,8 @@ Verification of a delegated writer's work is proportionate to the risk of the ch
 - A passive ordinary document or image needs structural readback, not an artificial semantic-verification subagent. Active, mixed, operational, executable, mode-changing, or unknown content gets functional verification at the tier the Delegated Verification Gate assigns.
 - For a trivial passive documentation-only edit, structural readback is the complete proportional check; do not open a separate semantic-verification ceremony.
 - If an applicable verifier is unavailable, report it as unavailable; never invent a pass, retry indefinitely, or escalate into extra ceremony.
-- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Unavailable, partial, declined, or exhausted proof becomes one actionable **Needs your decision** result naming the open blockers or missing proof; that result is a valid stop, hedged wording is not.
-- Functional proof and independent verification both project as **Checking**. One verified change permits at most one scoped correction, and a second only when the recheck shows the same blocker still failing; there is no loop-until-clean behavior.
+- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Continuity and missing proof follow the ODD Close (step 7).
+- Functional proof and independent verification both project as **Checking**; corrections follow the gate's **Correction bounds**, with no loop-until-clean behavior.
 - Commit, push, PR, direct-main, emergency, and release gates follow ordinary repository policy; checking output never authorizes delivery.
 <!-- odd-orchestrator-section:Native Checking Contract (ODD only):end -->
 
@@ -81,9 +81,9 @@ Interpret short replies such as "yes", "go ahead", or "eso mismo" against the im
 
 Resolving an incident or subdecision does not complete or cancel the original authorized objective; resume safe, necessary in-scope steps automatically, using judgment for proportionate recovery and respecting explicit user dispositions. Investigate pending technical uncertainty rather than treating it alone as a new human decision.
 
-Stop only for an unresolved consequential scope/product decision, required explicit consent, a denied action, unavailable required proof, or the human's explicit stop. Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule. Report a concrete blocker and the exact decision needed rather than requesting a generic "continue".
+Authorized work continues: runnable in-scope steps run, a pending child is a wait event whose completion resumes the turn without asking the human, and only a real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit stops the work it applies to, never independent authorized work. Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule. Report a concrete blocker and the exact decision needed rather than requesting a generic "continue".
 
-For background work, launch the bounded action and end the turn when no independent in-scope work remains. Retain its identity and resume the already-authorized continuation automatically on its completion event; do not ask the human to say "continue", poll, or claim completion while checks remain pending.
+For background work, launch the bounded action and end the turn when no independent in-scope work remains. Retain its identity and resume on its completion event without asking the human; never poll or claim completion while checks remain pending.
 
 ### Mental Model
 
@@ -91,9 +91,8 @@ Gentle AI is an ecosystem configurator and harness layer. After installation, th
 
 - Small request: do it directly.
 - Substantial authorized work: use ODD; track feature progress automatically.
-- The parent session orchestrates and writes inline; a bounded worker takes a unit only for a named reason.
 
-Delegation follows named reasons, never size or complexity alone. A Delegation Trigger holds only when its condition truly holds; none holds by default, and when in doubt work inline. Once one holds, delegation is not optional: use the smallest useful delegated workflow instead of continuing past it inline.
+Delegation follows named reasons, never size or complexity alone.
 <!-- odd-orchestrator-section:Orchestrator Identity and Role:end -->
 
 <!-- odd-orchestrator-section:Orchestrator Routing and Delivery:start -->
@@ -148,7 +147,7 @@ stop writes → parent captures git status → diagnose affected repositories/wo
 ### Allowed edit surfaces (MANDATORY)
 
 <!-- odd-orchestrator-fragment:writer.edit-surfaces:start -->
-A bounded writer refuses to write outside the exact allowed edit surfaces and stops for interaction when they are missing. The parent owns that input. Every new writer launch carries the section (a continuation inherits it); after a rejected launch, repair what the rejection names once, never relaunch the same prompt unchanged.
+A bounded writer refuses to write outside the exact allowed edit surfaces and stops for interaction when they are missing. The parent owns that input. A writer that needs a route beyond its surface never widens it on its own: it reports the necessary exact candidate paths with their reasons and waits for the parent-issued declaration. Every new writer launch carries the section (a continuation inherits it); after a rejected launch, repair what the rejection names once, never relaunch the same prompt unchanged. A continuation continues the same writer, and the section you pass replaces the inherited one rather than adding to it: carry every still-needed path, including the unchanged ones, and the concise reason for the addition. Dropping a needed path is the same defect as no surface, and an extension never widens to a repository-wide surface or resets a budget.
 
 Before launching a bounded writer through the runtime's delegation mechanism, derive the allowed edit surface from the task being delegated — the files the planned change must touch, plus the directories where the task authorizes new files — and pass it in the delegated prompt under an `## Allowed edit surfaces` heading:
 
@@ -158,16 +157,10 @@ Before launching a bounded writer through the runtime's delegation mechanism, de
 - the directories where new files are authorized, when the task requires new files;
 - nothing beyond the delegated task — a surface wider than the task is the same defect as no surface at all.
 
-If the surface genuinely cannot be derived, do not launch the writer, and do not ask the human to author paths. Derive a candidate set first — the exact paths this task would touch — and present that enumerated list as an approve/decline choice under the Lossless Blocking Prompts rules.
+If the surface genuinely cannot be derived, do not launch the writer, and do not ask the human to author paths. Derive a candidate set first — the exact paths this task would touch — and present that enumerated list as an approve/decline choice under the Lossless Blocking Prompts rules. Investigate a technical uncertainty about the route inside the authorized work; it is not a human question by itself.
 
-Relay a writer's interaction request about edit surfaces the same way: present its derived candidate paths as the choice, and add or drop paths only on the human's explicit instruction.
+Adjudicate a writer's edit-surface request yourself first: add a necessary path to its declaration without asking the human, when the route serves the objective already authorized in the same repository and you have checked ownership, preservation of existing work, risk, and concurrency with other writers and units. An optional or cosmetic refactor is not that necessary path, and an unresolved overlap or ownership conflict blocks the addition until it is settled. Only a real new objective or product scope, an unapproved repository, private material, a destructive or otherwise prohibited operation, missing consent, a denied action, or an exhausted limit goes to the human, under the existing protocols; for that human choice, present the writer's derived candidate paths under the Lossless Blocking Prompts rules. A surface entry never substitutes for repository or worktree authority and never authorizes an operation the rules prohibit.
 <!-- odd-orchestrator-fragment:writer.edit-surfaces:end -->
-
-### Key Learnings closing block
-
-<!-- odd-orchestrator-fragment:delegation.key-learnings:start -->
-When delegating to a generic exploration, writer, or verification worker, include the same `## Key Learnings` closing instruction in the delegated prompt: after the worker returns its normal result envelope or handoff, it closes its final response text with a `## Key Learnings` block of 1–5 numbered items, each a standalone factual sentence of at least 20 characters and at least 4 words, omitting the block when there is genuinely no reusable learning. The block layers on after the structured return contract and does not alter its fields. This applies to final response text only — not intermediate tool output. The Engram memory provider extracts and persists these items as passive capture; the worker does not parse the block or invoke passive-capture tools itself. This is separate from explicit `mem_save` persistence. Agents that must return strict JSON never receive this closing instruction; their required output shape remains unchanged.
-<!-- odd-orchestrator-fragment:delegation.key-learnings:end -->
 
 ### Delivery strategy
 
@@ -212,11 +205,13 @@ The parent resolves skills once per session or before first delegation:
 
 1. Read `.atl/skill-registry.md` if present.
 2. Match task context and target files against the `Trigger / description` column.
-3. Pass only matching `Path` values to subagents under `## Skills to load before work`.
+3. Pass only matching `Path` values to subagents under `## Skills to load before work`, matching the delegated task's own files and actions, never a fixed set: a child that will not commit gets no commit skill, and one that writes no docs gets no docs skill.
 4. Tell subagents to read those exact `SKILL.md` files before reading, writing, reviewing, testing, or creating artifacts.
 5. If the registry is absent, continue but mention that project-specific skill paths were unavailable.
 
 Subagents receive exact indexed paths and do not rediscover the registry or additional project/user `SKILL.md` files during normal runtime.
+
+`gentle-ai-worker` reports only `paths-injected`, `paths-invalid`, or `none`; the fallback values below come from other agents.
 
 If a subagent reports `skill_resolution`, interpret it as project/user skill resolution:
 
