@@ -364,19 +364,30 @@ for (const [relative, record] of Object.entries(lock.packages)) {
 // publisher snapshot's own metadata, never embedded in this installer. A
 // snapshot released after this build therefore installs unchanged, and any
 // refusal names the exact expected and staged values.
-// Minimal, fail-closed range satisfaction: `*` and `>=x.y.z` only. Any other
-// range shape is reported as unsupported instead of guessed.
+// Minimal, fail-closed range satisfaction: `||` of `*`, `>=x.y.z` and npm caret
+// `^x.y.z` only. An empty or any other alternative makes the whole range
+// unsupported, even when another alternative would match, instead of guessed.
 function satisfiesVersionRange(version, range) {
-  if (range === '*') return true;
-  const required = /^>=\s*(\d+)\.(\d+)\.(\d+)$/.exec(String(range));
-  if (!required) return undefined;
+  const bounds = [];
+  for (const alternative of String(range).split('||').map(text => text.trim())) {
+    if (alternative === '*') { bounds.push(null); continue; }
+    const minimum = /^>=\s*(\d+)\.(\d+)\.(\d+)$/.exec(alternative);
+    const caret = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(alternative);
+    const lower = (minimum ?? caret)?.slice(1).map(Number);
+    if (!lower) return undefined;
+    // ^1.2.3 is <2.0.0, ^0.2.3 is <0.3.0 and ^0.0.3 is <0.0.4.
+    const upper = !caret ? undefined : lower[0] > 0 ? [lower[0] + 1, 0, 0] : lower[1] > 0 ? [0, lower[1] + 1, 0] : [0, 0, lower[2] + 1];
+    bounds.push({ lower, upper });
+  }
+  if (bounds.includes(null)) return true;
   const actual = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(version));
   if (!actual) return undefined;
-  for (let index = 0; index < 3; ++index) {
-    const left = Number(actual[index + 1]), right = Number(required[index + 1]);
-    if (left !== right) return left > right;
-  }
-  return true;
+  const parts = actual.slice(1).map(Number);
+  const compare = other => {
+    for (let index = 0; index < 3; ++index) if (parts[index] !== other[index]) return parts[index] > other[index] ? 1 : -1;
+    return 0;
+  };
+  return bounds.some(({ lower, upper }) => compare(lower) >= 0 && (upper === undefined || compare(upper) < 0));
 }
 // Staged-graph peer lookup: top-level hoisted packages only, a scoped peer at
 // its two-component directory. Absent resolves to null; a malformed name

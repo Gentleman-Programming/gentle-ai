@@ -9,25 +9,25 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mutationjournal"
 )
 
-// #5256 U1b: the private transaction used by global Claude routing and pilot
+// #5256 U1b: the private transaction used by global modular routing and module
 // retirement. It publishes the core before changing the modules it references.
 //
-// The core and the modules keep separate journals, both rooted at the Claude
+// The core and the modules keep separate journals, both rooted at the runtime
 // config directory, because a rollback must restore the core before touching
 // any module: a core that cannot be restored may still reference the new
 // modules, and one shared Restore would keep going and remove them.
 
-// commitOrchestratorCore merges the orchestrator into CLAUDE.md under
-// configDir, the absolute Claude config directory, and installs modules
+// commitOrchestratorCoreAt merges the orchestrator into corePath under
+// configDir, the absolute runtime config directory, and installs modules
 // beside it in this order:
 //
-//  1. capture the CLAUDE.md before-image and preflight every module, before
+//  1. capture the core before-image and preflight every module, before
 //     any write;
 //  2. stage the referenced modules, keeping old module names and the ledger;
 //  3. publish the merged core, keeping an existing file's mode;
 //  4. finalize: retire unused owned modules and write the ledger once.
 //
-// merge receives the captured CLAUDE.md bytes, never a second read, so the
+// merge receives the captured core bytes, never a second read, so the
 // core write compare-and-swaps against exactly what was merged. Text outside
 // the managed sections merge replaces is preserved by merge itself.
 //
@@ -40,27 +40,29 @@ import (
 // Result.Files reports retired modules too. Nothing here is atomic across
 // files or locked against concurrent writers, and the compare-and-swap
 // checks bytes only, not file modes.
-func commitOrchestratorCore(configDir string, merge guidanceMerge, modules []orchestratorModule) (Result, error) {
-	return commitObservedOrchestratorCore(configDir, merge, modules, func() error { return nil })
+func commitOrchestratorCoreAt(configDir, corePath string, merge guidanceMerge, modules []orchestratorModule) (Result, error) {
+	return commitObservedOrchestratorCoreAt(configDir, corePath, merge, modules, func() error { return nil })
 }
 
-// commitObservedOrchestratorCore calls published right after the core write
+// commitObservedOrchestratorCoreAt calls published right after the core write
 // and before finalize; an error from it is handled like a core write that
 // failed after publication, so tests can drive the rollback.
-func commitObservedOrchestratorCore(configDir string, merge guidanceMerge, modules []orchestratorModule, published func() error) (Result, error) {
-	return commitPreparedOrchestratorCore(configDir, merge, func() (*orchestratorModuleInstall, error) {
+func commitObservedOrchestratorCoreAt(configDir, corePath string, merge guidanceMerge, modules []orchestratorModule, published func() error) (Result, error) {
+	return commitPreparedOrchestratorCoreAt(configDir, corePath, merge, func() (*orchestratorModuleInstall, error) {
 		return prepareOrchestratorModuleInstall(configDir, modules)
 	}, published)
 }
 
-// commitPreparedOrchestratorCore is the transaction itself. prepare plans the
+// commitPreparedOrchestratorCoreAt is the transaction itself. prepare plans the
 // module side once the core is captured: an install, or the removal that
 // retires the pilot behind a monolithic core.
-func commitPreparedOrchestratorCore(configDir string, merge guidanceMerge, prepare func() (*orchestratorModuleInstall, error), published func() error) (Result, error) {
+func commitPreparedOrchestratorCoreAt(configDir, corePath string, merge guidanceMerge, prepare func() (*orchestratorModuleInstall, error), published func() error) (Result, error) {
 	if !filepath.IsAbs(configDir) {
 		return Result{}, fmt.Errorf("orchestrator core config directory %q is not absolute", configDir)
 	}
-	corePath := filepath.Join(configDir, "CLAUDE.md")
+	if !filepath.IsAbs(corePath) || filepath.Dir(filepath.Clean(corePath)) != filepath.Clean(configDir) {
+		return Result{}, fmt.Errorf("orchestrator core path %q is outside config directory %q", corePath, configDir)
+	}
 	core := mutationjournal.New(configDir)
 	if err := core.Capture(corePath); err != nil {
 		return Result{}, fmt.Errorf("capture orchestrator core: %w", err)
@@ -109,13 +111,13 @@ func commitPreparedOrchestratorCore(configDir string, merge guidanceMerge, prepa
 	return Result{Changed: changed, Files: files}, nil
 }
 
-// orchestratorCorePaths lists, without touching the disk, every file
-// commitOrchestratorCore may change under configDir: CLAUDE.md, each known
+// orchestratorCorePathsFor lists, without touching the disk, every file
+// commitOrchestratorCoreAt may change under configDir: coreFile, each known
 // module name, used or not, and the ledger. Backups must be planned from this
 // list before the commit, never from its Result.
-func orchestratorCorePaths(configDir string) []string {
+func orchestratorCorePathsFor(configDir, coreFile string) []string {
 	dir := filepath.Join(configDir, "gentle-ai", "orchestrator")
-	paths := []string{filepath.Join(configDir, "CLAUDE.md")}
+	paths := []string{filepath.Join(configDir, coreFile)}
 	for _, name := range orchestratorModuleNames {
 		paths = append(paths, filepath.Join(dir, orchestratorModuleFile(name)))
 	}

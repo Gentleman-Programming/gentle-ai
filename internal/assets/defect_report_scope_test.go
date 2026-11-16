@@ -27,8 +27,31 @@ import (
 // that has to be right, it is not our work to triage, and it reintroduces the
 // prompt noise this exists to remove. Out of scope means silent.
 
+// harness-continuity S9 moved the workflow into the shared reference
+// providerDefectHandoffCanonicalPath; each orchestrator keeps the production
+// gate and the silent out-of-scope rule in its stub, and the reference keeps
+// every rule below.
 func TestDefectHandoffAdmitsOnlyFailuresGentleAIProduced(t *testing.T) {
 	for _, path := range allSDDOrchestratorAssetPaths(t) {
+		t.Run(path+"/stub", func(t *testing.T) {
+			stub := providerDefectStubSection(t, path)
+			for _, required := range []string{
+				"what produced the failure",
+				"When anything other than a Gentle AI invocation",
+				"there is no report and no handoff",
+				"do not name the component you believe is responsible",
+				"or ask",
+			} {
+				if !strings.Contains(stub, required) {
+					t.Errorf("%s defect stub is missing the production gate or silence %q", path, required)
+				}
+			}
+			if strings.Contains(MustRead(path), "appears blocked by a Gentle AI provider or tool defect") {
+				t.Error("the superseded subjective admissibility test is still present")
+			}
+		})
+	}
+	for _, path := range []string{providerDefectHandoffCanonicalPath} {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)
 

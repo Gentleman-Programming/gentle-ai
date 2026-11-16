@@ -114,13 +114,21 @@ The user-global Claude Code install can split the orchestrator into an always-lo
 
 ### Snapshots and manual restore
 
-Pre-upgrade Claude Code snapshots, and install, sync and complete-uninstall snapshots while the pilot is in use, record nine fixed paths: `CLAUDE.md`, all seven known module filenames (delegation, verification, tracking, memory, writer, prompts, skills) and the ledger, including the ones that do not exist yet. This is the snapshot scope, not a list of installed or owned files: the pilot installs only the modules it needs, and the ledger owns only what it installed.
+Pre-upgrade Claude Code snapshots, and install, sync and complete-uninstall snapshots while the pilot is in use, record nine fixed paths: `CLAUDE.md`, all seven known module filenames (delegation, verification, tracking, memory, writer, prompts, skills) and the ledger, including the ones that do not exist yet. This is the snapshot scope, not a list of installed or owned files: the pilot installs only the modules it needs, and the ledger owns only what it installed. The delegation module is no longer installed; an owned copy from an earlier release is retired on the next install or sync, and a modified one stays.
 
 Restoring one of these snapshots with `gentle-ai restore` or the **Backups** screen puts each of the nine paths back as it was:
 
 - **A path recorded as absent is deleted, even if you created or modified that file later and Gentle AI never owned it.**
 - Other files in the module directory are kept.
 - Snapshots taken before this layout existed do not record module or ledger paths. Of the nine paths, restoring them changes only `CLAUDE.md` (other files they recorded, such as settings, are restored as usual); module files and the ledger stay, and a remaining ledger keeps the pilot on the next global sync.
+
+## Codex orchestrator modules
+
+User-global Codex install and sync use an always-loaded core in `~/.codex/AGENTS.md` plus reachable on-demand modules in `~/.codex/gentle-ai/orchestrator/`. The ownership ledger in that directory records only the module bytes Gentle AI installed. Workspace Codex stays monolithic in `<workspace>/.codex/AGENTS.md`.
+
+Install, sync, and upgrade snapshots plan nine fixed paths before writing: `AGENTS.md`, all seven known module filenames, and the ledger. A failed install or sync restores that snapshot. Restore has the same concurrency limitation described above: a path recorded as absent is deleted even if it appeared while the operation was running.
+
+A modified referenced module or malformed ledger rejects the module update without changing the Codex core or module data. The delegation module is no longer installed; an owned copy from an earlier release is retired on the next install or sync, and a modified one stays. A complete Codex uninstall publishes the monolithic core before removing ledger-owned modules and the ledger; modified or unowned modules remain for manual review. Component-only uninstall preserves the modular layout.
 
 ## If verification fails
 

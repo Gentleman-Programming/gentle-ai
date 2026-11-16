@@ -110,7 +110,13 @@ type ReviewTargetStatusResult struct {
 	Escalation        *reviewtransaction.CompactEscalationEvidence `json:"escalation,omitempty"`
 	RepositoryContext *ReviewRepositoryContextReference            `json:"repository_context,omitempty"`
 	ValidationRequest *reviewtransaction.TargetedValidationRequest `json:"validation_request,omitempty"`
-	decision          reviewtransaction.TargetStatusDecision       `json:"-"`
+	// NonBlockingFindings is emitted only to a client that passed
+	// --non-blocking-findings, and only for a current compact authority in
+	// correction_required or escalated (issue #6088). It never carries a
+	// finding to correct or an unresolved finding; nothing routes on it.
+	NonBlockingFindings *reviewtransaction.NonBlockingFindingSet `json:"non_blocking_findings,omitempty"`
+
+	decision          reviewtransaction.TargetStatusDecision `json:"-"`
 	intendedUntracked reviewIntendedUntrackedScope
 	repositoryRoot    string
 	rddMode           reviewtransaction.RDDModeStatus

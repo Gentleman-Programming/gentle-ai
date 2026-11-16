@@ -20,10 +20,26 @@
     "next_transition": {"$ref": "#/$defs/next_transition"}, "validation_request": {"$ref": "status-v8.schema.json#/properties/validation_request"},
     "repository_context": {"$ref": "status-v8.schema.json#/properties/repository_context"}, "disposition": {"$ref": "status-v8.schema.json#/properties/disposition"},
     "eligible_untracked_inventory": {"$ref": "status-v8.schema.json#/properties/eligible_untracked_inventory"},
-    "escalation": {"$ref": "status-v8.schema.json#/properties/escalation"}
+    "escalation": {"$ref": "status-v8.schema.json#/properties/escalation"},
+    "non_blocking_findings": {"$ref": "#/$defs/non_blocking_findings"}
   },
   "dependentRequired": {"forecast": ["next_transition"]},
   "$defs": {
+    "non_blocking_findings": {
+      "description": "Opt-in (--non-blocking-findings): the admitted findings of a correction_required or escalated review that are neither to correct nor unresolved.",
+      "type": "object", "additionalProperties": false, "required": ["statement", "findings"],
+      "properties": {
+        "statement": {"type": "string", "minLength": 1},
+        "findings": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false, "required": ["id", "severity", "disposition", "claim"],
+          "properties": {
+            "id": {"type": "string", "minLength": 1}, "lens": {"type": "string", "minLength": 1},
+            "location": {"type": "string", "minLength": 1}, "severity": {"type": "string", "minLength": 1},
+            "disposition": {"enum": ["informational", "follow_up", "refuted"]}, "claim": {"type": "string"}
+          }
+        }}
+      }
+    },
     "next_transition": {"oneOf": [
       {
         "type": "object",
@@ -203,6 +219,9 @@
   "allOf": [
     {"$ref": "status-v8.schema.json#/allOf/0"}, {"$ref": "status-v8.schema.json#/allOf/1"},
     {"$ref": "status-v8.schema.json#/allOf/2"}, {"$ref": "status-v8.schema.json#/allOf/3"},
-    {"$ref": "status-v8.schema.json#/allOf/4"}, {"$ref": "status-v8.schema.json#/allOf/5"}
+    {"$ref": "status-v8.schema.json#/allOf/4"}, {"$ref": "status-v8.schema.json#/allOf/5"},
+    {"if": {"required": ["non_blocking_findings"]}, "then": {"required": ["authority"], "properties": {"authority": {"properties": {
+      "version": {"const": "compact-v2"}, "state": {"enum": ["correction_required", "escalated"]}
+    }, "required": ["version", "state"]}}}}
   ]
 }
