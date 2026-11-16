@@ -945,3 +945,47 @@ func TestEvidenceReportsUnavailableInspectionPhrases(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractBoundedSingleJSONObjectRecoversResultAfterReasoningProse is #4873:
+// a reasoning-tagged prefix whose prose leaves braces open used to swallow the
+// following, complete reviewer result, so admission reported "no complete JSON
+// object" and the collect slot was reoffered forever.
+func TestExtractBoundedSingleJSONObjectRecoversResultAfterReasoningProse(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "unbalanced brace in reasoning before the result",
+			payload: "reasoning: the guarded block opens with `if err != nil {` and never closes there\n{\"findings\":[],\"evidence\":[\"inspection completed\"]}",
+			want:    `{"findings":[],"evidence":["inspection completed"]}`,
+		},
+		{
+			name:    "balanced non-JSON braces and an open block before the result",
+			payload: "reasoning: { not json } and the guarded block opens with `func() {` here\n{\"findings\":[],\"evidence\":[\"inspection completed\"]}",
+			want:    `{"findings":[],"evidence":["inspection completed"]}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			extracted, decision, err := ExtractBoundedSingleJSONObject([]byte(test.payload), 4096)
+			if err != nil || decision != ArtifactAdmissionCompleted {
+				t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %q, %v; want completed", extracted, decision, err)
+			}
+			if got := string(extracted); got != test.want {
+				t.Fatalf("extracted = %q; want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestExtractBoundedSingleJSONObjectRefusesNestedObjectOfTruncatedPayload is
+// the fail-closed half of #4873: recovery must never admit a complete object
+// nested inside a payload that was cut mid-object.
+func TestExtractBoundedSingleJSONObjectRefusesNestedObjectOfTruncatedPayload(t *testing.T) {
+	payload := `{"subject_hash":"sha256:0","findings":[{"id":"R3-001","evidence":["ok"]}`
+	_, decision, err := ExtractBoundedSingleJSONObject([]byte(payload), 4096)
+	if err == nil || decision != ArtifactAdmissionIncomplete {
+		t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %v; want incomplete", decision, err)
+	}
+}

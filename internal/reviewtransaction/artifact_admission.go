@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"unicode"
@@ -715,6 +716,15 @@ func CanonicalReviewerResultPayload(subjectHash string, inspection ArtifactInspe
 	return append(payload, '\n'), nil
 }
 
+// jsonObjectCandidate is one complete JSON object found in a transport payload.
+type jsonObjectCandidate struct{ start, end int }
+
+// jsonObjectRecoveryAttemptLimit bounds the per-brace decode attempts a
+// recovery scan makes. The payload itself is already bounded by the caller's
+// result limit; this budget only keeps a pathological payload from turning
+// recovery into a second-order scan.
+const jsonObjectRecoveryAttemptLimit = 4096
+
 // ExtractBoundedSingleJSONObject accepts transport prose around exactly one
 // unambiguous JSON object. Multiple objects, an unterminated object, or a
 // payload outside the caller's bound fail closed with a classified decision.
@@ -722,8 +732,7 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 	if limit <= 0 || len(payload) == 0 || len(payload) > limit {
 		return nil, ArtifactAdmissionIncomplete, errors.New("reviewer payload is empty or exceeds the native bound")
 	}
-	type candidate struct{ start, end int }
-	candidates := []candidate{}
+	candidates := []jsonObjectCandidate{}
 	start, depth := -1, 0
 	inString, escaped := false, false
 	// The census below is what a truncated payload reports (issue #2791): a
@@ -768,10 +777,25 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 				var object map[string]json.RawMessage
 				fragment := bytes.TrimSpace(payload[start : index+1])
 				if json.Unmarshal(fragment, &object) == nil && object != nil {
-					candidates = append(candidates, candidate{start: start, end: index + 1})
+					candidates = append(candidates, jsonObjectCandidate{start: start, end: index + 1})
 				}
 				start = -1
 			}
+		}
+	}
+	if len(candidates) == 0 {
+		// Transport prose can leave a brace open before the result (#4873), and
+		// that makes the linear scan above swallow the complete object that
+		// follows. Recovery decodes each remaining brace start instead of
+		// trusting depth, while still refusing a payload cut mid-value.
+		recovered, truncated := recoverBoundedJSONObjectCandidates(payload)
+		switch {
+		case truncated:
+			// Fail closed below with the structural census as the diagnosis.
+		case len(recovered) > 1:
+			return nil, ArtifactAdmissionAmbiguous, errors.New("reviewer payload contains multiple JSON objects")
+		case len(recovered) == 1:
+			return append([]byte(nil), bytes.TrimSpace(payload[recovered[0].start:recovered[0].end])...), ArtifactAdmissionCompleted, nil
 		}
 	}
 	if depth != 0 || len(candidates) == 0 {
@@ -782,6 +806,51 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 	}
 	match := candidates[0]
 	return append([]byte(nil), bytes.TrimSpace(payload[match.start:match.end])...), ArtifactAdmissionCompleted, nil
+}
+
+// recoverBoundedJSONObjectCandidates decodes every brace start the linear
+// structural scan could not reach, using a strict JSON decoder that tracks
+// strings and escapes itself. It reports the complete objects it found and
+// whether the payload ended inside a value: a truncated payload must never
+// admit one of its own nested objects as the reviewer result.
+func recoverBoundedJSONObjectCandidates(payload []byte) ([]jsonObjectCandidate, bool) {
+	candidates := []jsonObjectCandidate{}
+	attempts := 0
+	for offset := nextJSONObjectStart(payload, 0); offset >= 0; {
+		if attempts == jsonObjectRecoveryAttemptLimit {
+			return candidates, false
+		}
+		attempts++
+		decoder := json.NewDecoder(bytes.NewReader(payload[offset:]))
+		var object map[string]json.RawMessage
+		if err := decoder.Decode(&object); err != nil {
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return candidates, true
+			}
+			offset = nextJSONObjectStart(payload, offset+1)
+			continue
+		}
+		if object == nil {
+			offset = nextJSONObjectStart(payload, offset+1)
+			continue
+		}
+		end := offset + int(decoder.InputOffset())
+		candidates = append(candidates, jsonObjectCandidate{start: offset, end: end})
+		offset = nextJSONObjectStart(payload, end)
+	}
+	return candidates, false
+}
+
+// nextJSONObjectStart returns the next opening brace at or after from, or -1.
+func nextJSONObjectStart(payload []byte, from int) int {
+	if from >= len(payload) {
+		return -1
+	}
+	index := bytes.IndexByte(payload[from:], '{')
+	if index < 0 {
+		return -1
+	}
+	return from + index
 }
 
 // jsonStructuralCensus counts the structural tokens ExtractBoundedSingleJSONObject
