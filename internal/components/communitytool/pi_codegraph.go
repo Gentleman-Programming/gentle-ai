@@ -377,6 +377,14 @@ func reconcilePiMCP(path string, journal *piJournal, changed map[string]struct{}
 	changed[path] = struct{}{}
 	owned := journal.ownedFile(path, string(append(encoded, '\n')), false, false)
 	if upgrading && existing != nil {
+		if hashPiBytes(data) != existing.AfterHash {
+			// The file drifted after the install that recorded ownership
+			// (user edits on top of an older revision without exposure):
+			// keep the recorded ownership unchanged so a later uninstall
+			// reports the drift and preserves the file instead of silently
+			// restoring bytes the user no longer has.
+			return existing, nil
+		}
 		// An in-place exposure upgrade must not replace the before-image
 		// the original install recorded: uninstall has to restore the
 		// original user file, not this codegraph-bearing intermediate,

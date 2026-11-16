@@ -704,8 +704,8 @@ func TestPiCodeGraphMCPRuntimeClassification(t *testing.T) {
 			result, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: home, Selected: true})
 			result, err = communitytool.PreservePiCodeGraphPending(result, err)
 			if tc.pending {
-				if err != nil || len(result.ManualActions) != 1 {
-					t.Fatalf("result=%#v error=%v, want exactly one pending action", result, err)
+				if err != nil || len(result.ManualActions) != 0 {
+					t.Fatalf("result=%#v error=%v, want silent adapter-health pending without manual action", result, err)
 				}
 				return
 			}

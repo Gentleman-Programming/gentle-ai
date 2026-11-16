@@ -272,6 +272,50 @@ func TestPiCodeGraphReconcilePreservesExistingExposure(t *testing.T) {
 	}
 }
 
+// A drifted MCP config keeps its recorded ownership across an exposure
+// upgrade: uninstall must report drift and preserve the file instead of
+// silently restoring pre-drift bytes (CodeRabbit).
+func TestPiCodeGraphExposureUpgradeKeepsDriftedOwnershipForUninstall(t *testing.T) {
+	home := t.TempDir()
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+	writePiFile(t, mcpPath, `{"mcpServers":{"user":{"command":"user-server"}}}`)
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an older-revision install without exposure whose file the
+	// user edited afterwards: strip exposure and add another server.
+	var root map[string]any
+	if err := json.Unmarshal(mustReadPiFile(t, mcpPath), &root); err != nil {
+		t.Fatal(err)
+	}
+	delete(root["mcpServers"].(map[string]any)["codegraph"].(map[string]any), "exposure")
+	root["mcpServers"].(map[string]any)["extra"] = map[string]any{"command": "extra-server"}
+	stripped, err := json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePiFile(t, mcpPath, string(stripped))
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := UninstallPiCodeGraph(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted := false
+	for _, action := range result.ManualActions {
+		if strings.Contains(action, "drifted") {
+			drifted = true
+		}
+	}
+	if !drifted {
+		t.Fatalf("uninstall after drifted exposure upgrade = %#v, want drift preserved action", result)
+	}
+	if got := string(mustReadPiFile(t, mcpPath)); !strings.Contains(got, "extra-server") {
+		t.Fatalf("uninstall dropped the user edit from the drifted MCP config: %s", got)
+	}
+}
+
 func TestPiCodeGraphReconcileInjectsDirectExposureOnFreshInstall(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
