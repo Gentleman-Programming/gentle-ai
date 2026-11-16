@@ -323,7 +323,11 @@ function restore() {
     fs.mkdirSync(quarantine, { mode: 0o700 });
     // Same-filesystem renames preserve uncertain new evidence, not destructive rm.
     for (const entry of fs.readdirSync(target)) fs.renameSync(path.join(target, entry), path.join(quarantine, entry));
-    copyTree(saved, target);
+    // The live root keeps its confirmed dev:ino, so restore into it entry by
+    // entry; newer Node refuses fs.cp onto an existing directory with
+    // errorOnExist (ERR_FS_CP_EEXIST from node 24.22).
+    for (const entry of fs.readdirSync(saved)) copyTree(path.join(saved, entry), path.join(target, entry));
+    fs.chmodSync(target, fs.lstatSync(saved).mode & 0o777);
     if (inventory(target) !== expected) reject('restored tree differs');
   }
   console.log('Shared preimages restored; uncertain new evidence retained');
