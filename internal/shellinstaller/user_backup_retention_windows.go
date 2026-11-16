@@ -127,24 +127,13 @@ func userWindowsPruneReplacedBackups(destination, keep string) error {
 	keepName := filepath.Base(keep)
 	keepStamp := strings.TrimPrefix(keepName, prefix)
 
-	entries, err := os.ReadDir(filepath.Dir(destination))
+	candidates, err := userWindowsReplacedCandidates(destination)
 	if err != nil {
-		return fmt.Errorf("Windows replaced backups beside %q cannot be listed; preserved: %w", destination, err)
-	}
-	candidates := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		candidate := filepath.Join(filepath.Dir(destination), entry.Name())
-		if err := userWindowsReplacedSibling(destination, candidate); err != nil {
-			continue // unrelated base, wrong marker or noncanonical timestamp
-		}
-		candidates = append(candidates, candidate)
+		return err
 	}
 	if len(candidates) == 0 {
 		return nil
 	}
-	// Timestamps are the fixed-width canonical UTC layout, so lexical order is
-	// chronological order; the last candidate is the lexically latest.
-	sort.Strings(candidates)
 	latestName := filepath.Base(candidates[len(candidates)-1])
 	// Clock skew can date a candidate in the future. Compare the canonical
 	// timestamp strings rather than the full backup name against the bare keep
@@ -171,4 +160,28 @@ func userWindowsPruneReplacedBackups(destination, keep string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// userWindowsReplacedCandidates discovers the exact canonical replaced-backup
+// siblings of destination, sorted. Timestamps are the fixed-width canonical UTC
+// layout and every candidate shares the same directory and base, so lexical
+// order is chronological order and the last candidate is the lexically latest.
+// It is read-only and validates names only, never manifests; both the
+// automatic retention and the Manage listing/prune use it so they always agree
+// on the candidate set and the latest.
+func userWindowsReplacedCandidates(destination string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Dir(destination))
+	if err != nil {
+		return nil, fmt.Errorf("Windows replaced backups beside %q cannot be listed; preserved: %w", destination, err)
+	}
+	candidates := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		candidate := filepath.Join(filepath.Dir(destination), entry.Name())
+		if err := userWindowsReplacedSibling(destination, candidate); err != nil {
+			continue // unrelated base, wrong marker or noncanonical timestamp
+		}
+		candidates = append(candidates, candidate)
+	}
+	sort.Strings(candidates)
+	return candidates, nil
 }
