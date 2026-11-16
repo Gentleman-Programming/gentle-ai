@@ -899,6 +899,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 			paths[path] = struct{}{}
 		}
+		for _, path := range communitytool.ForeignPiCodeGraphBackupPaths(homeDir) {
+			paths[path] = struct{}{}
+		}
 	}
 	for _, path := range antigravityRulesBackupPaths(homeDir, workspaceDir, scope, selection.Agents) {
 		paths[path] = struct{}{}

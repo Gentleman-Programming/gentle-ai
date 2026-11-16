@@ -335,6 +335,51 @@ func TestPiCodeGraphReconcileInjectsDirectExposureOnFreshInstall(t *testing.T) {
 	}
 }
 
+func containsPiPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
+}
+
+// ForeignPiCodeGraphBackupPaths feeds sync rollback snapshots: it lists the
+// managed files of every registered foreign agent dir (Copilot).
+func TestForeignPiCodeGraphBackupPathsCoverRegisteredAgentDirs(t *testing.T) {
+	home := t.TempDir()
+	defaultMCP := filepath.Join(home, ".pi", "agent", "mcp.json")
+	shellAgentDir := filepath.Join(home, ".gentle-shell", "agent")
+	shellMCP := filepath.Join(shellAgentDir, "mcp.json")
+	canonical := `{ "mcpServers": { "codegraph": { "command": "codegraph", "args": [ "serve", "--mcp" ] } } }`
+	writePiFile(t, defaultMCP, canonical)
+	writePiFile(t, shellMCP, canonical)
+	shellResult, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, AgentDir: shellAgentDir, EffectiveMCPProbe: piProbeForTest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := ForeignPiCodeGraphBackupPaths(home)
+	if !containsPiPath(paths, shellMCP) {
+		t.Fatalf("foreign MCP config missing from backup paths: %v", paths)
+	}
+	shellManifest := ""
+	for _, file := range shellResult.Files {
+		if strings.HasPrefix(filepath.Base(file), "pi-codegraph") {
+			shellManifest = file
+		}
+	}
+	if shellManifest == "" || !containsPiPath(paths, shellManifest) {
+		t.Fatalf("foreign manifest missing from backup paths: %v", paths)
+	}
+	if containsPiPath(paths, defaultMCP) {
+		t.Fatalf("current-dir MCP config must come from PiCodeGraphPaths, not the foreign helper: %v", paths)
+	}
+	writePiFile(t, shellMCP, `{"mcpServers":{"codegraph":{"command":"other"}}}`)
+	if containsPiPath(ForeignPiCodeGraphBackupPaths(home), shellMCP) {
+		t.Fatal("unmanaged foreign dir included in backup paths")
+	}
+}
+
 func TestRefreshPiCodeGraphAdoptsCanonicalEntryWithoutManifest(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
@@ -551,6 +596,95 @@ func TestPiCodeGraphUninstallPreservesPreexistingMarkedUserChildWithoutManifest(
 	}
 	if got := string(mustReadPiFile(t, childPath)); got != preexisting {
 		t.Fatalf("preexisting marked user child = %q, want exact before-image %q", got, preexisting)
+	}
+}
+
+// Deselection must remove the integration from every registered Pi agent
+// directory, not only the current one (Copilot).
+func TestPiCodeGraphDeselectionRemovesAllRegisteredAgentDirs(t *testing.T) {
+	home := t.TempDir()
+	defaultMCP := filepath.Join(home, ".pi", "agent", "mcp.json")
+	shellAgentDir := filepath.Join(home, ".gentle-shell", "agent")
+	shellMCP := filepath.Join(shellAgentDir, "mcp.json")
+	canonical := `{ "mcpServers": { "codegraph": { "command": "codegraph", "args": [ "serve", "--mcp" ] } } }`
+	writePiFile(t, defaultMCP, canonical)
+	writePiFile(t, shellMCP, canonical)
+	defaultResult, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shellResult, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, AgentDir: shellAgentDir, EffectiveMCPProbe: piProbeForTest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed {
+		t.Fatal("deselection changed nothing")
+	}
+	for _, mcp := range []string{defaultMCP, shellMCP} {
+		if got := string(mustReadPiFile(t, mcp)); got != canonical {
+			t.Fatalf("deselection left %s installed: %s", mcp, got)
+		}
+	}
+	for _, install := range [][]string{defaultResult.Files, shellResult.Files} {
+		for _, file := range install {
+			if !strings.HasPrefix(filepath.Base(file), "pi-codegraph") {
+				continue
+			}
+			if _, statErr := os.Stat(file); !os.IsNotExist(statErr) {
+				t.Fatalf("manifest %s survived deselection", file)
+			}
+		}
+	}
+}
+
+// A drifted foreign config is preserved with a manual action on deselection:
+// the all-directory uninstall keeps the per-directory drift contract.
+func TestPiCodeGraphDeselectionPreservesDriftedForeignAgentDir(t *testing.T) {
+	home := t.TempDir()
+	defaultMCP := filepath.Join(home, ".pi", "agent", "mcp.json")
+	shellAgentDir := filepath.Join(home, ".gentle-shell", "agent")
+	shellMCP := filepath.Join(shellAgentDir, "mcp.json")
+	canonical := `{ "mcpServers": { "codegraph": { "command": "codegraph", "args": [ "serve", "--mcp" ] } } }`
+	writePiFile(t, defaultMCP, canonical)
+	writePiFile(t, shellMCP, canonical)
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, AgentDir: shellAgentDir, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(mustReadPiFile(t, shellMCP), &root); err != nil {
+		t.Fatal(err)
+	}
+	root["mcpServers"].(map[string]any)["extra"] = map[string]any{"command": "extra-server"}
+	edited, err := json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePiFile(t, shellMCP, string(edited))
+	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted := false
+	for _, action := range result.ManualActions {
+		if strings.Contains(action, "drifted") {
+			drifted = true
+		}
+	}
+	if !drifted {
+		t.Fatalf("deselection = %#v, want drift preserved action for the foreign dir", result)
+	}
+	if got := string(mustReadPiFile(t, shellMCP)); !strings.Contains(got, "extra-server") {
+		t.Fatalf("deselection dropped the foreign user edit: %s", got)
+	}
+	if got := string(mustReadPiFile(t, defaultMCP)); got != canonical {
+		t.Fatalf("current dir was not uninstalled: %s", got)
 	}
 }
 

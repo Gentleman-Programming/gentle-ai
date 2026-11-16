@@ -199,7 +199,7 @@ type piCodeGraphOwnedFile struct {
 // gentle-pi package paths; package children are copied into a Pi overlay.
 func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult, err error) {
 	if !options.Selected {
-		return UninstallPiCodeGraph(options.HomeDir)
+		return UninstallAllPiCodeGraph(options.HomeDir)
 	}
 	paths := piagent.CodeGraphPaths(options.HomeDir)
 	if options.AgentDir != "" {
@@ -887,10 +887,36 @@ func RefreshAllPiCodeGraphIfConfigured(homeDir, workspaceDir string) (PiCodeGrap
 	if err != nil {
 		return result, configured, err
 	}
+	err = forEachForeignPiCodeGraphAgentDir(homeDir, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
+		foreign, foreignErr := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: homeDir, WorkspaceDir: workspaceDir, Selected: true, AgentDir: agentDir})
+		if foreignErr != nil {
+			return foreignErr
+		}
+		configured = true
+		result.Changed = result.Changed || foreign.Changed
+		result.Files = append(result.Files, foreign.Files...)
+		result.Children = append(result.Children, foreign.Children...)
+		result.ManualActions = append(result.ManualActions, foreign.ManualActions...)
+		return nil
+	})
+	if err != nil {
+		return result, configured, err
+	}
+	slices.Sort(result.Files)
+	result.Files = slices.Compact(result.Files)
+	return result, configured, nil
+}
+
+// forEachForeignPiCodeGraphAgentDir invokes visit for every foreign agent
+// directory registered by a pi-codegraph*.json manifest in the state dir
+// whose recorded mcpPath still holds a canonical codegraph entry. It mirrors
+// the refresh guards so callers never act on a directory Gentle AI is not
+// managing, and stops at the first error visit reports.
+func forEachForeignPiCodeGraphAgentDir(homeDir string, visit func(record piCodeGraphManifest, manifestPath, agentDir string) error) error {
 	current := piagent.CodeGraphPaths(homeDir)
 	manifests, err := filepath.Glob(filepath.Join(filepath.Dir(current.Manifest), "pi-codegraph*.json"))
 	if err != nil {
-		return result, configured, err
+		return err
 	}
 	for _, manifestPath := range manifests {
 		record, readErr := readPiCodeGraphManifest(manifestPath)
@@ -907,25 +933,77 @@ func RefreshAllPiCodeGraphIfConfigured(homeDir, workspaceDir string) (PiCodeGrap
 		if !hasAdoptablePiCodeGraphEntry(record.MCPPath) {
 			continue
 		}
-		foreign, foreignErr := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: homeDir, WorkspaceDir: workspaceDir, Selected: true, AgentDir: agentDir})
-		if foreignErr != nil {
-			return result, configured, foreignErr
+		if err := visit(record, manifestPath, agentDir); err != nil {
+			return err
 		}
-		configured = true
-		result.Changed = result.Changed || foreign.Changed
-		result.Files = append(result.Files, foreign.Files...)
-		result.Children = append(result.Children, foreign.Children...)
-		result.ManualActions = append(result.ManualActions, foreign.ManualActions...)
 	}
-	slices.Sort(result.Files)
-	result.Files = slices.Compact(result.Files)
-	return result, configured, nil
+	return nil
+}
+
+// ForeignPiCodeGraphBackupPaths returns the CodeGraph-managed files in every
+// foreign agent directory registered by a pi-codegraph*.json manifest: the
+// manifest itself, its recorded MCP config, and its recorded child overlays.
+// The sync refresh step may rewrite any of them, so rollback snapshots must
+// include them all. The current agent directory is intentionally excluded;
+// callers already snapshot it through PiCodeGraphPaths.
+func ForeignPiCodeGraphBackupPaths(homeDir string) []string {
+	var collected []string
+	err := forEachForeignPiCodeGraphAgentDir(homeDir, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
+		collected = append(collected, manifestPath, record.MCPPath)
+		for child := range record.Children {
+			collected = append(collected, child)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil
+	}
+	slices.Sort(collected)
+	return slices.Compact(collected)
 }
 
 // UninstallPiCodeGraph removes only manifest-owned entries. Drifted child files
 // are preserved and surfaced for manual review.
-func UninstallPiCodeGraph(homeDir string) (result PiCodeGraphResult, err error) {
-	paths := piagent.CodeGraphPaths(homeDir)
+func UninstallPiCodeGraph(homeDir string) (PiCodeGraphResult, error) {
+	return uninstallPiCodeGraphAt(piagent.CodeGraphPaths(homeDir))
+}
+
+func uninstallPiCodeGraphForAgent(homeDir, agentDir string) (PiCodeGraphResult, error) {
+	return uninstallPiCodeGraphAt(piagent.CodeGraphPathsForAgent(homeDir, agentDir))
+}
+
+// UninstallAllPiCodeGraph removes the CodeGraph integration from the current
+// agent directory and every foreign agent directory registered by a
+// pi-codegraph*.json manifest, restoring each directory from its own
+// before-images, so deselection never leaves a foreign directory installed.
+func UninstallAllPiCodeGraph(homeDir string) (PiCodeGraphResult, error) {
+	result, err := UninstallPiCodeGraph(homeDir)
+	if err != nil {
+		return result, err
+	}
+	err = forEachForeignPiCodeGraphAgentDir(homeDir, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
+		foreign, foreignErr := uninstallPiCodeGraphForAgent(homeDir, agentDir)
+		if foreignErr != nil {
+			return foreignErr
+		}
+		result.Changed = result.Changed || foreign.Changed
+		result.Files = append(result.Files, foreign.Files...)
+		result.Children = append(result.Children, foreign.Children...)
+		result.ManualActions = append(result.ManualActions, foreign.ManualActions...)
+		return nil
+	})
+	if err != nil {
+		return result, err
+	}
+	slices.Sort(result.Files)
+	result.Files = slices.Compact(result.Files)
+	return result, nil
+}
+
+// uninstallPiCodeGraphAt removes only manifest-owned entries for a single
+// agent directory. Drifted child files are preserved and surfaced for manual
+// review.
+func uninstallPiCodeGraphAt(paths piagent.CodeGraphPathSet) (result PiCodeGraphResult, err error) {
 	data, err := os.ReadFile(paths.Manifest)
 	if os.IsNotExist(err) {
 		return PiCodeGraphResult{}, nil
