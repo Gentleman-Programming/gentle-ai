@@ -704,8 +704,14 @@ func TestPiCodeGraphMCPRuntimeClassification(t *testing.T) {
 			result, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: home, Selected: true})
 			result, err = communitytool.PreservePiCodeGraphPending(result, err)
 			if tc.pending {
-				if err != nil || len(result.ManualActions) != 0 {
-					t.Fatalf("result=%#v error=%v, want silent adapter-health pending without manual action", result, err)
+				// Reconcile already converts an adapter-health pending internally
+				// (silent by owner decision), so the sentinel never crosses this
+				// boundary; the observable contract is a completed verification
+				// with no manual action. PreservePiCodeGraphPending stays in the
+				// chain to mirror the production pipeline step, and the verified
+				// fields keep an empty result from passing vacuously.
+				if err != nil || len(result.ManualActions) != 0 || !result.MCP.Adapter || !result.MCP.ReadOnlyExplore {
+					t.Fatalf("result=%#v error=%v, want verified silent outcome without manual action", result, err)
 				}
 				return
 			}
