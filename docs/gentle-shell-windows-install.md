@@ -35,6 +35,23 @@ already contains this unreleased installer.
 | Processes | Suspended child bound before resume; Job Object CPU/memory/process readback, inherited console, bounded cleanup |
 | Preservation | Isolated HOME/agent/config, caller CWD inherited; console modes saved/restored; personal PATH unchanged |
 
+## Replaced-backup retention
+
+A reconfigure that retires the installed tree renames it to a sibling
+`TARGET.replaced-<UTC>` backup (for example
+`C:\Users\...\gentle-shell.replaced-20260101T130000Z`) before publishing the
+replacement. After the new installation is published, verified and its
+launchers are confirmed, the installer bounds those backups to **one recent
+tree**: the backup it just created is always retained, and when the system
+clock has drifted the lexically latest candidate is retained as well, so clock
+skew never deletes the genuinely most recent tree. Every older candidate is
+removed only through the same positive validation as a single removal
+(canonical manifest, original active destination, current SID and physical
+identity, rechecked immediately before deletion). Unrelated folders, wrong
+markers and noncanonical timestamps are ignored; an invalid or uncertain
+candidate is preserved whole and reported. Retention failure is a warning and
+never retracts a valid installation.
+
 ## Persistent memory (Engram)
 
 Separate provisions Engram from the gentle-pi it installs, never from a

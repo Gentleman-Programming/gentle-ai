@@ -21,8 +21,10 @@ import (
 func moduleInstallFixture(t *testing.T) (base, configDir, dir string, modules []orchestratorModule) {
 	t.Helper()
 	modules = buildClaudeTestModules(t).modules
-	if len(modules) != 3 {
-		t.Fatalf("Claude bundle has %d modules, want 3", len(modules))
+	// harness-continuity S8 retired the delegation module (the Key Learnings
+	// ritual was its only fragment): the Claude bundle is writer plus skills.
+	if len(modules) != 2 || modules[0].name != "writer" || modules[1].name != "skills" {
+		t.Fatalf("Claude bundle modules = %d, want writer then skills", len(modules))
 	}
 	base = t.TempDir()
 	configDir = filepath.Join(base, "claude")
@@ -220,12 +222,11 @@ func TestOrchestratorModuleInstallUpdatesOwnedAndAdoptsIdentical(t *testing.T) {
 	writeModuleTestFile(t, ledger, moduleLedgerJSON(map[string]string{modules[0].file: managedownership.Hash([]byte("previous release\n"))}), 0o600)
 
 	install := runModuleInstall(t, configDir, modules)
-	if len(install.writes) != 2 {
-		t.Fatalf("writes = %d, want the owned update and the absent module only", len(install.writes))
+	if len(install.writes) != 1 {
+		t.Fatalf("writes = %d, want the owned update only", len(install.writes))
 	}
 	assertModuleFile(t, owned, modules[0].content, 0o600)
 	assertModuleFile(t, identical, modules[1].content, 0o640)
-	assertModuleFile(t, filepath.Join(dir, modules[2].file), modules[2].content, 0o644)
 	assertModuleFile(t, ledger, moduleLedgerJSON(moduleHashes(modules)), 0o600)
 }
 
@@ -252,23 +253,23 @@ func TestOrchestratorModuleInstallRejectsBeforeAnyWrite(t *testing.T) {
 		want    string
 	}{
 		{"modified owned module", func(t *testing.T, f *fixture) {
-			writeModuleTestFile(t, module(f, "delegation"), "user edit\n", 0o644)
-			ledger(t, f, moduleLedgerJSON(map[string]string{"orchestrator-delegation.md": managedownership.Hash([]byte("released\n"))}))
+			writeModuleTestFile(t, module(f, "writer"), "user edit\n", 0o644)
+			ledger(t, f, moduleLedgerJSON(map[string]string{"orchestrator-writer.md": managedownership.Hash([]byte("released\n"))}))
 		}, "modified or not owned"},
 		{"unowned module", func(t *testing.T, f *fixture) {
-			writeModuleTestFile(t, module(f, "writer"), "user file\n", 0o644)
+			writeModuleTestFile(t, module(f, "skills"), "user file\n", 0o644)
 		}, "modified or not owned"},
 		{"header-only module", func(t *testing.T, f *fixture) {
-			writeModuleTestFile(t, module(f, "delegation"), strings.SplitAfter(f.modules[0].content, "\n")[0], 0o644)
+			writeModuleTestFile(t, module(f, "writer"), strings.SplitAfter(f.modules[0].content, "\n")[0], 0o644)
 		}, "modified or not owned"},
 		{"module directory", func(t *testing.T, f *fixture) {
-			if err := os.MkdirAll(module(f, "delegation"), 0o755); err != nil {
+			if err := os.MkdirAll(module(f, "writer"), 0o755); err != nil {
 				t.Fatal(err)
 			}
 		}, "not a regular file"},
 		{"module symlink", func(t *testing.T, f *fixture) {
 			writeModuleTestFile(t, filepath.Join(f.base, "outside.md"), f.modules[0].content, 0o644)
-			link(t, filepath.Join(f.base, "outside.md"), module(f, "delegation"))
+			link(t, filepath.Join(f.base, "outside.md"), module(f, "writer"))
 		}, "not a regular file"},
 		{"unused known module symlink", func(t *testing.T, f *fixture) {
 			writeModuleTestFile(t, filepath.Join(f.base, "outside.md"), "user memory\n", 0o644)
@@ -284,7 +285,7 @@ func TestOrchestratorModuleInstallRejectsBeforeAnyWrite(t *testing.T) {
 			ledger(t, f, `{"version":1,"files":{"notes.md":"`+strings.Repeat("a", 64)+`"}}`)
 		}, "invalid ownership ledger entry"},
 		{"ledger bad hash", func(t *testing.T, f *fixture) {
-			ledger(t, f, `{"version":1,"files":{"orchestrator-delegation.md":"ABC"}}`)
+			ledger(t, f, `{"version":1,"files":{"orchestrator-writer.md":"ABC"}}`)
 		}, "invalid ownership ledger entry"},
 		{"module dir symlink", func(t *testing.T, f *fixture) {
 			if err := os.Mkdir(filepath.Join(f.base, "elsewhere"), 0o755); err != nil {
@@ -326,6 +327,8 @@ func TestOrchestratorModuleInstallRetiresOnlyOwnedUnusedAfterFinalize(t *testing
 	_, configDir, dir, modules := moduleInstallFixture(t)
 	module := func(name string) string { return filepath.Join(dir, orchestratorModuleFile(name)) }
 	writeModuleTestFile(t, module("memory"), "owned old memory\n", 0o644)
+	// An upgrade from a release that still shipped the delegation module.
+	writeModuleTestFile(t, module("delegation"), "owned old delegation\n", 0o644)
 	writeModuleTestFile(t, module("tracking"), "user edited tracking\n", 0o644)
 	writeModuleTestFile(t, module("prompts"), "user prompts\n", 0o644)
 	notes := filepath.Join(dir, "notes.md")
@@ -333,6 +336,7 @@ func TestOrchestratorModuleInstallRetiresOnlyOwnedUnusedAfterFinalize(t *testing
 	ledger := filepath.Join(dir, orchestratorModuleLedgerName)
 	writeModuleTestFile(t, ledger, moduleLedgerJSON(map[string]string{
 		"orchestrator-memory.md":       managedownership.Hash([]byte("owned old memory\n")),
+		"orchestrator-delegation.md":   managedownership.Hash([]byte("owned old delegation\n")),
 		"orchestrator-tracking.md":     managedownership.Hash([]byte("released tracking\n")),
 		"orchestrator-verification.md": managedownership.Hash([]byte("already gone\n")),
 	}), 0o644)
@@ -348,8 +352,10 @@ func TestOrchestratorModuleInstallRetiresOnlyOwnedUnusedAfterFinalize(t *testing
 	if err := install.finalize(); err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
-	if _, err := os.Lstat(module("memory")); !os.IsNotExist(err) {
-		t.Fatalf("owned unused module survived finalize: %v", err)
+	for _, name := range []string{"memory", "delegation"} {
+		if _, err := os.Lstat(module(name)); !os.IsNotExist(err) {
+			t.Fatalf("owned unused %s module survived finalize: %v", name, err)
+		}
 	}
 	assertModuleFile(t, module("tracking"), "user edited tracking\n", 0o644)
 	assertModuleFile(t, module("prompts"), "user prompts\n", 0o644)
@@ -394,7 +400,7 @@ func TestOrchestratorModuleInstallRestoreUndoesStageAndFinalize(t *testing.T) {
 		if err != nil {
 			t.Fatalf("prepare: %v", err)
 		}
-		late := filepath.Join(dir, modules[2].file)
+		late := filepath.Join(dir, modules[1].file)
 		writeModuleTestFile(t, late, "user file created after preflight\n", 0o644)
 		if err := install.stage(); err == nil || !strings.Contains(err.Error(), "mutation journal conflict") {
 			t.Fatalf("stage = %v, want a journal conflict on %s", err, late)
@@ -405,9 +411,6 @@ func TestOrchestratorModuleInstallRestoreUndoesStageAndFinalize(t *testing.T) {
 		assertModuleFile(t, owned, "previous release\n", 0o600)
 		assertModuleFile(t, late, "user file created after preflight\n", 0o644)
 		assertModuleFile(t, ledger, ledgerBody, 0o644)
-		if _, err := os.Lstat(filepath.Join(dir, modules[1].file)); !os.IsNotExist(err) {
-			t.Fatalf("restore kept a staged module: %v", err)
-		}
 	})
 }
 
@@ -425,17 +428,17 @@ func TestOrchestratorModuleInstallClassifiesCapturedBytes(t *testing.T) {
 		arrange      func(t *testing.T, dir string, modules []orchestratorModule)
 		want         string // prepare error; empty when the plan proceeds
 	}{
-		{"owned module", "orchestrator-delegation.md", func(t *testing.T, dir string, _ []orchestratorModule) {
-			writeModuleTestFile(t, filepath.Join(dir, "orchestrator-delegation.md"), "previous release\n", 0o644)
-			writeModuleTestFile(t, filepath.Join(dir, orchestratorModuleLedgerName), ownedLedger("orchestrator-delegation.md"), 0o644)
+		{"owned module", "orchestrator-writer.md", func(t *testing.T, dir string, _ []orchestratorModule) {
+			writeModuleTestFile(t, filepath.Join(dir, "orchestrator-writer.md"), "previous release\n", 0o644)
+			writeModuleTestFile(t, filepath.Join(dir, orchestratorModuleLedgerName), ownedLedger("orchestrator-writer.md"), 0o644)
 		}, "modified or not owned"},
-		{"absent module", "orchestrator-delegation.md", func(*testing.T, string, []orchestratorModule) {}, "modified or not owned"},
-		{"identical module", "orchestrator-delegation.md", func(t *testing.T, dir string, modules []orchestratorModule) {
+		{"absent module", "orchestrator-writer.md", func(*testing.T, string, []orchestratorModule) {}, "modified or not owned"},
+		{"identical module", "orchestrator-writer.md", func(t *testing.T, dir string, modules []orchestratorModule) {
 			writeModuleTestFile(t, filepath.Join(dir, modules[0].file), modules[0].content, 0o644)
 		}, "modified or not owned"},
 		{"ledger", orchestratorModuleLedgerName, func(t *testing.T, dir string, _ []orchestratorModule) {
-			writeModuleTestFile(t, filepath.Join(dir, "orchestrator-delegation.md"), "previous release\n", 0o644)
-			writeModuleTestFile(t, filepath.Join(dir, orchestratorModuleLedgerName), ownedLedger("orchestrator-delegation.md"), 0o644)
+			writeModuleTestFile(t, filepath.Join(dir, "orchestrator-writer.md"), "previous release\n", 0o644)
+			writeModuleTestFile(t, filepath.Join(dir, orchestratorModuleLedgerName), ownedLedger("orchestrator-writer.md"), 0o644)
 		}, "changed during preflight"},
 		{"owned unused module", "orchestrator-memory.md", func(t *testing.T, dir string, _ []orchestratorModule) {
 			writeModuleTestFile(t, filepath.Join(dir, "orchestrator-memory.md"), "previous release\n", 0o644)
