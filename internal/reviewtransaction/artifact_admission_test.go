@@ -952,14 +952,21 @@ func TestEvidenceReportsUnavailableInspectionPhrases(t *testing.T) {
 // object" and the collect slot was reoffered forever.
 func TestExtractBoundedSingleJSONObjectRecoversResultAfterReasoningProse(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		payload string
-		want    string
+		name      string
+		payload   string
+		want      string
+		ambiguous bool
 	}{
 		{
 			name:    "unbalanced brace in reasoning before the result",
 			payload: "reasoning: the guarded block opens with `if err != nil {` and never closes there\n{\"findings\":[],\"evidence\":[\"inspection completed\"]}",
 			want:    `{"findings":[],"evidence":["inspection completed"]}`,
+		},
+		{
+			name:      "two complete objects stay ambiguous after unbalanced prose",
+			payload:   "reasoning: `if err != nil {` never closes\n{\"findings\":[],\"evidence\":[\"first\"]}\n{\"findings\":[],\"evidence\":[\"second\"]}",
+			want:      "",
+			ambiguous: true,
 		},
 		{
 			name:    "balanced non-JSON braces and an open block before the result",
@@ -969,6 +976,12 @@ func TestExtractBoundedSingleJSONObjectRecoversResultAfterReasoningProse(t *test
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			extracted, decision, err := ExtractBoundedSingleJSONObject([]byte(test.payload), 4096)
+			if test.ambiguous {
+				if err == nil || decision != ArtifactAdmissionAmbiguous {
+					t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %q, %v; want ambiguous", extracted, decision, err)
+				}
+				return
+			}
 			if err != nil || decision != ArtifactAdmissionCompleted {
 				t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %q, %v; want completed", extracted, decision, err)
 			}
