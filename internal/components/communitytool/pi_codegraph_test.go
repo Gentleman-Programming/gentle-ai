@@ -225,6 +225,40 @@ func TestPiCodeGraphReconcileAddsDirectExposureWhenAbsent(t *testing.T) {
 	}
 }
 
+// An in-place exposure upgrade keeps the before-image recorded by the
+// original install: uninstall must restore the original user MCP config,
+// not the codegraph-bearing intermediate the upgrade started from.
+func TestPiCodeGraphExposureUpgradeKeepsOriginalBeforeForUninstall(t *testing.T) {
+	home := t.TempDir()
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+	original := `{"mcpServers":{"user":{"command":"user-server"}}}`
+	writePiFile(t, mcpPath, original)
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an install from an older revision: the entry exists without
+	// exposure while the manifest still records the original before-image.
+	var root map[string]any
+	if err := json.Unmarshal(mustReadPiFile(t, mcpPath), &root); err != nil {
+		t.Fatal(err)
+	}
+	delete(root["mcpServers"].(map[string]any)["codegraph"].(map[string]any), "exposure")
+	stripped, err := json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePiFile(t, mcpPath, string(stripped))
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UninstallPiCodeGraph(home); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustReadPiFile(t, mcpPath)); !strings.Contains(got, "user-server") || strings.Contains(got, `"codegraph"`) {
+		t.Fatalf("uninstall after exposure upgrade = %s, want the original MCP config", got)
+	}
+}
+
 func TestPiCodeGraphReconcilePreservesExistingExposure(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")

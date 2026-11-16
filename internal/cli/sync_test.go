@@ -2365,7 +2365,7 @@ func TestCodeGraphGuidanceSyncStepRefreshesOldMarkerWhenConfigured(t *testing.T)
 	if strings.Contains(text, "stale CodeGraph lifecycle guidance") {
 		t.Fatalf("stale guidance was not refreshed:\n%s", text)
 	}
-	if !strings.Contains(text, "immediately run `gentle-ai codegraph init --cwd <project-root>`") || !strings.Contains(text, "custom notes") {
+	if !strings.Contains(text, "Codegraph comes first") || !strings.Contains(text, "custom notes") {
 		t.Fatalf("latest guidance/user content missing after sync refresh:\n%s", text)
 	}
 	if !reflect.DeepEqual(changed, []string{settingsPath, agentsPath}) {
@@ -2690,7 +2690,7 @@ func TestCodeGraphGuidanceSyncStepRemovesLegacySkipBlockWhenConfigured(t *testin
 			t.Fatalf("legacy CodeGraph guidance %q was not removed during sync:\n%s", stale, text)
 		}
 	}
-	if !strings.Contains(text, "immediately run `gentle-ai codegraph init --cwd <project-root>`") || !strings.Contains(text, "custom notes") {
+	if !strings.Contains(text, "Codegraph comes first") || !strings.Contains(text, "custom notes") {
 		t.Fatalf("latest guidance/user content missing after sync cleanup:\n%s", text)
 	}
 	if !reflect.DeepEqual(changed, []string{settingsPath, agentsPath}) {
@@ -2731,7 +2731,7 @@ func TestCodeGraphGuidanceSyncStepRepairsCodexConfigOnlyGuidance(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
 	}
 	text := string(body)
-	for _, want := range []string{"<!-- gentle-ai:codegraph-guidance -->", "immediately run `gentle-ai codegraph init --cwd <project-root>`"} {
+	for _, want := range []string{"<!-- gentle-ai:codegraph-guidance -->", "Codegraph comes first"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("Codex AGENTS.md missing managed CodeGraph guidance %q:\n%s", want, text)
 		}
@@ -2894,7 +2894,7 @@ func TestComponentSyncStepInjectsCodeGraphGuidanceWhenCodeGraphSelected(t *testi
 	if err != nil {
 		t.Fatalf("read CodeGraph guidance: %v", err)
 	}
-	if !bytes.Contains(guidance, []byte("gentle-ai:codegraph-guidance")) || !bytes.Contains(guidance, []byte("gentle-ai codegraph init --cwd <project-root>")) {
+	if !bytes.Contains(guidance, []byte("gentle-ai:codegraph-guidance")) || !bytes.Contains(guidance, []byte("Codegraph comes first")) {
 		t.Fatalf("missing retained CodeGraph guidance: %s", guidance)
 	}
 }

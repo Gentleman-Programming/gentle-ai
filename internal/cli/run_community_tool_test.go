@@ -392,8 +392,8 @@ func TestPiCodeGraphPendingClassification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			result, err := communitytool.PreservePiCodeGraphPending(communitytool.PiCodeGraphResult{}, tc.err)
 			if tc.pending {
-				if err != nil || len(result.ManualActions) != 1 || !strings.Contains(result.ManualActions[0], "pending") {
-					t.Fatalf("result=%#v error=%v, want exactly one pending action", result, err)
+				if err != nil || len(result.ManualActions) != 0 {
+					t.Fatalf("result=%#v error=%v, want silent adapter-health pending without manual action", result, err)
 				}
 				return
 			}
@@ -488,8 +488,8 @@ func TestNativeReviewCodeGraphGuidanceMarkdownOnlyWhenSelected(t *testing.T) {
 				}
 				return
 			}
-			if !strings.Contains(got, "gentle-ai codegraph init --cwd <project-root>") {
-				t.Fatalf("CodeGraph guidance missing search-order rule:\n%s", got)
+			if !strings.Contains(got, "Codegraph comes first") {
+				t.Fatalf("CodeGraph guidance missing codegraph-first rule:\n%s", got)
 			}
 		})
 	}
@@ -754,7 +754,7 @@ func assertOpenCodeSharedPromptCodeGraphGuidance(t *testing.T, home string, want
 	if !strings.Contains(text, "user-owned OpenCode instructions") {
 		t.Fatalf("user-owned OpenCode guidance was overwritten: %s", text)
 	}
-	hasGuidance := strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") && strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>")
+	hasGuidance := strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") && strings.Contains(text, "Codegraph comes first")
 	if hasGuidance != want {
 		t.Fatalf("CodeGraph guidance present = %v, want %v in %s", hasGuidance, want, promptPath)
 	}

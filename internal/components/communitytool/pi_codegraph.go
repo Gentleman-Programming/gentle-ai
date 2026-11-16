@@ -355,6 +355,7 @@ func reconcilePiMCP(path string, journal *piJournal, changed map[string]struct{}
 		root["mcpServers"] = servers
 	}
 	desired := map[string]any{"command": "codegraph", "args": []any{"serve", "--mcp"}, "exposure": "direct"}
+	upgrading := false
 	if entry, found := servers["codegraph"]; found {
 		if !equivalentPiMCP(entry) {
 			return existing, fmt.Errorf("misconfigured Pi CodeGraph MCP entry at %q; Gentle AI will not overwrite it", path)
@@ -365,6 +366,7 @@ func reconcilePiMCP(path string, journal *piJournal, changed map[string]struct{}
 			return existing, nil
 		}
 		server["exposure"] = "direct"
+		upgrading = true
 	} else {
 		servers["codegraph"] = desired
 	}
@@ -374,6 +376,20 @@ func reconcilePiMCP(path string, journal *piJournal, changed map[string]struct{}
 	}
 	changed[path] = struct{}{}
 	owned := journal.ownedFile(path, string(append(encoded, '\n')), false, false)
+	if upgrading && existing != nil {
+		// An in-place exposure upgrade must not replace the before-image
+		// the original install recorded: uninstall has to restore the
+		// original user file, not this codegraph-bearing intermediate,
+		// so carry the original snapshot forward.
+		if existing.Before == nil {
+			owned.Before = nil
+		} else {
+			before := *existing.Before
+			owned.Before = &before
+		}
+		owned.Mode = existing.Mode
+		owned.Adopted = existing.Adopted
+	}
 	return &owned, nil
 }
 
