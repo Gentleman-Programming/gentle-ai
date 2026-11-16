@@ -1002,3 +1002,23 @@ func TestExtractBoundedSingleJSONObjectRefusesNestedObjectOfTruncatedPayload(t *
 		t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %v; want incomplete", decision, err)
 	}
 }
+
+// TestExtractBoundedSingleJSONObjectRefusesRecoveryItCannotProve covers the two
+// ways the recovery pass can fail to prove a single result: a nested object of
+// a malformed wrapper that does not close out the payload, and a brace budget
+// that expires before every brace was examined.
+func TestExtractBoundedSingleJSONObjectRefusesRecoveryItCannotProve(t *testing.T) {
+	malformedWrapper := `{"wrapper":!,"result":{"findings":[],"evidence":["nested"]}}`
+	exhaustedPayload := strings.Repeat("{x", jsonObjectRecoveryAttemptLimit) + `{"findings":[],"evidence":["first"]}{"findings":[],"evidence":["second"]}`
+	for _, test := range []struct{ name, payload string }{
+		{name: "nested object of a malformed wrapper", payload: malformedWrapper},
+		{name: "attempt budget exhausted before every brace", payload: exhaustedPayload},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, decision, err := ExtractBoundedSingleJSONObject([]byte(test.payload), len(test.payload)+1)
+			if err == nil || decision != ArtifactAdmissionIncomplete {
+				t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %v; want incomplete", decision, err)
+			}
+		})
+	}
+}

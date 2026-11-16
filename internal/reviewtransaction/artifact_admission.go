@@ -787,14 +787,18 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 		// Transport prose can leave a brace open before the result (#4873), and
 		// that makes the linear scan above swallow the complete object that
 		// follows. Recovery decodes each remaining brace start instead of
-		// trusting depth, while still refusing a payload cut mid-value.
-		recovered, truncated := recoverBoundedJSONObjectCandidates(payload)
+		// trusting depth, and only admits a result it can prove unique: the
+		// payload must not be cut mid-value, the attempt budget must have
+		// covered every brace, and the object must close out the payload. A
+		// nested object of a malformed or truncated wrapper therefore stays
+		// refused instead of being admitted as the reviewer result.
+		recovered, truncated, exhausted := recoverBoundedJSONObjectCandidates(payload)
 		switch {
-		case truncated:
+		case truncated || exhausted:
 			// Fail closed below with the structural census as the diagnosis.
 		case len(recovered) > 1:
 			return nil, ArtifactAdmissionAmbiguous, errors.New("reviewer payload contains multiple JSON objects")
-		case len(recovered) == 1:
+		case len(recovered) == 1 && len(bytes.TrimSpace(payload[recovered[0].end:])) == 0:
 			return append([]byte(nil), bytes.TrimSpace(payload[recovered[0].start:recovered[0].end])...), ArtifactAdmissionCompleted, nil
 		}
 	}
@@ -810,22 +814,22 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 
 // recoverBoundedJSONObjectCandidates decodes every brace start the linear
 // structural scan could not reach, using a strict JSON decoder that tracks
-// strings and escapes itself. It reports the complete objects it found and
-// whether the payload ended inside a value: a truncated payload must never
+// strings and escapes itself. It reports the complete objects it found, and
+// whether it could not finish the scan: a payload that ended inside a value
+// (truncated) or one whose attempt budget ran out (exhausted) must never
 // admit one of its own nested objects as the reviewer result.
-func recoverBoundedJSONObjectCandidates(payload []byte) ([]jsonObjectCandidate, bool) {
-	candidates := []jsonObjectCandidate{}
+func recoverBoundedJSONObjectCandidates(payload []byte) (candidates []jsonObjectCandidate, truncated, exhausted bool) {
 	attempts := 0
 	for offset := nextJSONObjectStart(payload, 0); offset >= 0; {
 		if attempts == jsonObjectRecoveryAttemptLimit {
-			return candidates, false
+			return candidates, truncated, true
 		}
 		attempts++
 		decoder := json.NewDecoder(bytes.NewReader(payload[offset:]))
 		var object map[string]json.RawMessage
 		if err := decoder.Decode(&object); err != nil {
 			if errors.Is(err, io.ErrUnexpectedEOF) {
-				return candidates, true
+				return candidates, true, false
 			}
 			offset = nextJSONObjectStart(payload, offset+1)
 			continue
@@ -838,7 +842,7 @@ func recoverBoundedJSONObjectCandidates(payload []byte) ([]jsonObjectCandidate, 
 		candidates = append(candidates, jsonObjectCandidate{start: offset, end: end})
 		offset = nextJSONObjectStart(payload, end)
 	}
-	return candidates, false
+	return candidates, false, false
 }
 
 // nextJSONObjectStart returns the next opening brace at or after from, or -1.
