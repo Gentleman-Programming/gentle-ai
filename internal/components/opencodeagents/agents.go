@@ -130,6 +130,7 @@ var releasedPromptEdits = map[string][][2]string{
 		{"decision owner can approve, decline, or select from, and never ask anyone", "human can approve, decline, or select from, and never ask the human"},
 		{"each with its reason, and ask the parent to approve that list, narrow it, or route it to the human.", "and ask the human to approve that list or name which entries to drop."},
 		{"text, or unchanged file contents.", "text, or unchanged file contents. Any requested `## Key Learnings` block follows it."},
+		{"never looping. Name in `summary` the loop's diagnosed cause (for example a wrong test, a wrong hypothesis, missing context, a setup or environment error, or a real blocker). Exhaustion ends this cycle, not the unit: the parent decides the next step from your evidence. Making a new test fail for the expected reason is RED construction, not a fix correction: its own harness or setup errors get the setup bound (one self-fix), separate from the fix's limit; if the test still cannot reproduce the failure, return `status: partial` naming a reproduction blocker, not exhausted corrections.", "never looping."},
 	},
 	"gentle-ai-verify": {
 		{"probe regression tests follow it.", "probe regression tests, then any requested `## Key Learnings` block, follow it."},
