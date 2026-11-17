@@ -16,10 +16,13 @@ function Get-Sha256($Certificate) {
 }
 
 function Invoke-Case($Name, $Directory, $Fingerprint, $ExpectedError) {
+    Write-Output "PROGRESS case start: $Name"
     $stdout = Join-Path $root 'stdout.txt'
     $stderr = Join-Path $root 'stderr.txt'
+    Write-Output "PROGRESS child start: $Name"
     & $pwsh -NoProfile -NonInteractive -File $verifier -Directory $Directory -ExpectedCertificateSha256 $Fingerprint > $stdout 2> $stderr
     $code = $LASTEXITCODE
+    Write-Output "PROGRESS child end: $Name"
     $out = [IO.File]::ReadAllText($stdout).TrimEnd("`r", "`n")
     $err = [IO.File]::ReadAllText($stderr).TrimEnd("`r", "`n")
     if ($ExpectedError) {
@@ -29,6 +32,7 @@ function Invoke-Case($Name, $Directory, $Fingerprint, $ExpectedError) {
         throw "$Name failed assertion: exit=$code stdout=[$out] stderr=[$err]"
     }
     Write-Output "PASS $Name"
+    Write-Output "PROGRESS case end: $Name"
 }
 
 function New-CaseDirectory($Name, $Source) {
@@ -41,15 +45,19 @@ function New-CaseDirectory($Name, $Source) {
 try {
     New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
     foreach ($name in @('signer', 'other')) {
+        Write-Output "PROGRESS certificate start: $name"
         $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=SignPath disposable $name $([guid]::NewGuid())" -CertStoreLocation 'Cert:\CurrentUser\My' -KeyExportPolicy NonExportable -NotAfter (Get-Date).AddDays(1)
         $certificates += $certificate
+        Write-Output "PROGRESS certificate end: $name"
     }
     $fingerprint = Get-Sha256 $certificates[0]
     $otherFingerprint = Get-Sha256 $certificates[1]
     $signed = New-CaseDirectory 'signed' $UnsignedDirectory
     foreach ($file in Get-ChildItem -LiteralPath $signed -Filter '*.exe') {
+        Write-Output "PROGRESS signing start: $($file.Name)"
         $signature = Set-AuthenticodeSignature -LiteralPath $file.FullName -Certificate $certificates[0] -HashAlgorithm SHA256
         if ($null -eq $signature.SignerCertificate) { throw 'Fixture signing failed' }
+        Write-Output "PROGRESS signing end: $($file.Name)"
     }
 
     Invoke-Case 'intact' $signed $fingerprint ''
