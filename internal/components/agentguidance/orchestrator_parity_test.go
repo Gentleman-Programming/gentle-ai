@@ -308,7 +308,7 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 				"**Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers",
 				"A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one.",
 				// harness-continuity S6: what stays open ends the unit partial.
-				"Blockers still open after that, and a writer's self-review under the same bound, leave the unit `status: partial`, naming any genuine human decision; independent authorized work continues.",
+				"Blockers still open after that leave the unit `status: partial`, naming any genuine human decision; independent authorized work continues.",
 				// S6 test discipline reaches every handoff.
 				"the applicable test-first policy and runner from `## Implementation Routing`",
 				// S7 verify handoff.
