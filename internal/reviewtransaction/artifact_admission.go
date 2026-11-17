@@ -863,10 +863,35 @@ func nextJSONObjectStart(payload []byte, from int) int {
 // brace open before the result (#4873), and that brace says nothing about the
 // result. An attempted JSON object that never terminates is different: its
 // nested object is a fragment of that wrapper, never the reviewer result.
+//
+// Strings are tracked only inside a JSON-looking brace, because that is the
+// only place a string literal is grammatical. Prose quotes stay literal text,
+// so an unmatched quote in transport prose cannot hide a brace from the stack,
+// and a brace inside a JSON string value cannot move the stack either.
 func enclosingJSONObject(payload []byte, offset int) bool {
 	open := []bool{}
+	inString, escaped := false, false
 	for index := 0; index < offset; index++ {
-		switch payload[index] {
+		value := payload[index]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch value {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		insideJSONObject := len(open) > 0 && open[len(open)-1]
+		switch value {
+		case '"':
+			if insideJSONObject {
+				inString = true
+			}
 		case '{':
 			open = append(open, looksLikeJSONObjectStart(payload, index))
 		case '}':

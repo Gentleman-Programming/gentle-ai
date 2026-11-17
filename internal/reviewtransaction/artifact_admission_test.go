@@ -969,6 +969,11 @@ func TestExtractBoundedSingleJSONObjectRecoversResultAfterReasoningProse(t *test
 			ambiguous: true,
 		},
 		{
+			name:    "unmatched prose quote before an open prose brace",
+			payload: "reasoning: he said \"the block opens { and never closes\n{\"findings\":[],\"evidence\":[\"inspection completed\"]}",
+			want:    `{"findings":[],"evidence":["inspection completed"]}`,
+		},
+		{
 			name:    "balanced non-JSON braces and an open block before the result",
 			payload: "reasoning: { not json } and the guarded block opens with `func() {` here\n{\"findings\":[],\"evidence\":[\"inspection completed\"]}",
 			want:    `{"findings":[],"evidence":["inspection completed"]}`,
@@ -1014,6 +1019,7 @@ func TestExtractBoundedSingleJSONObjectRefusesRecoveryItCannotProve(t *testing.T
 	for _, test := range []struct{ name, payload string }{
 		{name: "nested object of a malformed wrapper", payload: malformedWrapper},
 		{name: "nested object of an unclosed malformed wrapper", payload: unclosedWrapper},
+		{name: "brace inside a wrapper string", payload: `{"wrapper":"}","bad":!,"result":{"findings":[],"evidence":["nested"]}`},
 		{name: "attempt budget exhausted before every brace", payload: exhaustedPayload},
 	} {
 		t.Run(test.name, func(t *testing.T) {
