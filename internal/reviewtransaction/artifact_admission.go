@@ -720,10 +720,16 @@ func CanonicalReviewerResultPayload(subjectHash string, inspection ArtifactInspe
 type jsonObjectCandidate struct{ start, end int }
 
 // jsonObjectRecoveryAttemptLimit bounds the per-brace decode attempts a
-// recovery scan makes. The payload itself is already bounded by the caller's
-// result limit; this budget only keeps a pathological payload from turning
-// recovery into a second-order scan.
-const jsonObjectRecoveryAttemptLimit = 4096
+// recovery scan makes, and jsonObjectRecoveryByteBudgetFactor bounds the
+// aggregate bytes those attempts may traverse. The payload itself is already
+// bounded by the caller's result limit; the two budgets keep a pathological
+// payload — many short brace starts in front of one long invalid suffix — from
+// turning recovery into a second-order scan, where each attempt rescans the
+// whole suffix.
+const (
+	jsonObjectRecoveryAttemptLimit     = 4096
+	jsonObjectRecoveryByteBudgetFactor = 16
+)
 
 // ExtractBoundedSingleJSONObject accepts transport prose around exactly one
 // unambiguous JSON object. Multiple objects, an unterminated object, or a
@@ -817,10 +823,12 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 // structural scan could not reach, using a strict JSON decoder that tracks
 // strings and escapes itself. It reports the complete objects it found, and
 // whether it could not finish the scan: a payload that ended inside a value
-// (truncated) or one whose attempt budget ran out (exhausted) must never
-// admit one of its own nested objects as the reviewer result.
+// (truncated) or one whose attempt or byte-work budget ran out (exhausted) must
+// never admit one of its own nested objects as the reviewer result.
 func recoverBoundedJSONObjectCandidates(payload []byte) (candidates []jsonObjectCandidate, truncated, exhausted bool) {
 	attempts := 0
+	work := 0
+	budget := jsonObjectRecoveryByteBudgetFactor * len(payload)
 	for offset := nextJSONObjectStart(payload, 0); offset >= 0; {
 		if attempts == jsonObjectRecoveryAttemptLimit {
 			return candidates, truncated, true
@@ -828,7 +836,12 @@ func recoverBoundedJSONObjectCandidates(payload []byte) (candidates []jsonObject
 		attempts++
 		decoder := json.NewDecoder(bytes.NewReader(payload[offset:]))
 		var object map[string]json.RawMessage
-		if err := decoder.Decode(&object); err != nil {
+		err := decoder.Decode(&object)
+		work += jsonObjectDecodeWork(decoder, err)
+		if work > budget {
+			return candidates, truncated, true
+		}
+		if err != nil {
 			if errors.Is(err, io.ErrUnexpectedEOF) {
 				return candidates, true, false
 			}
@@ -844,6 +857,20 @@ func recoverBoundedJSONObjectCandidates(payload []byte) (candidates []jsonObject
 		offset = nextJSONObjectStart(payload, end)
 	}
 	return candidates, false, false
+}
+
+// jsonObjectDecodeWork reports how many payload bytes one recovery decode
+// traversed. InputOffset stops at the last complete token, so a decode that
+// failed inside a long value reports its traversal through SyntaxError.Offset
+// instead; without that, repeated attempts could rescan the same suffix
+// without ever charging the byte budget.
+func jsonObjectDecodeWork(decoder *json.Decoder, err error) int {
+	work := int(decoder.InputOffset())
+	var syntaxError *json.SyntaxError
+	if errors.As(err, &syntaxError) && int(syntaxError.Offset) > work {
+		work = int(syntaxError.Offset)
+	}
+	return work
 }
 
 // nextJSONObjectStart returns the next opening brace at or after from, or -1.

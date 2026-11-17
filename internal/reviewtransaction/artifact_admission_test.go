@@ -997,6 +997,33 @@ func TestExtractBoundedSingleJSONObjectRecoversResultAfterReasoningProse(t *test
 	}
 }
 
+// TestRecoverBoundedJSONObjectCandidatesStopsOnByteBudget pins the aggregate
+// work bound: many short brace starts in front of one long invalid suffix make
+// every attempt rescan that suffix, so the attempt limit alone does not bound
+// the traversal.
+func TestRecoverBoundedJSONObjectCandidatesStopsOnByteBudget(t *testing.T) {
+	payload := []byte(strings.Repeat(`{"x":`, 64) + `"` + strings.Repeat("A", 1<<16) + `",!`)
+	candidates, truncated, exhausted := recoverBoundedJSONObjectCandidates(payload)
+	if truncated || !exhausted || len(candidates) != 0 {
+		t.Fatalf("recoverBoundedJSONObjectCandidates() = %d candidate(s), truncated=%v, exhausted=%v; want exhausted with no candidate", len(candidates), truncated, exhausted)
+	}
+}
+
+// TestExtractBoundedSingleJSONObjectKeepsRecoveringManyProseBraces is the other
+// half of the work bound: a long reasoning prefix with many prose braces is
+// cheap per attempt, so the byte budget must not starve the recovery the
+// change exists for.
+func TestExtractBoundedSingleJSONObjectKeepsRecoveringManyProseBraces(t *testing.T) {
+	payload := strings.Repeat("reasoning { prose ", 200) + `{"findings":[],"evidence":["inspection completed"]}`
+	extracted, decision, err := ExtractBoundedSingleJSONObject([]byte(payload), len(payload)+1)
+	if err != nil || decision != ArtifactAdmissionCompleted {
+		t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %q, %v; want completed", extracted, decision, err)
+	}
+	if got := string(extracted); got != `{"findings":[],"evidence":["inspection completed"]}` {
+		t.Fatalf("extracted = %q", got)
+	}
+}
+
 // TestExtractBoundedSingleJSONObjectRefusesNestedObjectOfTruncatedPayload is
 // the fail-closed half of #4873: recovery must never admit a complete object
 // nested inside a payload that was cut mid-object.
