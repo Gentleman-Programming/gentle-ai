@@ -64,7 +64,7 @@ func TestRenderedVerificationGateEndsOpenBlockersAsPartial(t *testing.T) {
 		for _, want := range []string{
 			"**Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker",
 			"A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one.",
-			"Blockers still open after that, and a writer's self-review under the same bound, " + openBlockersPartial,
+			"Blockers still open after that " + openBlockersPartial,
 			separateBudgets,
 		} {
 			if !strings.Contains(rendered, want) {
