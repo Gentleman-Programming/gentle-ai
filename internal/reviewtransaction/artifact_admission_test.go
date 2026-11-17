@@ -1009,9 +1009,11 @@ func TestExtractBoundedSingleJSONObjectRefusesNestedObjectOfTruncatedPayload(t *
 // that expires before every brace was examined.
 func TestExtractBoundedSingleJSONObjectRefusesRecoveryItCannotProve(t *testing.T) {
 	malformedWrapper := `{"wrapper":!,"result":{"findings":[],"evidence":["nested"]}}`
+	unclosedWrapper := `{"wrapper":!,"result":{"findings":[],"evidence":["nested"]}`
 	exhaustedPayload := strings.Repeat("{x", jsonObjectRecoveryAttemptLimit) + `{"findings":[],"evidence":["first"]}{"findings":[],"evidence":["second"]}`
 	for _, test := range []struct{ name, payload string }{
 		{name: "nested object of a malformed wrapper", payload: malformedWrapper},
+		{name: "nested object of an unclosed malformed wrapper", payload: unclosedWrapper},
 		{name: "attempt budget exhausted before every brace", payload: exhaustedPayload},
 	} {
 		t.Run(test.name, func(t *testing.T) {

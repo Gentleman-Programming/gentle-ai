@@ -789,16 +789,17 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 		// follows. Recovery decodes each remaining brace start instead of
 		// trusting depth, and only admits a result it can prove unique: the
 		// payload must not be cut mid-value, the attempt budget must have
-		// covered every brace, and the object must close out the payload. A
-		// nested object of a malformed or truncated wrapper therefore stays
-		// refused instead of being admitted as the reviewer result.
+		// covered every brace, the object must close out the payload, and no
+		// enclosing brace may begin like a JSON object. A nested object of a
+		// malformed or truncated wrapper therefore stays refused instead of
+		// being admitted as the reviewer result.
 		recovered, truncated, exhausted := recoverBoundedJSONObjectCandidates(payload)
 		switch {
 		case truncated || exhausted:
 			// Fail closed below with the structural census as the diagnosis.
 		case len(recovered) > 1:
 			return nil, ArtifactAdmissionAmbiguous, errors.New("reviewer payload contains multiple JSON objects")
-		case len(recovered) == 1 && len(bytes.TrimSpace(payload[recovered[0].end:])) == 0:
+		case len(recovered) == 1 && len(bytes.TrimSpace(payload[recovered[0].end:])) == 0 && !enclosingJSONObject(payload, recovered[0].start):
 			return append([]byte(nil), bytes.TrimSpace(payload[recovered[0].start:recovered[0].end])...), ArtifactAdmissionCompleted, nil
 		}
 	}
@@ -855,6 +856,47 @@ func nextJSONObjectStart(payload []byte, from int) int {
 		return -1
 	}
 	return from + index
+}
+
+// enclosingJSONObject reports whether offset sits inside a brace span whose
+// first non-space byte begins like a JSON object. Transport prose may leave a
+// brace open before the result (#4873), and that brace says nothing about the
+// result. An attempted JSON object that never terminates is different: its
+// nested object is a fragment of that wrapper, never the reviewer result.
+func enclosingJSONObject(payload []byte, offset int) bool {
+	open := []bool{}
+	for index := 0; index < offset; index++ {
+		switch payload[index] {
+		case '{':
+			open = append(open, looksLikeJSONObjectStart(payload, index))
+		case '}':
+			if len(open) > 0 {
+				open = open[:len(open)-1]
+			}
+		}
+	}
+	for _, jsonLike := range open {
+		if jsonLike {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeJSONObjectStart reports whether the brace at index is followed by a
+// JSON object key or immediate close, rather than by prose.
+func looksLikeJSONObjectStart(payload []byte, index int) bool {
+	for cursor := index + 1; cursor < len(payload); cursor++ {
+		switch payload[cursor] {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '"', '}':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // jsonStructuralCensus counts the structural tokens ExtractBoundedSingleJSONObject
