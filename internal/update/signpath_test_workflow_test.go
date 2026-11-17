@@ -221,18 +221,25 @@ func TestSignPathArtifactConfiguration(t *testing.T) {
 
 func TestSignPathVerifierIsFailClosed(t *testing.T) {
 	verifier := readRepositoryFile(t, "scripts", "verify-signpath-test.ps1")
-	for _, want := range []string{"Get-AuthenticodeSignature", "SignerCertificate", "SHA256", "RawData", "CurrentUser", "Root", "Valid", "finally", "0x8664", "0xAA64"} {
+	for _, want := range []string{"Get-AuthenticodeSignature", "SignerCertificate", "SHA256", "RawData", "HashMismatch", "NotTrusted", "CustomRootTrust", "CustomTrustStore", "NoCheck", "finally", "0x8664", "0xAA64", "SIGNPATH-STAGE"} {
 		if !strings.Contains(verifier, want) {
 			t.Errorf("verifier missing %q", want)
 		}
 	}
-	if strings.Contains(verifier, "LocalMachine") {
-		t.Error("verifier changes machine trust")
+	// The verifier must never touch a certificate store: store writes can block
+	// on a Windows trust-confirmation prompt in a non-interactive session.
+	for _, banned := range []string{"LocalMachine", "X509Store", "certutil", "Cert:\\", ".Remove("} {
+		if strings.Contains(verifier, banned) {
+			t.Errorf("verifier must not use %q", banned)
+		}
 	}
 	tests := readRepositoryFile(t, "scripts", "verify-signpath-test.tests.ps1")
-	for _, want := range []string{"tampered", "wrong signer", "unsigned", "missing", "extra", "architecture", "intact"} {
+	for _, want := range []string{"tampered", "wrong signer", "unsigned", "missing", "extra", "architecture", "intact", "WaitForExit", "Kill($true)", "timed out", "SIGNPATH-STAGE", "Verifier leaked trust anchor"} {
 		if !strings.Contains(tests, want) {
 			t.Errorf("native fixture coverage missing %q", want)
 		}
+	}
+	if strings.Contains(tests, "$store.Add(") {
+		t.Error("fixtures must not add trust anchors (can block on a Windows prompt)")
 	}
 }
