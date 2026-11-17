@@ -27,7 +27,16 @@ export default Plugin.define({
         await mkdir(directory, { recursive: true })
         temporary = `${destination}.${randomBytes(6).toString("hex")}.tmp`
         await writeFile(temporary, JSON.stringify(variants), { mode: 0o600 })
-        if (!abort.signal.aborted) await rename(temporary, destination)
+        // Windows rejects rename onto a destination a reader holds open (EPERM/EBUSY/EACCES);
+        // retry briefly so a concurrent reader cannot permanently stale the catalog.
+        for (let attempt = 0; !abort.signal.aborted; attempt++) {
+          try { await rename(temporary, destination); break }
+          catch (error) {
+            const code = (error as NodeJS.ErrnoException)?.code
+            if (attempt >= 50 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) throw error
+            await new Promise(resolve => setTimeout(resolve, 20))
+          }
+        }
       } catch { /* Catalog failure is unavailable coverage, never startup failure. */ }
       finally { if (temporary) await rm(temporary, { force: true }).catch(() => {}) }
     }
