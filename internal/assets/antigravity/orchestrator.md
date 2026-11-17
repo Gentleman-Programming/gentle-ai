@@ -23,11 +23,11 @@ When a sub-agent or tool returns a user-facing blocking prompt or menu, preserve
 
 #### Gentle AI Provider Defect Handoff (MANDATORY)
 
-Before losslessly relaying any blocking choice envelope, classify its semantic admissibility. **The test is what produced the failure, not what the work was doing when it happened.** When anything other than a Gentle AI invocation (its non-zero exit, typed envelope, refusal, or documented contract refusing) produced it, there is no report and no handoff: do not name the component you believe is responsible, suggest where else to file it, or ask; say plainly what blocked the work, then continue or stop as the workflow dictates. When a Gentle AI invocation produced it, read `_shared/provider-defect-report.md` from the runtime's installed skills directory and follow it before any report, consent prompt, or GitHub operation. If that file is not installed, file no report, open no consent prompt, and run no GitHub operation; tell the user the defect-report skill is not installed and keep the evidence.
+Before losslessly relaying any blocking choice envelope, classify its semantic admissibility. **The test is what produced the failure, not what the work was doing when it happened.** When anything other than a Gentle AI invocation (its non-zero exit, typed envelope, refusal, or documented contract refusing) produced it, there is no report and no handoff: do not name the component you believe is responsible, suggest where else to file it, or ask; say plainly what blocked the work, then continue or stop. When a Gentle AI invocation produced it, read `_shared/provider-defect-report.md` from the runtime's installed skills directory and follow it before any report, consent prompt, or GitHub operation. If that file is not installed, file no report, open no consent prompt, and run no GitHub operation; tell the user the defect-report skill is not installed and keep the evidence.
 
 ### Dynamic Delegation Protocol (MANDATORY)
 
-When `pi-bridge` is active (e.g. Gentle Shell), route all subagent delegation to `pi_subagent_run` on `pi-bridge` (models: `~/.pi/gentle-ai/models.json`). For eager MCP, call the registered direct `mcp_<serverName>_<toolName>` tool, or for lazy MCP `call_mcp_tool` with `ServerName: "pi-bridge"` and `ToolName: "pi_subagent_run"`. In Gentle Shell bridge mode, do NOT call `define_subagent` or `invoke_subagent`. Else, when `pi-bridge` is not active (native standalone Antigravity bounded ODD work), call `define_subagent` to create a general-purpose worker with a scoped mission, then `invoke_subagent` with the defined name. Pass edit surfaces, constraints, context, skills, and checks; enable needed MCPs. Verify edits and synthesize outcomes/risks. Max depth: 10.
+When `pi-bridge` is active, route all subagent delegation to `pi_subagent_run` on `pi-bridge` (models: `~/.pi/gentle-ai/models.json`). For eager MCP, call the registered direct `mcp_<serverName>_<toolName>` tool, or for lazy MCP `call_mcp_tool` with `ServerName: "pi-bridge"` and `ToolName: "pi_subagent_run"`. In Gentle Shell bridge mode, do NOT call `define_subagent` or `invoke_subagent`. Else, when `pi-bridge` is not active (native standalone Antigravity bounded ODD work), call `define_subagent` to create a general-purpose worker with a scoped mission, then `invoke_subagent` with the defined name. Pass edit surfaces, constraints, context, skills, and checks; enable needed MCPs. Verify edits and synthesize outcomes/risks. Max depth: 10.
 
 ### Language Domain Contract
 
@@ -35,7 +35,7 @@ When `pi-bridge` is active (e.g. Gentle Shell), route all subagent delegation to
 
 ### Delegation Rules
 
-These rules select execution topology, not the implementation method. Crossing a threshold selects **delegated direct** work. Implementation runs as **direct inline** or **delegated direct**; size, file count, or risk alone does not change the workflow.
+These rules select execution topology, not the implementation method. Crossing a threshold selects **delegated direct** work; size, file count, or risk alone does not change the workflow.
 
 Core principle: **does this inflate the parent context without need?** If yes, use one bounded worker. If no, do it inline.
 
@@ -51,18 +51,16 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 | Focused test and suite of the change being made | ✅ once each | — |
 | High-risk change, or long suites, builds, installs, or native review actions of a large task | — | ✅ independent verifier or fresh per-action worker |
 
-Use a dynamically defined, bounded general-purpose worker for delegated-direct work.
-
-Keep each delegated writer bounded, with a short synthesized handoff.
+Use a dynamically defined, bounded general-purpose worker for delegated-direct work, with a short synthesized handoff.
 
 #### Delegation Triggers
 
-These are parent-orchestrator routing boundaries. Each trigger holds only when its condition truly holds, and only then is it mandatory; no trigger holds by default, and when in doubt work inline. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
+These are parent-orchestrator routing boundaries. Each trigger holds only when its condition truly holds, and only then is it mandatory; no trigger holds by default, and when in doubt work inline. Use the smallest useful topology; keep safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
 1. **Evidence budget rule**: decide or verify inline with one parallel batch, at most 3 calls and approximately 10k tokens. Use bounded search/line ranges, not whole large files.
 2. **Mapping rule**: follow the always-on Work Routing Ladder's exploration rule below.
-   - Keep parent bash output bounded to counts, --stat, tail, or summaries. On a large task, delegate long suites and builds; return concise observed results, including failures.
-   - The approximately 150k parent-context backstop is advisory guidance, not mechanically observed or enforced. Pause and delegate the next bounded unit; do not claim runtime telemetry or enforcement.
+   - Keep parent bash output bounded to counts, --stat, tail, or summaries; on a large task, delegate long suites and builds and return concise observed results, including failures.
+   - The approximately 150k parent-context backstop is advisory, not enforced. Pause and delegate the next bounded unit; do not claim runtime telemetry or enforcement.
 3. **Write rule**: a small task's writes stay inline, even across files; delegate a writer only for a named reason: parallel units launched together in one turn (two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work: several files or roughly 100+ changed lines, because a subagent spends one to two minutes reading before it writes) or the context backstop. A unit is one independent piece of behavior with its code, tests, and docs together: never split one behavior into test, docs, and code writers, and a delivery that depends on another is not independent; several small independent changes run inline, one after another. Never for size, a large task alone, file count, or a price ratio; without a reason the parent writes inline, following its logbook. File count never fires this rule.
 4. **Context rule**: when the Write rule delegates a write, delegate reading that prepares a write together with it, plus broad research/context compression; an inline write reads inline, and never explore files you will read anyway before writing inline.
 5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route.
@@ -90,7 +88,7 @@ The canonical native bounded-review contract is injected from the shared provide
 
 #### Cost and Context Balance
 
-- Keep exploration, implementation, and verification concerns separated even when they run in one Antigravity conversation.
+- Keep exploration, implementation, and verification concerns separated even in one Antigravity conversation.
 - Do not interleave broad exploration with edits; parallel writers follow the **Parallel writers** rule under `## Implementation Routing`.
 - Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
 - Avoid extra ceremony for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
@@ -101,7 +99,7 @@ The canonical native bounded-review contract is injected from the shared provide
 
 Before launching any dynamic bounded worker across both delegation paths (`pi_subagent_run` or standalone `invoke_subagent`), check your launch log. The one-writer rule does not replace this check:
 
-- Track `(role, task-fingerprint)` pairs launched this turn (short summary/hash of the task).
+- Track `(role, task-fingerprint)` pairs launched this turn (short summary/hash).
 - If already tracked, **do NOT launch again**; emit one launch per distinct task, then append the pair.
 
 Prevents duplicate launches and stale-read conflicts.
