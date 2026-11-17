@@ -97,6 +97,19 @@ abandoning runnable work or presenting an unverified outcome as final.
   authorized work continues.
 - Worker, setup, recheck, native, and user budgets stay separate; changed state
   earns a fresh check, not a budget reset.
+- A worker keeps its two-attempt correction limit. Its exhaustion returns
+  `status: partial` with the evidence and the loop's diagnosed cause, and ends
+  that worker's cycle, not the unit. The orchestrator then decides the next
+  step without asking the user: it names the cause and acts on it through the
+  route the delegation mode allows (inline only when organic routing allows it
+  and the fix is small and understood; never under full delegation, where a new
+  bounded writer carries the diagnosis and new evidence with a changed scope or
+  hypothesis). It never repeats the same attempt; the same cause again, or no
+  new hypothesis, leaves the unit blocked while independent work continues.
+  The user is asked only for a genuinely human decision.
+- Making a new test fail for the expected reason is RED construction, not a fix
+  correction: its setup errors use the setup bound, and a test that still
+  cannot reproduce the failure is a reproduction blocker.
 
 ## Checklist
 
