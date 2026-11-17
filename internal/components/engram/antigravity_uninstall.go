@@ -324,7 +324,9 @@ func migrateOrReconcilePluginMCP(homeDir, dir string) ([]string, error) {
 		}
 		globalServers["engram"] = globalEngram
 	}
-	globalEngram["args"] = []any{"mcp", "--tools=agent"}
+	if globalEngram["args"] == nil {
+		globalEngram["args"] = []any{"mcp", "--tools=agent"}
+	}
 
 	// Check for env conflict without leaking env values in error messages (#5988).
 	if customEnv != nil {

@@ -99,7 +99,12 @@ func engramServerJSONWithCmd(cmd string) []byte {
 
 // engramOverlayJSON returns the settings overlay JSON (used for merge-into-settings
 // and MCPConfigFile strategies), with the resolved engram command.
-func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
+func engramOverlayJSON(agentID model.AgentID, cmd string, customArgs ...[]string) []byte {
+	args := []string{"mcp", "--tools=agent"}
+	if len(customArgs) > 0 && len(customArgs[0]) > 0 {
+		args = customArgs[0]
+	}
+
 	var cfg map[string]any
 	if agentID == model.AgentOpenCode || agentID == model.AgentKilocode {
 		// OpenCode 1.3.3+ requires command as an array for type:local servers.
@@ -111,11 +116,12 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 		// Without this, users upgrading from v1.11.3 (which had a separate
 		// "args" key) would end up with both "args" and the new array "command"
 		// in their config, which is invalid for OpenCode 1.3.3.
+		commandArray := append([]string{cmd}, args...)
 		cfg = map[string]any{
 			"mcp": map[string]any{
 				"engram": map[string]any{
 					"__replace__": map[string]any{
-						"command": []string{cmd, "mcp", "--tools=agent"},
+						"command": commandArray,
 						"type":    "local",
 					},
 				},
@@ -128,7 +134,7 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 					"engram": map[string]any{
 						"__replace__": map[string]any{
 							"command": cmd,
-							"args":    []string{"mcp", "--tools=agent"},
+							"args":    args,
 						},
 					},
 				},
@@ -139,7 +145,7 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 			"mcpServers": map[string]any{
 				"engram": map[string]any{
 					"command": cmd,
-					"args":    []string{"mcp", "--tools=agent"},
+					"args":    args,
 				},
 			},
 		}
@@ -345,7 +351,7 @@ func injectAntigravityMutationsUnderLock(configHomeDir, settingsPath, mcpPath st
 	}
 	// The engram command is read from the shared configs; resolve it under
 	// the lock so the merged config reflects the latest shared state.
-	engramCommand := stableAntigravityEngramCommand(configHomeDir, mcpPath)
+	engramCommand, preservedArgs := stableAntigravityEngramInvocation(configHomeDir, mcpPath)
 	changed := false
 	files := make([]string, 0, 4)
 	settingsWrite, settingsErr := ensureJSONFileIfMissing(settingsPath)
@@ -368,7 +374,10 @@ func injectAntigravityMutationsUnderLock(configHomeDir, settingsPath, mcpPath st
 	// cloud authentication and fails with "cannot get the signed-in user" in
 	// local/offline/ACP sessions. Merge engram directly into mcpPath alongside
 	// existing servers (e.g. context7).
-	overlay := engramOverlayJSON(model.AgentAntigravity, engramCommand)
+	//
+	// When reusing a preserved global launcher command from mcpPath, preserve
+	// any existing launcher arguments so wrappers are not stripped (#5988).
+	overlay := engramOverlayJSON(model.AgentAntigravity, engramCommand, preservedArgs)
 	baseJSON, readErr := osReadFile(mcpPath)
 	if readErr != nil {
 		return changed, files, readErr
@@ -994,6 +1003,21 @@ func stableEngramCommandForExisting(cmd string, _ model.AgentID) string {
 }
 
 func stableAntigravityEngramCommand(homeDir, globalPath string) string {
+	cmd, _ := stableAntigravityEngramInvocation(homeDir, globalPath)
+	return cmd
+}
+
+func shouldNormalizeEngramArgs(cmd string, args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	if isEngramCommand(cmd) && len(args) == 1 && args[0] == "mcp" {
+		return true
+	}
+	return false
+}
+
+func stableAntigravityEngramInvocation(homeDir, globalPath string) (string, []string) {
 	paths := []string{
 		globalPath,
 		filepath.Join(AntigravityPluginDir(homeDir), "mcp_config.json"),
@@ -1010,11 +1034,19 @@ func stableAntigravityEngramCommand(homeDir, globalPath string) string {
 		// even if its basename does not satisfy the managed-plugin check in isEngramCommand.
 		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok {
 			if (path == globalPath || isEngramCommand(cmd)) && engramCommandResolves(cmd) {
-				return stableEngramCommandForExisting(cmd, model.AgentAntigravity)
+				stableCmd := stableEngramCommandForExisting(cmd, model.AgentAntigravity)
+				if path == globalPath {
+					if existingArgs, hasArgs := existingMergedEngramArgs(raw, model.AgentAntigravity); hasArgs {
+						if !shouldNormalizeEngramArgs(cmd, existingArgs) {
+							return stableCmd, existingArgs
+						}
+					}
+				}
+				return stableCmd, nil
 			}
 		}
 	}
-	return preferredStableEngramCommand()
+	return preferredStableEngramCommand(), nil
 }
 
 // engramCommandResolves reports whether cmd can still be launched: a bare name
@@ -1043,6 +1075,53 @@ func preferredStableEngramCommand() string {
 	return "engram"
 }
 
+func existingMergedEngramServerMap(raw []byte, agentID model.AgentID) (map[string]any, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+
+	normalized, err := filemerge.MergeJSONObjects(raw, []byte("{}"))
+	if err != nil {
+		return nil, false
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(normalized, &root); err != nil {
+		return nil, false
+	}
+
+	var server any
+	switch agentID {
+	case model.AgentOpenCode:
+		server, _ = opencode.MCPEntry(root, "engram")
+	case model.AgentOpenClaw:
+		mcp, ok := root["mcp"].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		servers, ok := mcp["servers"].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		server = servers["engram"]
+	case model.AgentVSCodeCopilot:
+		servers, ok := root["servers"].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		server = servers["engram"]
+	default:
+		mcpServers, ok := root["mcpServers"].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		server = mcpServers["engram"]
+	}
+
+	serverMap, ok := server.(map[string]any)
+	return serverMap, ok
+}
+
 func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, bool) {
 	if len(raw) == 0 {
 		return "", false
@@ -1056,50 +1135,33 @@ func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, boo
 		return filemerge.ReadYAMLMCPServerCommand(string(raw), "engram")
 	}
 
-	normalized, err := filemerge.MergeJSONObjects(raw, []byte("{}"))
-	if err != nil {
-		return "", false
-	}
-
-	var root map[string]any
-	if err := json.Unmarshal(normalized, &root); err != nil {
-		return "", false
-	}
-
-	var server any
-	switch agentID {
-	case model.AgentOpenCode:
-		server, _ = opencode.MCPEntry(root, "engram")
-	case model.AgentOpenClaw:
-		mcp, ok := root["mcp"].(map[string]any)
-		if !ok {
-			return "", false
-		}
-		servers, ok := mcp["servers"].(map[string]any)
-		if !ok {
-			return "", false
-		}
-		server = servers["engram"]
-	case model.AgentVSCodeCopilot:
-		servers, ok := root["servers"].(map[string]any)
-		if !ok {
-			return "", false
-		}
-		server = servers["engram"]
-	default:
-		mcpServers, ok := root["mcpServers"].(map[string]any)
-		if !ok {
-			return "", false
-		}
-		server = mcpServers["engram"]
-	}
-
-	serverMap, ok := server.(map[string]any)
+	serverMap, ok := existingMergedEngramServerMap(raw, agentID)
 	if !ok {
 		return "", false
 	}
 
 	return executableFromCommandValue(serverMap["command"])
+}
+
+func existingMergedEngramArgs(raw []byte, agentID model.AgentID) ([]string, bool) {
+	serverMap, ok := existingMergedEngramServerMap(raw, agentID)
+	if !ok {
+		return nil, false
+	}
+	var args []string
+	if rawArgs, ok := serverMap["args"].([]any); ok {
+		for _, item := range rawArgs {
+			if s, ok := item.(string); ok {
+				args = append(args, s)
+			}
+		}
+	} else if strArgs, ok := serverMap["args"].([]string); ok {
+		args = strArgs
+	}
+	if len(args) == 0 {
+		return nil, false
+	}
+	return args, true
 }
 
 func executableFromCommandValue(command any) (string, bool) {

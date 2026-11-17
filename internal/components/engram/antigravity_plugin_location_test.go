@@ -1046,3 +1046,60 @@ func TestRetireManagedAntigravityPluginsStopsOnSymlinkMCP(t *testing.T) {
 		t.Fatalf("plugin.json must be preserved: %v", err)
 	}
 }
+
+func TestInjectAntigravityPreservesLauncherArgsWhenGlobalCommandKept(t *testing.T) {
+	home := t.TempDir()
+	globalMCP := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	if err := os.MkdirAll(filepath.Dir(globalMCP), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	launcherCmd := "/usr/bin/env"
+	if runtime.GOOS == "windows" {
+		launcherCmd = filepath.Join(t.TempDir(), "env.exe")
+		if err := os.WriteFile(launcherCmd, []byte(""), 0o755); err != nil {
+			t.Fatalf("WriteFile(env.exe) error = %v", err)
+		}
+	}
+	wantArgs := []string{"/opt/tools/engram", "mcp", "--tools=agent"}
+
+	globalContent := fmt.Sprintf(`{
+  "mcpServers": {
+    "engram": {
+      "command": %q,
+      "args": [%q, %q, %q]
+    }
+  }
+}
+`, launcherCmd, wantArgs[0], wantArgs[1], wantArgs[2])
+
+	if err := os.WriteFile(globalMCP, []byte(globalContent), 0o644); err != nil {
+		t.Fatalf("WriteFile(globalMCP) error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".gemini", "config", "settings.json")
+	if _, _, err := injectAntigravityOwnership(home, settingsPath, globalMCP); err != nil {
+		t.Fatalf("injectAntigravityOwnership error = %v", err)
+	}
+
+	data, err := os.ReadFile(globalMCP)
+	if err != nil {
+		t.Fatalf("ReadFile(globalMCP) error = %v", err)
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("Unmarshal(globalMCP) error = %v", err)
+	}
+	server := cfg.MCPServers["engram"]
+	if server.Command != launcherCmd {
+		t.Fatalf("command = %q, want %q", server.Command, launcherCmd)
+	}
+	if !slices.Equal(server.Args, wantArgs) {
+		t.Fatalf("args = %v, want preserved %v", server.Args, wantArgs)
+	}
+}
