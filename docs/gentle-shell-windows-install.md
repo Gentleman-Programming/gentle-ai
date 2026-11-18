@@ -52,6 +52,20 @@ markers and noncanonical timestamps are ignored; an invalid or uncertain
 candidate is preserved whole and reported. Retention failure is a warning and
 never retracts a valid installation.
 
+## Removed-backup retention
+
+An uninstall renames the installed tree to a sibling `TARGET.removed-<UTC>`
+backup and prunes it to the minimal retained set (config, agent, home,
+selection and manifest). The same one-tree bound applies: after the uninstall
+succeeds, the backup it just created is kept and every older `TARGET.removed-*`
+backup is removed. A removed backup is deleted only when it is an exact
+canonical sibling, a directory owned by the current account, carries a canonical
+manifest and selection for the original destination, and every top-level entry
+passes the owned-identity check, rechecked immediately before deletion. Replaced
+backups are a separate family and are never touched by this step. An uncertain
+older backup is preserved whole and reported; the uninstall itself is never
+undone.
+
 ## Persistent memory (Engram)
 
 Separate provisions Engram from the gentle-pi it installs, never from a
