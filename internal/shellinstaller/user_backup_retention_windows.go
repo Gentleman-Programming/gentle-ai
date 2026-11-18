@@ -74,12 +74,19 @@ func userWindowsReplacedBackupInspect(destination, backup string) (userWindowsMa
 }
 
 // userWindowsReplacedSibling refuses every path that is not an exact clean
-// absolute sibling of destination named <base>.replaced-<canonical UTC>. The
+// absolute sibling of destination named <base>.replaced-<canonical UTC>.
+func userWindowsReplacedSibling(destination, backup string) error {
+	return userWindowsBackupSibling(destination, backup, "replaced")
+}
+
+// userWindowsBackupSibling is the shared name validator for a retired tree of
+// the given kind ("replaced" or "removed"): the path must be an exact clean
+// absolute sibling of destination named <base>.<kind>-<canonical UTC>. The
 // timestamp must round-trip through the canonical UTC layout so a
 // close-looking name can never reach the installer's removal path.
-func userWindowsReplacedSibling(destination, backup string) error {
+func userWindowsBackupSibling(destination, backup, kind string) error {
 	refused := func(reason string) error {
-		return fmt.Errorf("Windows replaced backup %q %s; preserved", backup, reason)
+		return fmt.Errorf("Windows %s backup %q %s; preserved", kind, backup, reason)
 	}
 	if !filepath.IsAbs(destination) || filepath.Clean(destination) != destination {
 		return refused("targets a noncanonical active destination")
@@ -90,12 +97,13 @@ func userWindowsReplacedSibling(destination, backup string) error {
 	if filepath.Dir(backup) != filepath.Dir(destination) {
 		return refused("is not an exact sibling of the active destination")
 	}
+	marker := "." + kind + "-"
 	base := filepath.Base(destination)
 	name := filepath.Base(backup)
-	if name == base || !strings.HasPrefix(name, base+".replaced-") {
-		return refused("does not use the canonical replaced-backup name")
+	if name == base || !strings.HasPrefix(name, base+marker) {
+		return refused("does not use the canonical " + kind + "-backup name")
 	}
-	stamp := strings.TrimPrefix(name, base+".replaced-")
+	stamp := strings.TrimPrefix(name, base+marker)
 	parsed, err := time.Parse("20060102T150405Z", stamp)
 	if err != nil || parsed.Format("20060102T150405Z") != stamp {
 		return refused("carries a noncanonical UTC timestamp")
@@ -114,27 +122,39 @@ func userWindowsReplacedSibling(destination, backup string) error {
 // candidate is preserved whole and reported in a joined error, so cleanup is
 // best-effort and never retracts a valid installation.
 func userWindowsPruneReplacedBackups(destination, keep string) error {
-	if err := userWindowsReplacedSibling(destination, keep); err != nil {
+	return userWindowsPruneBackups(destination, keep, "replaced", func(destination, backup string) error {
+		_, err := userWindowsReplacedBackupInspect(destination, backup)
+		return err
+	}, userWindowsRemoveReplacedBackup)
+}
+
+// userWindowsPruneBackups is the retention policy shared by every retired-tree
+// family: it keeps the exact keep (and a clock-skewed latest) and removes every
+// other validated sibling of the same kind through remove, inspecting a
+// skew-retained candidate read-only through inspect.
+func userWindowsPruneBackups(destination, keep, kind string, inspect, remove func(destination, backup string) error) error {
+	sibling := func(destination, backup string) error { return userWindowsBackupSibling(destination, backup, kind) }
+	if err := sibling(destination, keep); err != nil {
 		return err
 	}
 	// The exact keep is the backup just created; nothing may be removed unless
 	// it is actually on disk. A missing keep refuses the whole prune before any
 	// candidate is touched.
 	if _, err := os.Lstat(keep); err != nil {
-		return fmt.Errorf("Windows replaced-backup keep %q is missing; preserved: %w", keep, err)
+		return fmt.Errorf("Windows %s-backup keep %q is missing; preserved: %w", kind, keep, err)
 	}
-	prefix := filepath.Base(destination) + ".replaced-"
+	prefix := filepath.Base(destination) + "." + kind + "-"
 	keepName := filepath.Base(keep)
 	keepStamp := strings.TrimPrefix(keepName, prefix)
 
 	entries, err := os.ReadDir(filepath.Dir(destination))
 	if err != nil {
-		return fmt.Errorf("Windows replaced backups beside %q cannot be listed; preserved: %w", destination, err)
+		return fmt.Errorf("Windows %s backups beside %q cannot be listed; preserved: %w", kind, destination, err)
 	}
 	candidates := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		candidate := filepath.Join(filepath.Dir(destination), entry.Name())
-		if err := userWindowsReplacedSibling(destination, candidate); err != nil {
+		if err := sibling(destination, candidate); err != nil {
 			continue // unrelated base, wrong marker or noncanonical timestamp
 		}
 		candidates = append(candidates, candidate)
@@ -161,11 +181,11 @@ func userWindowsPruneReplacedBackups(destination, keep string) error {
 			// Clock skew retained this candidate; it stays on disk but is still
 			// inspected read-only so an uncertain future tree is preserved whole
 			// and reported, never silently kept.
-			if _, err := userWindowsReplacedBackupInspect(destination, candidate); err != nil {
+			if err := inspect(destination, candidate); err != nil {
 				errs = append(errs, err)
 			}
 		default:
-			if err := userWindowsRemoveReplacedBackup(destination, candidate); err != nil {
+			if err := remove(destination, candidate); err != nil {
 				errs = append(errs, err)
 			}
 		}
