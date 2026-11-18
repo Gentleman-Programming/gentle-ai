@@ -823,6 +823,18 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 		fmt.Fprintln(os.Stderr, "Windows install phase: overlay-ready main")
 	}
+	if !scope.reused[UserComponentSDK] {
+		// Declaration files and source maps are never loaded at run time. Each
+		// file costs a real-time antivirus scan on first use, so dropping them
+		// shortens the first launch. Pruning is best effort and never fails the
+		// install.
+		phase("prune", "prefix")
+		if removed, err := userPruneNonRuntimeFiles(filepath.Join(stage, "prefix", "node_modules")); err != nil {
+			fmt.Fprintf(os.Stderr, "Windows install warning: prefix prune incomplete after %d files: %v\n", removed, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "Windows install phase: prefix pruned %d non-runtime files\n", removed)
+		}
+	}
 	if installed != nil && !scope.reused[UserComponentSDK] {
 		// A rebuilt agent must not look like a fresh installation to the
 		// operator: provider logins, sessions, project state and user models
