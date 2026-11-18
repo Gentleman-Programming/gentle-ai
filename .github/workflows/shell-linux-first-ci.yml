@@ -179,7 +179,7 @@ jobs:
           status=0
           worker gentle-lab-full /usr/bin/python3 -B /fixture/harness.py full >"$RUNNER_TEMP/user-guest.raw" 2>&1 || status=$?
           /usr/bin/python3 - "$RUNNER_TEMP/user-guest.raw" "$status" <<'PY'
-          import pathlib,sys,base64
+          import pathlib,sys,base64,json
           raw=pathlib.Path(sys.argv[1]).read_bytes()
           if len(raw)>=4096 or b'\0' in raw:
               # The whole output stays withheld. The harness's last line is its
@@ -191,6 +191,9 @@ jobs:
                   try:
                       last.decode('utf-8','strict')
                       print('GUEST-REPORT-BASE64:'+base64.b64encode(last).decode('ascii'))
+                      # Readable twin of the line above: JSON-escaped ASCII on one
+                      # prefixed line, so guest bytes can never forge a log command.
+                      print('GUEST-REPORT-TEXT:'+json.dumps(last.decode('utf-8'),ensure_ascii=True))
                   except UnicodeDecodeError:
                       pass
               raise SystemExit('STOP: entire Guest output withheld at byte/NUL bound')
