@@ -826,6 +826,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	// Declaration files and source maps are never loaded at run time. Each file
 	// costs a real-time antivirus scan on first use, so dropping them shortens
 	// the first launch. Best effort: only a cancelled context fails the install.
+	phase("prune", "prefix")
 	if err := userPrunePrefix(ctx, stage, scope.reused[UserComponentSDK], os.Stderr); err != nil {
 		return result, err
 	}

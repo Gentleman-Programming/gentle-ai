@@ -1,3 +1,5 @@
+//go:build windows
+
 package shellinstaller
 
 import (
@@ -57,30 +59,6 @@ func TestUserPruneNonRuntimeFilesRemovesOnlyTypesAndSourceMaps(t *testing.T) {
 	}
 }
 
-func TestUserPruneNonRuntimeFilesPreservesGentlePiTree(t *testing.T) {
-	root := t.TempDir()
-	// Main-channel verification compares gentle-pi byte for byte.
-	top := pruneWrite(t, root, "gentle-pi/index.d.ts")
-	nested := pruneWrite(t, root, "gentle-pi/node_modules/dep/index.d.ts")
-	other := pruneWrite(t, root, "other/gentle-pi/index.d.ts")
-
-	removed, err := userPruneNonRuntimeFiles(context.Background(), root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{top, nested} {
-		if _, err := os.Lstat(path); err != nil {
-			t.Errorf("%s must be preserved: %v", path, err)
-		}
-	}
-	if _, err := os.Lstat(other); !os.IsNotExist(err) {
-		t.Errorf("only the top-level gentle-pi tree is protected; %s should be removed", other)
-	}
-	if removed != 1 {
-		t.Fatalf("removed = %d, want 1", removed)
-	}
-}
-
 func TestUserPruneNonRuntimeFilesPreservesTypescriptAndMatchesCaseInsensitively(t *testing.T) {
 	root := t.TempDir()
 	lib := pruneWrite(t, root, "typescript/lib/lib.dom.d.ts")
@@ -130,29 +108,37 @@ func TestUserPruneNonRuntimeFilesMissingRootIsNoop(t *testing.T) {
 	}
 }
 
-func TestUserPruneProtectsScopedGentlePiAndNestedTypescript(t *testing.T) {
+func TestUserPruneProtectsGentlePiAndNestedTypescriptTrees(t *testing.T) {
 	root := t.TempDir()
-	scoped := pruneWrite(t, root, "@acme/gentle-pi/index.d.ts")
-	nestedTS := pruneWrite(t, root, "dep/node_modules/typescript/lib/lib.es5.d.ts")
-	deepGentle := pruneWrite(t, root, "dep/node_modules/gentle-pi/index.d.ts")
-	other := pruneWrite(t, root, "@acme/other/index.d.ts")
-
+	// Main-channel verification compares gentle-pi byte for byte: the top-level
+	// tree (and everything nested in it) and an npm-scoped one are protected.
+	kept := []string{
+		pruneWrite(t, root, "gentle-pi/index.d.ts"),
+		pruneWrite(t, root, "gentle-pi/node_modules/dep/index.d.ts"),
+		pruneWrite(t, root, "@acme/gentle-pi/index.d.ts"),
+		pruneWrite(t, root, "dep/node_modules/typescript/lib/lib.es5.d.ts"),
+	}
+	gone := []string{
+		pruneWrite(t, root, "other/gentle-pi/index.d.ts"),
+		pruneWrite(t, root, "dep/node_modules/gentle-pi/index.d.ts"),
+		pruneWrite(t, root, "@acme/other/index.d.ts"),
+	}
 	removed, err := userPruneNonRuntimeFiles(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{scoped, nestedTS} {
+	for _, path := range kept {
 		if _, err := os.Lstat(path); err != nil {
 			t.Errorf("%s must be preserved: %v", path, err)
 		}
 	}
-	for _, path := range []string{deepGentle, other} {
+	for _, path := range gone {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Errorf("%s should be removed (err=%v)", path, err)
 		}
 	}
-	if removed != 2 {
-		t.Fatalf("removed = %d, want 2", removed)
+	if removed != len(gone) {
+		t.Fatalf("removed = %d, want %d", removed, len(gone))
 	}
 }
 
