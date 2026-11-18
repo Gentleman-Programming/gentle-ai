@@ -197,33 +197,30 @@ func TestUserPruneKeepsGoingAndJoinsErrorsWhenARemovalFails(t *testing.T) {
 	}
 }
 
-func TestUserPrunePrefixSkipsWhenTheSDKComponentIsReused(t *testing.T) {
-	stage := t.TempDir()
-	file := pruneWrite(t, stage, "prefix/node_modules/dep/index.d.ts")
-	var log bytes.Buffer
-	if err := userPrunePrefix(context.Background(), stage, true, &log); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(file); err != nil {
-		t.Errorf("a reused prefix must not be pruned again: %v", err)
-	}
-	if log.Len() != 0 {
-		t.Errorf("a skipped prune must not log, got %q", log.String())
-	}
-}
-
-func TestUserPrunePrefixPrunesAndLogsElapsedTime(t *testing.T) {
-	stage := t.TempDir()
-	file := pruneWrite(t, stage, "prefix/node_modules/dep/index.d.ts")
-	var log bytes.Buffer
-	if err := userPrunePrefix(context.Background(), stage, false, &log); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(file); !os.IsNotExist(err) {
-		t.Errorf("declaration file should be pruned (err=%v)", err)
-	}
-	if got := log.String(); !strings.Contains(got, "pruned 1 non-runtime files in ") {
-		t.Errorf("log = %q, want the count and the elapsed time", got)
+func TestUserPrunePrefixHonorsReuseAndLogsElapsedTime(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		reused    bool
+		wantGone  bool
+		wantInLog string
+	}{
+		{"reused SDK is not pruned again and stays silent", true, false, ""},
+		{"fresh SDK is pruned and the elapsed time logged", false, true, "pruned 1 non-runtime files in "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stage := t.TempDir()
+			file := pruneWrite(t, stage, "prefix/node_modules/dep/index.d.ts")
+			var log bytes.Buffer
+			if err := userPrunePrefix(context.Background(), stage, tc.reused, &log); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(file); os.IsNotExist(err) != tc.wantGone {
+				t.Errorf("file removed = %v, want %v (err=%v)", os.IsNotExist(err), tc.wantGone, err)
+			}
+			if got := log.String(); (tc.wantInLog == "" && got != "") || !strings.Contains(got, tc.wantInLog) {
+				t.Errorf("log = %q, want it to contain %q", got, tc.wantInLog)
+			}
+		})
 	}
 }
 
