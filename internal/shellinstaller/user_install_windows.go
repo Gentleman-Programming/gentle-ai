@@ -473,6 +473,87 @@ func userWindowsStageRemove(stage, identity string) error {
 	return os.RemoveAll(stage)
 }
 
+// userWindowsRetireReplacement renames the owned destination to a fresh
+// sibling TARGET.replaced-<UTC> backup and returns the backup path with the
+// physical identity it carries, so a failed replacement can restore exactly
+// that tree.
+func userWindowsRetireReplacement(destination string, now time.Time) (backup, identity string, err error) {
+	backup = destination + ".replaced-" + now.UTC().Format("20060102T150405Z")
+	if _, err := os.Lstat(backup); !os.IsNotExist(err) {
+		return "", "", errors.Join(err, errors.New("Windows replacement backup path is already occupied"))
+	}
+	identity, err = userWindowsIdentity(destination, true)
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.Rename(destination, backup); err != nil {
+		return "", "", err
+	}
+	return backup, identity, nil
+}
+
+// userWindowsRestoreReplacement moves the retired backup back to its original
+// destination after a failure before publication. Like the Unix
+// userRestoreShellReplacement it never removes or overwrites a destination
+// that exists: both trees are then retained and reported. A backup whose
+// physical identity changed since the retire is never restored.
+func userWindowsRestoreReplacement(destination, backup, identity string) error {
+	if _, err := os.Lstat(destination); err == nil {
+		return fmt.Errorf("replacement failure left a destination at %q; both trees retained, backup retained at %s", destination, backup)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(err, fmt.Errorf("Windows destination state is uncertain; backup retained at %s", backup))
+	}
+	if observed, err := userWindowsIdentity(backup, true); err != nil || observed != identity {
+		return errors.Join(err, fmt.Errorf("Windows replacement backup identity differs; not restored, backup retained at %s", backup))
+	}
+	if err := os.Rename(backup, destination); err != nil {
+		return errors.Join(err, fmt.Errorf("previous Windows installation could not be restored; backup retained at %s", backup))
+	}
+	return nil
+}
+
+// userWindowsReplacementFailure joins a pre-publication failure with the
+// outcome of restoring the retired installation.
+func userWindowsReplacementFailure(cause error, destination, backup, identity string) error {
+	if restoreErr := userWindowsRestoreReplacement(destination, backup, identity); restoreErr != nil {
+		return errors.Join(cause, restoreErr)
+	}
+	return errors.Join(cause, fmt.Errorf("previous Windows installation restored to %q", destination))
+}
+
+// userWindowsWorker is a background acquisition that writes into the stage.
+// Stop cancels and joins it, so the stage is never removed while it writes.
+type userWindowsWorker struct {
+	cancel context.CancelFunc
+	done   chan error
+	joined bool
+	err    error
+}
+
+func userWindowsStartWorker(ctx context.Context, work func(context.Context) error) *userWindowsWorker {
+	workCtx, cancel := context.WithCancel(ctx)
+	worker := &userWindowsWorker{cancel: cancel, done: make(chan error, 1)}
+	go func() { worker.done <- work(workCtx) }()
+	return worker
+}
+
+// Wait joins the worker and returns its result; later calls repeat it.
+func (w *userWindowsWorker) Wait() error {
+	if !w.joined {
+		w.err, w.joined = <-w.done, true
+		w.cancel()
+	}
+	return w.err
+}
+
+// Stop cancels a still-running worker and waits for it to return.
+func (w *userWindowsWorker) Stop() {
+	if !w.joined {
+		w.cancel()
+		_ = w.Wait()
+	}
+}
+
 func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserInstallResult, err error) {
 	if ctx == nil || ctx.Err() != nil {
 		return result, errors.New("Windows installation canceled")
@@ -511,6 +592,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	var installed *userWindowsManifest
 	goReuse := false
+	retire := false
 	if _, err := os.Lstat(req.Destination); err == nil {
 		// A reconfigure/replace of the managed target (channel switch or
 		// component update) is a fresh install over a retired backup, so the
@@ -573,17 +655,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			// agent.
 			installed = &recorded
 		}
-		backup = req.Destination + ".replaced-" + time.Now().UTC().Format("20060102T150405Z")
-		if _, err := os.Lstat(backup); !os.IsNotExist(err) {
-			return result, errors.Join(err, errors.New("Windows replacement backup path is already occupied"))
-		}
-		if _, err := userWindowsIdentity(req.Destination, true); err != nil {
-			return result, err
-		}
-		if err := os.Rename(req.Destination, backup); err != nil {
-			return result, err
-		}
-		fmt.Fprintf(os.Stderr, "Windows install phase: replaced previous installation %s -> %s\n", req.Destination, backup)
+		retire = true
 	}
 	if !scope.full && installed == nil {
 		return result, errors.New("a component update requires a recorded installation")
@@ -601,6 +673,27 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 		fmt.Fprintf(os.Stderr, "Frozen canonical Gentle Shell Main: %s archive SHA256 %s (TLS publisher, not signed binary)\n", mainArtifact.Prefix, mainArtifact.SHA)
 	}
+	published := false
+	if retire {
+		// Reconfigure: retire the previous tree to its .replaced- backup so the
+		// fresh install below can publish into the confirmed destination. The
+		// pure acquisition above runs first, so a failed download never
+		// retires anything.
+		var backupIdentity string
+		backup, backupIdentity, err = userWindowsRetireReplacement(req.Destination, time.Now())
+		if err != nil {
+			return result, err
+		}
+		fmt.Fprintf(os.Stderr, "Windows install phase: replaced previous installation %s -> %s\n", req.Destination, backup)
+		// Registered before the stage cleanup, so it runs after it: every
+		// failure before publication moves the retired tree back. A published
+		// destination is never touched.
+		defer func() {
+			if !published {
+				err = userWindowsReplacementFailure(err, req.Destination, backup, backupIdentity)
+			}
+		}()
+	}
 	parent := filepath.Dir(req.Destination)
 	stage, err := os.MkdirTemp(parent, ".gentle-shell-windows-stage-")
 	if err != nil {
@@ -610,7 +703,6 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if identityErr != nil {
 		return result, identityErr // Do not claim ownership or remove an unknown stage.
 	}
-	published := false
 	defer func() {
 		if published {
 			return
@@ -654,10 +746,12 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-acquire")
-	codegraph := make(chan error, 1)
-	go func() {
-		codegraph <- userWindowsCodeGraphAcquire(ctx, stage, req, scope)
-	}()
+	codegraph := userWindowsStartWorker(ctx, func(ctx context.Context) error {
+		return userWindowsCodeGraphAcquire(ctx, stage, req, scope)
+	})
+	// Registered after the stage cleanup, so it runs before it: an early
+	// return cancels and joins the acquisition before the stage is removed.
+	defer codegraph.Stop()
 	// The Windows stock provision helper requires its exact six-field
 	// selection ABI. Preferences are already materialized in the staged
 	// config/state/mcp files and must not widen this helper boundary.
@@ -728,7 +822,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			}
 		}
 	}
-	if err := <-codegraph; err != nil {
+	if err := codegraph.Wait(); err != nil {
 		return result, err
 	}
 	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-ready")
