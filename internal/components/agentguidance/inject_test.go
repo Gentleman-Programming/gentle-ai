@@ -89,6 +89,8 @@ func TestClaudeODDRoutingRendersRoleModelTable(t *testing.T) {
 		"### Claude ODD worker assignments",
 		"Agent tool `model` and `effort` parameters",
 		"omit `effort` when the table says `default`",
+		"Claude Code 2.1.292 or later",
+		"when the Agent tool offers no `effort` parameter",
 		"| `odd-explorer` | `sonnet` | `default` |",
 		"| `odd-worker` | `opus` | `high` |",
 		"| `odd-verify` | `sonnet` | `default` |",
