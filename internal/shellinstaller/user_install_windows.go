@@ -506,7 +506,14 @@ func userWindowsRestoreReplacement(destination, backup, identity string) error {
 	if observed, err := userWindowsIdentity(backup, true); err != nil || observed != identity {
 		return errors.Join(err, fmt.Errorf("Windows replacement backup identity differs; not restored, backup retained at %s", backup))
 	}
-	if err := os.Rename(backup, destination); err != nil {
+	restoreFrom, fromErr := windows.UTF16PtrFromString(backup)
+	restoreTo, toErr := windows.UTF16PtrFromString(destination)
+	if fromErr != nil || toErr != nil {
+		return errors.Join(fromErr, toErr, fmt.Errorf("previous Windows installation could not be restored; backup retained at %s", backup))
+	}
+	// No replace-existing flag: a destination that appeared after the Lstat
+	// check is never overwritten.
+	if err := windows.MoveFileEx(restoreFrom, restoreTo, windows.MOVEFILE_WRITE_THROUGH); err != nil {
 		return errors.Join(err, fmt.Errorf("previous Windows installation could not be restored; backup retained at %s", backup))
 	}
 	return nil
