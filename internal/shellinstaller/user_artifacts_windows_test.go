@@ -6,8 +6,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,6 +39,7 @@ func userWindowsZipFixture(t *testing.T, names ...string) ([]byte, userWindowsAr
 // and returns the download cache directory inside it.
 func userWindowsCacheFixture(t *testing.T) string {
 	t.Helper()
+	userDownloadFastRetry(t)
 	local := t.TempDir()
 	t.Setenv("LOCALAPPDATA", local)
 	return filepath.Join(local, "gentle-shell", "cache", "downloads")
@@ -102,9 +105,123 @@ func TestUserWindowsAcquireIgnoresUnverifiedCacheEntries(t *testing.T) {
 		if _, err := os.Lstat(target); !os.IsNotExist(err) {
 			t.Fatalf("%s-mismatched cache entry produced a target", name)
 		}
-		if err := os.Remove(filepath.Join(cache, artifact.Archive)); err != nil {
+		// Self-heal: the owned corrupt entry is discarded, never kept.
+		if _, err := os.Lstat(filepath.Join(cache, artifact.Archive)); !os.IsNotExist(err) {
+			t.Fatalf("%s-mismatched owned cache entry was kept: %v", name, err)
+		}
+	}
+}
+
+func TestUserWindowsAcquireReplacesCorruptCacheEntry(t *testing.T) {
+	cache := userWindowsCacheFixture(t)
+	data, _ := userWindowsZipFixture(t, "fixture/fd.exe")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+	artifact := userWindowsCacheArtifact(data, server.URL+"/fixture.zip")
+	userWindowsCacheSeed(t, cache, artifact, data[:len(data)/2]) // A partial entry left by a crash.
+	target := filepath.Join(t.TempDir(), "fixture.zip")
+	got, err := userWindowsAcquire(context.Background(), artifact, target)
+	if err != nil || !bytes.Equal(got, data) || requests != 1 {
+		t.Fatalf("corrupt cache entry was not replaced by a download: requests=%d err=%v", requests, err)
+	}
+	stored, err := os.ReadFile(filepath.Join(cache, artifact.Archive))
+	if err != nil || !bytes.Equal(stored, data) {
+		t.Fatalf("cache entry was not healed with verified bytes: %v", err)
+	}
+	entries, err := os.ReadDir(cache)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("cache store left temporary entries: %v %v", entries, err)
+	}
+}
+
+func TestUserWindowsAcquireKeepsForeignCacheEntryShape(t *testing.T) {
+	// A directory at the entry name is not an owned regular file: it is
+	// never deleted, and the install still succeeds over the network.
+	cache := userWindowsCacheFixture(t)
+	data, _ := userWindowsZipFixture(t, "fixture/fd.exe")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(data) }))
+	defer server.Close()
+	artifact := userWindowsCacheArtifact(data, server.URL+"/fixture.zip")
+	if err := os.MkdirAll(filepath.Join(cache, artifact.Archive, "keep"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := userWindowsAcquire(context.Background(), artifact, filepath.Join(t.TempDir(), "fixture.zip"))
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("non-file cache entry failed the install: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(cache, artifact.Archive, "keep")); err != nil || !info.IsDir() {
+		t.Fatalf("non-file cache entry was removed: %v", err)
+	}
+}
+
+func TestUserWindowsAcquireRetriesTransientFailures(t *testing.T) {
+	data, _ := userWindowsZipFixture(t, "fixture/fd.exe")
+	for _, tc := range []struct {
+		name     string
+		first    func(http.ResponseWriter, *http.Request)
+		requests int
+		ok       bool
+	}{
+		{"503 then success", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }, 2, true},
+		{"429 then success", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTooManyRequests) }, 2, true},
+		{"stalled body then success", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+			_, _ = w.Write(data[:10])
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}, 2, true},
+		{"404 is final", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) }, 1, false},
+		{"digest mismatch is final", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(append([]byte(nil), data[1:]...)) }, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userWindowsCacheFixture(t)
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if requests == 1 || !tc.ok {
+					tc.first(w, r)
+					return
+				}
+				_, _ = w.Write(data)
+			}))
+			defer server.Close()
+			artifact := userWindowsCacheArtifact(data, server.URL+"/fixture.zip")
+			got, err := userWindowsAcquire(context.Background(), artifact, filepath.Join(t.TempDir(), "fixture.zip"))
+			if requests != tc.requests || (err == nil) != tc.ok || (tc.ok && !bytes.Equal(got, data)) {
+				t.Fatalf("requests=%d err=%v, want requests=%d ok=%v", requests, err, tc.requests, tc.ok)
+			}
+		})
+	}
+}
+
+func TestUserWindowsSupplierRedirectPolicy(t *testing.T) {
+	via := []*http.Request{{}}
+	for raw, want := range map[string]bool{
+		"https://nodejs.org/dist/x.zip":                  true,
+		"https://dl.google.com/go/x.zip":                 true,
+		"https://release-assets.githubusercontent.com/x": true,
+		"https://objects.githubusercontent.com/x":        true,
+		"http://objects.githubusercontent.com/x":         false,
+		"https://user@objects.githubusercontent.com/x":   false,
+		"https://objects.githubusercontent.com/x#frag":   false,
+		"https://githubusercontent.com.evil.example/x":   false,
+		"https://example.com/x":                          false,
+	} {
+		target, err := url.Parse(raw)
+		if err != nil {
 			t.Fatal(err)
 		}
+		if got := userWindowsSupplierRedirect(&http.Request{URL: target}, via) == nil; got != want {
+			t.Errorf("%s: accepted=%v, want %v", raw, got, want)
+		}
+	}
+	ok, _ := url.Parse("https://objects.githubusercontent.com/x")
+	if userWindowsSupplierRedirect(&http.Request{URL: ok}, make([]*http.Request, 5)) == nil {
+		t.Error("redirect hop limit not enforced")
 	}
 }
 

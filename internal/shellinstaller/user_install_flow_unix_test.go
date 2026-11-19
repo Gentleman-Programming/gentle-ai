@@ -4,10 +4,18 @@ package shellinstaller
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestUnixCanonicalRequestKeepsUncheckablePathsVerbatim(t *testing.T) {
@@ -96,5 +104,128 @@ func TestUnixInstallBoundCoversNpmNetworkBudget(t *testing.T) {
 	}
 	if userUnixInstallBound <= 3*userUnixNpmNetworkTimeout {
 		t.Fatalf("userUnixInstallBound %s does not exceed three network-bound provision invocations at the npm budget %s each", userUnixInstallBound, userUnixNpmNetworkTimeout)
+	}
+}
+
+func TestUserToolRedirectPolicyAcceptsGitHubAssetHosts(t *testing.T) {
+	via := []*http.Request{{}}
+	for raw, want := range map[string]bool{
+		"https://release-assets.githubusercontent.com/x": true,
+		"https://objects.githubusercontent.com/x":        true,
+		"https://objects.githubusercontent.com:8443/x":   false,
+		"http://objects.githubusercontent.com/x":         false,
+		"https://user@objects.githubusercontent.com/x":   false,
+		"https://objects.githubusercontent.com/x#frag":   false,
+		"https://githubusercontent.com.evil.example/x":   false,
+		"https://nodejs.org/x":                           false,
+	} {
+		target, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := userToolRedirect(&http.Request{URL: target}, via) == nil; got != want {
+			t.Errorf("%s: accepted=%v, want %v", raw, got, want)
+		}
+	}
+	ok, _ := url.Parse("https://objects.githubusercontent.com/x")
+	if userToolRedirect(&http.Request{URL: ok}, make([]*http.Request, 5)) == nil {
+		t.Error("redirect hop limit not enforced")
+	}
+}
+
+func TestUserToolsClientHasNoWholeBodyTimeout(t *testing.T) {
+	client, err := userToolsClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	if client.Timeout != 0 {
+		t.Fatalf("tool client keeps a whole-body timeout %s", client.Timeout)
+	}
+	idle, ok := client.Transport.(*userDownloadIdleTransport)
+	if !ok || idle.idle != userDownloadIdleTimeout {
+		t.Fatalf("tool client lacks the inactivity timeout: %T", client.Transport)
+	}
+	base := idle.base.(*http.Transport)
+	if base.Proxy != nil || base.ResponseHeaderTimeout != 30*time.Second || base.TLSHandshakeTimeout != 10*time.Second || base.TLSClientConfig.ServerName != "" {
+		t.Fatal("tool client transport bounds changed")
+	}
+}
+
+func TestUserToolFetchRetriesTransientFailuresOnly(t *testing.T) {
+	userDownloadFastRetry(t)
+	data := []byte("pinned tool archive fixture")
+	pin := fmt.Sprintf("%x", sha256.Sum256(data))
+	for _, tc := range []struct {
+		name     string
+		first    func(http.ResponseWriter, *http.Request)
+		requests int
+		ok       bool
+	}{
+		{"502 then success", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) }, 2, true},
+		{"stalled body then success", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+			_, _ = w.Write(data[:4])
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}, 2, true},
+		{"404 is final", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) }, 1, false},
+		{"digest mismatch is final", func(w http.ResponseWriter, _ *http.Request) {
+			corrupt := append([]byte(nil), data...)
+			corrupt[0] ^= 0xff
+			_, _ = w.Write(corrupt)
+		}, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if requests == 1 || !tc.ok {
+					tc.first(w, r)
+					return
+				}
+				_, _ = w.Write(data)
+			}))
+			defer server.Close()
+			client := server.Client()
+			client.Transport = userDownloadIdle(client.Transport, userDownloadIdleTimeout)
+			got, err := userToolFetch(context.Background(), client, server.URL+"/fd.tar.gz", userToolSource{size: int64(len(data)), pin: pin})
+			if requests != tc.requests || (err == nil) != tc.ok || (tc.ok && string(got) != string(data)) {
+				t.Fatalf("requests=%d err=%v, want requests=%d ok=%v", requests, err, tc.requests, tc.ok)
+			}
+		})
+	}
+}
+
+type userBootstrapRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f userBootstrapRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestUserBootstrapFetchRetriesTransientAndKeepsPreexistingArchive(t *testing.T) {
+	userDownloadFastRetry(t)
+	for _, preexisting := range []bool{false, true} {
+		archive := filepath.Join(t.TempDir(), "node.tgz")
+		if preexisting {
+			if err := os.WriteFile(archive, []byte("sentinel"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		calls := 0
+		client := &http.Client{Transport: userBootstrapRoundTrip(func(*http.Request) (*http.Response, error) {
+			calls++
+			return nil, &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+		})}
+		err := userBootstrapFetch(context.Background(), client, archive)
+		var failure *PrivateRuntimeError
+		if !errors.As(err, &failure) || failure.Kind != "acquisition" || calls != userDownloadAttempts {
+			t.Fatalf("preexisting=%v: calls=%d err=%v, want %d transient attempts", preexisting, calls, err, userDownloadAttempts)
+		}
+		data, readErr := os.ReadFile(archive)
+		if preexisting && (readErr != nil || string(data) != "sentinel") {
+			t.Fatalf("pre-existing archive was touched: %q %v", data, readErr)
+		}
+		if !preexisting && !errors.Is(readErr, os.ErrNotExist) {
+			t.Fatalf("failed transient attempts left an archive: %v", readErr)
+		}
 	}
 }

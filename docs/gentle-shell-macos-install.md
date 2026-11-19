@@ -129,6 +129,8 @@ CodeGraph ON adds two npm archives of the same 1.4.1 release as Linux, each pinn
 
 Stock Pi and its npm graph come from the same frozen lock as Linux, with the darwin arm64 optional packages selected.
 
+The fd, ripgrep and CodeGraph archives have no whole-download deadline: a transfer fails only when it receives no data for 60 seconds, or after a 30-minute ceiling. Connection resets, timeouts, temporary DNS errors and HTTP 5xx or 429 responses are retried up to three attempts with backoff, for the Node archive too. Other HTTP errors and any size or SHA-256 mismatch fail at once. fd and ripgrep redirects are accepted to any HTTPS host under `githubusercontent.com`; the pins above remain the integrity check.
+
 ## Node bootstrap publication
 
 BSD `mv` cannot rename without replacing, so the bootstrap only stages Node. The installer then accepts only the exact reported stage path `<parent>/.gentle-node-stage.<8 characters>/node`, re-verifies every staged file against its inventory and the pinned `bin/node`, and publishes with an atomic `RENAME_EXCL` rename that refuses any existing destination.
