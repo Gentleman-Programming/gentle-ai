@@ -501,6 +501,11 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil || confirmation != req.Confirmation {
 		return result, errors.Join(err, errors.New("physical Windows selection confirmation differs"))
 	}
+	release, err := userAcquireOperationLock(req.Destination)
+	if err != nil {
+		return result, err
+	}
+	defer userReleaseOperationLock(release, &err)
 	var backup string
 	// A component-scoped update reuses the recorded installation: the scope is
 	// bound to the reconfigure target and the recorded manifest supplies the
