@@ -105,6 +105,7 @@ expected_contract = [
 	current_contract_root / "schemas/status-v7.schema.json",
 	current_contract_root / "schemas/status-v8.schema.json",
 	current_contract_root / "schemas/status-v9.schema.json",
+	current_contract_root / "schemas/status-v10.schema.json",
 	current_contract_root / "schemas/status.schema.json",
 	current_contract_root / "schemas/transition-binding.schema.json",
 	current_contract_root / "schemas/transition-execution.schema.json",

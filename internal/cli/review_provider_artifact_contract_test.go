@@ -311,7 +311,7 @@ func TestReviewProviderArtifactStatusV7ContractsArePinned(t *testing.T) {
 // TestManagedAssetsContinuationSchemaRuleIsExercised is the RED-first proof
 // for the corroborated review finding on #3299/#4170: failure.schema.json's
 // if/then rule tying `continuation` to `code: managed_assets_outdated` (and
-// forbidding it on every other code), and status-v9.schema.json's dedicated
+// forbidding it on every other code), and the current status schema's dedicated
 // oneOf branch for the same reason code, were published without ever
 // validating a real produced envelope against either rule in either
 // direction. It exercises both published schemas against three shapes each:
@@ -371,14 +371,14 @@ func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
 		}
 	}
 
-	// --- status-v9.schema.json, exercised against the real STATUS stop transition ---
+	// --- status-v10.schema.json (current), exercised against the real STATUS stop transition ---
 	var stopOutput bytes.Buffer
 	if err := RunReview([]string{
 		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
 	}, &stopOutput); err != nil {
 		t.Fatalf("stale managed assets STATUS: %v\n%s", err, stopOutput.String())
 	}
-	statusV9Schema := compileWholeNativeStatusSchema(t, "status-v9.schema.json")
+	statusV10Schema := compileWholeNativeStatusSchema(t, "status-v10.schema.json")
 
 	statusDoc := decodeJSONObjectCopy(t, stopOutput.Bytes())
 	nextTransition, ok := statusDoc["next_transition"].(map[string]any)
@@ -387,7 +387,7 @@ func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
 	}
 
 	// (a) the real envelope validates.
-	validatePublishedReviewSchema(t, statusV9Schema, stopOutput.Bytes())
+	validatePublishedReviewSchema(t, statusV10Schema, stopOutput.Bytes())
 
 	// (b) the same stop with continuation removed must fail: nothing else in
 	// the oneOf admits a managed_assets_outdated stop without it.
@@ -395,8 +395,8 @@ func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
 	withoutTransition := decodeJSONObjectCopy(t, stopOutput.Bytes())["next_transition"].(map[string]any)
 	delete(withoutTransition, "continuation")
 	withoutStopContinuation["next_transition"] = withoutTransition
-	if err := statusV9Schema.Validate(withoutStopContinuation); err == nil {
-		t.Fatal("status-v9.schema.json accepted a managed_assets_outdated stop with no continuation")
+	if err := statusV10Schema.Validate(withoutStopContinuation); err == nil {
+		t.Fatal("status-v10.schema.json accepted a managed_assets_outdated stop with no continuation")
 	}
 
 	// (c) the same continuation attached to an unrelated reason code (still a
@@ -407,8 +407,8 @@ func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
 	unrelatedTransition := decodeJSONObjectCopy(t, stopOutput.Bytes())["next_transition"].(map[string]any)
 	unrelatedTransition["reason_code"] = "rdd_disabled"
 	unrelatedReason["next_transition"] = unrelatedTransition
-	if err := statusV9Schema.Validate(unrelatedReason); err == nil {
-		t.Fatal("status-v9.schema.json accepted a continuation attached to an unrelated stop reason code")
+	if err := statusV10Schema.Validate(unrelatedReason); err == nil {
+		t.Fatal("status-v10.schema.json accepted a continuation attached to an unrelated stop reason code")
 	}
 	for _, command := range []string{
 		"'/tmp/gentle\nai' sync --agent opencode",
@@ -418,8 +418,8 @@ func TestManagedAssetsContinuationSchemaRuleIsExercised(t *testing.T) {
 		multilineTransition := multilineCommand["next_transition"].(map[string]any)
 		multilineContinuation := multilineTransition["continuation"].(map[string]any)
 		multilineContinuation["command"] = command
-		if err := statusV9Schema.Validate(multilineCommand); err == nil {
-			t.Fatalf("status-v9.schema.json accepted multiline continuation command %q", command)
+		if err := statusV10Schema.Validate(multilineCommand); err == nil {
+			t.Fatalf("status-v10.schema.json accepted multiline continuation command %q", command)
 		}
 	}
 }
@@ -543,6 +543,7 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "status-v7.schema.json", id: ReviewIntegrationStatusSchemaIDV7},
 		{name: "status-v8.schema.json", id: ReviewIntegrationStatusSchemaIDV8},
 		{name: "status-v9.schema.json", id: ReviewIntegrationStatusSchemaIDV9},
+		{name: "status-v10.schema.json", id: ReviewIntegrationStatusSchemaIDV10},
 		{name: "capabilities.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV2},
 		{name: "capabilities-v2.1.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV21},
 		{name: "capabilities-v2.2.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV22},

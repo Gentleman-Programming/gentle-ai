@@ -33,8 +33,10 @@ const ReviewIntegrationStatusSchemaV8 = "gentle-ai.review-integration.status/v8"
 const ReviewIntegrationStatusSchemaIDV8 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v8.schema.json"
 const ReviewIntegrationStatusSchemaV9 = "gentle-ai.review-integration.status/v9"
 const ReviewIntegrationStatusSchemaIDV9 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v9.schema.json"
-const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV9
-const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV9
+const ReviewIntegrationStatusSchemaV10 = "gentle-ai.review-integration.status/v10"
+const ReviewIntegrationStatusSchemaIDV10 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v10.schema.json"
+const ReviewIntegrationStatusSchema = ReviewIntegrationStatusSchemaV10
+const ReviewIntegrationStatusSchemaID = ReviewIntegrationStatusSchemaIDV10
 const ReviewIntegrationProjectionSchema = "gentle-ai.review-integration.projection/v1"
 const ReviewIntegrationProjectionSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/projection.schema.json"
 
@@ -253,7 +255,7 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
 		result.AuthorityTargetIdentity = native.AuthorityTargetIdentity
 	}
-	if native.Escalation != nil && (schema == ReviewIntegrationStatusSchemaV7 || schema == ReviewIntegrationStatusSchemaV8 || schema == ReviewIntegrationStatusSchemaV9) {
+	if native.Escalation != nil && (schema == ReviewIntegrationStatusSchemaV7 || schema == ReviewIntegrationStatusSchemaV8 || schema == ReviewIntegrationStatusSchemaV9 || schema == ReviewIntegrationStatusSchemaV10) {
 		result.Escalation = native.Escalation
 	}
 	if native.Applicability != reviewtransaction.TargetApplicabilityCurrent {
@@ -344,7 +346,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 
 func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *reviewStatusCompactAuthority) error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
-	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5 || result.Schema == ReviewIntegrationStatusSchemaV6 || result.Schema == ReviewIntegrationStatusSchemaV7 || result.Schema == ReviewIntegrationStatusSchemaV8 || result.Schema == ReviewIntegrationStatusSchemaV9) && result.Contract == ReviewIntegrationContractV2
+	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5 || result.Schema == ReviewIntegrationStatusSchemaV6 || result.Schema == ReviewIntegrationStatusSchemaV7 || result.Schema == ReviewIntegrationStatusSchemaV8 || result.Schema == ReviewIntegrationStatusSchemaV9 || result.Schema == ReviewIntegrationStatusSchemaV10) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
 		return errors.New("invalid negotiated review status identity")
 	}
@@ -498,7 +500,18 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		// stale lineages as optional, discoverable recovery candidates. An
 		// unrelated target with zero candidates remains equally valid.
 		terminalConsumed := result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityNotReplayable
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !terminalConsumed && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
+		// Issue #6156: an undeclared untracked population rewrites the
+		// fresh-target transition into the typed
+		// intended_untracked_selection_required collect, and the root action
+		// follows that transition (#3928), so a Collect action paired with
+		// that collect is a legitimate unrelated-target shape over a consumed
+		// target. validateNextTransitionTargets still checks the full collect
+		// input through validateIntendedUntrackedSelectionTransition, so this
+		// admission changes no shape rule beyond the root action.
+		untrackedSelectionRequired := result.NextTransition != nil &&
+			result.NextTransition.Kind == reviewNextTransitionCollect &&
+			result.NextTransition.ReasonCode == "intended_untracked_selection_required"
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !terminalConsumed && !(result.Action == reviewtransaction.TargetStatusActionCollect && untrackedSelectionRequired) && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:
@@ -546,10 +559,10 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	default:
 		return errors.New("unsupported review status recovery disposition")
 	}
-	if result.Escalation != nil && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
+	if result.Escalation != nil && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 && result.Schema != ReviewIntegrationStatusSchemaV10 {
 		return errors.New("status escalation requires review status schema v7") // refusal:by-design world-action: only the provider can omit escalation from a pre-v7 envelope or publish the v7 identity that defines it
 	}
-	escalationRequired := (result.Schema == ReviewIntegrationStatusSchemaV7 || result.Schema == ReviewIntegrationStatusSchemaV8 || result.Schema == ReviewIntegrationStatusSchemaV9) && result.Authority != nil &&
+	escalationRequired := (result.Schema == ReviewIntegrationStatusSchemaV7 || result.Schema == ReviewIntegrationStatusSchemaV8 || result.Schema == ReviewIntegrationStatusSchemaV9 || result.Schema == ReviewIntegrationStatusSchemaV10) && result.Authority != nil &&
 		result.Authority.Version == reviewtransaction.AuthorityVersionCompact && result.Authority.State == reviewtransaction.StateEscalated
 	if escalationRequired != (result.Escalation != nil) {
 		return errors.New("status escalation must match escalated authority") // refusal:by-design world-action: only the provider can project canonical escalation evidence for a v7 compact authority
@@ -583,7 +596,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		}
 		return nil
 	}
-	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
+	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 && result.Schema != ReviewIntegrationStatusSchemaV10 {
 		return errors.New("submission descriptor status schema is unsupported") // refusal:by-design world-action: only a provider code fix can select a supported descriptor schema
 	}
 	for _, input := range transition.Collect.Inputs {
@@ -598,7 +611,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return err
 		}
 		if input.CaptureOperation == reviewCaptureResultCaptureOperation {
-			if result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
+			if result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 && result.Schema != ReviewIntegrationStatusSchemaV10 {
 				return errors.New("pre-v8 negotiated status contains a lens provider task") // refusal:by-design world-action: only status/v8 may publish provider-owned lens tasks
 			}
 			if err := validateReviewLensProviderTaskInput(input, arguments); err != nil {
@@ -606,7 +619,7 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			}
 			continue
 		}
-		if result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 {
+		if result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 && result.Schema != ReviewIntegrationStatusSchemaV10 {
 			return errors.New("v4 negotiated status contains a provider role task") // refusal:by-design world-action: only the v5 provider can emit a Go-issued provider task
 		}
 		if err := validateReviewProviderTaskInput(input, arguments); err != nil {
@@ -762,7 +775,7 @@ func validateReviewLensProviderTaskInput(input ReviewTransitionInput, arguments 
 }
 
 func (result ReviewTargetStatusResult) validateTargetedValidatorProviderTaskInput(input ReviewTransitionInput) error {
-	if (result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9) || result.Authority == nil || result.ValidationRequest == nil ||
+	if (result.Schema != ReviewIntegrationStatusSchemaV5 && result.Schema != ReviewIntegrationStatusSchemaV6 && result.Schema != ReviewIntegrationStatusSchemaV7 && result.Schema != ReviewIntegrationStatusSchemaV8 && result.Schema != ReviewIntegrationStatusSchemaV9 && result.Schema != ReviewIntegrationStatusSchemaV10) || result.Authority == nil || result.ValidationRequest == nil ||
 		input.Name != reviewProviderRoleInputName(reviewerprovider.RoleTargetedValidator) || input.ProviderTask == nil ||
 		input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) || input.Submission != nil {
 		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority

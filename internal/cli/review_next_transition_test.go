@@ -854,7 +854,7 @@ func TestReviewStatusEscalationParityPreservesLegacyAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), payload)
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v10.schema.json"), payload)
 	if err := status.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -881,7 +881,7 @@ func TestReviewStatusEscalationRequiresCurrentSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), payload)
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v10.schema.json"), payload)
 
 	legacy := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV1)
 	legacy.Projection = status.Projection

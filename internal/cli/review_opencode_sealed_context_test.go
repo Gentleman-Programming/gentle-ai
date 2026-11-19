@@ -33,7 +33,7 @@ func TestOpenCodeLineageStatusSealsOnlyItsCollectInputs(t *testing.T) {
 	}
 
 	raw, status := openCodeSealedStatus(t, repo, started.LineageID, "")
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), raw)
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v10.schema.json"), raw)
 	if status.RepositoryContext == nil || !strings.HasPrefix(status.RepositoryContext.Handle, "rctx2_") {
 		t.Fatalf("STATUS envelope repository context = %#v, want the unchanged rctx2 digest", status.RepositoryContext)
 	}
