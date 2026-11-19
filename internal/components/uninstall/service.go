@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeagentfiles"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
@@ -548,6 +549,26 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 					op = mergeRewriteOps(existing, op)
 				}
 				operationsByKey[key] = op
+			}
+			if agentID == model.AgentOpenCode {
+				// The managed subagents also exist as individual agent files;
+				// remove only the files the ownership ledger (or exact managed
+				// bytes) proves gentle-ai wrote. User-authored files stay.
+				owned, _, _, inventoryErr := opencodeagentfiles.OwnedFiles(s.homeDir, adapter)
+				if inventoryErr == nil {
+					for _, ownedPath := range owned {
+						backupTargets[ownedPath] = struct{}{}
+						path := ownedPath
+						op := operation{typeID: opRemoveFile, path: path, agents: []model.AgentID{agentID}}
+						op.apply = func(string) (bool, bool, error) {
+							if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+								return false, false, removeErr
+							}
+							return true, true, nil
+						}
+						operationsByKey[operationKey(op)] = op
+					}
+				}
 			}
 			for _, op := range retainedOpenCodePluginOperations(adapter, s.homeDir) {
 				backupTargets[op.path] = struct{}{}

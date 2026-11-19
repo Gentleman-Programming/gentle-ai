@@ -311,8 +311,8 @@ func (a *Adapter) SupportsSubAgents() bool {
 	return a.CapabilityManifest().Features.FileSubAgents
 }
 
-func (a *Adapter) SubAgentsDir(_ string) string {
-	return ""
+func (a *Adapter) SubAgentsDir(homeDir string) string {
+	return filepath.Join(ConfigPath(homeDir), "agents")
 }
 
 func (a *Adapter) EmbeddedSubAgentsDir() string {
