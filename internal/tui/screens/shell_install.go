@@ -64,6 +64,17 @@ func shellFailedSteps(steps []ShellInstallStep) []ShellInstallStep {
 }
 
 func RenderShellInstall(steps []ShellInstallStep, failure string, done bool, frame, bloom int, destinationPublished, fallbackAvailable bool, mode, launchCommand string, width, height int) string {
+	return renderShellInstall(steps, failure, done, frame, bloom, destinationPublished, fallbackAvailable, mode, launchCommand, "", width, height)
+}
+
+// RenderShellInstallRunning renders a running installation with an optional
+// notice: the cancel question, a cancel in progress, or why publication
+// cannot be cancelled.
+func RenderShellInstallRunning(steps []ShellInstallStep, frame int, notice string, width, height int) string {
+	return renderShellInstall(steps, "", false, frame, 0, false, false, "", "", notice, width, height)
+}
+
+func renderShellInstall(steps []ShellInstallStep, failure string, done bool, frame, bloom int, destinationPublished, fallbackAvailable bool, mode, launchCommand, notice string, width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
@@ -172,7 +183,10 @@ func RenderShellInstall(steps []ShellInstallStep, failure string, done bool, fra
 	if current != "" {
 		lines = append(lines, styles.TitleStyle.Render("CURRENT TASK"), "  "+current, "")
 	}
-	lines = append(lines, styles.HelpStyle.Render("The worker is running; do not close the terminal"))
+	if notice != "" {
+		lines = append(lines, styles.WarningStyle.Render(notice), "")
+	}
+	lines = append(lines, styles.HelpStyle.Render("The worker is running; do not close the terminal  •  esc: cancel before publication"))
 	return finishShellLines(lines, width, height)
 }
 
