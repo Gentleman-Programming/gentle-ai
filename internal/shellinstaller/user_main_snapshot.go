@@ -18,6 +18,30 @@ import (
 // retries after a Main composition failure.
 const userMainFallbackCommit = "63d6065f924ec366a321dd21f7396f04026c026f"
 
+// ErrMainSDKInstall marks a failed Main SDK composition. Callers match it
+// with errors.Is to offer the last qualified Main snapshot; the wording of
+// the wrapped error is never part of that contract.
+var ErrMainSDKInstall = errors.New("Main SDK installation failed")
+
+// userMainSDKError keeps the existing "<context>: <cause>" message while
+// matching ErrMainSDKInstall and unwrapping to the cause.
+type userMainSDKError struct {
+	context string
+	err     error
+}
+
+func (e *userMainSDKError) Error() string        { return e.context + ": " + e.err.Error() }
+func (e *userMainSDKError) Unwrap() error        { return e.err }
+func (e *userMainSDKError) Is(target error) bool { return target == ErrMainSDKInstall }
+
+// userMainSDKFailure wraps a Main SDK composition failure; nil stays nil.
+func userMainSDKFailure(context string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &userMainSDKError{context: context, err: err}
+}
+
 type userSnapshotArtifact struct {
 	URL, SHA, Archive, Prefix string
 	Bound, Size               int64

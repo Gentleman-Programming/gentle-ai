@@ -594,10 +594,10 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		fmt.Fprintln(os.Stderr, "Windows install phase: main-acquire")
 		mainArtifact, mainData, err = userWindowsMainSnapshot(ctx) // Confirmed choice, before first filesystem effect.
 		if err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK acquisition", err)
 		}
 		if _, err := userWindowsMainFiles(ctx, mainData, mainArtifact); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK acquisition", err)
 		}
 		fmt.Fprintf(os.Stderr, "Frozen canonical Gentle Shell Main: %s archive SHA256 %s (TLS publisher, not signed binary)\n", mainArtifact.Prefix, mainArtifact.SHA)
 	}
@@ -795,31 +795,31 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if channel == "main" && !scope.reused[UserComponentSDK] {
 		fmt.Fprintln(os.Stderr, "Windows install phase: overlay main")
 		if err := userWindowsInventory(stage, userWindowsInventoryInstalled); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK overlay", err)
 		}
 		gentle, stock := filepath.Join(stage, "prefix/node_modules/gentle-pi"), filepath.Join(stage, "stock-gentle-pi")
 		if err := os.Rename(gentle, stock); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK overlay", err)
 		}
 		if _, err := userWindowsZIP(ctx, mainData, mainArtifact, gentle, ""); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK overlay", err)
 		}
 		for _, name := range []string{".gentle-ai", "node_modules"} {
 			original := filepath.Join(stock, name)
 			if _, err := os.Lstat(original); errors.Is(err, os.ErrNotExist) && name == "node_modules" {
 				continue
 			} else if err != nil {
-				return result, err
+				return result, userMainSDKFailure("Main SDK overlay", err)
 			}
 			if err := os.Rename(original, filepath.Join(gentle, name)); err != nil {
-				return result, err
+				return result, userMainSDKFailure("Main SDK overlay", err)
 			}
 		}
 		if err := userWindowsCompareMain(ctx, mainData, mainArtifact, gentle); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK overlay", err)
 		}
 		if err := userWindowsProvision(ctx, stage, "overlay", io.Discard, os.Stderr); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK overlay", err)
 		}
 		fmt.Fprintln(os.Stderr, "Windows install phase: overlay-ready main")
 	}
