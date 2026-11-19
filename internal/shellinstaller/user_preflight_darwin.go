@@ -46,8 +46,11 @@ func userVolumePreflight(parent string) (err error) {
 		return privateError("filesystem", err)
 	}
 	name, renamed := probe.Name(), probe.Name()+".excl"
+	created := []string{name}
 	defer func() {
-		for _, path := range []string{name, renamed} {
+		// Only entries this probe created are removed: a failed no-replace
+		// rename never claims an existing renamed path.
+		for _, path := range created {
 			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
 				err = errors.Join(err, privateError("filesystem", removeErr))
 			}
@@ -63,6 +66,7 @@ func userVolumePreflight(parent string) (err error) {
 	if err := userRenameNoReplace(name, renamed); err != nil {
 		return userVolumeRefusal(parent, "RENAME_EXCL", err)
 	}
+	created = []string{renamed}
 	return nil
 }
 
