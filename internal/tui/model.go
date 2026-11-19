@@ -31,6 +31,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/starprompt"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
@@ -823,6 +824,23 @@ type Model struct {
 	// It distinguishes "sync hasn't run yet" (false) from "sync ran with 0 changes" (true, filesChanged=0).
 	HasSyncRun bool
 
+	// Star prompt state (issue #5969): non-intrusive GitHub star offer.
+	// See star_prompt.go for the courtesies and message flow.
+	StarState    starprompt.State
+	StarLoaded   bool
+	StarUnusable bool
+	StarOffered  bool
+	StarVisible  bool
+	// StarWaitingIdle is true between arming the idle wait and its expiry.
+	StarWaitingIdle bool
+	// StarLastKey records the last keypress to detect the idle window.
+	StarLastKey time.Time
+	// StarThanksAt shows the thanks line for a few seconds after starring.
+	StarThanksAt time.Time
+	// StarManualURL is set when neither gh nor the browser could star, so the
+	// user still gets the URL.
+	StarManualURL string
+
 	// UpgradeErr holds the error from the last upgrade run (nil on success).
 	UpgradeErr error
 
@@ -1146,6 +1164,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.AgentBuilder.InstallResults = msg.Results
 			m.AgentBuilder.InstallErr = nil
 			m.setScreen(ScreenAgentBuilderComplete)
+			starCmd := m.starRecordOperation()
+			return m, starCmd
 		}
 		return m, nil
 	case ReviewStoreResetSurveyedMsg:
@@ -1307,7 +1327,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.UpdateResults = nil
 		m.UpdateCheckDone = false
-		return m, m.Init()
+		starCmd := m.starRecordOperation()
+		return m, tea.Batch(m.Init(), starCmd)
 	case SyncDoneMsg:
 		if m.Screen != ScreenSync && m.Screen != ScreenUpgradeSync {
 			return m, nil
@@ -1319,7 +1340,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.HasSyncRun = true
 		m.PendingSyncOverrides = nil
 		m.refreshCodexManagedServiceTier(msg.CodexServiceTier)
-		return m, nil
+		starCmd := m.starRecordOperation()
+		return m, starCmd
 	case UninstallDoneMsg:
 		if m.Screen != ScreenUninstallConfirm {
 			return m, nil
@@ -1330,7 +1352,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SyncCleanInstallFiles = msg.SyncFiles
 		m.SyncCleanInstallErr = msg.SyncErr
 		m.setScreen(ScreenUninstallResult)
-		return m, nil
+		starCmd := m.starRecordOperation()
+		return m, starCmd
 	case UpgradePhaseCompletedMsg:
 		if m.Screen != ScreenUpgradeSync {
 			return m, nil
@@ -1347,7 +1370,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.UpdateResults = nil
 		m.UpdateCheckDone = false
 		return m, m.Init()
+	case StarIdleElapsedMsg, StarVisibleTimeoutMsg, StarGhDoneMsg:
+		if cmd := m.starHandleMsg(msg); cmd != nil {
+			return m, cmd
+		}
+		return m, nil
 	case tea.KeyMsg:
+		// Star prompt chords take precedence only while its offer is visible;
+		// every other key only records activity for the idle window (#5969).
+		if updated, cmd, consumed := m.starObserveKey(msg.String()); consumed {
+			return updated, cmd
+		} else {
+			m = updated
+		}
 		if m.Screen == ScreenRenameBackup {
 			return m.handleRenameInput(msg)
 		}
@@ -1507,6 +1542,16 @@ func (m Model) findProgressItem(stepID string) int {
 }
 
 func (m Model) View() string {
+	out := m.viewScreen()
+	if line := m.starFooterLine(); line != "" {
+		out += "\n" + line
+	}
+	return out
+}
+
+// viewScreen renders the active screen (the star offer appends its own
+// non-blocking footer line on top of it).
+func (m Model) viewScreen() string {
 	switch m.Screen {
 	case ScreenWelcome:
 		var banner string
