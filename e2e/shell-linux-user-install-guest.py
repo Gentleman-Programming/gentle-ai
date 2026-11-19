@@ -1248,19 +1248,33 @@ def main():
         require('0.99.2' in run([str(target / 'bin/pi'), '--version']), 'authenticated prior did not launch')
         nested = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/package.json'
         require(json.loads(nested.read_text())['version'] == '0.99.2', 'actual prior nested TUI placement differs')
-        # The stub selects the Pi release the generated lock pinned: the only
-        # upgrade target whose whole graph the provisioner authenticates.
+        # The stub selects the Pi release the generated lock pinned. From the
+        # frozen prior parent even that update is refused by construction:
+        # stock `npm install -g` keeps the prior lock's top-level packages
+        # (pi-ai 1.0.0 among them), which the generated lock never admits once
+        # Pi leaves 0.99.2 (#6170, #6045). The next launch stays refused and
+        # confirmed recovery restores the modern locked cohort prepare-prior
+        # saved.
         lock_pi = json.loads((target / 'runtime/project/package-lock.json').read_text())['packages']['node_modules/@earendil-works/pi-coding-agent']['version']
         PI_LATEST = lock_pi
-        run([str(target / 'bin/pi'), 'update', '--self'], cwd=WORK / 'project', timeout=180)
-        require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'actual stock prior-to-locked transition absent')
+        refused = run([str(target / 'bin/pi'), 'update', '--self'], cwd=WORK / 'project', timeout=180, good=False)
+        require('global package lacks authenticated metadata' in refused, 'prior-parent self-update was not refused for its unauthenticated packages')
+        require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'refused update replaced physical selected roots')
+        require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'refused update changed owned command bindings')
+        run([str(target / 'bin/pi'), '--version'], good=False)
+        upgrade_recovery = run([SUPERVISOR, 'shell', 'recover', str(target), 'inspect'])
+        upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
+        run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
+        coding_metadata = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/package.json'
+        require(json.loads(coding_metadata.read_text())['version'] == lock_pi, 'prior-parent recovery did not restore the locked cohort')
+        require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'locked cohort did not launch after prior-parent refusal')
+        REPORT['priorParentUpdate'] = 'refused-and-recovered: 0.99.2 to locked %s keeps unadmitted prior packages; locked cohort restored' % lock_pi
+        # On the modern cohort the stock updater reinstalls the locked release.
+        run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180)
+        require(lock_pi in run([str(target / 'bin/pi'), '--version'], cwd=WORK / 'project'), 'locked force reinstall did not launch')
         require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'update replaced physical selected roots')
         require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'update changed owned command bindings')
-        REPORT['trueUpgrade'] = 'actual published 0.99.2 to locked %s stock updater; TEST-only Pi API selection, not public latest authority' % lock_pi
-        run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180)
-        run([str(target / 'bin/pi'), '--version'], cwd=WORK / 'project')
-        REPORT['stockForce'] = 'actual separate same-version reinstall after true upgrade'
-        coding_metadata = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/package.json'
+        REPORT['lockedForceUpdate'] = 'actual stock --force reinstall of locked %s; TEST-only Pi API selection, not public latest authority' % lock_pi
         expected_metadata = coding_metadata.read_bytes()
         corrupted = json.loads(expected_metadata)
         corrupted['version'] = '9.9.9'
@@ -1342,7 +1356,7 @@ def main():
         if MODE == 'full':
             format_data = WORK / 'gofmt.data'
             require(format_data.is_file() and format_data.stat().st_size == 0, 'whole source formatting not yet qualified')
-            require(all(key in REPORT for key in ['manager', 'nativeBackend', 'trueUpgrade', 'upgradeRecovery', 'outOfLockUpdate', 'installerTUI', 'installerCancel', 'publicationUncertainty', 'sharedRecovery', 'recoveryFaultMatrix']), 'full observed qualification record incomplete')
+            require(all(key in REPORT for key in ['manager', 'nativeBackend', 'priorParentUpdate', 'lockedForceUpdate', 'upgradeRecovery', 'outOfLockUpdate', 'installerTUI', 'installerCancel', 'publicationUncertainty', 'sharedRecovery', 'recoveryFaultMatrix']), 'full observed qualification record incomplete')
     finally:
         server.shutdown()
         server.server_close()
