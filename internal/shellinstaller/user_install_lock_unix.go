@@ -32,6 +32,12 @@ func userLockFile(path, destination string) (func() error, error) {
 			_ = unix.Close(fd)
 			return nil, fmt.Errorf("inspect Gentle Shell operation lock %s: %w", path, err)
 		}
+		if stat.Nlink == 0 && stat.Mode&unix.S_IFMT == unix.S_IFREG {
+			// The previous holder unlinked this file between our open and
+			// fstat while releasing: retry on the current name.
+			_ = unix.Close(fd)
+			continue
+		}
 		if stat.Mode&unix.S_IFMT != unix.S_IFREG || int(stat.Uid) != os.Geteuid() || stat.Nlink != 1 || stat.Mode&0o077 != 0 {
 			_ = unix.Close(fd)
 			return nil, fmt.Errorf("Gentle Shell operation lock %s is not a private regular file owned by this user", path)
