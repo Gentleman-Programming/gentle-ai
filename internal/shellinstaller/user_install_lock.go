@@ -19,12 +19,6 @@ func (e *UserShellOperationInProgressError) Error() string {
 	return fmt.Sprintf("another Gentle Shell operation is in progress for %s; wait for it to finish and retry", e.Destination)
 }
 
-// IsUserShellOperationInProgress reports whether err is a lock contention.
-func IsUserShellOperationInProgress(err error) bool {
-	var locked *UserShellOperationInProgressError
-	return errors.As(err, &locked)
-}
-
 // userOperationLockPath names the lock beside the destination, in its private
 // parent. It exists only while an operation holds it: the holder removes it
 // on release (Windows deletes it on close, also when the owner exits). The

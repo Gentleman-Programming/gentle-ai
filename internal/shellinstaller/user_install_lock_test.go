@@ -5,6 +5,7 @@ package shellinstaller
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -33,7 +34,7 @@ func userLockDestination(t *testing.T) string {
 
 func requireUserLockContention(t *testing.T, err error, destination string) {
 	t.Helper()
-	if !IsUserShellOperationInProgress(err) || err.Error() != userLockedMessage(destination) {
+	if !isOperationInProgress(err) || err.Error() != userLockedMessage(destination) {
 		t.Fatalf("expected lock contention for %s, got %v", destination, err)
 	}
 }
@@ -119,7 +120,7 @@ func TestUserOperationLockLeavesNoEntryBesideTheDestination(t *testing.T) {
 }
 
 func TestUserOperationLockRefusesRelativeDestination(t *testing.T) {
-	if _, err := userAcquireOperationLock("install"); err == nil || IsUserShellOperationInProgress(err) {
+	if _, err := userAcquireOperationLock("install"); err == nil || isOperationInProgress(err) {
 		t.Fatalf("relative destination must be refused, got %v", err)
 	}
 }
@@ -191,7 +192,7 @@ func TestUserOperationLockContendsAcrossProcessesAndReleasesOnExit(t *testing.T)
 			_ = release()
 			break
 		}
-		if !IsUserShellOperationInProgress(err) || time.Now().After(deadline) {
+		if !isOperationInProgress(err) || time.Now().After(deadline) {
 			t.Fatalf("lock must be released when its owner exits: %v", err)
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -253,7 +254,7 @@ func TestUserOperationLockInstallHelperProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err = RunUserEntry(ctx, os.Args[0], []string{"internal-install-direct", destination, "separate", "", "", confirmation}, nil, io.Discard, io.Discard)
-	if IsUserShellOperationInProgress(err) {
+	if isOperationInProgress(err) {
 		os.Stdout.WriteString("contended " + err.Error() + "\n")
 		os.Exit(0)
 	}
@@ -309,4 +310,10 @@ func TestApplyUserExperiencePreferencesFailsFastWhileAnotherOperationHoldsTheLoc
 	if _, err := os.Lstat(filepath.Join(destination, "config")); !os.IsNotExist(err) {
 		t.Fatal("contended preference apply must not write the target")
 	}
+}
+
+// isOperationInProgress reports whether err is a lock contention.
+func isOperationInProgress(err error) bool {
+	var locked *UserShellOperationInProgressError
+	return errors.As(err, &locked)
 }
