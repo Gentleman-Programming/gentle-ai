@@ -44,8 +44,8 @@ On an installed Separate target, **Manage → SDK source → Apply preferences**
 | Target parent | Owned by you, mode `0700`, on one filesystem. Absolute paths using only ASCII letters, digits, `/`, `_`, `.` and `-`. |
 | Path spelling | `/tmp`, `/var` and `/etc` are resolved once to their `/private/...` spelling. Any other symbolic link in the path refuses. |
 | Extended metadata | Every checked entry refuses BSD flags (other than nodump, hidden, tracked and APFS compression) and ACLs with any allow entry. Deny-only ACLs and `com.apple.provenance` are accepted. `com.apple.quarantine` refuses on entries the installer creates; your Shared prefix and agent, their saved preimages and the running `gentle-ai` are yours, so a quarantine left by an approved download is accepted there. |
-| Supervisor binary | The running `gentle-ai`, after resolving links such as a Homebrew symlink, and every ancestor directory must be owned by you or root and not group/other writable. Only the root-owned sticky `/private/tmp` is excepted. |
-| Durability | The installer's own Go writes and directory entries flush with `F_FULLFSYNC`; a filesystem without it (some network or FUSE mounts) refuses installation instead of risking unflushed data. The Node provisioning helper (prefix, settings and recovery copies) uses Node's `fsync`, which tries `F_FULLFSYNC` and falls back to a weaker barrier or plain `fsync` where the filesystem lacks it. |
+| Supervisor binary | The running `gentle-ai`, after resolving links such as a Homebrew symlink, and every ancestor directory must be owned by you or root and not group/other writable. Only the root-owned sticky `/private/tmp` is excepted. Inspection (`--inspect` and the TUI review) checks this before any confirmation or staging, and installation checks it again. A Homebrew install refuses because `/opt/homebrew/Cellar` (or `/usr/local/Cellar`) is admin-group writable; do not change Homebrew permissions. Instead run `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest` into your own `GOBIN`, or copy the `gentle-ai` binary into a user-owned `0755` directory such as `~/.local/bin` and run it from there. |
+| Durability | The installer's own Go writes and directory entries flush with `F_FULLFSYNC`, and stages publish with `RENAME_EXCL`. Inspection probes both on a temporary file in the target parent, before any download, and refuses a volume that lacks either (often exFAT, SMB or NFS) instead of risking unflushed data. The Node provisioning helper (prefix, settings and recovery copies) uses Node's `fsync`, which tries `F_FULLFSYNC` and falls back to a weaker barrier or plain `fsync` where the filesystem lacks it. |
 
 ## Modes on macOS
 
@@ -97,7 +97,7 @@ macOS has no cgroups or systemd user manager. Each installer command and the lau
 | `TasksMax=512` | `RLIMIT_NPROC` = your current process count + 512 (capped at the inherited hard limit) |
 | `CPUQuota=100%` | `RLIMIT_CPU` = the command's deadline in seconds; none for a launched Pi session |
 | `UMask=0077` | `umask 077` |
-| `LimitNOFILE=1024:524288` | `RLIMIT_NOFILE` 1024 soft, 524288 hard (capped at the inherited hard limit) |
+| `LimitNOFILE=1024:524288` | `RLIMIT_NOFILE` 1024 soft, 524288 hard (capped at the inherited hard limit and at `kern.maxfilesperproc`) |
 | (no equivalent) | `RLIMIT_FSIZE` 4 GiB per written file, for installer commands and the Pi session |
 
 **Limitations, stated plainly:**
