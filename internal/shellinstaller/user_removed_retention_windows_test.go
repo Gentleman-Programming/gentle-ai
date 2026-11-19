@@ -105,9 +105,8 @@ func TestUninstallWindowsKeepsOnlyOneRemovedBackup(t *testing.T) {
 	if _, err := os.Lstat(older); !os.IsNotExist(err) {
 		t.Fatalf("the previous removed backup survived the uninstall: %v", err)
 	}
-	// The replaced family is independent and stays untouched; the operation
-	// lock file stays beside the target by design.
-	userWindowsRetentionAssertEntries(t, root, filepath.Base(backup), filepath.Base(replaced), ".install.gentle-shell.lock")
+	// The replaced family is independent and stays untouched.
+	userWindowsRetentionAssertEntries(t, root, filepath.Base(backup), filepath.Base(replaced))
 }
 
 // A previous backup that cannot be validated is preserved and reported, but

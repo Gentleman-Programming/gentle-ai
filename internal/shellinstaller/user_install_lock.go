@@ -26,18 +26,17 @@ func IsUserShellOperationInProgress(err error) bool {
 }
 
 // userOperationLockPath names the lock beside the destination, in its private
-// parent. The leading dot and the fixed suffix keep it outside every stage,
-// replaced/removed backup and registry candidate pattern; it never carries an
-// installation manifest, so discovery can never treat it as an installation.
+// parent. It exists only while an operation holds it: the holder removes it
+// on release (Windows deletes it on close, also when the owner exits). The
+// leading dot and the fixed suffix keep it outside every stage, backup and
+// registry candidate pattern, and it never carries an installation manifest.
 func userOperationLockPath(destination string) string {
 	return filepath.Join(filepath.Dir(destination), "."+filepath.Base(destination)+".gentle-shell.lock")
 }
 
 // userAcquireOperationLock takes the cross-process exclusive lock for one
 // destination without waiting. The operating system releases it when the
-// returned release runs or the holding process exits; the lock file itself is
-// left in place, because deleting it could split two holders onto different
-// files. Acquire it once at the top of an operation: a nested acquire for the
+// returned release runs or the holding process exits. Acquire it once at the top of an operation: a nested acquire for the
 // same destination in the same process reports contention, never deadlocks.
 func userAcquireOperationLock(destination string) (release func() error, err error) {
 	if destination == "" || !filepath.IsAbs(destination) || filepath.Dir(destination) == destination {

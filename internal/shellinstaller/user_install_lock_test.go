@@ -67,13 +67,54 @@ func TestUserOperationLockRejectsASecondHolderUntilReleased(t *testing.T) {
 	defer again()
 	info, err := os.Lstat(userOperationLockPath(destination))
 	if err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("lock file must stay a regular file beside the destination: %v", err)
+		t.Fatalf("a held lock must be a regular file beside the destination: %v", err)
 	}
 	if filepath.Base(userOperationLockPath(destination)) != ".install.gentle-shell.lock" {
 		t.Fatalf("unexpected lock name %q", userOperationLockPath(destination))
 	}
 	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
 		t.Fatal("locking must never create the destination")
+	}
+}
+
+func userParentEntries(t *testing.T, directory string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
+func TestUserOperationLockLeavesNoEntryBesideTheDestination(t *testing.T) {
+	destination := userLockDestination(t)
+	parent := filepath.Dir(destination)
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	before := userParentEntries(t, parent)
+	for round := 0; round < 2; round++ {
+		release, err := userAcquireOperationLock(destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := release(); err != nil {
+			t.Fatal(err)
+		}
+		if after := userParentEntries(t, parent); strings.Join(after, "\n") != strings.Join(before, "\n") {
+			t.Fatalf("round %d: the parent gained entries: before %v after %v", round, before, after)
+		}
+	}
+	// A failed operation releases the same way.
+	if _, err := userWithOperationLock(destination, func() (int, error) { return 0, os.ErrInvalid }); err != os.ErrInvalid {
+		t.Fatalf("operation error must keep its identity, got %v", err)
+	}
+	if after := userParentEntries(t, parent); strings.Join(after, "\n") != strings.Join(before, "\n") {
+		t.Fatalf("a failed operation left entries: before %v after %v", before, after)
 	}
 }
 
@@ -154,6 +195,10 @@ func TestUserOperationLockContendsAcrossProcessesAndReleasesOnExit(t *testing.T)
 			t.Fatalf("lock must be released when its owner exits: %v", err)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	// A lock file a killed owner left behind is removed by the next release.
+	if _, err := os.Lstat(userOperationLockPath(destination)); !os.IsNotExist(err) {
+		t.Fatalf("the next release must remove the lock file: %v", err)
 	}
 }
 

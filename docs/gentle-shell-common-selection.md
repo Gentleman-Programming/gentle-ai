@@ -31,7 +31,7 @@ Install, update, reconfigure, preference apply and uninstall each hold an exclus
 another Gentle Shell operation is in progress for <destination>; wait for it to finish and retry
 ```
 
-The operating system releases the lock when its owner exits, including on a crash, so no stale lock needs manual cleanup. The lock file stays in place between runs; it is never an installation and discovery never lists it. On Linux and Windows the installer worker process takes the lock, never the outer process that launched it.
+The operating system releases the lock when its owner exits, including on a crash, so no stale lock needs manual cleanup. The lock file exists only while an operation holds it: the holder removes it on release, and Windows also deletes it when the owner exits. A file a killed Linux/macOS owner left behind is unlocked; the next operation reuses and removes it. It is never an installation and discovery never lists it. On Linux and Windows the installer worker process takes the lock, never the outer process that launched it.
 
 ## Verification and rollback
 
