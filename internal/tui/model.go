@@ -1561,7 +1561,7 @@ func (m Model) View() string {
 	case ScreenKiroModelPicker:
 		return screens.RenderKiroModelPicker(m.KiroModelPicker, m.Cursor)
 	case ScreenAntigravityModelPicker:
-		return screens.RenderAntigravityModelPicker(m.AntigravityModelPicker, m.Cursor)
+		return screens.RenderAntigravityModelPicker(m.AntigravityModelPicker, m.Cursor, m.Width)
 	case ScreenCodexModelPicker:
 		return screens.RenderCodexModelPicker(m.CodexModelPicker, m.Cursor, m.Height)
 	case ScreenCommunityTools:
