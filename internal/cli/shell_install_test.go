@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -311,5 +313,62 @@ func TestRunShellInstallInlinePublishedInstallRegistersAndKeepsLaunchers(t *test
 	}
 	if done != 5 {
 		t.Fatalf("progress = %+v, want 5 done steps", h.reports)
+	}
+}
+
+// Linux and Windows install in a child process, so the typed Main SDK error
+// crosses the boundary only as the marker line; the parent restores it for
+// the TUI fallback (#6176).
+func TestShellInlineRestoresMainSDKFailureAcrossWorkerBoundary(t *testing.T) {
+	oldDirect, oldWorker, oldProbe, oldInspect, oldEntry := shellInlineDirect, shellDirectWorker, shellLaunchProbe, shellInstallInspect, shellInstallEntry
+	t.Cleanup(func() {
+		shellInlineDirect, shellDirectWorker, shellLaunchProbe, shellInstallInspect, shellInstallEntry = oldDirect, oldWorker, oldProbe, oldInspect, oldEntry
+	})
+	shellInstallInspect = func(shellinstaller.UserInstallRequest) (string, error) { return "token", nil }
+	shellLaunchProbe = func(context.Context, string) error { return nil }
+	selection := ShellInstallSelection{Request: shellinstaller.UserInstallRequest{Destination: "/home/test/install", Mode: "separate", Confirmation: "token"}, Confirmed: true, Executed: true}
+	fail := func(marker bool) func(io.Writer) error {
+		return func(stderr io.Writer) error {
+			_, _ = io.WriteString(stderr, "Main SDK + stock provider: private installation: nonzero\n")
+			if marker {
+				_, _ = io.WriteString(stderr, shellinstaller.MainSDKFailureMarker+"\n")
+			}
+			return &exec.ExitError{}
+		}
+	}
+	for _, direct := range []bool{true, false} {
+		for _, marker := range []bool{true, false} {
+			shellInlineDirect = direct
+			emit := fail(marker)
+			shellDirectWorker = func(_ context.Context, _ string, _ []string, _, stderr io.Writer) error { return emit(stderr) }
+			shellInstallEntry = func(_ context.Context, _ string, _ []string, _ io.Reader, _, stderr io.Writer) error {
+				return emit(stderr)
+			}
+			err := RunShellInstallInline(context.Background(), selection, func(shellinstaller.UserInstallProgress) {}, io.Discard)
+			var exit *exec.ExitError
+			if err == nil || !errors.As(err, &exit) || !strings.Contains(err.Error(), "Main SDK + stock provider") {
+				t.Fatalf("direct=%v marker=%v: worker error lost: %v", direct, marker, err)
+			}
+			if got := errors.Is(err, shellinstaller.ErrMainSDKInstall); got != marker {
+				t.Fatalf("direct=%v marker=%v: errors.Is(ErrMainSDKInstall) = %v", direct, marker, got)
+			}
+		}
+	}
+}
+
+// The child entry prints the marker only for a typed Main SDK failure.
+func TestShellReportEntryErrorMarksOnlyMainSDKFailures(t *testing.T) {
+	var stderr bytes.Buffer
+	typed := fmt.Errorf("composition: %w", shellinstaller.ErrMainSDKInstall)
+	if err := shellReportEntryError(typed, &stderr); err != typed || stderr.String() != shellinstaller.MainSDKFailureMarker+"\n" {
+		t.Fatalf("typed failure: err=%v stderr=%q", err, stderr.String())
+	}
+	stderr.Reset()
+	other := errors.New("Main SDK wording without the type")
+	if err := shellReportEntryError(other, &stderr); err != other || stderr.Len() != 0 {
+		t.Fatalf("untyped failure marked: err=%v stderr=%q", err, stderr.String())
+	}
+	if err := shellReportEntryError(nil, &stderr); err != nil || stderr.Len() != 0 {
+		t.Fatalf("success marked: err=%v stderr=%q", err, stderr.String())
 	}
 }

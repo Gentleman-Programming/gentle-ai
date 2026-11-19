@@ -98,7 +98,7 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 	}
 	defer cancel()
 	if args[0] != "install" {
-		return shellinstaller.RunUserEntry(ctx, self, args, os.Stdin, stdout, os.Stderr)
+		return shellReportEntryError(shellinstaller.RunUserEntry(ctx, self, args, os.Stdin, stdout, os.Stderr), os.Stderr)
 	}
 	if len(args) == 1 {
 		return runShellInstallTUI(ctx, cancel, self, stdout)
@@ -180,13 +180,13 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 			report(shellinstaller.UserInstallProgress{Index: 1, Total: 5, State: "done"})
 			report(shellinstaller.UserInstallProgress{Index: 2, Total: 5, State: "running"})
 		}
-		runErr := shellinstaller.RunUserEntry(ctx, self, args, nil, progress, progress)
+		runErr := shellInstallEntry(ctx, self, args, nil, progress, progress)
 		if runErr != nil {
 			if output := strings.TrimSpace(workerLog.String()); output != "" {
-				return fmt.Errorf("%w; worker output: %s", runErr, output)
+				runErr = fmt.Errorf("%w; worker output: %s", runErr, output)
 			}
 		}
-		return runErr
+		return shellinstaller.MainSDKFailureFromWorker(runErr, workerLog.String())
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -206,7 +206,7 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 		if output := strings.TrimSpace(workerLog.String()); output != "" {
 			waitErr = fmt.Errorf("%w; worker output: %s", waitErr, output)
 		}
-		return preserveShellFailure(waitErr)
+		return shellinstaller.MainSDKFailureFromWorker(preserveShellFailure(waitErr), workerLog.String())
 	}
 	return nil
 }
@@ -412,6 +412,15 @@ func shellExecutionContext() (context.Context, context.CancelFunc, string, error
 		cancel()
 	}
 	return ctx, cancel, self, err
+}
+
+// shellReportEntryError marks a Main SDK failure for the parent: a child
+// installer's typed error crosses the process boundary only as this line.
+func shellReportEntryError(err error, stderr io.Writer) error {
+	if errors.Is(err, shellinstaller.ErrMainSDKInstall) {
+		_, _ = fmt.Fprintln(stderr, shellinstaller.MainSDKFailureMarker)
+	}
+	return err
 }
 
 func preserveShellFailure(err error) error {

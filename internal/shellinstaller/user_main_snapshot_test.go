@@ -223,3 +223,21 @@ func TestUserMainSDKFailureIsTyped(t *testing.T) {
 		t.Fatal("untyped Main SDK wording matched the sentinel")
 	}
 }
+
+// A child worker's error regains ErrMainSDKInstall only from the exact
+// marker line, with its message unchanged.
+func TestMainSDKFailureFromWorker(t *testing.T) {
+	cause := errors.New("exit status 1; worker output: Main SDK + stock provider: nonzero")
+	err := MainSDKFailureFromWorker(cause, "progress\n"+MainSDKFailureMarker+"\nerror: Main SDK + stock provider: nonzero\n")
+	if !errors.Is(err, ErrMainSDKInstall) || !errors.Is(err, cause) || err.Error() != cause.Error() {
+		t.Fatalf("marked worker failure = %v", err)
+	}
+	for _, output := range []string{"", "Main SDK + stock provider: nonzero", "prefix " + MainSDKFailureMarker} {
+		if got := MainSDKFailureFromWorker(cause, output); got != cause {
+			t.Fatalf("output %q changed the error: %v", output, got)
+		}
+	}
+	if MainSDKFailureFromWorker(nil, MainSDKFailureMarker) != nil {
+		t.Fatal("success became a failure")
+	}
+}
