@@ -8,7 +8,7 @@ Other platforms: [macOS](gentle-shell-macos-install.md) and [Windows](gentle-she
 
 - Non-root Linux amd64; an already-qualified execution boundary or an existing delegated **systemd user manager >=254**. No sudo, new-delegation or container fallback.
 - **Root opt-in**: root installs refuse by default with a full explanation. A root operator may accept the risk explicitly — `--accept-root-risk` on the CLI, or typing `I accept the risk` on the installer TUI warning screen — and every accepted root run then uses the same sandbox properties through a transient **system** unit, records `rootRisk` in the manifest, and prints a sandbox-disabled warning on every launch. Delegated operations refuse with named causes where root has no support (for example the fresh native slice); the private-sandbox guarantees never silently pretend to hold for root.
-- Physical execution checks: cgroup2, capabilities **0**, NoNewPrivs **1**, memory **3 GiB**, swap **0**, CPU **1**, tasks **64**. Missing prerequisites refuse before package JavaScript runs.
+- Physical execution checks: cgroup2, capabilities **0**, NoNewPrivs **1**, memory **3 GiB**, swap **0**, CPU **1**, tasks **512** by default ([adjustable](#unit-limits)). Missing prerequisites refuse before package JavaScript runs.
 - The manager route requires a physically trusted stock `/usr/bin/setpriv` (util-linux). It clears inherited/ambient capabilities and sets NoNewPrivs before the supervisor starts; the supervisor still verifies all four active capability sets, UID and exact cgroup limits. The manager and its bounding set are not reconfigured; this is not full Guest qualification.
 - Selected roots and target parent: owned, private and on one filesystem. Use absolute paths containing only ASCII letters, digits, `/`, `_`, `.` and `-`, including parents; aliases/collisions refuse. TARGET, selected prefix and agent must be mutually disjoint (none contains another).
 - Supervisor executable and ancestors: current-user or root owned, not group/other writable; only root-owned sticky `/tmp` is excepted. Refusals name the unsafe ancestor. Use a qualifying location, not permission changes to an unrelated shared prefix.
@@ -143,6 +143,18 @@ If TARGET was already removed, this recovery command cannot reconstruct its lost
 Without an intact recovery snapshot, do not reinstall into the damaged target. Keep the previous target, agent configuration/history and evidence; inspect and confirm a **different, empty TARGET** using the Separate commands above, then use its bindings.
 
 There is no automatic migration. Review user-authored data before manual transfer; **do not copy managed `npmCommand`, package registrations or runtime files** from the damaged installation. A valid saved upgrade snapshot can instead use the recovery route.
+
+## Unit limits
+
+Each launch runs in a transient user unit with an exact budget. The default is 1 CPU, 3 GiB memory, no swap and 512 tasks. Builds, test suites or emulators started by the agent share that budget, so raise it when they are slow or killed by the memory limit:
+
+```bash
+gentle-ai shell limits                                   # show the current budget
+gentle-ai shell limits --cpus 6 --memory 12G --swap 8G --tasks 2048
+gentle-ai shell limits --reset                           # back to the defaults
+```
+
+The setting is per user (`~/.gentle-ai/shell-limits.json`) and applies from the next launch. Flags left out keep their value. Values must be finite: 1 CPU up to the host count, 1G to 1T memory, up to 1T swap, 512 to 65536 tasks. Sizes are rounded down to a whole MiB, because the kernel stores memory limits in pages. Native installs keep their slice at the defaults, so the setting applies to the Separate unit. The unit is created with these values and the inner leaf check verifies them exactly, so an edited or invalid setting refuses the launch instead of running unbounded.
 
 ## Safety limits
 

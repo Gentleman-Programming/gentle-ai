@@ -84,6 +84,9 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 		_, err := io.WriteString(stdout, shellInstallHelp)
 		return err
 	}
+	if args[0] == "limits" {
+		return runShellLimits(args[1:], stdout)
+	}
 	switch args[0] {
 	case "install", "launch-pnpm", "internal-launch-pnpm", "launch", "recover", "internal-check", "internal-install", "internal-install-direct", "internal-launch", "internal-recover", "internal-native-produce", "internal-native-coordinate", "internal-native-own":
 		// The delegated supervisor or worker re-enters here; internal selectors

@@ -87,15 +87,21 @@ func privateKernelData(membership, mounts string, limits []string) error {
 	if _, err := privateCgroupPath(membership, mounts); err != nil {
 		return err
 	}
-	want := fmt.Sprintf("%d\n0\n100000 100000\n%d", userUnitMemoryMaxBytes, userUnitTasksMax)
-	if len(limits) != 4 || strings.Join(limits, "\n") != want {
+	// The unit's own environment names the budget it was created with; an
+	// absent entry means the defaults and an invalid one refuses.
+	budget, err := userUnitLimitsFromEnv(os.Environ())
+	if err != nil {
+		return privateError("unavailable", err)
+	}
+	want := budget.leaf()
+	if len(limits) != 4 || strings.Join(limits, "\n") != strings.Join(want, "\n") {
 		observed := append([]string(nil), limits...)
 		for len(observed) < 4 {
 			observed = append(observed, "")
 		}
 		return privateError("unavailable", fmt.Errorf(
-			"leaf limits differ: memory.max=%q memory.swap.max=%q cpu.max=%q pids.max=%q want %d/0/\"100000 100000\"/%d",
-			observed[0], observed[1], observed[2], observed[3], userUnitMemoryMaxBytes, userUnitTasksMax))
+			"leaf limits differ: memory.max=%q memory.swap.max=%q cpu.max=%q pids.max=%q want %s/%s/%q/%s",
+			observed[0], observed[1], observed[2], observed[3], want[0], want[1], want[2], want[3]))
 	}
 	return nil
 }

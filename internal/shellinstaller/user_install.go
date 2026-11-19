@@ -76,10 +76,17 @@ const (
 
 // userServicePropertyBase holds the identical sandbox properties for the user
 // and system delegation paths: both create the same bounded transient unit.
-func userServicePropertyBase(unit string, interactive bool, cwd string) []string {
+// The unit budget comes from the GENTLE_SHELL_UNIT_LIMITS entry of env, the
+// same entry the inner leaf check reads; without it the defaults apply. An
+// invalid entry also builds the default unit, which the inner check refuses.
+func userServicePropertyBase(unit string, interactive bool, cwd string, env []string) []string {
+	limits, err := userUnitLimitsFromEnv(env)
+	if err != nil {
+		limits = DefaultUserUnitLimits()
+	}
 	result := []string{"--quiet", "--wait", "--collect", "--service-type=exec", "--expand-environment=no", "--description=Gentle Shell owned runtime", "--unit=" + unit, "--working-directory=" + cwd,
-		fmt.Sprintf("--property=MemoryMax=%d", userUnitMemoryMaxBytes), "--property=MemorySwapMax=0", "--property=CPUQuota=100%", "--property=CPUQuotaPeriodSec=100ms",
-		fmt.Sprintf("--property=TasksMax=%d", userUnitTasksMax), "--property=NoNewPrivileges=yes", "--property=UMask=0077", "--property=KillMode=control-group", "--property=TimeoutStopSec=2s",
+		fmt.Sprintf("--property=MemoryMax=%d", limits.MemoryMaxBytes), fmt.Sprintf("--property=MemorySwapMax=%d", limits.SwapMaxBytes), fmt.Sprintf("--property=CPUQuota=%d%%", limits.CPUs*100), "--property=CPUQuotaPeriodSec=100ms",
+		fmt.Sprintf("--property=TasksMax=%d", limits.TasksMax), "--property=NoNewPrivileges=yes", "--property=UMask=0077", "--property=KillMode=control-group", "--property=TimeoutStopSec=2s",
 		"--property=UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT NODE_OPTIONS NODE_PATH"}
 	if interactive {
 		result = append(result, "--pty")
@@ -90,7 +97,7 @@ func userServicePropertyBase(unit string, interactive bool, cwd string) []string
 }
 
 func userServiceArgs(unit string, interactive bool, self, cwd string, args, env []string) []string {
-	result := append([]string{"--user"}, userServicePropertyBase(unit, interactive, cwd)...)
+	result := append([]string{"--user"}, userServicePropertyBase(unit, interactive, cwd, env)...)
 	result = append(result, "/usr/bin/env", "-i")
 	result = append(result, env...)
 	return append(append(result, userCapabilityDrop, "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", "--", self, "shell"), args...)
@@ -100,7 +107,7 @@ func userServiceArgs(unit string, interactive bool, self, cwd string, args, env 
 // user manager to inherit, and none is created, so the identical sandbox
 // properties are applied by a transient system unit instead.
 func rootServiceArgs(unit string, interactive bool, self, cwd string, args, env []string) []string {
-	result := userServicePropertyBase(unit, interactive, cwd)
+	result := userServicePropertyBase(unit, interactive, cwd, env)
 	result = append(result, "/usr/bin/env", "-i")
 	result = append(result, env...)
 	return append(append(result, userCapabilityDrop, "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", "--", self, "shell"), args...)
