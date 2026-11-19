@@ -66,6 +66,24 @@ backups are a separate family and are never touched by this step. An uncertain
 older backup is preserved whole and reported; the uninstall itself is never
 undone.
 
+## Files in use
+
+Uninstall and the in-place channel switch first look for running processes
+whose image lives under the installation (for example `node.exe`,
+`supervisor.exe` or `engram.exe` started from it). When one runs, nothing moves
+and the error names each process with its PID: close these Gentle Shell
+processes and retry. Renames and removals of installer-owned paths retry a
+sharing, lock or access violation with a short bounded backoff (about 2.6 s in
+total), which covers an antivirus scan or the search indexer briefly holding a
+freshly written file. A path still busy after the last attempt reports the
+original Windows error together with the running processes, or, when none run
+from the installation, asks you to close the program holding the file. A
+CodeGraph archive that stays locked still fails the install, because the stage
+is published as the installation and must not carry it. Preference files are
+replaced atomically: the new content is written and read back as a sibling
+first and then renamed over the previous file, so an interrupted replacement
+keeps the previous file.
+
 ## Persistent memory (Engram)
 
 Separate provisions Engram from the gentle-pi it installs, never from a
