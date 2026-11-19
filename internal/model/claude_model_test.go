@@ -1,6 +1,7 @@
 package model_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -115,5 +116,56 @@ func TestClaudePhaseAssignmentsFromLegacyPreservesModelsWithDefaultEffort(t *tes
 	}
 	if _, ok := got["bad"]; ok {
 		t.Fatalf("invalid legacy alias should be ignored, got %+v", got["bad"])
+	}
+}
+
+func TestRenderClaudeODDAssignmentsResolvesRoleModelsAndEfforts(t *testing.T) {
+	tests := []struct {
+		name   string
+		legacy map[string]model.ClaudeModelAlias
+		phases map[string]model.ClaudePhaseAssignment
+		want   []string
+	}{
+		{
+			name: "no assignments uses the picker default",
+			want: []string{"| `odd-explorer` | `sonnet` | `default` |", "| `odd-worker` | `sonnet` | `default` |", "| `odd-verify` | `sonnet` | `default` |"},
+		},
+		{
+			name:   "phase assignment wins over legacy and default",
+			legacy: map[string]model.ClaudeModelAlias{"odd-worker": model.ClaudeModelHaiku, "default": model.ClaudeModelHaiku},
+			phases: map[string]model.ClaudePhaseAssignment{"odd-worker": {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortHigh}},
+			want:   []string{"| `odd-explorer` | `haiku` | `default` |", "| `odd-worker` | `opus` | `high` |", "| `odd-verify` | `haiku` | `default` |"},
+		},
+		{
+			name: "unassigned roles take the default row model and effort",
+			phases: map[string]model.ClaudePhaseAssignment{
+				"default":      {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortXHigh},
+				"odd-explorer": {Model: model.ClaudeModelSonnet, Effort: model.ClaudeEffortLow},
+			},
+			want: []string{"| `odd-explorer` | `sonnet` | `low` |", "| `odd-worker` | `opus` | `xhigh` |", "| `odd-verify` | `opus` | `xhigh` |"},
+		},
+		{
+			name:   "effort the model does not support renders default",
+			phases: map[string]model.ClaudePhaseAssignment{"odd-verify": {Model: model.ClaudeModelHaiku, Effort: model.ClaudeEffortHigh}},
+			want:   []string{"| `odd-verify` | `haiku` | `default` |"},
+		},
+		{
+			name:   "invalid phase model falls back",
+			phases: map[string]model.ClaudePhaseAssignment{"odd-verify": {Model: "bogus", Effort: model.ClaudeEffortMax}},
+			want:   []string{"| `odd-verify` | `sonnet` | `default` |"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := model.RenderClaudeODDAssignments(tt.legacy, tt.phases)
+			if !strings.HasPrefix(got, "| ODD worker class | Model | Effort |\n|---|---|---|\n") {
+				t.Fatalf("missing table header:\n%s", got)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("missing %q in:\n%s", want, got)
+				}
+			}
+		})
 	}
 }
