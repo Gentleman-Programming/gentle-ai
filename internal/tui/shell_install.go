@@ -850,9 +850,14 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 			run.done, run.err = true, event.err
 			run.confirmCancel, run.cancelling, run.notice = false, false, ""
 			if event.err != nil && run.control != nil && run.control.wasCancelled() {
-				if run.stalled {
+				switch {
+				case run.control.inPublication():
+					// The worker reported publication after the cancel was
+					// accepted: the outcome is not a clean cancellation.
+					run.err = fmt.Errorf("the run was stopped, but the worker had already started publication; inspect the installation before retrying: %w", event.err)
+				case run.stalled:
 					run.err = fmt.Errorf("no installation progress for %s; the run was stopped before publication: %w", shellInstallInactivityLimit, event.err)
-				} else {
+				default:
 					run.err = fmt.Errorf("installation cancelled before publication: %w", event.err)
 				}
 			} else if event.err != nil {

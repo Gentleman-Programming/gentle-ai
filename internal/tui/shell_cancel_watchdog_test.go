@@ -269,3 +269,19 @@ func TestShellUpdateFailedCheckOffersRetry(t *testing.T) {
 		t.Fatal("Back did not leave the failed check")
 	}
 }
+
+// A cancel accepted just before the worker reported publication is not
+// presented as a clean cancellation.
+func TestShellRunCancelRacingPublicationIsReportedAccurately(t *testing.T) {
+	m, cmd, contexts := blockingRun(t, 4, nil)
+	<-contexts
+	m = key(m, tea.KeyMsg{Type: tea.KeyEsc})
+	m = key(m, tea.KeyMsg{Type: tea.KeyEnter})
+	// The worker had already crossed into publication when the cancel landed.
+	m.shellInstallRun.control.markProgress(shellinstaller.UserInstallProgress{Index: 5, Total: 5, State: "running"})
+	m = pumpShellRun(t, m, cmd)
+	err := m.shellInstallRun.err
+	if err == nil || strings.Contains(err.Error(), "cancelled before publication") || !strings.Contains(err.Error(), "already started publication") {
+		t.Fatalf("racing cancel error = %v", err)
+	}
+}

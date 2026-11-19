@@ -47,7 +47,13 @@ func runShellDirectWorker(ctx context.Context, self string, args []string, stdou
 	// rollback. It is killed only if it outlives the grace period.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = shellDirectWorkerGrace
-	return cmd.Run()
+	err := cmd.Run()
+	if err != nil && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		// A cancel that arrived after the worker committed: it finished and
+		// exited successfully, so its result stands.
+		return nil
+	}
+	return err
 }
 
 // Platform contracts live in shell_install_platform_{windows,other}.go:

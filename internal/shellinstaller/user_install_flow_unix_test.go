@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -96,5 +97,79 @@ func TestUnixInstallBoundCoversNpmNetworkBudget(t *testing.T) {
 	}
 	if userUnixInstallBound <= 3*userUnixNpmNetworkTimeout {
 		t.Fatalf("userUnixInstallBound %s does not exceed three network-bound provision invocations at the npm budget %s each", userUnixInstallBound, userUnixNpmNetworkTimeout)
+	}
+}
+
+// cancelOnceExists is a context that reports cancellation as soon as path
+// exists: a cancel arriving exactly at the publication commit point.
+type cancelOnceExists struct {
+	context.Context
+	path string
+	once sync.Once
+	done chan struct{}
+}
+
+func (c *cancelOnceExists) Err() error {
+	if _, err := os.Lstat(c.path); err == nil {
+		c.once.Do(func() { close(c.done) })
+		return context.Canceled
+	}
+	return nil
+}
+
+func (c *cancelOnceExists) Done() <-chan struct{} {
+	_ = c.Err()
+	return c.done
+}
+
+// A cancel that reaches the worker right after the rename (a late TUI
+// cancel) never turns the published installation into a failure (#6177).
+func TestUserPublishManifestIgnoresCancelAfterCommit(t *testing.T) {
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", parent)
+	t.Setenv("GENTLE_AI_SHELL_REGISTRY_HOME", parent)
+	stage, root := filepath.Join(parent, "stage"), filepath.Join(parent, "final")
+	for _, dir := range []string{stage, stage + "/prefix", stage + "/agent", stage + "/bin"} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := userManifest{Schema: userSchema, Destination: root, Prefix: stage + "/prefix", Agent: stage + "/agent", Mode: "separate"}
+	if manifest.PrefixIdentity, err = userIdentity(stage + "/prefix"); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.AgentIdentity, err = userIdentity(stage + "/agent"); err != nil {
+		t.Fatal(err)
+	}
+	originalCleanup, originalReadback := userPublishEphemeralCleanup, userPublishReadback
+	t.Cleanup(func() { userPublishEphemeralCleanup, userPublishReadback = originalCleanup, originalReadback })
+	userPublishEphemeralCleanup = func(string) error { return nil }
+	readbacks := 0
+	userPublishReadback = func(ctx context.Context, got string) (userManifest, error) {
+		readbacks++
+		if got != root {
+			return userManifest{}, errors.New("readback of another root")
+		}
+		if err := ctx.Err(); err != nil {
+			return userManifest{}, err
+		}
+		return manifest, nil
+	}
+	ctx, committed := userWithPublicationCommit(&cancelOnceExists{Context: context.Background(), path: root, done: make(chan struct{})})
+	result, publishErr := userPublishManifest(ctx, stage, stage+"/prefix", stage+"/agent", manifest)
+	if publishErr != nil {
+		t.Fatalf("published installation reported a failure after a late cancel: %v", publishErr)
+	}
+	if !*committed || readbacks != 1 || result.Destination != root || result.State != "ComponentInstalled" {
+		t.Fatalf("publication result = %+v committed=%v readbacks=%d", result, *committed, readbacks)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "installation.json")); err != nil {
+		t.Fatalf("published manifest missing: %v", err)
 	}
 }

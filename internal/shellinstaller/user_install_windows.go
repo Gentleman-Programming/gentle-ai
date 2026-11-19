@@ -926,8 +926,10 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	fmt.Fprintln(os.Stderr, "Windows install phase: verify")
 	// The verification runs on its own budget: the install deadline is spent,
 	// and an inherited deadline here would leave the published installation
-	// unqualified (issue #5714). Cooperative cancellation still applies.
-	verifyCtx, cancelVerify := userWindowsVerifyContext(ctx)
+	// unqualified (issue #5714). The move is the commit point, so a late
+	// cancel no longer applies either: it would report a published
+	// installation as failed.
+	verifyCtx, cancelVerify := userWindowsVerifyContext(context.WithoutCancel(ctx))
 	defer cancelVerify()
 	if err := userWindowsVerify(verifyCtx, req.Destination, io.Discard, io.Discard); err != nil {
 		return result, errors.Join(err, errors.New("published Windows installation remains unqualified; preserved, no success reported"))
