@@ -5,6 +5,7 @@ package shellinstaller
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -160,5 +161,76 @@ func TestShellReplacementRoutingByNewSelection(t *testing.T) {
 	args = []string{target, "separate", "", "", token, "--experience", encoded}
 	if _, fresh, err := userNativeFreshRequest(args); err != nil || fresh {
 		t.Fatalf("Main reconfigure did not route to the legacy path: fresh=%v err=%v", fresh, err)
+	}
+}
+
+// After a successful publish only the newest replaced backup is retained
+// (#6182), mirroring the Windows retention policy: owned, validated sibling
+// trees only, symlinks never followed, uncertain trees preserved and named.
+func TestPruneReplacedBackupsKeepsOnlyTheNewest(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Chmod(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, "installed")
+	writeInstallFixture(t, target, userManifest{})
+	backup := func(stamp string) string { return target + ".replaced-" + stamp }
+	owned := func(path string) {
+		writeInstallFixture(t, path, userManifest{Schema: userSchema, Destination: target, Prefix: target + "/prefix", Agent: target + "/agent", Mode: "separate"})
+		if err := os.MkdirAll(filepath.Join(path, "runtime", "node"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := backup("20260301T000000Z")
+	older := []string{backup("20260101T000000Z"), backup("20260201T000000Z"), backup("20980101T000000Z")}
+	skewed := backup("20990101T000000Z")
+	for _, path := range append([]string{keep, skewed}, older...) {
+		owned(path)
+	}
+	foreign := backup("20250101T000000Z")
+	writeInstallFixture(t, foreign, userManifest{Schema: userSchema, Destination: filepath.Join(home, "elsewhere"), Mode: "separate"})
+	victim := filepath.Join(home, "victim")
+	owned(victim)
+	link := backup("20250201T000000Z")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
+	}
+	unrelated := []string{target + ".replaced-junk", filepath.Join(home, "other.replaced-20200101T000000Z")}
+	for _, path := range unrelated {
+		owned(path)
+	}
+
+	// A missing keep refuses before any candidate is touched.
+	if err := userPruneReplacedBackups(target, backup("20260401T000000Z")); err == nil {
+		t.Fatal("prune ran without its keep on disk")
+	}
+	if _, err := os.Lstat(older[0]); err != nil {
+		t.Fatalf("missing keep still removed a candidate: %v", err)
+	}
+
+	err := userPruneReplacedBackups(target, keep)
+	if err == nil || !strings.Contains(err.Error(), foreign) || !strings.Contains(err.Error(), link) {
+		t.Fatalf("uncertain candidates were not reported: %v", err)
+	}
+	for _, path := range older {
+		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("older backup %s survived: %v", path, statErr)
+		}
+	}
+	for _, path := range append([]string{target, keep, skewed, foreign, link, filepath.Join(victim, "installation.json")}, unrelated...) {
+		if _, statErr := os.Lstat(path); statErr != nil {
+			t.Fatalf("retained path %s was removed: %v", path, statErr)
+		}
+	}
+	// A second prune with nothing left to remove is a clean no-op apart from
+	// the preserved uncertain trees.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(foreign); err != nil {
+		t.Fatal(err)
+	}
+	if err := userPruneReplacedBackups(target, keep); err != nil {
+		t.Fatalf("clean prune failed: %v", err)
 	}
 }
