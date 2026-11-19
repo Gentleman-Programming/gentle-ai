@@ -38,6 +38,9 @@ MODE = sys.argv[1] if len(sys.argv) == 2 else 'full'
 REPORT = {}
 COMMAND_FAILURE = None
 FAULT = ''
+# TEST-only answer of the pi.dev latest-version stub: the release a stock
+# `pi update --self` installs. 1.0.0 lies outside every reviewed lock.
+PI_LATEST = '1.0.0'
 FAULT_SEEN = threading.Event()
 FAULT_RELEASE = threading.Event()
 CACHE = {}
@@ -313,7 +316,7 @@ class Mirror(http.server.BaseHTTPRequestHandler):
                 FAULT_SEEN.set()
                 status, headers, raw = 404, {}, b''
             elif host == 'pi.dev' and self.path == '/api/latest-version':
-                status, headers, raw = 200, {'content-type': 'application/json'}, b'{"version":"1.0.0"}'
+                status, headers, raw = 200, {'content-type': 'application/json'}, json.dumps({'version': PI_LATEST}, separators=(',', ':')).encode()
             else:
                 status, headers, raw = public_bytes(host, self.path)
             self.send_response(status)
@@ -1158,7 +1161,7 @@ def mvp_smoke(personal):
 
 
 def main():
-    global FAULT
+    global FAULT, PI_LATEST
     require(MODE in {'probe', 'direct', 'full', 'smoke'}, 'explicit qualification mode')
     if MODE == 'probe':
         kernel()
@@ -1245,11 +1248,15 @@ def main():
         require('0.99.2' in run([str(target / 'bin/pi'), '--version']), 'authenticated prior did not launch')
         nested = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/package.json'
         require(json.loads(nested.read_text())['version'] == '0.99.2', 'actual prior nested TUI placement differs')
+        # The stub selects the Pi release the generated lock pinned: the only
+        # upgrade target whose whole graph the provisioner authenticates.
+        lock_pi = json.loads((target / 'runtime/project/package-lock.json').read_text())['packages']['node_modules/@earendil-works/pi-coding-agent']['version']
+        PI_LATEST = lock_pi
         run([str(target / 'bin/pi'), 'update', '--self'], cwd=WORK / 'project', timeout=180)
-        require('1.3.0' in run([str(target / 'bin/pi'), '--version']), 'actual stock prior-to-next transition absent')
+        require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'actual stock prior-to-locked transition absent')
         require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'update replaced physical selected roots')
         require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'update changed owned command bindings')
-        REPORT['trueUpgrade'] = 'actual published 0.99.2 to 1.3.0 stock updater; TEST-only Pi API selection, not public latest authority'
+        REPORT['trueUpgrade'] = 'actual published 0.99.2 to locked %s stock updater; TEST-only Pi API selection, not public latest authority' % lock_pi
         run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180)
         run([str(target / 'bin/pi'), '--version'], cwd=WORK / 'project')
         REPORT['stockForce'] = 'actual separate same-version reinstall after true upgrade'
@@ -1263,8 +1270,24 @@ def main():
         upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
         run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
         require(coding_metadata.read_bytes() == expected_metadata, 'separate upgrade preimages did not restore known bytes')
-        require('1.3.0' in run([str(target / 'bin/pi'), '--version']), 'restored known cohort did not retry successfully')
+        require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'restored known cohort did not retry successfully')
         REPORT['upgradeRecovery'] = 'actual unknown cohort refused, full saved trees restored and authenticated retry observed'
+        # A stock self-update to a release outside the reviewed lock (#6170):
+        # npm writes it, the post-launch readback refuses its unauthenticated
+        # packages, the next launch stays refused, and confirmed recovery
+        # restores the authenticated locked cohort.
+        PI_LATEST = '1.0.0'
+        refused = run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180, good=False)
+        require('global package lacks authenticated metadata' in refused, 'out-of-lock self-update was not refused for its unauthenticated packages')
+        require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'refused update replaced physical selected roots')
+        require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'refused update changed owned command bindings')
+        run([str(target / 'bin/pi'), '--version'], good=False)
+        upgrade_recovery = run([SUPERVISOR, 'shell', 'recover', str(target), 'inspect'])
+        upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
+        run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
+        require(coding_metadata.read_bytes() == expected_metadata, 'out-of-lock recovery did not restore known bytes')
+        require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'authenticated cohort did not launch after out-of-lock refusal')
+        REPORT['outOfLockUpdate'] = 'actual stock self-update to 1.0.0 outside the lock refused, launch held, locked %s restored' % lock_pi
         shared_prefix, shared_agent = WORK / 'shared-prefix', WORK / 'shared-agent'
         shutil.copytree(manifest['Prefix'], shared_prefix, symlinks=True)
         drop_separate_companion(shared_prefix)
@@ -1319,7 +1342,7 @@ def main():
         if MODE == 'full':
             format_data = WORK / 'gofmt.data'
             require(format_data.is_file() and format_data.stat().st_size == 0, 'whole source formatting not yet qualified')
-            require(all(key in REPORT for key in ['manager', 'nativeBackend', 'trueUpgrade', 'upgradeRecovery', 'installerTUI', 'installerCancel', 'publicationUncertainty', 'sharedRecovery', 'recoveryFaultMatrix']), 'full observed qualification record incomplete')
+            require(all(key in REPORT for key in ['manager', 'nativeBackend', 'trueUpgrade', 'upgradeRecovery', 'outOfLockUpdate', 'installerTUI', 'installerCancel', 'publicationUncertainty', 'sharedRecovery', 'recoveryFaultMatrix']), 'full observed qualification record incomplete')
     finally:
         server.shutdown()
         server.server_close()
