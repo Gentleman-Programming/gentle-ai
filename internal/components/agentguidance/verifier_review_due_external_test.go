@@ -33,7 +33,7 @@ func TestVerifierReviewDueContract(t *testing.T) {
 			for _, want := range []string{
 				"When `review_due` is true (`high_risk`), or when the user explicitly asks for a review",
 				"When `review_due` is false, record `review_due_reason` and continue",
-				"`under_budget` stays pending in the slice until a later commit reaches the budget",
+				"`under_budget` (medium risk; the name is a frozen wire spelling, not a size cap) is not auto-reviewed and stays pending in the slice until a high-risk commit closes it or the user asks for review",
 				"assess the open slice first. Review the pending slice only when `review_due` is true or the user explicitly asks; otherwise preserve the pending boundary and proceed without starting review",
 				"A task boundary neither authorizes review nor advances a reviewed boundary",
 				"report the missing assessment proof; never infer `review_due` or construct a preflight transition",

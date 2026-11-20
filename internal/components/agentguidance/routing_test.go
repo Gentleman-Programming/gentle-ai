@@ -468,7 +468,7 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		}},
 		{"a non-due assessment records its reason and continues", []string{
 			"When `review_due` is false, record `review_due_reason` and continue: `passive` needs no review and the boundary advances",
-			"`under_budget` stays pending in the slice until a later commit reaches the budget",
+			"`under_budget` (medium risk; the name is a frozen wire spelling, not a size cap) is not auto-reviewed and stays pending in the slice until a high-risk commit closes it or the user asks for review",
 			"`already_reviewed` means this exact range is already covered by terminal authority",
 		}},
 		// A task boundary must preserve the provider's due decision and must not
@@ -480,7 +480,7 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		// so the assessment outcome is recorded per commit.
 		{"boundaries advance and outcomes are recorded per commit", []string{
 			"The first boundary is the branch point, and every reviewed boundary becomes the next base",
-			"Record per commit the assessed tier and outcome: granted, declined, passive, under budget, already reviewed, or unavailable",
+			"Record per commit the assessed tier and outcome: granted, declined, passive, medium (not auto-reviewed), already reviewed, or unavailable",
 			"An unavailable or failed assessment never lowers the tier: report the missing assessment proof; never infer `review_due` or construct a preflight transition",
 			"Never infer low risk from a failed assessment",
 		}},
