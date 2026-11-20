@@ -945,3 +945,115 @@ func TestEvidenceReportsUnavailableInspectionPhrases(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractBoundedSingleJSONObjectRecoversResultAfterReasoningProse is #4873:
+// a reasoning-tagged prefix whose prose leaves braces open used to swallow the
+// following, complete reviewer result, so admission reported "no complete JSON
+// object" and the collect slot was reoffered forever.
+func TestExtractBoundedSingleJSONObjectRecoversResultAfterReasoningProse(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		payload   string
+		want      string
+		ambiguous bool
+	}{
+		{
+			name:    "unbalanced brace in reasoning before the result",
+			payload: "reasoning: the guarded block opens with `if err != nil {` and never closes there\n{\"findings\":[],\"evidence\":[\"inspection completed\"]}",
+			want:    `{"findings":[],"evidence":["inspection completed"]}`,
+		},
+		{
+			name:      "two complete objects stay ambiguous after unbalanced prose",
+			payload:   "reasoning: `if err != nil {` never closes\n{\"findings\":[],\"evidence\":[\"first\"]}\n{\"findings\":[],\"evidence\":[\"second\"]}",
+			want:      "",
+			ambiguous: true,
+		},
+		{
+			name:    "unmatched prose quote before an open prose brace",
+			payload: "reasoning: he said \"the block opens { and never closes\n{\"findings\":[],\"evidence\":[\"inspection completed\"]}",
+			want:    `{"findings":[],"evidence":["inspection completed"]}`,
+		},
+		{
+			name:    "balanced non-JSON braces and an open block before the result",
+			payload: "reasoning: { not json } and the guarded block opens with `func() {` here\n{\"findings\":[],\"evidence\":[\"inspection completed\"]}",
+			want:    `{"findings":[],"evidence":["inspection completed"]}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			extracted, decision, err := ExtractBoundedSingleJSONObject([]byte(test.payload), 4096)
+			if test.ambiguous {
+				if err == nil || decision != ArtifactAdmissionAmbiguous {
+					t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %q, %v; want ambiguous", extracted, decision, err)
+				}
+				return
+			}
+			if err != nil || decision != ArtifactAdmissionCompleted {
+				t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %q, %v; want completed", extracted, decision, err)
+			}
+			if got := string(extracted); got != test.want {
+				t.Fatalf("extracted = %q; want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestRecoverBoundedJSONObjectCandidatesStopsOnByteBudget pins the aggregate
+// work bound: many short brace starts in front of one long invalid suffix make
+// every attempt rescan that suffix, so the attempt limit alone does not bound
+// the traversal.
+func TestRecoverBoundedJSONObjectCandidatesStopsOnByteBudget(t *testing.T) {
+	payload := []byte(strings.Repeat(`{"x":`, 64) + `"` + strings.Repeat("A", 1<<16) + `",!`)
+	candidates, truncated, exhausted := recoverBoundedJSONObjectCandidates(payload)
+	if truncated || !exhausted || len(candidates) != 0 {
+		t.Fatalf("recoverBoundedJSONObjectCandidates() = %d candidate(s), truncated=%v, exhausted=%v; want exhausted with no candidate", len(candidates), truncated, exhausted)
+	}
+}
+
+// TestExtractBoundedSingleJSONObjectKeepsRecoveringManyProseBraces is the other
+// half of the work bound: a long reasoning prefix with many prose braces is
+// cheap per attempt, so the byte budget must not starve the recovery the
+// change exists for.
+func TestExtractBoundedSingleJSONObjectKeepsRecoveringManyProseBraces(t *testing.T) {
+	payload := strings.Repeat("reasoning { prose ", 200) + `{"findings":[],"evidence":["inspection completed"]}`
+	extracted, decision, err := ExtractBoundedSingleJSONObject([]byte(payload), len(payload)+1)
+	if err != nil || decision != ArtifactAdmissionCompleted {
+		t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %q, %v; want completed", extracted, decision, err)
+	}
+	if got := string(extracted); got != `{"findings":[],"evidence":["inspection completed"]}` {
+		t.Fatalf("extracted = %q", got)
+	}
+}
+
+// TestExtractBoundedSingleJSONObjectRefusesNestedObjectOfTruncatedPayload is
+// the fail-closed half of #4873: recovery must never admit a complete object
+// nested inside a payload that was cut mid-object.
+func TestExtractBoundedSingleJSONObjectRefusesNestedObjectOfTruncatedPayload(t *testing.T) {
+	payload := `{"subject_hash":"sha256:0","findings":[{"id":"R3-001","evidence":["ok"]}`
+	_, decision, err := ExtractBoundedSingleJSONObject([]byte(payload), 4096)
+	if err == nil || decision != ArtifactAdmissionIncomplete {
+		t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %v; want incomplete", decision, err)
+	}
+}
+
+// TestExtractBoundedSingleJSONObjectRefusesRecoveryItCannotProve covers the two
+// ways the recovery pass can fail to prove a single result: a nested object of
+// a malformed wrapper that does not close out the payload, and a brace budget
+// that expires before every brace was examined.
+func TestExtractBoundedSingleJSONObjectRefusesRecoveryItCannotProve(t *testing.T) {
+	malformedWrapper := `{"wrapper":!,"result":{"findings":[],"evidence":["nested"]}}`
+	unclosedWrapper := `{"wrapper":!,"result":{"findings":[],"evidence":["nested"]}`
+	exhaustedPayload := strings.Repeat("{x", jsonObjectRecoveryAttemptLimit) + `{"findings":[],"evidence":["first"]}{"findings":[],"evidence":["second"]}`
+	for _, test := range []struct{ name, payload string }{
+		{name: "nested object of a malformed wrapper", payload: malformedWrapper},
+		{name: "nested object of an unclosed malformed wrapper", payload: unclosedWrapper},
+		{name: "brace inside a wrapper string", payload: `{"wrapper":"}","bad":!,"result":{"findings":[],"evidence":["nested"]}`},
+		{name: "attempt budget exhausted before every brace", payload: exhaustedPayload},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, decision, err := ExtractBoundedSingleJSONObject([]byte(test.payload), len(test.payload)+1)
+			if err == nil || decision != ArtifactAdmissionIncomplete {
+				t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %v; want incomplete", decision, err)
+			}
+		})
+	}
+}
