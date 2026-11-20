@@ -349,12 +349,11 @@ func TestUserWindowsVerifyContextRespectsCooperativeCancel(t *testing.T) {
 
 func TestWindowsEnvironmentForwardsMainFallback(t *testing.T) {
 	t.Setenv("GENTLE_AI_MAIN_FALLBACK", "1")
-	t.Setenv("GENTLE_AI_SHELL_STEPS", "1")
 	env, err := userWindowsEnvironment("")
 	if err != nil {
 		t.Skip(err)
 	}
-	for _, want := range []string{"GENTLE_AI_MAIN_FALLBACK=1", "GENTLE_AI_SHELL_STEPS=1"} {
+	for _, want := range []string{"GENTLE_AI_MAIN_FALLBACK=1"} {
 		found := false
 		for _, entry := range env {
 			found = found || entry == want

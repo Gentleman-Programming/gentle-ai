@@ -77,11 +77,15 @@ func TestShellMainFallbackEscAndCtrlCDecline(t *testing.T) {
 	}
 }
 
-// The fallback is recognized through the typed error, never the wording.
-func TestShellMainFallbackUsesTypedError(t *testing.T) {
+// The fallback is recognized through the typed error in-process and through
+// the worker's "Main SDK" output across a process boundary.
+func TestShellMainFallbackRecognition(t *testing.T) {
 	unsetShellRunEnv(t)
-	if m := failedMainRun(t, errors.New("Main SDK + stock provider: nonzero")); m.shellInstallRun.fallbackAvailable {
-		t.Fatal("untyped error text offered the fallback")
+	if m := failedMainRun(t, errors.New("unrelated install failure")); m.shellInstallRun.fallbackAvailable {
+		t.Fatal("unrelated error offered the fallback")
+	}
+	if m := failedMainRun(t, errors.New("exit status 1; worker output: Main SDK + stock provider: nonzero")); !m.shellInstallRun.fallbackAvailable {
+		t.Fatal("worker output naming Main SDK did not offer the fallback")
 	}
 	reworded := fmt.Errorf("composition refused: %w", shellinstaller.ErrMainSDKInstall)
 	if m := failedMainRun(t, reworded); !m.shellInstallRun.fallbackAvailable || !strings.Contains(m.View(), "try last qualified Main") {

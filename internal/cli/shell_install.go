@@ -108,7 +108,7 @@ func RunShell(args []string, stdout io.Writer) (resultErr error) {
 	}
 	defer cancel()
 	if args[0] != "install" {
-		return shellReportEntryError(shellinstaller.RunUserEntry(ctx, self, args, os.Stdin, stdout, os.Stderr), os.Stderr)
+		return shellinstaller.RunUserEntry(ctx, self, args, os.Stdin, stdout, os.Stderr)
 	}
 	if len(args) == 1 {
 		return runShellInstallTUI(ctx, cancel, self, stdout)
@@ -190,13 +190,6 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 			report(shellinstaller.UserInstallProgress{Index: 1, Total: 5, State: "done"})
 			report(shellinstaller.UserInstallProgress{Index: 2, Total: 5, State: "running"})
 		}
-		// The worker prints the Main SDK marker only when its parent asks for
-		// it; the Windows worker environment forwards this same signal.
-		// Darwin runs the entry in-process, where the signal would print step
-		// lines over the TUI and the typed error already arrives intact.
-		if runtime.GOOS == "windows" {
-			defer shellRequestWorkerSteps()()
-		}
 		if runtime.GOOS == "darwin" {
 			// The in-process installer has no output to parse: its own steps
 			// (publish included) reach the caller through the context.
@@ -207,8 +200,9 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 			if output := strings.TrimSpace(workerLog.String()); output != "" {
 				runErr = fmt.Errorf("%w; worker output: %s", runErr, output)
 			}
+			runErr = workerLog.flag(runErr)
 		}
-		return workerLog.mainSDKFailure(runErr)
+		return runErr
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -228,7 +222,7 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 		if output := strings.TrimSpace(workerLog.String()); output != "" {
 			waitErr = fmt.Errorf("%w; worker output: %s", waitErr, output)
 		}
-		return workerLog.mainSDKFailure(preserveShellFailure(waitErr))
+		return preserveShellFailure(workerLog.flag(waitErr))
 	}
 	return nil
 }
@@ -254,7 +248,7 @@ func (w *shellStepWriter) Write(p []byte) (int, error) {
 		w.buffer = w.buffer[index+1:]
 	}
 	if len(w.buffer) > shellStepLineLimit {
-		// An unterminated oversized line is never a marker; keep its tail only.
+		// An unterminated oversized line is never a step line; keep it in the log only.
 		_, _ = w.log.Write(w.buffer)
 		w.buffer = nil
 	}
@@ -281,56 +275,73 @@ func (w *shellStepWriter) observe(line string) {
 }
 
 type boundedWorkerLog struct {
-	mu      sync.Mutex
-	data    []byte
-	limit   int
-	pending []byte // current unterminated line, bounded
-	marked  bool   // a full marker line was seen while streaming
+	mu    sync.Mutex
+	data  []byte
+	limit int
+	// line is the current unterminated line, capped, and mainSDK remembers
+	// that an "Error:" line named the Main SDK, so a long diagnostic that
+	// pushes the line's prefix out of data cannot hide the failure.
+	line    []byte
+	mainSDK bool
 }
 
-const workerMarkerLineLimit = 1024
-
-// scan records the Main SDK marker as lines stream past, so a later long line
-// evicting it from the bounded tail cannot lose it. Callers hold w.mu.
-func (w *boundedWorkerLog) scan(p []byte) {
-	for _, b := range p {
-		if b == '\n' {
-			if strings.TrimSpace(string(w.pending)) == shellinstaller.MainSDKFailureMarker {
-				w.marked = true
-			}
-			w.pending = w.pending[:0]
-			continue
-		}
-		if len(w.pending) <= workerMarkerLineLimit {
-			w.pending = append(w.pending, b)
-		}
-	}
-}
-
-func (w *boundedWorkerLog) sawMarker() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.marked || (len(w.pending) <= workerMarkerLineLimit && strings.TrimSpace(string(w.pending)) == shellinstaller.MainSDKFailureMarker)
-}
-
-// mainSDKFailure restores ErrMainSDKInstall on err when the worker emitted the
-// marker anywhere in its output.
-func (w *boundedWorkerLog) mainSDKFailure(err error) error {
-	if w.sawMarker() {
-		return shellinstaller.MainSDKFailureFromWorker(err, shellinstaller.MainSDKFailureMarker)
-	}
-	return shellinstaller.MainSDKFailureFromWorker(err, w.String())
-}
+const workerLogLineLimit = 64 << 10
 
 func (w *boundedWorkerLog) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.scan(p)
+	rest := p
+	for len(rest) > 0 {
+		index := bytes.IndexByte(rest, '\n')
+		if index < 0 {
+			if room := workerLogLineLimit - len(w.line); room > 0 {
+				w.line = append(w.line, rest[:min(room, len(rest))]...)
+			}
+			break
+		}
+		if room := workerLogLineLimit - len(w.line); room > 0 {
+			w.line = append(w.line, rest[:min(room, index)]...)
+		}
+		w.observeLine()
+		w.line = w.line[:0]
+		rest = rest[index+1:]
+	}
 	w.data = append(w.data, p...)
 	if len(w.data) > w.limit {
 		w.data = append([]byte(nil), w.data[len(w.data)-w.limit:]...)
 	}
 	return len(p), nil
+}
+
+func (w *boundedWorkerLog) observeLine() {
+	if bytes.HasPrefix(w.line, []byte("Error:")) && bytes.Contains(w.line, []byte("Main SDK")) {
+		w.mainSDK = true
+	}
+}
+
+// mainSDKFailure reports whether the worker named a Main SDK failure on an
+// "Error:" line, including a last line without a newline.
+func (w *boundedWorkerLog) mainSDKFailure() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.line) > 0 {
+		w.observeLine()
+	}
+	return w.mainSDK
+}
+
+// mainSDKFlagged keeps err's message and chain and also matches
+// shellinstaller.ErrMainSDKInstall.
+type mainSDKFlagged struct{ err error }
+
+func (e mainSDKFlagged) Error() string   { return e.err.Error() }
+func (e mainSDKFlagged) Unwrap() []error { return []error{e.err, shellinstaller.ErrMainSDKInstall} }
+
+func (w *boundedWorkerLog) flag(err error) error {
+	if err != nil && w.mainSDKFailure() {
+		return mainSDKFlagged{err}
+	}
+	return err
 }
 
 func (w *boundedWorkerLog) String() string {
@@ -471,31 +482,6 @@ func shellExecutionContext() (context.Context, context.CancelFunc, string, error
 		cancel()
 	}
 	return ctx, cancel, self, err
-}
-
-// shellReportEntryError marks a Main SDK failure for the parent: a child
-// installer's typed error crosses the process boundary only as this line.
-// Only an inline parent asks for it (GENTLE_AI_SHELL_STEPS=1); a plain CLI
-// install keeps its stderr unchanged.
-func shellReportEntryError(err error, stderr io.Writer) error {
-	if errors.Is(err, shellinstaller.ErrMainSDKInstall) && os.Getenv("GENTLE_AI_SHELL_STEPS") == "1" {
-		_, _ = fmt.Fprintln(stderr, shellinstaller.MainSDKFailureMarker)
-	}
-	return err
-}
-
-// shellRequestWorkerSteps sets the inline-parent signal for a worker started
-// with the caller environment and returns the restore.
-func shellRequestWorkerSteps() func() {
-	previous, had := os.LookupEnv("GENTLE_AI_SHELL_STEPS")
-	_ = os.Setenv("GENTLE_AI_SHELL_STEPS", "1")
-	return func() {
-		if had {
-			_ = os.Setenv("GENTLE_AI_SHELL_STEPS", previous)
-		} else {
-			_ = os.Unsetenv("GENTLE_AI_SHELL_STEPS")
-		}
-	}
 }
 
 func preserveShellFailure(err error) error {

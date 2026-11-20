@@ -357,11 +357,6 @@ func userWindowsUninstall(install UserShellInstall) (string, error) {
 	if _, err := os.Lstat(backup); !os.IsNotExist(err) {
 		return "", errors.Join(err, errors.New("Windows uninstall backup already exists"))
 	}
-	// A process running from the installation would survive the rename and
-	// keep its files undeletable in the backup: name it and refuse first.
-	if err := userWindowsRefuseRunning(install.Target); err != nil {
-		return "", err
-	}
 	if err := userWindowsRenameBusy(install.Target, install.Target, backup); err != nil {
 		return "", err
 	}
