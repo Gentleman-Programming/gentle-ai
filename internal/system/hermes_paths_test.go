@@ -89,3 +89,19 @@ func TestHermesConfigDirFor(t *testing.T) {
 		})
 	}
 }
+
+// TestHermesConfigDirIgnoresLocalAppDataOutsideHome checks that a home whose
+// HOME/USERPROFILE were redirected (as tests and sandboxes do) never resolves
+// to an ambient %LOCALAPPDATA% that lives outside it.
+func TestHermesConfigDirIgnoresLocalAppDataOutsideHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HERMES_HOME", "")
+	t.Setenv("LOCALAPPDATA", filepath.Join(t.TempDir(), "ambient-localappdata"))
+
+	got := system.HermesConfigDirFor(home, "windows")
+	if want := filepath.Join(home, "AppData", "Local", "hermes"); got != want {
+		t.Fatalf("HermesConfigDirFor() = %q, want %q", got, want)
+	}
+}

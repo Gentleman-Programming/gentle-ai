@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // Run the public dispatcher in a separate process with an isolated home. This
@@ -334,6 +336,9 @@ func TestSkillRegistrySourceUnionOrderAndEmptyRows(t *testing.T) {
 	}
 	for _, root := range userRoots {
 		path := filepath.Join(home, filepath.FromSlash(root))
+		if root == ".hermes/skills" {
+			path = filepath.Join(system.HermesConfigDir(home), "skills")
+		}
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatal(err)
 		}
