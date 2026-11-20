@@ -5,7 +5,6 @@ package shellinstaller
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
