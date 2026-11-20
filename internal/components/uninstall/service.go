@@ -2027,7 +2027,7 @@ func removeManagedAntigravityPluginAsset(path string) operation {
 		typeID: opRemoveFile,
 		path:   path,
 		apply: func(path string) (bool, bool, error) {
-			removed, err := engram.RemoveManagedAntigravityPluginAsset(path)
+			removed, err := engram.RemoveManagedAntigravityPluginAssetForUninstall(path)
 			return removed, removed, err
 		},
 	}

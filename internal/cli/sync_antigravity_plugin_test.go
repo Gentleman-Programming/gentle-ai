@@ -33,69 +33,53 @@ func setupAntigravitySyncHome(t *testing.T) string {
 	return home
 }
 
-// TestRunSyncAntigravityReportsOnlyWrittenPluginFiles pins #5614: a full sync
-// listed the three Engram plugin files as changed even when they were current.
-func TestRunSyncAntigravityReportsOnlyWrittenPluginFiles(t *testing.T) {
+// TestRunSyncAntigravityReportsOnlyWrittenFiles pins that a full sync
+// lists Antigravity global MCP config as changed only when written.
+func TestRunSyncAntigravityReportsOnlyWrittenFiles(t *testing.T) {
 	home := setupAntigravitySyncHome(t)
 	args := []string{"--agents", "antigravity"}
-	plugin := engram.AntigravityPluginAssetPaths(home)
+	global := filepath.Join(home, ".gemini", "config", "mcp_config.json")
 
 	first, err := RunSync(args)
 	if err != nil {
 		t.Fatalf("RunSync() first error = %v", err)
 	}
-	for _, path := range plugin {
-		if !containsPath(first.ChangedFiles, path) {
-			t.Fatalf("first sync ChangedFiles = %v, want written plugin asset %q", first.ChangedFiles, path)
-		}
+	if !containsPath(first.ChangedFiles, global) {
+		t.Fatalf("first sync ChangedFiles = %v, want written global MCP config %q", first.ChangedFiles, global)
 	}
 
 	second, err := RunSync(args)
 	if err != nil {
 		t.Fatalf("RunSync() second error = %v", err)
 	}
-	for _, path := range plugin {
-		if containsPath(second.ChangedFiles, path) {
-			t.Fatalf("second sync ChangedFiles = %v, must not list unchanged plugin asset %q", second.ChangedFiles, path)
-		}
+	if containsPath(second.ChangedFiles, global) {
+		t.Fatalf("second sync ChangedFiles = %v, must not list unchanged global MCP config %q", second.ChangedFiles, global)
 	}
 
-	// A really changed asset is still reported.
-	if err := os.WriteFile(plugin[2], []byte("{}\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(hooks) error = %v", err)
+	// Rewriting the file causes it to be reported as changed again.
+	if err := os.WriteFile(global, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(global) error = %v", err)
 	}
 	third, err := RunSync(args)
 	if err != nil {
 		t.Fatalf("RunSync() third error = %v", err)
 	}
-	if !containsPath(third.ChangedFiles, plugin[2]) || containsPath(third.ChangedFiles, plugin[0]) {
-		t.Fatalf("third sync ChangedFiles = %v, want only the rewritten %q among plugin assets", third.ChangedFiles, plugin[2])
+	if !containsPath(third.ChangedFiles, global) {
+		t.Fatalf("third sync ChangedFiles = %v, want rewritten %q", third.ChangedFiles, global)
 	}
 }
 
-// TestRunSyncAntigravityMigratesLegacyPlugin moves the plugin an older
-// gentle-ai wrote under antigravity-cli/plugins to the shared config root
-// (#5930) and reports the retired legacy assets.
-func TestRunSyncAntigravityMigratesLegacyPlugin(t *testing.T) {
+// TestRunSyncAntigravityRetiresLegacyPlugin retires legacy plugin assets
+// left behind by older gentle-ai versions (#5988).
+func TestRunSyncAntigravityRetiresLegacyPlugin(t *testing.T) {
 	home := setupAntigravitySyncHome(t)
-	args := []string{"--agents", "antigravity"}
-	if _, err := RunSync(args); err != nil {
-		t.Fatalf("RunSync() seed error = %v", err)
+	legacyDir := engram.AntigravityLegacyPluginDir(home)
+	if err := engram.WriteManagedAntigravityPluginForTest(legacyDir, "engram"); err != nil {
+		t.Fatalf("WriteManagedAntigravityPluginForTest() error = %v", err)
 	}
 	legacy := engram.AntigravityLegacyPluginAssetPaths(home)
-	for i, path := range engram.AntigravityPluginAssetPaths(home) {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", path, err)
-		}
-		if err := os.MkdirAll(filepath.Dir(legacy[i]), 0o755); err != nil {
-			t.Fatalf("MkdirAll(legacy) error = %v", err)
-		}
-		if err := os.WriteFile(legacy[i], raw, 0o644); err != nil {
-			t.Fatalf("WriteFile(%q) error = %v", legacy[i], err)
-		}
-	}
 
+	args := []string{"--agents", "antigravity"}
 	result, err := RunSync(args)
 	if err != nil {
 		t.Fatalf("RunSync() error = %v", err)
@@ -108,17 +92,11 @@ func TestRunSyncAntigravityMigratesLegacyPlugin(t *testing.T) {
 			t.Fatalf("ChangedFiles = %v, want retired legacy asset %q", result.ChangedFiles, path)
 		}
 	}
-	for _, path := range engram.AntigravityPluginAssetPaths(home) {
-		if containsPath(result.ChangedFiles, path) {
-			t.Fatalf("ChangedFiles = %v, must not list unchanged plugin asset %q", result.ChangedFiles, path)
-		}
-	}
 }
 
 // TestRunInstallAntigravityEngramOnlyWithoutGlobalMCPConfig covers an
-// engram-only install on a host with no global Antigravity mcp_config.json.
-// Engram's registration is plugin-owned, so verification must not require the
-// global config Engram never writes, and the plugin must survive.
+// engram-only install on a host with no preexisting Antigravity mcp_config.json.
+// Engram is registered natively in the global mcp_config.json (#5988).
 func TestRunInstallAntigravityEngramOnlyWithoutGlobalMCPConfig(t *testing.T) {
 	home := setupAntigravitySyncHome(t)
 	restoreVersion := verifyEngramVersionCommand
@@ -136,27 +114,27 @@ func TestRunInstallAntigravityEngramOnlyWithoutGlobalMCPConfig(t *testing.T) {
 		t.Fatalf("RunInstall(antigravity, engram) error = %v", err)
 	}
 
-	for _, path := range engram.AntigravityPluginAssetPaths(home) {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("plugin asset %q must survive the install: %v", path, err)
-		}
-	}
 	adapter, err := agents.NewAdapter(model.AgentAntigravity)
 	if err != nil {
 		t.Fatalf("NewAdapter(antigravity) error = %v", err)
 	}
 	global := adapter.MCPConfigPath(home, "engram")
-	if _, err := os.Stat(global); !os.IsNotExist(err) {
-		t.Fatalf("global Antigravity MCP config %q must not be written by Engram; stat err = %v", global, err)
+	if _, err := os.Stat(global); err != nil {
+		t.Fatalf("global Antigravity MCP config %q must be written by Engram; stat err = %v", global, err)
 	}
-	// Engram may still remove a managed duplicate from it, so it stays a
-	// backup target while verification no longer requires it.
+
+	for _, path := range engram.AntigravityPluginAssetPaths(home) {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("plugin asset %q must not exist after global install: stat err = %v", path, err)
+		}
+	}
+
 	adapters := []agents.Adapter{adapter}
 	selection := model.Selection{Agents: []model.AgentID{model.AgentAntigravity}, Components: []model.ComponentID{model.ComponentEngram}}
 	if !containsPath(componentPathsWithWorkspaceScoped(home, "", ScopeGlobal, selection, adapters, model.ComponentEngram), global) {
-		t.Fatalf("global Antigravity MCP config %q must stay a backup target", global)
+		t.Fatalf("global Antigravity MCP config %q must be a component path", global)
 	}
-	if containsPath(verificationComponentPaths(home, "", ScopeGlobal, selection, adapters, model.ComponentEngram), global) {
-		t.Fatalf("global Antigravity MCP config %q must not be a verification target", global)
+	if !containsPath(verificationComponentPaths(home, "", ScopeGlobal, selection, adapters, model.ComponentEngram), global) {
+		t.Fatalf("global Antigravity MCP config %q must be a verification target", global)
 	}
 }
