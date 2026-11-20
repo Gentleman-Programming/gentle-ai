@@ -35,6 +35,12 @@ already contains this unreleased installer.
 | Processes | Suspended child bound before resume; Job Object CPU/memory/process readback, inherited console, bounded cleanup |
 | Preservation | Isolated HOME/agent/config, caller CWD inherited; console modes saved/restored; personal PATH unchanged |
 
+## Downloads on slow or flaky networks
+
+Supplier archives (Node, Go, fd, ripgrep, CodeGraph) have no whole-download deadline. A transfer fails only when it receives no data for 60 seconds, or after a 30-minute ceiling. Connection resets, timeouts, temporary DNS errors and HTTP 5xx or 429 responses are retried up to three attempts with backoff. Other HTTP errors and any size or SHA-256 mismatch fail at once. GitHub release redirects are accepted to any HTTPS host under `githubusercontent.com`; the pinned SHA-256 and size remain the integrity check.
+
+Verified archives are cached in `%LOCALAPPDATA%\gentle-shell\cache\downloads`. A cache entry is written under a temporary name and renamed into place, so a crash cannot leave a partial entry. An owned entry that fails its size or SHA-256 check is deleted and downloaded again.
+
 ## Replaced-backup retention
 
 A reconfigure that retires the installed tree renames it to a sibling
