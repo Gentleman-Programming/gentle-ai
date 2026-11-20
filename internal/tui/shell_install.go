@@ -802,7 +802,7 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			} else if event.err != nil {
 				request := m.shellInstallSelection.Request
-				if request.Experience != nil && request.Experience.SDKSource == "main-preview" && errors.Is(event.err, shellinstaller.ErrMainSDKInstall) && os.Getenv("GENTLE_AI_MAIN_FALLBACK") != "1" {
+				if request.Experience != nil && request.Experience.SDKSource == "main-preview" && shellMainSDKFailure(event.err) && os.Getenv("GENTLE_AI_MAIN_FALLBACK") != "1" {
 					run.fallbackAvailable = true
 				}
 			}
@@ -1068,4 +1068,11 @@ func (m Model) finishShellInstallSelection(selection cli.ShellInstallSelection, 
 	// This child performs synchronous selection only. Its sole command is
 	// Quit, handled above; never run an installer from inside the parent TUI.
 	return m, nil
+}
+
+// shellMainSDKFailure reports a Main SDK composition failure. In-process the
+// error is typed; from a child worker only its output text survives, which
+// names the failed step ("Main SDK ..."), as before the typed error existed.
+func shellMainSDKFailure(err error) bool {
+	return errors.Is(err, shellinstaller.ErrMainSDKInstall) || strings.Contains(err.Error(), "Main SDK")
 }

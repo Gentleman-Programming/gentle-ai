@@ -92,11 +92,6 @@ func userWindowsChannelOverlay(ctx context.Context, req UserInstallRequest) (res
 	if err != nil {
 		return UserInstallResult{}, true, err
 	}
-	// A Gentle Shell process running from the installation keeps the SDK
-	// package busy: name it and refuse before a single byte moves.
-	if err := userWindowsRefuseRunning(root); err != nil {
-		return UserInstallResult{}, true, fmt.Errorf("Windows channel overlay refused: %w", err)
-	}
 	// Integrity gate: refuse on any doubt about the installed tree before a
 	// single byte moves.
 	if err := userWindowsOverlayVerify(ctx, root, io.Discard, os.Stderr); err != nil {

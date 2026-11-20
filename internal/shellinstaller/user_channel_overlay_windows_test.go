@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -480,33 +479,5 @@ func TestUserWindowsChannelOverlayUnwindsAfterProvisionFailure(t *testing.T) {
 				t.Fatalf("unwound selection differs: %+v %v", selected, selectionErr)
 			}
 		})
-	}
-}
-
-// A Gentle Shell process running from the installation refuses the overlay
-// before verification, acquisition or any byte moves, and is named.
-func TestUserWindowsChannelOverlayRefusesRunningInstallation(t *testing.T) {
-	root := userWindowsOverlayFixture(t)
-	t.Setenv("GENTLE_AI_RECONFIGURE_TARGET", root)
-	artifact, data := userWindowsOverlayMainFixture(t, strings.Repeat("a", 40))
-	verifies, snapshotCalls := 0, 0
-	var provisions []string
-	userWindowsOverlaySeams(t, &artifact, &data, &verifies, &provisions, &snapshotCalls)
-	command := userWindowsRunFromInstallation(t, filepath.Join(root, "runtime"))
-
-	_, applied, err := userWindowsChannelOverlay(context.Background(), userWindowsOverlayRequest(root, "main"))
-	want := fmt.Sprintf("supervisor-test.exe (PID %d)", command.Process.Pid)
-	if err == nil || !applied || !strings.Contains(err.Error(), "close these Gentle Shell processes and retry") || !strings.Contains(err.Error(), want) {
-		t.Fatalf("running installation did not refuse the overlay naming %q: applied=%v err=%v", want, applied, err)
-	}
-	if verifies != 0 || snapshotCalls != 0 || len(provisions) != 0 {
-		t.Fatalf("refused overlay still ran verify=%d snapshot=%d provision=%v", verifies, snapshotCalls, provisions)
-	}
-	gentle := filepath.Join(root, "prefix", "node_modules", "gentle-pi")
-	if got := userWindowsOverlayRead(t, filepath.Join(gentle, "package.json")); got != "stock package\n" {
-		t.Fatalf("refused overlay mutated the SDK: %q", got)
-	}
-	if _, err := os.Lstat(filepath.Join(root, "stock-gentle-pi")); !os.IsNotExist(err) {
-		t.Fatal("refused overlay created the stock copy")
 	}
 }

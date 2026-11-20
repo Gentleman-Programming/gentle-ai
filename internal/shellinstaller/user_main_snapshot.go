@@ -39,26 +39,6 @@ func (e *userMainSDKError) Error() string {
 func (e *userMainSDKError) Unwrap() error        { return e.err }
 func (e *userMainSDKError) Is(target error) bool { return target == ErrMainSDKInstall }
 
-// MainSDKFailureMarker is the stderr line a child installer prints when it
-// fails with ErrMainSDKInstall. Linux and Windows install in a child process,
-// so the typed error crosses the process boundary only as this line.
-const MainSDKFailureMarker = "gentle-ai shell: Main SDK composition failed"
-
-// MainSDKFailureFromWorker restores ErrMainSDKInstall on a child worker's
-// error when the worker output carries MainSDKFailureMarker on its own line.
-// The error message is unchanged; any other error is returned as is.
-func MainSDKFailureFromWorker(err error, output string) error {
-	if err == nil || errors.Is(err, ErrMainSDKInstall) {
-		return err
-	}
-	for _, line := range strings.Split(output, "\n") {
-		if strings.TrimSpace(line) == MainSDKFailureMarker {
-			return &userMainSDKError{err: err}
-		}
-	}
-	return err
-}
-
 // userMainSDKFailure wraps a Main SDK composition failure; nil stays nil.
 func userMainSDKFailure(context string, err error) error {
 	if err == nil {

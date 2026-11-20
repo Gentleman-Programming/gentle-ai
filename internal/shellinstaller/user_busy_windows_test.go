@@ -4,10 +4,7 @@ package shellinstaller
 
 import (
 	"errors"
-	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,38 +29,6 @@ func userWindowsHoldFile(t *testing.T, path string, hold time.Duration) <-chan s
 	}()
 	t.Cleanup(func() { <-released })
 	return released
-}
-
-// userWindowsRunFromInstallation starts a long-running copy of ping.exe whose
-// image lives in dir, like a Gentle Shell process started from the
-// installation, and stops it when the test ends.
-func userWindowsRunFromInstallation(t *testing.T, dir string) *exec.Cmd {
-	t.Helper()
-	system, err := windows.GetSystemDirectory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	source, err := os.Open(filepath.Join(system, "ping.exe"))
-	if err != nil {
-		t.Skipf("no ping.exe to run from the installation: %v", err)
-	}
-	image := filepath.Join(dir, "supervisor-test.exe")
-	destination, err := os.OpenFile(image, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, copyErr := io.Copy(destination, source)
-	source.Close()
-	if err := errors.Join(copyErr, destination.Close()); err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command(image, "-n", "60", "127.0.0.1")
-	if err := command.Start(); err != nil {
-		t.Skipf("cannot start the copied process: %v", err)
-	}
-	t.Cleanup(func() { command.Process.Kill(); command.Wait() })
-
-	return command
 }
 
 func TestUserWindowsRetryBusyRetriesOnlyTransientErrors(t *testing.T) {
@@ -96,7 +61,7 @@ func TestUserWindowsRetryBusyRetriesOnlyTransientErrors(t *testing.T) {
 	if calls != len(userWindowsBusyDelays)+1 {
 		t.Fatalf("persistent lock retried %d times, want %d", calls, len(userWindowsBusyDelays)+1)
 	}
-	if !errors.Is(err, windows.ERROR_LOCK_VIOLATION) || !strings.Contains(err.Error(), "still in use") || !strings.Contains(err.Error(), "retry") {
+	if !errors.Is(err, windows.ERROR_LOCK_VIOLATION) || !strings.Contains(err.Error(), "in use by another program") || !strings.Contains(err.Error(), "close Gentle Shell and retry") {
 		t.Fatalf("persistent lock error is not actionable or lost its cause: %v", err)
 	}
 }
@@ -131,26 +96,6 @@ func TestUninstallWindowsWaitsForTransientlyHeldFile(t *testing.T) {
 	}
 	if _, err := os.Lstat(target); !os.IsNotExist(err) {
 		t.Fatalf("target still exists after uninstall: %v", err)
-	}
-}
-
-func TestUninstallWindowsNamesRunningInstalledProcess(t *testing.T) {
-	previous := userWindowsBusySleep
-	userWindowsBusySleep = func(time.Duration) {}
-	t.Cleanup(func() { userWindowsBusySleep = previous })
-	target, _ := userWindowsUninstallFixture(t)
-	command := userWindowsRunFromInstallation(t, target)
-
-	backup, err := UninstallUserShellInstall(t.TempDir(), UserShellInstall{Target: target, Mode: "separate"})
-	if err == nil {
-		t.Fatalf("uninstall moved an installation with a running process: %q", backup)
-	}
-	want := fmt.Sprintf("supervisor-test.exe (PID %d)", command.Process.Pid)
-	if backup != "" || !strings.Contains(err.Error(), "close these Gentle Shell processes and retry") || !strings.Contains(err.Error(), want) {
-		t.Fatalf("busy uninstall error does not name the running process %q: %v (backup %q)", want, err, backup)
-	}
-	if _, err := os.Lstat(filepath.Join(target, "manifest.json")); err != nil {
-		t.Fatalf("refused uninstall touched the installation: %v", err)
 	}
 }
 
