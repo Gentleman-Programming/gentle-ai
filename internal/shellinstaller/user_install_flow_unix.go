@@ -142,6 +142,9 @@ func userInspectInstall(req UserInstallRequest) (string, error) {
 	if err := ValidateUserInstall(req); err != nil {
 		return "", err
 	}
+	if err := userPlatformPreflight(req); err != nil {
+		return "", err
+	}
 	if _, statErr := os.Lstat(req.Destination); statErr == nil {
 		data, err := os.ReadFile(filepath.Join(req.Destination, "installation.json"))
 		if err != nil {
