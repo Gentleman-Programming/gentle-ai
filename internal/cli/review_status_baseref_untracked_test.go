@@ -2,9 +2,9 @@ package cli
 
 import (
 	"bytes"
-	"reflect"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
@@ -76,7 +76,7 @@ func TestBaseRefStatusUntrackedDeclarationRequiredOverAcknowledgedTarget(t *test
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &status)
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v10.schema.json"), output.Bytes())
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), output.Bytes())
 	if status.NextTransition == nil ||
 		status.NextTransition.Kind != reviewNextTransitionCollect ||
 		status.NextTransition.ReasonCode != "intended_untracked_selection_required" {

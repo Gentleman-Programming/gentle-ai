@@ -6,9 +6,9 @@ import (
 )
 
 // Issue #6156 companion coverage: the selectorless untracked-declaration
-// collect must validate against the published status-v10 schema both with a
+// collect must validate against the published status-v9 schema both with a
 // runtime agent (workspace submission branch) and without one. The agentless
-// envelope carries no submission, which is why the v10 input keeps
+// envelope carries no submission, which is why the v9 input keeps
 // `submission` optional: a current-changes STATUS with no --agent has no
 // selected-STATUS submission to re-enter.
 func TestSelectorlessUntrackedCollectValidatesAgainstPublishedSchema(t *testing.T) {
@@ -16,10 +16,11 @@ func TestSelectorlessUntrackedCollectValidatesAgainstPublishedSchema(t *testing.
 		t.Skip("requires git fixtures")
 	}
 	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/chosen.md", "# Chosen\n", 0o644)
 	writeUndeclaredWorkspaceFile(t, repo, "docs/other.md", "# Other\n", 0o644)
-	schema := compileWholeNativeStatusSchema(t, "status-v10.schema.json")
+	schema := compileWholeNativeStatusSchema(t, "status-v9.schema.json")
 
 	var withAgent bytes.Buffer
 	if err := RunReviewStatus([]string{"--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo, "--agent", "pi"}, &withAgent); err != nil {
