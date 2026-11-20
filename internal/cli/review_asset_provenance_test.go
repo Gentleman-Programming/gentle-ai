@@ -436,8 +436,8 @@ func TestNegotiatedStatusReportsManagedAssetsOutdatedBeforeOfferingStart(t *test
 		continuation.Agent != "opencode" || len(continuation.StaleAssets) != 1 || continuation.StaleAssets[0] != "sha256:stale" {
 		t.Fatalf("stale managed assets STATUS continuation = %#v", continuation)
 	}
-	statusV10Schema := compileWholeNativeStatusSchema(t, "status-v10.schema.json")
-	validatePublishedReviewSchema(t, statusV10Schema, output.Bytes())
+	statusV9Schema := compileWholeNativeStatusSchema(t, "status-v9.schema.json")
+	validatePublishedReviewSchema(t, statusV9Schema, output.Bytes())
 
 	// Once the recorded digest converges with this binary's, the very same
 	// candidate must be offered again: the skew was the only thing blocking
@@ -485,7 +485,7 @@ func TestNegotiatedBoundStatusResumesSameCaptureAfterManagedAssetsConverge(t *te
 				var result ReviewTargetStatusResult
 				decodeStrictReviewJSON(t, output.Bytes(), &result)
 				requireManagedAssetProvenanceNoError(t, result.Validate())
-				validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v10.schema.json"), output.Bytes())
+				validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), output.Bytes())
 				return result
 			}
 			initial := status()
@@ -769,7 +769,7 @@ func TestManagedAssetsContinuationUsesInvokingExecutable(t *testing.T) {
 	}
 	// The executable-anchored command must still satisfy the published
 	// continuation contract, not just this test's expectation.
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v10.schema.json"), output.Bytes())
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), output.Bytes())
 
 	// Convergence (#4434's invariant, not just the rendered shape): execute the
 	// emitted continuation command exactly as printed -- through executable

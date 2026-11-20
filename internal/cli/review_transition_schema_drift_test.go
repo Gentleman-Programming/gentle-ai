@@ -185,12 +185,12 @@ func TestV2TransitionSchemasAcceptProviderPayloadsAndRejectDrift(t *testing.T) {
 	}, &statusOutput); err != nil {
 		t.Fatalf("approved STATUS: %v\n%s", err, statusOutput.String())
 	}
-	statusV10Schema := compileWholeNativeStatusSchema(t, "status-v10.schema.json")
-	validatePublishedReviewSchema(t, statusV10Schema, statusOutput.Bytes())
+	statusV9Schema := compileWholeNativeStatusSchema(t, "status-v9.schema.json")
+	validatePublishedReviewSchema(t, statusV9Schema, statusOutput.Bytes())
 	statusDocument := decodeJSONObjectCopy(t, statusOutput.Bytes())
 	statusDocument["escalation"] = map[string]any{"cause": "unresolved_severe_findings", "finding_ids": []any{}}
-	if err := statusV10Schema.Validate(statusDocument); err == nil {
-		t.Fatal("current status schema accepted escalation on approved authority")
+	if err := statusV9Schema.Validate(statusDocument); err == nil {
+		t.Fatal("status-v9 schema accepted escalation on approved authority")
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)

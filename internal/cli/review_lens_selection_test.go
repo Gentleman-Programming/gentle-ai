@@ -229,7 +229,7 @@ func TestReviewStatusPreflightCarriesLensSelectionIntoStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("STATUS preflight refused a valid selection: %v\n%s", err, payload)
 	}
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v10.schema.json"), payload)
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), payload)
 	lineage := status.NextTransition.Execute.Binding.LineageID
 	var output bytes.Buffer
 	if err := RunReview(startPreflightTokens(status), &output); err != nil {

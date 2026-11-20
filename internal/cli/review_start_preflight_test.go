@@ -137,7 +137,7 @@ func TestReviewStatusPreflightsStartOptionsIntoTheFreshStart(t *testing.T) {
 				t.Fatalf("options changed the START binding: %#v vs %#v", status.NextTransition.Execute, plain.NextTransition.Execute)
 			}
 			if contract == ReviewIntegrationContractV2 {
-				validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v10.schema.json"), payload)
+				validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), payload)
 			}
 			lineage := status.NextTransition.Execute.Binding.LineageID
 			occupied, err := reviewtransaction.ExactReviewLineageOccupied(context.Background(), repo, lineage)
