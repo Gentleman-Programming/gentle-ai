@@ -145,3 +145,91 @@ func TestPartialUninstallAntigravityKeepsRetainedGuidanceWithoutManualNote(t *te
 		t.Fatalf("rules after uninstall = %q, want only the retained routing rule", got)
 	}
 }
+
+func TestPartialUninstallAntigravityCleansUpWorkspaceGuidanceAndPreservesUserContent(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	restore := gemini.LookPathOverride
+	gemini.LookPathOverride = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { gemini.LookPathOverride = restore })
+	engram.SetLookPathForTest(t, "/opt/homebrew/bin/engram", "")
+
+	svc, err := NewService(home, workspace, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	// Setup workspace staging and AGENTS.md with Antigravity sections + user instructions
+	wsStagingPath := antigravityrules.StagingPath(workspace)
+	if err := os.MkdirAll(filepath.Dir(wsStagingPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wsStaging := filemerge.InjectMarkdownSection("", "persona", "Workspace persona.\n")
+	wsStaging = filemerge.InjectMarkdownSection(wsStaging, "engram-protocol", "Workspace engram.\n")
+	if err := os.WriteFile(wsStagingPath, []byte(wsStaging), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wsAgentsPath := antigravityrules.AgentsMDPath(workspace)
+	userInstructions := "# Project Readme\n\nMust pass CI.\n\n"
+	wsAgentsContent := userInstructions + wsStaging
+	if err := os.WriteFile(wsAgentsPath, []byte(wsAgentsContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Publish initially in workspace
+	if _, err := antigravityrules.Publish(workspace, antigravityrules.WithWorkspaceScope(true)); err != nil {
+		t.Fatalf("Publish(workspace) error = %v", err)
+	}
+
+	// Also setup home so uninstall has home staging
+	homeStagingPath := antigravityrules.StagingPath(home)
+	if err := os.MkdirAll(filepath.Dir(homeStagingPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(homeStagingPath, []byte(wsStaging), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := antigravityrules.Publish(home); err != nil {
+		t.Fatalf("Publish(home) error = %v", err)
+	}
+
+	// Perform full Antigravity uninstall
+	result, err := svc.PartialUninstall([]model.AgentID{model.AgentAntigravity}, nil)
+	if err != nil {
+		t.Fatalf("PartialUninstall() error = %v", err)
+	}
+
+	// 1. Workspace AGENTS.md must preserve user content
+	afterData, err := os.ReadFile(wsAgentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(workspace AGENTS.md) error = %v", err)
+	}
+	afterContent := string(afterData)
+	if !strings.Contains(afterContent, "Must pass CI.") {
+		t.Fatalf("user content was removed from workspace AGENTS.md:\n%s", afterContent)
+	}
+	// 2. Antigravity sections must be removed
+	if strings.Contains(afterContent, "<!-- gentle-ai:persona -->") {
+		t.Fatalf("persona section survived in workspace AGENTS.md:\n%s", afterContent)
+	}
+	if strings.Contains(afterContent, "<!-- gentle-ai:engram-protocol -->") {
+		t.Fatalf("engram-protocol section survived in workspace AGENTS.md:\n%s", afterContent)
+	}
+	// 3. Workspace config AGENTS.md must be removed
+	if _, err := os.Stat(antigravityrules.ConfigAgentsMDPath(workspace)); !os.IsNotExist(err) {
+		t.Fatalf("workspace config AGENTS.md survived uninstall: %v", err)
+	}
+	// 4. Workspace AGENTS.md must be recorded in backup manifest
+	foundInBackup := false
+	for _, entry := range result.Manifest.Entries {
+		if entry.OriginalPath == wsAgentsPath {
+			foundInBackup = true
+			break
+		}
+	}
+	if !foundInBackup {
+		t.Fatalf("workspace AGENTS.md was not included in uninstall backup snapshot: %+v", result.Manifest.Entries)
+	}
+}

@@ -1,6 +1,7 @@
 package antigravityrules_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,5 +173,425 @@ func TestGeminiCLIManaged(t *testing.T) {
 				t.Fatalf("GeminiCLIManaged() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPublishWritesConfigAgentsMDAndSymlink(t *testing.T) {
+	home := t.TempDir()
+	staging := filemerge.InjectMarkdownSection("", "persona", "Persona text.\n")
+	staging = filemerge.InjectMarkdownSection(staging, "engram-protocol", "Engram protocol.\n")
+	writeFile(t, antigravityrules.StagingPath(home), staging)
+
+	result, err := antigravityrules.Publish(home)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	configAgents := antigravityrules.ConfigAgentsMDPath(home)
+	if got := readFile(t, configAgents); got != staging {
+		t.Fatalf("config AGENTS.md = %q, want %q", got, staging)
+	}
+
+	homeAgents := antigravityrules.AgentsMDPath(home)
+	info, err := os.Lstat(homeAgents)
+	if err != nil {
+		t.Fatalf("Lstat(home AGENTS.md) error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("home AGENTS.md is not a symlink; mode = %v", info.Mode())
+	}
+	target, err := os.Readlink(homeAgents)
+	if err != nil {
+		t.Fatalf("Readlink(home AGENTS.md) error = %v", err)
+	}
+	wantTarget := filepath.Join(".gemini", "config", "AGENTS.md")
+	if target != wantTarget {
+		t.Fatalf("symlink target = %q, want %q", target, wantTarget)
+	}
+
+	// Idempotent publish
+	again, err := antigravityrules.Publish(home)
+	if err != nil || again.Changed {
+		t.Fatalf("second Publish() = %+v, %v; want unchanged", again, err)
+	}
+
+	// Empty staging retires files
+	writeFile(t, antigravityrules.StagingPath(home), "")
+	retired, err := antigravityrules.Publish(home)
+	if err != nil {
+		t.Fatalf("Publish(empty) error = %v", err)
+	}
+	if !retired.Changed {
+		t.Fatal("expected Publish(empty) changed = true")
+	}
+	if _, err := os.Stat(configAgents); !os.IsNotExist(err) {
+		t.Fatalf("config AGENTS.md survived retirement: %v", err)
+	}
+	if _, err := os.Lstat(homeAgents); !os.IsNotExist(err) {
+		t.Fatalf("home AGENTS.md symlink survived retirement: %v", err)
+	}
+}
+
+func TestPublishMigratesLegacyGeminiSymlink(t *testing.T) {
+	home := t.TempDir()
+	legacyLink := antigravityrules.AgentsMDPath(home)
+	if err := os.Symlink(filepath.Join(".gemini", "GEMINI.md"), legacyLink); err != nil {
+		t.Fatal(err)
+	}
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Persona text.\n")
+	writeFile(t, antigravityrules.StagingPath(home), staging)
+
+	result, err := antigravityrules.Publish(home)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	target, err := os.Readlink(legacyLink)
+	if err != nil {
+		t.Fatalf("Readlink() error = %v", err)
+	}
+	wantTarget := filepath.Join(".gemini", "config", "AGENTS.md")
+	if target != wantTarget {
+		t.Fatalf("migrated symlink target = %q, want %q", target, wantTarget)
+	}
+}
+
+func TestPublishPreservesRegularAgentsMDUserContent(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := antigravityrules.AgentsMDPath(home)
+	userContent := "# My Custom Instructions\n\nRun tests before commit.\n"
+	writeFile(t, agentsPath, userContent)
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Persona text.\n")
+	writeFile(t, antigravityrules.StagingPath(home), staging)
+
+	result, err := antigravityrules.Publish(home)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	content := readFile(t, agentsPath)
+	if !strings.Contains(content, userContent) {
+		t.Fatalf("user content was lost in regular AGENTS.md:\n%s", content)
+	}
+	if !strings.Contains(content, "<!-- gentle-ai:persona -->") {
+		t.Fatalf("missing persona section in regular AGENTS.md:\n%s", content)
+	}
+
+	// Retirement removes only gentle-ai sections, keeping user content
+	writeFile(t, antigravityrules.StagingPath(home), "")
+	retired, err := antigravityrules.Publish(home)
+	if err != nil {
+		t.Fatalf("Publish(empty) error = %v", err)
+	}
+	if !retired.Changed {
+		t.Fatal("expected Publish(empty) changed = true")
+	}
+	afterContent := readFile(t, agentsPath)
+	if strings.Contains(afterContent, "<!-- gentle-ai:persona -->") {
+		t.Fatalf("persona section survived retirement in regular AGENTS.md:\n%s", afterContent)
+	}
+	if !strings.Contains(afterContent, "Run tests before commit.") {
+		t.Fatalf("user content was lost after retirement in regular AGENTS.md:\n%s", afterContent)
+	}
+}
+
+func TestPublishWritesRegularAgentsMDInWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Workspace persona.\n")
+	writeFile(t, antigravityrules.StagingPath(workspace), staging)
+
+	result, err := antigravityrules.Publish(workspace)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	agentsPath := antigravityrules.AgentsMDPath(workspace)
+	info, err := os.Lstat(agentsPath)
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("workspace AGENTS.md must be a regular file, got symlink")
+	}
+	if got := readFile(t, agentsPath); got != staging {
+		t.Fatalf("workspace AGENTS.md = %q, want %q", got, staging)
+	}
+}
+
+func TestPublishReportsErrorOnDirectoryAGENTS(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := antigravityrules.AgentsMDPath(home)
+	if err := os.Mkdir(agentsPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Persona text.\n")
+	writeFile(t, antigravityrules.StagingPath(home), staging)
+
+	_, err := antigravityrules.Publish(home)
+	if err == nil || !strings.Contains(err.Error(), "expected") || !strings.Contains(err.Error(), "got directory") {
+		t.Fatalf("expected directory error, got: %v", err)
+	}
+}
+
+func TestPublishPreservesUnrelatedSymlink(t *testing.T) {
+	home := t.TempDir()
+	unrelatedTarget := filepath.Join(t.TempDir(), "custom-GEMINI.md")
+	writeFile(t, unrelatedTarget, "# Unrelated\n")
+
+	agentsPath := antigravityrules.AgentsMDPath(home)
+	if err := os.Symlink(unrelatedTarget, agentsPath); err != nil {
+		t.Fatal(err)
+	}
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Persona text.\n")
+	writeFile(t, antigravityrules.StagingPath(home), staging)
+
+	result, err := antigravityrules.Publish(home)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	// Symlink should remain untouched and pointing to unrelatedTarget
+	info, err := os.Lstat(agentsPath)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("unrelated symlink was replaced: %v", err)
+	}
+	target, err := os.Readlink(agentsPath)
+	if err != nil || target != unrelatedTarget {
+		t.Fatalf("symlink target = %q, want %q", target, unrelatedTarget)
+	}
+	if result.Changed {
+		for _, f := range result.Files {
+			if f == agentsPath {
+				t.Fatalf("agentsPath reported changed for unrelated symlink")
+			}
+		}
+	}
+}
+
+func TestPublishWorkspaceWithoutGitDirCreatesRegularFile(t *testing.T) {
+	workspace := t.TempDir() // No .git subdirectory
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Non-git workspace persona.\n")
+	writeFile(t, antigravityrules.StagingPath(workspace), staging)
+
+	result, err := antigravityrules.Publish(workspace, antigravityrules.WithWorkspaceScope(true))
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	agentsPath := antigravityrules.AgentsMDPath(workspace)
+	info, err := os.Lstat(agentsPath)
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("workspace AGENTS.md must be a regular file, got symlink")
+	}
+	if got := readFile(t, agentsPath); got != staging {
+		t.Fatalf("workspace AGENTS.md = %q, want %q", got, staging)
+	}
+}
+
+func TestPublishRemovesRetiredAntigravitySectionsFromWorkspaceAGENTS(t *testing.T) {
+	workspace := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	agentsPath := antigravityrules.AgentsMDPath(workspace)
+
+	initialContent := filemerge.InjectMarkdownSection("", "persona", "Active persona.\n")
+	initialContent = filemerge.InjectMarkdownSection(initialContent, "engram-protocol", "Engram protocol.\n")
+	writeFile(t, agentsPath, initialContent)
+
+	// Staging now only has persona (engram was dropped/uninstalled)
+	staging := filemerge.InjectMarkdownSection("", "persona", "Active persona.\n")
+	writeFile(t, antigravityrules.StagingPath(workspace), staging)
+
+	result, err := antigravityrules.Publish(workspace, antigravityrules.WithWorkspaceScope(true))
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	content := readFile(t, agentsPath)
+	if !strings.Contains(content, "<!-- gentle-ai:persona -->") {
+		t.Fatalf("expected persona section preserved, got:\n%s", content)
+	}
+	if strings.Contains(content, "<!-- gentle-ai:engram-protocol -->") {
+		t.Fatalf("expected retired engram-protocol section removed, got:\n%s", content)
+	}
+}
+
+func TestPublishWorkspaceReplacesOwnedSymlinkWithRegularFile(t *testing.T) {
+	workspace := t.TempDir()
+	agentsPath := antigravityrules.AgentsMDPath(workspace)
+	configPath := antigravityrules.ConfigAgentsMDPath(workspace)
+
+	// Setup config file and a symlink pointing to it
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	writeFile(t, configPath, "# Config AGENTS\n")
+	if err := os.Symlink(filepath.Join(".gemini", "config", "AGENTS.md"), agentsPath); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Workspace persona.\n")
+	writeFile(t, antigravityrules.StagingPath(workspace), staging)
+
+	result, err := antigravityrules.Publish(workspace, antigravityrules.WithWorkspaceScope(true))
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	info, err := os.Lstat(agentsPath)
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("expected workspace AGENTS.md to be converted to a regular file, still symlink")
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("expected workspace AGENTS.md to be regular file, mode=%v", info.Mode())
+	}
+	content := readFile(t, agentsPath)
+	if !strings.Contains(content, "Workspace persona.") {
+		t.Fatalf("expected workspace content written, got:\n%s", content)
+	}
+}
+
+func TestPublishPreservesOpenClawSectionsWhenOpenClawIsManaged(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := antigravityrules.AgentsMDPath(home)
+
+	initialContent := filemerge.InjectMarkdownSection("", "persona", "Antigravity persona.\n")
+	initialContent = filemerge.InjectMarkdownSection(initialContent, "engram-protocol", "OpenClaw engram protocol.\n")
+	initialContent = filemerge.InjectMarkdownSection(initialContent, "agent-routing", "OpenClaw routing guidance.\n")
+	writeFile(t, agentsPath, initialContent)
+
+	// Antigravity staging is emptied (uninstalled)
+	writeFile(t, antigravityrules.StagingPath(home), "")
+
+	// Publish with OpenClaw actively managed
+	result, err := antigravityrules.Publish(home, antigravityrules.WithActiveAgents([]model.AgentID{model.AgentOpenClaw}))
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	content := readFile(t, agentsPath)
+	if strings.Contains(content, "<!-- gentle-ai:persona -->") {
+		t.Fatalf("expected Antigravity persona removed, got:\n%s", content)
+	}
+	if !strings.Contains(content, "<!-- gentle-ai:engram-protocol -->") {
+		t.Fatalf("expected OpenClaw engram-protocol preserved, got:\n%s", content)
+	}
+	if !strings.Contains(content, "<!-- gentle-ai:agent-routing -->") {
+		t.Fatalf("expected OpenClaw agent-routing preserved, got:\n%s", content)
+	}
+}
+
+func TestPublishWorkspaceSymlinkReadErrorPropagates(t *testing.T) {
+	workspace := t.TempDir()
+	agentsPath := antigravityrules.AgentsMDPath(workspace)
+	legacyPath := antigravityrules.LegacyPromptPath(workspace)
+
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	writeFile(t, legacyPath, "# Protected legacy prompt\n")
+	if err := os.Chmod(legacyPath, 0o000); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(legacyPath, 0o644)
+	})
+	if _, err := os.ReadFile(legacyPath); err == nil {
+		t.Skip("current process can read mode-0000 files; skipping permission error test")
+	}
+
+	if err := os.Symlink(filepath.Join(".gemini", "GEMINI.md"), agentsPath); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Workspace persona.\n")
+	writeFile(t, antigravityrules.StagingPath(workspace), staging)
+
+	_, err := antigravityrules.Publish(workspace, antigravityrules.WithWorkspaceScope(true))
+	if err == nil {
+		t.Fatal("expected Publish() error when owned symlink target is unreadable, got nil")
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("expected permission error from reading %q, got: %v", agentsPath, err)
+	}
+
+	info, lstatErr := os.Lstat(agentsPath)
+	if lstatErr != nil {
+		t.Fatalf("Lstat() error = %v", lstatErr)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected symlink preserved on read error, got mode=%v", info.Mode())
+	}
+}
+
+func TestPublishWorkspaceDanglingOwnedSymlinkConvertsToRegularFile(t *testing.T) {
+	workspace := t.TempDir()
+	agentsPath := antigravityrules.AgentsMDPath(workspace)
+
+	if err := os.Symlink(filepath.Join(".gemini", "GEMINI.md"), agentsPath); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+
+	staging := filemerge.InjectMarkdownSection("", "persona", "Workspace persona.\n")
+	writeFile(t, antigravityrules.StagingPath(workspace), staging)
+
+	result, err := antigravityrules.Publish(workspace, antigravityrules.WithWorkspaceScope(true))
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected Publish() changed = true")
+	}
+
+	info, err := os.Lstat(agentsPath)
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("expected regular file after converting dangling owned symlink, mode=%v", info.Mode())
+	}
+	content := readFile(t, agentsPath)
+	if !strings.Contains(content, "Workspace persona.") {
+		t.Fatalf("expected staged persona written, got:\n%s", content)
 	}
 }

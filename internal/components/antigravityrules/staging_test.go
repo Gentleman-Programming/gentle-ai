@@ -33,8 +33,9 @@ func TestPublishRealAntigravityGuidanceWritesRulesNotGeminiMD(t *testing.T) {
 		t.Fatalf("Publish() error = %v", err)
 	}
 	rendered := antigravityrules.Render(staging)
-	if !result.Changed || len(result.Files) != len(rendered) {
-		t.Fatalf("Publish() = %+v, want %d written rule files", result, len(rendered))
+	wantFiles := len(rendered) + 2
+	if !result.Changed || len(result.Files) != wantFiles {
+		t.Fatalf("Publish() = %+v, want %d written files", result, wantFiles)
 	}
 	var names []string
 	for _, rule := range rendered {
@@ -45,6 +46,13 @@ func TestPublishRealAntigravityGuidanceWritesRulesNotGeminiMD(t *testing.T) {
 	}
 	if got := strings.Join(publishedRules(t, home), ","); got != strings.Join(names, ",") {
 		t.Fatalf("published rules = %s, want %s", got, strings.Join(names, ","))
+	}
+
+	if got := readFile(t, antigravityrules.ConfigAgentsMDPath(home)); got != staging {
+		t.Errorf("config AGENTS.md on disk differs from staging")
+	}
+	if got := readFile(t, antigravityrules.AgentsMDPath(home)); got != staging {
+		t.Errorf("home AGENTS.md on disk differs from staging")
 	}
 
 	if _, err := os.Stat(filepath.Join(home, ".gemini", "GEMINI.md")); !os.IsNotExist(err) {
