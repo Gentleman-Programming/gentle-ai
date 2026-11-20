@@ -186,7 +186,12 @@ func renderShellInstall(steps []ShellInstallStep, failure string, done bool, fra
 	if notice != "" {
 		lines = append(lines, styles.WarningStyle.Render(notice), "")
 	}
-	lines = append(lines, styles.HelpStyle.Render("The worker is running; do not close the terminal  •  esc: cancel before publication"))
+	help := "The worker is running; do not close the terminal"
+	if len(steps) > 0 && steps[len(steps)-1].State == "pending" {
+		// The last step is publication, which can no longer be cancelled.
+		help += "  •  esc: cancel before publication"
+	}
+	lines = append(lines, styles.HelpStyle.Render(help))
 	return finishShellLines(lines, width, height)
 }
 

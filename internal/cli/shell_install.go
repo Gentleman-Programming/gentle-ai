@@ -28,6 +28,9 @@ var (
 	// direct worker plus the delegated-unit launch probe.
 	shellInlineDirect = runtime.GOOS == "linux"
 	shellDirectWorker = runShellDirectWorker
+	// shellInlineProgressContext carries the inline reporter to an in-process
+	// installer; tests replace it to observe the wiring.
+	shellInlineProgressContext = shellinstaller.WithInstallProgress
 )
 
 // shellDirectWorkerGrace bounds how long a cancelled direct worker may take
@@ -196,6 +199,11 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 		// lines over the TUI and the typed error already arrives intact.
 		if runtime.GOOS == "windows" {
 			defer shellRequestWorkerSteps()()
+		}
+		if runtime.GOOS == "darwin" {
+			// The in-process installer has no output to parse: its own steps
+			// (publish included) reach the caller through the context.
+			ctx = shellInlineProgressContext(ctx, report)
 		}
 		runErr := shellInstallEntry(ctx, self, args, nil, progress, progress)
 		if runErr != nil {

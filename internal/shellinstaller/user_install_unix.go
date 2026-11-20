@@ -185,7 +185,13 @@ func userInteractive(stdin io.Reader) (bool, error) {
 
 func userFinish(ctx context.Context, result UserInstallResult, cause error, workspace string, identity os.FileInfo, dest string) (UserInstallResult, error) {
 	cleanupErr := privateCleanup(workspace, identity)
-	cause = errors.Join(cause, cleanupErr, ctx.Err())
+	ctxErr := ctx.Err()
+	if committed, ok := ctx.Value(userPublicationCommitKey{}).(*bool); ok && *committed {
+		// A cancel after the commit point retracts nothing: the destination
+		// is published, so it must not be reported as a failure.
+		ctxErr = nil
+	}
+	cause = errors.Join(cause, cleanupErr, ctxErr)
 	if cause == nil {
 		return result, nil
 	}
