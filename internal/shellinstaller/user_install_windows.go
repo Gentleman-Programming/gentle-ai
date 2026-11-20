@@ -486,7 +486,7 @@ func userWindowsRetireReplacement(destination string, now time.Time) (backup, id
 	if err != nil {
 		return "", "", err
 	}
-	if err := os.Rename(destination, backup); err != nil {
+	if err := userWindowsRenameBusy(destination, destination, backup); err != nil {
 		return "", "", err
 	}
 	return backup, identity, nil
@@ -506,14 +506,9 @@ func userWindowsRestoreReplacement(destination, backup, identity string) error {
 	if observed, err := userWindowsIdentity(backup, true); err != nil || observed != identity {
 		return errors.Join(err, fmt.Errorf("Windows replacement backup identity differs; not restored, backup retained at %s", backup))
 	}
-	restoreFrom, fromErr := windows.UTF16PtrFromString(backup)
-	restoreTo, toErr := windows.UTF16PtrFromString(destination)
-	if fromErr != nil || toErr != nil {
-		return errors.Join(fromErr, toErr, fmt.Errorf("previous Windows installation could not be restored; backup retained at %s", backup))
-	}
 	// No replace-existing flag: a destination that appeared after the Lstat
 	// check is never overwritten.
-	if err := windows.MoveFileEx(restoreFrom, restoreTo, windows.MOVEFILE_WRITE_THROUGH); err != nil {
+	if err := userWindowsMoveNoReplaceBusy(backup, backup, destination); err != nil {
 		return errors.Join(err, fmt.Errorf("previous Windows installation could not be restored; backup retained at %s", backup))
 	}
 	return nil
@@ -1023,9 +1018,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	fmt.Fprintln(os.Stderr, "Windows install phase: publish")
-	from, _ := windows.UTF16PtrFromString(stage)
-	to, _ := windows.UTF16PtrFromString(req.Destination)
-	if err := windows.MoveFileEx(from, to, windows.MOVEFILE_WRITE_THROUGH); err != nil {
+	if err := userWindowsMoveNoReplaceBusy(stage, stage, req.Destination); err != nil {
 		return result, err
 	} // No replace-existing flag.
 	published = true
