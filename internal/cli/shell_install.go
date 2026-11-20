@@ -200,6 +200,7 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 			if output := strings.TrimSpace(workerLog.String()); output != "" {
 				runErr = fmt.Errorf("%w; worker output: %s", runErr, output)
 			}
+			runErr = workerLog.flag(runErr)
 		}
 		return runErr
 	}
@@ -221,7 +222,7 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 		if output := strings.TrimSpace(workerLog.String()); output != "" {
 			waitErr = fmt.Errorf("%w; worker output: %s", waitErr, output)
 		}
-		return preserveShellFailure(waitErr)
+		return preserveShellFailure(workerLog.flag(waitErr))
 	}
 	return nil
 }
@@ -277,16 +278,70 @@ type boundedWorkerLog struct {
 	mu    sync.Mutex
 	data  []byte
 	limit int
+	// line is the current unterminated line, capped, and mainSDK remembers
+	// that an "Error:" line named the Main SDK, so a long diagnostic that
+	// pushes the line's prefix out of data cannot hide the failure.
+	line    []byte
+	mainSDK bool
 }
+
+const workerLogLineLimit = 64 << 10
 
 func (w *boundedWorkerLog) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	rest := p
+	for len(rest) > 0 {
+		index := bytes.IndexByte(rest, '\n')
+		if index < 0 {
+			if room := workerLogLineLimit - len(w.line); room > 0 {
+				w.line = append(w.line, rest[:min(room, len(rest))]...)
+			}
+			break
+		}
+		if room := workerLogLineLimit - len(w.line); room > 0 {
+			w.line = append(w.line, rest[:min(room, index)]...)
+		}
+		w.observeLine()
+		w.line = w.line[:0]
+		rest = rest[index+1:]
+	}
 	w.data = append(w.data, p...)
 	if len(w.data) > w.limit {
 		w.data = append([]byte(nil), w.data[len(w.data)-w.limit:]...)
 	}
 	return len(p), nil
+}
+
+func (w *boundedWorkerLog) observeLine() {
+	if bytes.HasPrefix(w.line, []byte("Error:")) && bytes.Contains(w.line, []byte("Main SDK")) {
+		w.mainSDK = true
+	}
+}
+
+// mainSDKFailure reports whether the worker named a Main SDK failure on an
+// "Error:" line, including a last line without a newline.
+func (w *boundedWorkerLog) mainSDKFailure() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.line) > 0 {
+		w.observeLine()
+	}
+	return w.mainSDK
+}
+
+// mainSDKFlagged keeps err's message and chain and also matches
+// shellinstaller.ErrMainSDKInstall.
+type mainSDKFlagged struct{ err error }
+
+func (e mainSDKFlagged) Error() string   { return e.err.Error() }
+func (e mainSDKFlagged) Unwrap() []error { return []error{e.err, shellinstaller.ErrMainSDKInstall} }
+
+func (w *boundedWorkerLog) flag(err error) error {
+	if err != nil && w.mainSDKFailure() {
+		return mainSDKFlagged{err}
+	}
+	return err
 }
 
 func (w *boundedWorkerLog) String() string {

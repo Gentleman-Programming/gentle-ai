@@ -87,7 +87,8 @@ Renames and removals of installer-owned paths retry a
 sharing, lock or access violation with a short bounded backoff (about 2.6 s in
 total), which covers an antivirus scan or the search indexer briefly holding a
 freshly written file. A path still busy after the last attempt reports the
-original Windows error and asks you to close Gentle Shell and retry. A
+original Windows error and asks you to close the program holding the file
+(for example an antivirus scan or an open editor or terminal) and retry. A
 CodeGraph archive that stays locked still fails the install, because the stage
 is published as the installation and must not carry it. Preference files are
 replaced atomically: the new content is written and read back as a sibling

@@ -223,6 +223,3 @@ func TestUserMainSDKFailureIsTyped(t *testing.T) {
 		t.Fatal("untyped Main SDK wording matched the sentinel")
 	}
 }
-
-// A child worker's error regains ErrMainSDKInstall only from the exact
-// marker line, with its message unchanged.

@@ -61,7 +61,7 @@ func TestUserWindowsRetryBusyRetriesOnlyTransientErrors(t *testing.T) {
 	if calls != len(userWindowsBusyDelays)+1 {
 		t.Fatalf("persistent lock retried %d times, want %d", calls, len(userWindowsBusyDelays)+1)
 	}
-	if !errors.Is(err, windows.ERROR_LOCK_VIOLATION) || !strings.Contains(err.Error(), "in use by another program") || !strings.Contains(err.Error(), "close Gentle Shell and retry") {
+	if !errors.Is(err, windows.ERROR_LOCK_VIOLATION) || !strings.Contains(err.Error(), "is still in use by another program (for example an antivirus scan or an open editor or terminal)") || !strings.Contains(err.Error(), "close it and retry") {
 		t.Fatalf("persistent lock error is not actionable or lost its cause: %v", err)
 	}
 }
