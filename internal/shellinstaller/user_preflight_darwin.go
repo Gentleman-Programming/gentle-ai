@@ -17,20 +17,27 @@ func init() { userPlatformPreflight = userDarwinPreflight }
 // after private staging or the downloads into inspection, so the operator sees
 // them before confirming. Both checks stay authoritative at action time too:
 // installation repeats the supervisor provenance check when it copies the
-// supervisor, and every write still requires F_FULLFSYNC and RENAME_EXCL.
-// Verifying an existing installation stages nothing and skips both.
+// supervisor (a fresh install only), and every write still requires F_FULLFSYNC and RENAME_EXCL.
+// Verifying an existing installation stages nothing and skips both; a
+// reconfiguration skips the supervisor check and keeps the volume probe.
 func userDarwinPreflight(req UserInstallRequest) error {
-	if _, err := os.Lstat(req.Destination); err == nil && userReconfigureTarget() != req.Destination {
+	_, statErr := os.Lstat(req.Destination)
+	exists := statErr == nil
+	if exists && userReconfigureTarget() != req.Destination {
 		return nil
 	}
-	self, err := userExecutable()
-	if err != nil {
-		return privateError("source", err)
-	}
-	// The same policy as action time (#5814): no exception for Homebrew; the
-	// refusal names a remediation that leaves Homebrew permissions alone.
-	if _, err := userSupervisorSHA(context.Background(), self); err != nil {
-		return fmt.Errorf("supervisor provenance: %w", err)
+	// Reconfiguring an existing install (including the SDK channel overlay)
+	// never copies the supervisor, so provenance is a fresh-install gate only.
+	if !exists {
+		self, err := userExecutable()
+		if err != nil {
+			return privateError("source", err)
+		}
+		// The same policy as action time (#5814): no exception for Homebrew; the
+		// refusal names a remediation that leaves Homebrew permissions alone.
+		if _, err := userSupervisorSHA(context.Background(), self); err != nil {
+			return fmt.Errorf("supervisor provenance: %w", err)
+		}
 	}
 	return userVolumePreflight(filepath.Dir(req.Destination))
 }
