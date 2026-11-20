@@ -144,6 +144,10 @@ Without an intact recovery snapshot, do not reinstall into the damaged target. K
 
 There is no automatic migration. Review user-authored data before manual transfer; **do not copy managed `npmCommand`, package registrations or runtime files** from the damaged installation. A valid saved upgrade snapshot can instead use the recovery route.
 
+## Downloads on slow or flaky networks
+
+The pinned fd, ripgrep and CodeGraph archives have no whole-download deadline. A transfer fails only when it receives no data for 60 seconds, or after a 30-minute ceiling. Connection resets, timeouts, temporary DNS errors and HTTP 5xx or 429 responses are retried up to three attempts with backoff; the pinned Node archive gets the same retries. Other HTTP errors and any size or SHA-256 mismatch fail at once. fd and ripgrep redirects are accepted to any HTTPS host under `githubusercontent.com`; the pinned SHA-256 and size remain the integrity check.
+
 ## Safety limits
 
 Stock Pi's updater is retained. Readback accepts only complete known prior/modern graphs; unknown versions, bytes or placement fail closed and retain evidence. Package lifecycle scripts stay disabled. Installation/UI opening or a same-version reinstall does not qualify the full update journey.
