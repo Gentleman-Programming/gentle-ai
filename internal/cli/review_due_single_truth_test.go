@@ -9,9 +9,10 @@ import (
 	"testing"
 )
 
-// statusReviewDue is the one definition of "review due" (odd/tasks/
-// rdd-simplification.md S1): the native STATUS offers a review.start for the
-// candidate, i.e. there are unreviewed changes.
+// statusReviewDue only reads whether STATUS offers a review.start for the
+// candidate, i.e. there are unreviewed changes. It is necessary, not
+// sufficient: due is that offer AND the assessment's ReviewDue (high risk only;
+// odd/tasks/rdd-simplification.md S1, revised).
 func statusReviewDue(status ReviewTargetStatusResult) bool {
 	return status.NextTransition != nil && status.NextTransition.Kind == reviewNextTransitionExecute &&
 		status.NextTransition.Execute != nil && status.NextTransition.Execute.Operation == "review.start"
@@ -51,8 +52,9 @@ func reviewStopHookAssessSelectorsForTest(status ReviewTargetStatusResult) []str
 }
 
 // TestReviewDueHasOneSourceOfTruth pins S1: for the same candidate, the Stop
-// hook, the STATUS-derived decision and the assess report cannot disagree, and
-// a medium candidate that used to be skipped as under_budget is now due.
+// hook, the STATUS-derived decision and the assess report cannot disagree.
+// The policy is unchanged: only high risk is due; medium (under_budget) and
+// passive candidates are not.
 func TestReviewDueHasOneSourceOfTruth(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -69,6 +71,9 @@ func TestReviewDueHasOneSourceOfTruth(t *testing.T) {
 		{"high workspace", false, stageReviewStopHookCandidate, true},
 		{"high committed range", true, stageReviewStopHookCandidate, true},
 		{"passive workspace", false, func(t *testing.T, repo string) {
+			writeReviewStartCandidate(t, repo, "docs/guide.md", "hello\n", 0o644)
+		}, false},
+		{"passive committed range (fresh docs-only commit, not due)", true, func(t *testing.T, repo string) {
 			writeReviewStartCandidate(t, repo, "docs/guide.md", "hello\n", 0o644)
 		}, false},
 		{"clean committed tree", true, func(t *testing.T, repo string) {}, false},

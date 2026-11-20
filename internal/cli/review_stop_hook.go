@@ -180,8 +180,8 @@ func runReviewStopHookStop(ctx context.Context, payload reviewStopHookPayload, r
 	}
 	// Only a review_due candidate earns a reminder (verify-always-rdd-high
 	// S2). The decision is reviewAssessDue's, read through `review assess`
-	// over the selectors the offered START carries (#4815); the hook adds no
-	// due rule of its own.
+	// over the selectors the offered START carries (#4815); the hook computes
+	// no due rule of its own (the live-review exception below is separate).
 	if !reviewStopHookReviewDue(ctx, root, runtimeAgent, &status) {
 		return nil
 	}
