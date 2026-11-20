@@ -234,6 +234,16 @@ func ApplyUserExperiencePreferences(install UserShellInstall, selected UserExper
 	if err := selected.Validate(); err != nil {
 		return err
 	}
+	if !filepath.IsAbs(install.Target) {
+		return errors.New("in-place preferences require an absolute Separate installation")
+	}
+	_, err := userWithOperationLock(install.Target, func() (struct{}, error) {
+		return struct{}{}, userWindowsApplyPreferences(install, selected)
+	})
+	return err
+}
+
+func userWindowsApplyPreferences(install UserShellInstall, selected UserExperience) error {
 	userForceGGAInert(&selected)
 	if _, err := userWindowsManifestRead(install.Target); err != nil {
 		return fmt.Errorf("managed Windows installation manifest is not canonical: %w", err)
@@ -334,6 +344,12 @@ func UninstallUserShellInstall(_ string, install UserShellInstall) (string, erro
 	if install.Mode != "separate" || !filepath.IsAbs(install.Target) {
 		return "", errors.New("Windows uninstall requires an absolute Separate installation")
 	}
+	// Held for the whole uninstall: a concurrent install, update or uninstall
+	// of the same target fails fast instead of racing on the rename.
+	return userWithOperationLock(install.Target, func() (string, error) { return userWindowsUninstall(install) })
+}
+
+func userWindowsUninstall(install UserShellInstall) (string, error) {
 	if _, err := userWindowsIdentity(install.Target, true); err != nil {
 		return "", err
 	}
