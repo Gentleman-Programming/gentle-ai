@@ -6,7 +6,8 @@ Other platforms: [macOS](gentle-shell-macos-install.md) and [Windows](gentle-she
 
 ## Requirements
 
-- Non-root Linux amd64; an already-qualified execution boundary or an existing delegated **systemd user manager >=254**. No sudo, new-delegation or container fallback.
+- Non-root Linux amd64 with glibc; an already-qualified execution boundary or an existing delegated **systemd user manager >=254**. No sudo, new-delegation or container fallback. Other hosts (for example arm64 or musl/Alpine) are refused at inspect, before any download, with `unsupported host: Linux <arch>[/musl]; supported: Linux amd64 with glibc ...`. The libc is read from the loader of `/bin/sh`.
+- The target parent must be on a mount that allows execution. A `noexec` mount is refused at inspect, before any download; choose a target under your home directory or remount without `noexec`.
 - **Root opt-in**: root installs refuse by default with a full explanation. A root operator may accept the risk explicitly — `--accept-root-risk` on the CLI, or typing `I accept the risk` on the installer TUI warning screen — and every accepted root run then uses the same sandbox properties through a transient **system** unit, records `rootRisk` in the manifest, and prints a sandbox-disabled warning on every launch. Delegated operations refuse with named causes where root has no support (for example the fresh native slice); the private-sandbox guarantees never silently pretend to hold for root.
 - Physical execution checks: cgroup2, capabilities **0**, NoNewPrivs **1**, memory **3 GiB**, swap **0**, CPU **1**, tasks **64**. Missing prerequisites refuse before package JavaScript runs.
 - The manager route requires a physically trusted stock `/usr/bin/setpriv` (util-linux). It clears inherited/ambient capabilities and sets NoNewPrivs before the supervisor starts; the supervisor still verifies all four active capability sets, UID and exact cgroup limits. The manager and its bounding set are not reconfigured; this is not full Guest qualification.
@@ -51,7 +52,17 @@ For Shared, use `--mode shared` and supply `--prefix /owned/selected-prefix --ag
 
 Launch `TARGET/bin/gentle-shell` or `TARGET/bin/pi`. Normal launches have no installer menu; `TARGET/bin/gentle-shell install` reopens it. Separate publishes `~/.local/bin/gentle-shell` and `~/.local/bin/gs`. When `~/.local/bin` is not on the PATH of the terminal that started the install, it appends one marked line, `export PATH="$HOME/.local/bin:$PATH" # gentle-ai: gentle-shell launcher`, to the startup file your shell reads for new terminals: `$ZDOTDIR/.zshrc` (or `~/.zshrc`) for zsh, `~/.bashrc` for bash, `conf.d/gentle-ai-shell.fish` (the same line in fish syntax) for fish, and `~/.profile` otherwise. It never writes through a symlink, never adds the line twice, and prints the line to add by hand when it may not edit that file. Uninstall removes exactly that line and deletes the file only when nothing at all is left in it (0 bytes). The installer does not otherwise modify PATH or shell files, replace an unrelated `pi`, or require a root installation.
 
-The installer TUI runs the portable direct worker, so it first probes the delegated systemd unit every later launch uses. When that probe fails (for example no `XDG_RUNTIME_DIR=/run/user/UID` or no user manager), the install is refused **before any change**: no target, launcher or registry entry is created. A published installation is recorded in `~/.gentle-ai/shell-installs.json` (0600) for Manage. That directory may be gentle-ai's usual `0755` state directory, but it must be owned by you, not a symlink, and not writable by group or others. If the installation cannot be recorded, the completion output says so; the installation itself is kept.
+The installer TUI runs the portable direct worker, so it first probes the delegated systemd unit every later launch uses. When that probe fails (for example no `XDG_RUNTIME_DIR=/run/user/UID` or no user manager), the install is refused **before any change**: no target, launcher or registry entry is created. The refusal names the condition that failed and how to fix it:
+
+| Refusal names | Fix |
+| --- | --- |
+| `XDG_RUNTIME_DIR is unset` or `XDG_RUNTIME_DIR is "<value>", expected "/run/user/UID"` | Log in as this user through a systemd session (desktop, console or ssh with pam_systemd). A `su` or `sudo` shell keeps another user's value. |
+| `/run/user/UID/bus does not exist` (or is not a socket, or not owned by you) | Start the user manager: log in through a systemd session or run `loginctl enable-linger $USER`. On WSL, set `[boot] systemd=true` in `/etc/wsl.conf` and run `wsl --shutdown`. |
+| `version >=254 required: found "249"` | Use a distribution that ships systemd 254 or newer (for example Ubuntu 24.04 or Debian 13). |
+
+A published installation is recorded in `~/.gentle-ai/shell-installs.json` (0600) for Manage. That directory may be gentle-ai's usual `0755` state directory, but it must be owned by you, not a symlink, and not writable by group or others. If the installation cannot be recorded, the completion output says so; the installation itself is kept.
+
+Reconfiguring or updating an installation moves the previous tree aside to `TARGET.replaced-<UTC timestamp>`. After the new tree is published and verified, older `TARGET.replaced-*` trees are removed so only the newest one remains. Only owned private directories whose manifest names TARGET are removed; symlinks and anything else are left in place and named in a warning. A retention failure is a warning and never undoes the published installation.
 
 On the Stable SDK channel, gentle-pi is installed at the newest release of the reviewed supplier list, and every update check compares the installed version against that list live — a newly reviewed release needs no gentle-ai rebuild. See [the Stable trust boundary](gentle-shell-stable-trust-boundary.md) for which authority admits supplier code and what an attacker would need.
 
@@ -143,6 +154,10 @@ If TARGET was already removed, this recovery command cannot reconstruct its lost
 Without an intact recovery snapshot, do not reinstall into the damaged target. Keep the previous target, agent configuration/history and evidence; inspect and confirm a **different, empty TARGET** using the Separate commands above, then use its bindings.
 
 There is no automatic migration. Review user-authored data before manual transfer; **do not copy managed `npmCommand`, package registrations or runtime files** from the damaged installation. A valid saved upgrade snapshot can instead use the recovery route.
+
+## Downloads on slow or flaky networks
+
+The pinned fd, ripgrep and CodeGraph archives have no whole-download deadline. A transfer fails only when it receives no data for 60 seconds, or after a 30-minute ceiling. Connection resets, timeouts, temporary DNS errors and HTTP 5xx or 429 responses are retried up to three attempts with backoff; the pinned Node archive gets the same retries. Other HTTP errors and any size or SHA-256 mismatch fail at once. fd and ripgrep redirects are accepted to any HTTPS host under `githubusercontent.com`; the pinned SHA-256 and size remain the integrity check.
 
 ## Safety limits
 

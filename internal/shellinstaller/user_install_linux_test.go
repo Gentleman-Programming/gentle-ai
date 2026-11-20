@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -802,5 +803,68 @@ func TestUserBusEnvironmentAcceptsTrailingSlashRuntimeDir(t *testing.T) {
 		if _, err := userBusEnvironment(); err == nil || !strings.Contains(err.Error(), "set XDG_RUNTIME_DIR") {
 			t.Fatalf("XDG_RUNTIME_DIR=%q accepted: %v", value, err)
 		}
+	}
+}
+
+// Each refusal of the unit probe names the exact failed condition and a
+// remediation, while keeping the prefix existing callers match (#6182).
+func TestUserBusRefusalsNameTheFailedCondition(t *testing.T) {
+	expected := "/run/user/" + strconv.Itoa(os.Getuid())
+	for _, tc := range []struct {
+		value string
+		wants []string
+	}{
+		{"", []string{"set XDG_RUNTIME_DIR to your existing /run/user/UID", "XDG_RUNTIME_DIR is unset", strconv.Quote(expected), "pam_systemd"}},
+		{"/run/user/0", []string{"set XDG_RUNTIME_DIR to your existing /run/user/UID", `XDG_RUNTIME_DIR is "/run/user/0"`, strconv.Quote(expected), "su"}},
+	} {
+		err := userRuntimeDirCheck(tc.value, expected)
+		for _, want := range tc.wants {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("XDG_RUNTIME_DIR=%q refusal lacks %q: %v", tc.value, want, err)
+			}
+		}
+	}
+	if err := userRuntimeDirCheck(expected, expected); err != nil {
+		t.Fatalf("exact runtime dir refused: %v", err)
+	}
+
+	dir := t.TempDir()
+	notSocket := filepath.Join(dir, "file")
+	if err := os.WriteFile(notSocket, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for path, condition := range map[string]string{filepath.Join(dir, "bus"): "does not exist", notSocket: "is not a socket"} {
+		err := userBusSocketCheck(path, os.Getuid())
+		for _, want := range []string{"existing user-manager bus unavailable", path + " " + condition, "loginctl enable-linger", "[boot] systemd=true"} {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("bus %s refusal lacks %q: %v", path, want, err)
+			}
+		}
+	}
+	socket := filepath.Join(dir, "s")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := userBusSocketCheck(socket, os.Getuid()); err != nil {
+		t.Fatalf("owned bus socket refused: %v", err)
+	}
+	if err := userBusSocketCheck(socket, os.Getuid()+1); err == nil || !strings.Contains(err.Error(), socket+" is not owned by you") {
+		t.Fatalf("foreign bus socket admitted or unnamed: %v", err)
+	}
+}
+
+func TestUserManagerVersionRefusalNamesFoundVersion(t *testing.T) {
+	for value, found := range map[string]string{"249\n": `found "249"`, "": `found "(none)"`, "systemd 256": `found "systemd 256"`} {
+		err := userManagerVersion([]byte(value))
+		for _, want := range []string{"existing systemd user manager version >=254 required", found, "254 or newer"} {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("version %q refusal lacks %q: %v", value, want, err)
+			}
+		}
+	}
+	if err := userManagerVersion([]byte(strings.Repeat("2", 4097))); err == nil || len(err.Error()) > 512 {
+		t.Fatalf("oversized version admitted or echoed whole: %d bytes", len(err.Error()))
 	}
 }

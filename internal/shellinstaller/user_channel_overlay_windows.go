@@ -92,6 +92,11 @@ func userWindowsChannelOverlay(ctx context.Context, req UserInstallRequest) (res
 	if err != nil {
 		return UserInstallResult{}, true, err
 	}
+	// A Gentle Shell process running from the installation keeps the SDK
+	// package busy: name it and refuse before a single byte moves.
+	if err := userWindowsRefuseRunning(root); err != nil {
+		return UserInstallResult{}, true, fmt.Errorf("Windows channel overlay refused: %w", err)
+	}
 	// Integrity gate: refuse on any doubt about the installed tree before a
 	// single byte moves.
 	if err := userWindowsOverlayVerify(ctx, root, io.Discard, os.Stderr); err != nil {
@@ -131,7 +136,7 @@ func userWindowsChannelOverlay(ctx context.Context, req UserInstallRequest) (res
 			cause := errors.Join(
 				userWindowsOverlayRemoveIfPresent(filepath.Join(root, "main.json")),
 				userWindowsOverlayRemoveIfPresent(filepath.Join(root, "runtime", "archives", "main.zip")),
-				os.RemoveAll(quarantine))
+				userWindowsRemoveAllBusy(root, quarantine))
 			if cause != nil {
 				fmt.Fprintf(os.Stderr, "Windows channel overlay committed, but Main cleanup failed; overlay evidence remains in %q: %v\n", root, cause)
 			}
@@ -175,14 +180,14 @@ func userWindowsOverlayToMain(ctx context.Context, root string, rollback *userWi
 	}
 	// First retain the installed stock package as the tree-root restore source
 	// for a later Main -> Stable overlay: a stable installation has no copy.
-	if err := os.Rename(gentle, stock); err != nil {
+	if err := userWindowsRenameBusy(root, gentle, stock); err != nil {
 		return userWindowsArtifact{}, err
 	}
 	rollback.push(func() error {
-		if err := os.RemoveAll(gentle); err != nil {
+		if err := userWindowsRemoveAllBusy(root, gentle); err != nil {
 			return err
 		}
-		return os.Rename(stock, gentle)
+		return userWindowsRenameBusy(root, stock, gentle)
 	})
 	// Unpack the fresh Main snapshot into the SDK location, mirroring the
 	// fresh-install overlay block.
@@ -196,10 +201,10 @@ func userWindowsOverlayToMain(ctx context.Context, root string, rollback *userWi
 		} else if err != nil {
 			return userWindowsArtifact{}, err
 		}
-		if err := os.Rename(original, target); err != nil {
+		if err := userWindowsRenameBusy(root, original, target); err != nil {
 			return userWindowsArtifact{}, err
 		}
-		rollback.push(func() error { return os.Rename(target, original) })
+		rollback.push(func() error { return userWindowsRenameBusy(root, target, original) })
 	}
 	// Inert Main authority: the manifest names nothing yet, so these writes
 	// change no verification outcome until the authority rebind below. Each
@@ -264,10 +269,10 @@ func userWindowsOverlayToStable(ctx context.Context, root string, rollback *user
 		}
 		switch {
 		case !mainMissing && stockMissing:
-			if err := os.Rename(mainPath, stockPath); err != nil {
+			if err := userWindowsRenameBusy(root, mainPath, stockPath); err != nil {
 				return "", err
 			}
-			rollback.push(func() error { return os.Rename(stockPath, mainPath) })
+			rollback.push(func() error { return userWindowsRenameBusy(root, stockPath, mainPath) })
 		case mainMissing && stockMissing && name == "node_modules":
 			// Neither side carries dependency custody.
 		default:
@@ -277,18 +282,18 @@ func userWindowsOverlayToStable(ctx context.Context, root string, rollback *user
 	// Rename-exchange semantics: the Main package moves aside to quarantine,
 	// then the retained stock copy is promoted. The last known-good copy is
 	// only dropped after the restored tree fully verifies.
-	if err := os.Rename(gentle, quarantine); err != nil {
+	if err := userWindowsRenameBusy(root, gentle, quarantine); err != nil {
 		return "", err
 	}
-	rollback.push(func() error { return os.Rename(quarantine, gentle) })
-	if err := os.Rename(stock, gentle); err != nil {
+	rollback.push(func() error { return userWindowsRenameBusy(root, quarantine, gentle) })
+	if err := userWindowsRenameBusy(root, stock, gentle); err != nil {
 		return "", err
 	}
 	rollback.push(func() error {
-		if err := os.Rename(gentle, stock); err != nil {
+		if err := userWindowsRenameBusy(root, gentle, stock); err != nil {
 			return err
 		}
-		return os.Rename(quarantine, gentle)
+		return userWindowsRenameBusy(root, quarantine, gentle)
 	})
 	// The selection still names Main here, so the provisioner re-checks the
 	// composition of the restored package before any authority changes.
@@ -336,11 +341,11 @@ func userWindowsChannelRebind(root string, selection, manifestBytes []byte, inst
 			userWindowsReplaceFile(filepath.Join(root, "selection.json"), selection),
 			userWindowsReplaceFile(filepath.Join(root, "manifest.json"), manifestBytes))
 	}
-	if err := os.Rename(selectionStaged, filepath.Join(root, "selection.json")); err != nil {
+	if err := userWindowsRenameBusy(root, selectionStaged, filepath.Join(root, "selection.json")); err != nil {
 		rollback.push(restore)
 		return err
 	}
-	if err := os.Rename(manifestStaged, filepath.Join(root, "manifest.json")); err != nil {
+	if err := userWindowsRenameBusy(root, manifestStaged, filepath.Join(root, "manifest.json")); err != nil {
 		rollback.push(restore)
 		return err
 	}
