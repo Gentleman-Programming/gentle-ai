@@ -6,7 +6,7 @@ Other platforms: [macOS](gentle-shell-macos-install.md) and [Windows](gentle-she
 
 ## Requirements
 
-- Non-root Linux amd64 with glibc; an already-qualified execution boundary or an existing delegated **systemd user manager >=254**. No sudo, new-delegation or container fallback. Other hosts (for example arm64 or musl/Alpine) are refused at inspect, before any download, with `unsupported host: Linux <arch>[/musl]; supported: Linux amd64 with glibc ...`. The libc is read from the loader of `/bin/sh`.
+- Non-root Linux amd64; an already-qualified execution boundary or an existing delegated **systemd user manager >=254**. No sudo, new-delegation or container fallback. Other architectures (for example arm64) are refused at inspect, before any download, with `unsupported host: Linux <arch>; supported: Linux amd64 ...`.
 - The target parent must be on a mount that allows execution. A `noexec` mount is refused at inspect, before any download; choose a target under your home directory or remount without `noexec`.
 - **Root opt-in**: root installs refuse by default with a full explanation. A root operator may accept the risk explicitly — `--accept-root-risk` on the CLI, or typing `I accept the risk` on the installer TUI warning screen — and every accepted root run then uses the same sandbox properties through a transient **system** unit, records `rootRisk` in the manifest, and prints a sandbox-disabled warning on every launch. Delegated operations refuse with named causes where root has no support (for example the fresh native slice); the private-sandbox guarantees never silently pretend to hold for root.
 - Physical execution checks: cgroup2, capabilities **0**, NoNewPrivs **1**, memory **3 GiB**, swap **0**, CPU **1**, tasks **64**. Missing prerequisites refuse before package JavaScript runs.
@@ -62,7 +62,7 @@ The installer TUI runs the portable direct worker, so it first probes the delega
 
 A published installation is recorded in `~/.gentle-ai/shell-installs.json` (0600) for Manage. That directory may be gentle-ai's usual `0755` state directory, but it must be owned by you, not a symlink, and not writable by group or others. If the installation cannot be recorded, the completion output says so; the installation itself is kept.
 
-Reconfiguring or updating an installation moves the previous tree aside to `TARGET.replaced-<UTC timestamp>`. After the new tree is published and verified, older `TARGET.replaced-*` trees are removed so only the newest one remains. Only owned private directories whose manifest names TARGET are removed; symlinks and anything else are left in place and named in a warning. A retention failure is a warning and never undoes the published installation.
+Reconfiguring or updating an installation moves the previous tree aside to `TARGET.replaced-<UTC timestamp>`. The installer never deletes these backups on Linux or macOS; remove the ones you no longer need yourself.
 
 On the Stable SDK channel, gentle-pi is installed at the newest release of the reviewed supplier list, and every update check compares the installed version against that list live — a newly reviewed release needs no gentle-ai rebuild. See [the Stable trust boundary](gentle-shell-stable-trust-boundary.md) for which authority admits supplier code and what an attacker would need.
 
