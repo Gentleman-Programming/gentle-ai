@@ -696,12 +696,6 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 	if cleanupErr := userPublishEphemeralCleanup(manifest.Destination); cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "Installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", manifest.Destination, cleanupErr)
 	}
-	// Keep only the newest replaced backup; failure never retracts the install.
-	if replaced {
-		if retentionErr := userPruneReplacedBackups(manifest.Destination, backup); retentionErr != nil {
-			fmt.Fprintf(os.Stderr, "Installation is published and verified, but replaced-backup retention failed; older backups may remain beside %q: %v\n", manifest.Destination, retentionErr)
-		}
-	}
 	return UserInstallResult{manifest.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", launcherNote}, nil
 }
 

@@ -3,67 +3,22 @@
 package shellinstaller
 
 import (
-	"debug/elf"
 	"fmt"
-	"io"
-	"path/filepath"
-	"strings"
 
 	"golang.org/x/sys/unix"
 )
 
-// userHostShell is the executable whose ELF interpreter identifies the host
-// libc. A glibc host may also carry a musl loader (Debian's musl package
-// installs /lib/ld-musl-*.so.1), so the loader actually used by the system
-// shell is the evidence, never the presence of a musl loader file.
-const userHostShell = "/bin/sh"
-
-// userHostPlatform refuses a host the installer cannot serve before any
-// download: only Linux amd64 with glibc is supported. A shell that cannot be
-// classified (unreadable, static or not ELF) is no evidence of musl, so this
-// diagnosis never refuses an unclassified host; later checks still apply.
-func userHostPlatform(goarch, shell string) error {
-	libc := userHostLibc(shell)
-	if goarch == "amd64" && libc != "musl" {
+// userHostPlatform refuses a host architecture the installer cannot serve
+// before any download: only Linux amd64 is supported.
+func userHostPlatform(goarch string) error {
+	if goarch == "amd64" {
 		return nil
 	}
-	host := "Linux " + goarch
-	if libc == "musl" {
-		host += "/musl"
-	}
-	return privateError("unavailable", userUnsupportedHost(host))
+	return privateError("unavailable", userUnsupportedHost("Linux "+goarch))
 }
 
 func userUnsupportedHost(host string) error {
-	return fmt.Errorf("unsupported host: %s; supported: Linux amd64 with glibc and a systemd user manager >=254, as a non-root user", host)
-}
-
-// userHostLibc reports "musl" or "glibc" from the PT_INTERP of shell, or ""
-// when the shell cannot be classified.
-func userHostLibc(shell string) string {
-	file, err := elf.Open(shell)
-	if err != nil {
-		return ""
-	}
-	defer file.Close()
-	for _, program := range file.Progs {
-		if program.Type != elf.PT_INTERP {
-			continue
-		}
-		data, err := io.ReadAll(io.LimitReader(program.Open(), 4096))
-		if err != nil {
-			return ""
-		}
-		loader := filepath.Base(strings.TrimRight(string(data), "\x00"))
-		switch {
-		case strings.HasPrefix(loader, "ld-musl-"):
-			return "musl"
-		case strings.HasPrefix(loader, "ld-linux"):
-			return "glibc"
-		}
-		return ""
-	}
-	return ""
+	return fmt.Errorf("unsupported host: %s; supported: Linux amd64 with a systemd user manager >=254, as a non-root user", host)
 }
 
 // userExecutableMount refuses a target parent on a noexec mount before any
