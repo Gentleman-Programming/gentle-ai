@@ -22,6 +22,30 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// userPlatformPreflight runs platform checks at inspection, before any
+// confirmation, staging or download, for failures that would otherwise
+// surface mid-install. Darwin installs its own; elsewhere it accepts.
+var userPlatformPreflight = func(UserInstallRequest) error { return nil }
+
+// Owned-process descriptor limits: systemd's LimitNOFILE defaults.
+const (
+	userDescriptors    = 1024
+	userDescriptorsMax = 524288
+)
+
+// userDescriptorCeiling returns the RLIMIT_NOFILE soft and hard limits for
+// owned work: the systemd defaults capped at the inherited hard limit and at
+// the kernel per-process maximum (darwin kern.maxfilesperproc), which refuses
+// any higher hard limit even when the inherited one is unlimited. A zero
+// kernelMax means no kernel maximum applies.
+func userDescriptorCeiling(inheritedMax, kernelMax uint64) (soft, hard uint64) {
+	hard = min(userDescriptorsMax, inheritedMax)
+	if kernelMax > 0 {
+		hard = min(hard, kernelMax)
+	}
+	return min(userDescriptors, hard), hard
+}
+
 func userSelectionPath(path string) bool {
 	return privateHierarchyPath(path) && strings.IndexFunc(path, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/_.-", r))
@@ -284,7 +308,7 @@ func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 		privateGroup := os.Getuid() != 0 && group == uint32(os.Getuid())
 		writable := st.Mode().Perm()&0002 != 0 || (st.Mode().Perm()&0020 != 0 && !privateGroup)
 		if (owner != 0 && owner != uint32(os.Getuid())) || (writable && !trustedTmp) {
-			return "", privateError("source", fmt.Errorf("supervisor ancestor refused: path=%q owner=%d mode=%#o", current, owner, st.Mode().Perm()))
+			return "", privateError("source", fmt.Errorf("supervisor ancestor refused: path=%q owner=%d mode=%#o%s", current, owner, st.Mode().Perm(), userHomebrewHint(current)))
 		}
 		if current == "/" {
 			break

@@ -142,6 +142,9 @@ func userInspectInstall(req UserInstallRequest) (string, error) {
 	if err := ValidateUserInstall(req); err != nil {
 		return "", err
 	}
+	if err := userPlatformPreflight(req); err != nil {
+		return "", err
+	}
 	if _, statErr := os.Lstat(req.Destination); statErr == nil {
 		data, err := os.ReadFile(filepath.Join(req.Destination, "installation.json"))
 		if err != nil {
@@ -242,6 +245,11 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil || req.Confirmation != confirmation {
 		return result, privateError("refused", errors.Join(err, errors.New("physical selection confirmation differs")))
 	}
+	release, err := userAcquireOperationLock(req.Destination)
+	if err != nil {
+		return result, err
+	}
+	defer userReleaseOperationLock(release, &err)
 	if _, statErr := os.Lstat(req.Destination); statErr == nil && userReconfigureTarget() != req.Destination {
 		manifest, err := userReadManifest(ctx, req.Destination)
 		if err != nil {
@@ -692,6 +700,12 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 	if cleanupErr := userPublishEphemeralCleanup(manifest.Destination); cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "Installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", manifest.Destination, cleanupErr)
 	}
+	// Keep only the newest replaced backup; failure never retracts the install.
+	if replaced {
+		if retentionErr := userPruneReplacedBackups(manifest.Destination, backup); retentionErr != nil {
+			fmt.Fprintf(os.Stderr, "Installation is published and verified, but replaced-backup retention failed; older backups may remain beside %q: %v\n", manifest.Destination, retentionErr)
+		}
+	}
 	return UserInstallResult{manifest.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", launcherNote}, nil
 }
 
@@ -836,7 +850,7 @@ func userBootstrap(ctx context.Context, root, workspace string) error {
 	}
 	defer client.CloseIdleConnections()
 	archive := filepath.Join(workspace, "node.tgz")
-	if err := privateColdFetch(ctx, client, archive, privateColdSize, privateColdSHA); err != nil {
+	if err := userBootstrapFetch(ctx, client, archive); err != nil {
 		return err
 	}
 	if err := userWriteBootstrapHelpers(root); err != nil {
@@ -851,6 +865,24 @@ func userBootstrap(ctx context.Context, root, workspace string) error {
 		return fmt.Errorf("Node bootstrap: %w; bounded output: %s", err, output)
 	}
 	return userBootstrapPublish(ctx, output, filepath.Join(root, "runtime/node"))
+}
+
+// userBootstrapFetch retries the pinned Node download on transient failures.
+// privateColdFetch creates the archive exclusively, so a retry first removes
+// the partial archive its own failed attempt left; a pre-existing archive is
+// never removed and still refuses the fetch.
+func userBootstrapFetch(ctx context.Context, client *http.Client, archive string) error {
+	_, statErr := os.Lstat(archive)
+	preexisting := !errors.Is(statErr, os.ErrNotExist)
+	attempts := 0
+	return userDownloadRetry(ctx, func(ctx context.Context) error {
+		if attempts++; attempts > 1 && !preexisting {
+			if err := os.Remove(archive); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return privateError("acquisition", err)
+			}
+		}
+		return privateColdFetch(ctx, client, archive, privateColdSize, privateColdSHA)
+	})
 }
 
 // Selected Shared tools are never replaced. AGENT/bin must be absent or an
@@ -889,38 +921,18 @@ func userToolsAcquire(ctx context.Context, root string) error {
 	if err := privateNativeDirectory(archives); err != nil {
 		return err
 	}
-	client, err := privateColdClient()
+	client, err := userToolsClient()
 	if err != nil {
 		return err
 	}
-	transport := client.Transport.(*http.Transport)
-	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
-	transport.TLSClientConfig.ServerName = "" // Verify each actual HTTPS host.
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) > 4 || req.URL.Scheme != "https" || req.URL.User != nil || req.URL.Fragment != "" || req.URL.Host != "release-assets.githubusercontent.com" {
-			return privateError("acquisition", nil)
-		}
-		return nil
-	}
 	defer client.CloseIdleConnections()
+	ctx, cancel := context.WithTimeout(ctx, userDownloadCeiling)
+	defer cancel()
 	for _, source := range userToolSources {
 		url := "https://github.com/" + source.repo + "/releases/download/" + source.tag + "/" + source.stem + ".tar.gz"
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		data, err := userToolFetch(ctx, client, url, source)
 		if err != nil {
 			return err
-		}
-		response, err := client.Do(req)
-		if err != nil {
-			return privateError("acquisition", err)
-		}
-		encoding := response.Header.Values("Content-Encoding")
-		if response.StatusCode != 200 || response.ContentLength != source.size || response.Uncompressed || response.TLS == nil || len(response.TLS.VerifiedChains) == 0 || len(encoding) > 1 || (len(encoding) == 1 && encoding[0] != "" && encoding[0] != "identity") {
-			return privateError("acquisition", errors.Join(response.Body.Close(), errors.New("helper response refused")))
-		}
-		data, readErr := io.ReadAll(io.LimitReader(response.Body, source.size+1))
-		err = errors.Join(readErr, response.Body.Close(), ctx.Err())
-		if err != nil || int64(len(data)) != source.size || fmt.Sprintf("%x", sha256.Sum256(data)) != source.pin {
-			return privateError("acquisition", err)
 		}
 		if err := userToolWrite(filepath.Join(archives, source.name+".tgz"), data, 0600); err != nil {
 			return err
@@ -930,6 +942,65 @@ func userToolsAcquire(ctx context.Context, root string) error {
 		}
 	}
 	return nil
+}
+
+// userToolRedirect admits at most four HTTPS redirect hops without userinfo,
+// fragment or explicit port to a GitHub release-asset host under
+// githubusercontent.com. The pinned SHA/size, not the host, authenticate the
+// bytes.
+func userToolRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > 4 || req.URL.Scheme != "https" || req.URL.User != nil || req.URL.Fragment != "" || req.URL.Port() != "" || !userDownloadGitHubAssetHost(req.URL.Hostname()) {
+		return privateError("acquisition", nil)
+	}
+	return nil
+}
+
+// userToolsClient keeps the cold client's connect/TLS/response-header bounds
+// but replaces its whole-request timeout with a body inactivity timeout; the
+// caller bounds the whole acquisition with userDownloadCeiling.
+func userToolsClient() (*http.Client, error) {
+	client, err := privateColdClient()
+	if err != nil {
+		return nil, err
+	}
+	transport := client.Transport.(*http.Transport)
+	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	transport.TLSClientConfig.ServerName = "" // Verify each actual HTTPS host.
+	client.Transport = userDownloadIdle(transport, userDownloadIdleTimeout)
+	client.Timeout = 0
+	client.CheckRedirect = userToolRedirect
+	return client, nil
+}
+
+// userToolFetch downloads one pinned tool archive, retrying only transient
+// failures. A size or SHA-256 mismatch is final.
+func userToolFetch(ctx context.Context, client *http.Client, url string, source userToolSource) ([]byte, error) {
+	var data []byte
+	err := userDownloadRetry(ctx, func(ctx context.Context) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		response, err := client.Do(req)
+		if err != nil {
+			return privateError("acquisition", err)
+		}
+		if err := userDownloadStatus(response.StatusCode); err != nil {
+			return privateError("acquisition", errors.Join(err, response.Body.Close()))
+		}
+		encoding := response.Header.Values("Content-Encoding")
+		if response.ContentLength != source.size || response.Uncompressed || response.TLS == nil || len(response.TLS.VerifiedChains) == 0 || len(encoding) > 1 || (len(encoding) == 1 && encoding[0] != "" && encoding[0] != "identity") {
+			return privateError("acquisition", errors.Join(response.Body.Close(), errors.New("helper response refused")))
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, source.size+1))
+		err = errors.Join(readErr, response.Body.Close(), ctx.Err())
+		if err != nil || int64(len(body)) != source.size || fmt.Sprintf("%x", sha256.Sum256(body)) != source.pin {
+			return privateError("acquisition", err)
+		}
+		data = body
+		return nil
+	})
+	return data, err
 }
 
 func userToolBinary(ctx context.Context, archives string, source userToolSource) ([]byte, error) {

@@ -6,6 +6,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,19 +145,41 @@ func userWindowsDownloadCacheHit(ctx context.Context, artifact userWindowsArtifa
 	if !ok {
 		return nil, false
 	}
-	data, err := userWindowsRead(filepath.Join(cache, artifact.Archive), artifact.Bound)
-	if err != nil ||
-		(artifact.Size != 0 && int64(len(data)) != artifact.Size) ||
-		userWindowsSHA(data) != artifact.SHA {
+	entry := filepath.Join(cache, artifact.Archive)
+	data, err := userWindowsRead(entry, artifact.Bound)
+	if err != nil {
+		return nil, false
+	}
+	if (artifact.Size != 0 && int64(len(data)) != artifact.Size) || userWindowsSHA(data) != artifact.SHA {
+		// A partial or corrupt entry (for example left by a crash) would
+		// otherwise fail verification on every run: discard it so the
+		// verified download can take its place.
+		userWindowsDownloadCacheDiscard(entry)
 		return nil, false
 	}
 	return data, true
 }
 
+// userWindowsDownloadCacheDiscard removes entry only when it is an owned
+// regular file (current-SID owner, single link, no reparse point) inside the
+// already verified cache directory. Anything else is left untouched.
+func userWindowsDownloadCacheDiscard(entry string) {
+	info, err := os.Lstat(entry)
+	if err != nil || !info.Mode().IsRegular() {
+		return
+	}
+	if _, err := userWindowsIdentity(entry, true); err != nil {
+		return
+	}
+	_ = os.Remove(entry)
+}
+
 // userWindowsDownloadCacheStore best-effort retains already verified supplier
-// bytes under their exact archive name. Any failure is dropped: a partial or
-// unverified entry is removed rather than left behind, and an entry another
-// concurrent install already stored is kept as found (it is re-verified
+// bytes under their exact archive name. The bytes are written to a private
+// temporary name first and renamed into place, so a crash never leaves a
+// partial entry under the final name. Any failure is dropped and the
+// temporary file removed; an entry another concurrent install already stored
+// is replaced by these equally verified bytes (and every entry is re-verified
 // before any later read).
 func userWindowsDownloadCacheStore(artifact userWindowsArtifact, data []byte) {
 	cache, ok := userWindowsDownloadCacheDirectory()
@@ -163,8 +187,19 @@ func userWindowsDownloadCacheStore(artifact userWindowsArtifact, data []byte) {
 		return
 	}
 	entry := filepath.Join(cache, artifact.Archive)
-	if err := userWindowsWrite(entry, data); err != nil && !errors.Is(err, os.ErrExist) {
-		_ = os.Remove(entry)
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return
+	}
+	temporary := entry + ".partial-" + hex.EncodeToString(suffix[:])
+	if err := userWindowsWrite(temporary, data); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			_ = os.Remove(temporary) // Only this call created the random name.
+		}
+		return
+	}
+	if err := os.Rename(temporary, entry); err != nil {
+		_ = os.Remove(temporary)
 	}
 }
 
@@ -186,22 +221,45 @@ func userWindowsAcquire(ctx context.Context, artifact userWindowsArtifact, targe
 	return data, nil
 }
 
+// userWindowsSupplierRedirect admits at most four HTTPS redirect hops without
+// userinfo or fragment to the fixed supplier hosts or a GitHub release-asset
+// host under githubusercontent.com. The pinned SHA/size, not the host,
+// authenticate the bytes.
+func userWindowsSupplierRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > 4 || req.URL.Scheme != "https" || req.URL.User != nil || req.URL.Fragment != "" {
+		return errors.New("Windows supplier redirect refused")
+	}
+	host := req.URL.Hostname()
+	if host != "nodejs.org" && host != "dl.google.com" && !userDownloadGitHubAssetHost(host) {
+		return errors.New("Windows supplier redirect host refused")
+	}
+	return nil
+}
+
+// userWindowsAcquireNetwork downloads one pinned supplier archive. Connect,
+// TLS and response-header timeouts bound each attempt, an inactivity timeout
+// bounds the body and userDownloadCeiling bounds the whole acquisition, so a
+// slow but progressing transfer completes. Transient failures are retried a
+// bounded number of times; a digest/size mismatch never is.
 func userWindowsAcquireNetwork(ctx context.Context, artifact userWindowsArtifact) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, userDownloadCeiling)
+	defer cancel()
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DisableCompression = true
-	client := &http.Client{Transport: transport, Timeout: 90 * time.Second}
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	client := &http.Client{Transport: userDownloadIdle(transport, userDownloadIdleTimeout), CheckRedirect: userWindowsSupplierRedirect}
 	defer transport.CloseIdleConnections()
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) > 4 || req.URL.Scheme != "https" || req.URL.User != nil {
-			return errors.New("Windows supplier redirect refused")
-		}
-		host := req.URL.Hostname()
-		if host != "nodejs.org" && host != "dl.google.com" && host != "release-assets.githubusercontent.com" {
-			return errors.New("Windows supplier redirect host refused")
-		}
-		return nil
-	}
+	var data []byte
+	err := userDownloadRetry(ctx, func(ctx context.Context) error {
+		var attemptErr error
+		data, attemptErr = userWindowsFetchOnce(ctx, client, artifact)
+		return attemptErr
+	})
+	return data, err
+}
+
+func userWindowsFetchOnce(ctx context.Context, client *http.Client, artifact userWindowsArtifact) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, artifact.URL, nil)
 	if err != nil {
 		return nil, err
@@ -212,8 +270,11 @@ func userWindowsAcquireNetwork(ctx context.Context, artifact userWindowsArtifact
 		return nil, err
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK || response.ContentLength > artifact.Bound {
-		return nil, errors.New("Windows supplier status/byte bound refused")
+	if err := userDownloadStatus(response.StatusCode); err != nil {
+		return nil, errors.Join(err, errors.New("Windows supplier status refused"))
+	}
+	if response.ContentLength > artifact.Bound {
+		return nil, errors.New("Windows supplier byte bound refused")
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, artifact.Bound+1))
 	if err != nil || int64(len(data)) > artifact.Bound || (artifact.Size != 0 && int64(len(data)) != artifact.Size) || userWindowsSHA(data) != artifact.SHA {

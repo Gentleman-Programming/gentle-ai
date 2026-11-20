@@ -174,18 +174,38 @@ func RecordUserShellInstall(string, UserShellInstall) error { return nil }
 
 func RemoveUserShellInstall(string, string) error { return nil }
 
-// userWindowsReplaceFile replaces one managed preference file: the parent
-// custody is verified, any previous file is removed and the replacement is
-// written and read back through the exclusive owned writer.
+// userWindowsReplaceFile replaces one managed preference file atomically: the
+// parent custody is verified, the replacement is written and read back as an
+// exclusive sibling through the owned writer, and only then renamed over the
+// previous file (MoveFileEx with MOVEFILE_REPLACE_EXISTING, via os.Rename,
+// retried while a reader briefly holds it). Any failure keeps the previous
+// file and removes the sibling, so an interrupted replacement never leaves the
+// preference missing.
 func userWindowsReplaceFile(path string, data []byte) error {
-	if _, err := userWindowsIdentity(filepath.Dir(path), true); err != nil {
+	parent := filepath.Dir(path)
+	if _, err := userWindowsIdentity(parent, true); err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	staged := path + ".replace-new"
+	// A sibling left by an interrupted replacement is ours and is dropped.
+	if err := userWindowsRemoveBusy(parent, staged); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return userWindowsWrite(path, data)
+	if err := userWindowsReplaceWrite(staged, data); err != nil {
+		return errors.Join(err, userWindowsOverlayRemoveIfPresent(staged))
+	}
+	if err := userWindowsRenameBusy(parent, staged, path); err != nil {
+		return errors.Join(err, userWindowsOverlayRemoveIfPresent(staged))
+	}
+	actual, err := userWindowsRead(path, int64(len(data)))
+	if err != nil || string(actual) != string(data) {
+		return errors.Join(err, fmt.Errorf("Windows replacement readback differs for %q", path))
+	}
+	return nil
 }
+
+// userWindowsReplaceWrite is the exclusive owned writer of the staged sibling.
+var userWindowsReplaceWrite = userWindowsWrite
 
 // userWindowsMergePreference loads a bounded JSON object, applies one update
 // and replaces the file, keeping unrelated keys intact.
@@ -214,6 +234,16 @@ func ApplyUserExperiencePreferences(install UserShellInstall, selected UserExper
 	if err := selected.Validate(); err != nil {
 		return err
 	}
+	if !filepath.IsAbs(install.Target) {
+		return errors.New("in-place preferences require an absolute Separate installation")
+	}
+	_, err := userWithOperationLock(install.Target, func() (struct{}, error) {
+		return struct{}{}, userWindowsApplyPreferences(install, selected)
+	})
+	return err
+}
+
+func userWindowsApplyPreferences(install UserShellInstall, selected UserExperience) error {
 	userForceGGAInert(&selected)
 	if _, err := userWindowsManifestRead(install.Target); err != nil {
 		return fmt.Errorf("managed Windows installation manifest is not canonical: %w", err)
@@ -314,6 +344,12 @@ func UninstallUserShellInstall(_ string, install UserShellInstall) (string, erro
 	if install.Mode != "separate" || !filepath.IsAbs(install.Target) {
 		return "", errors.New("Windows uninstall requires an absolute Separate installation")
 	}
+	// Held for the whole uninstall: a concurrent install, update or uninstall
+	// of the same target fails fast instead of racing on the rename.
+	return userWithOperationLock(install.Target, func() (string, error) { return userWindowsUninstall(install) })
+}
+
+func userWindowsUninstall(install UserShellInstall) (string, error) {
 	if _, err := userWindowsIdentity(install.Target, true); err != nil {
 		return "", err
 	}
@@ -321,7 +357,12 @@ func UninstallUserShellInstall(_ string, install UserShellInstall) (string, erro
 	if _, err := os.Lstat(backup); !os.IsNotExist(err) {
 		return "", errors.Join(err, errors.New("Windows uninstall backup already exists"))
 	}
-	if err := os.Rename(install.Target, backup); err != nil {
+	// A process running from the installation would survive the rename and
+	// keep its files undeletable in the backup: name it and refuse first.
+	if err := userWindowsRefuseRunning(install.Target); err != nil {
+		return "", err
+	}
+	if err := userWindowsRenameBusy(install.Target, install.Target, backup); err != nil {
 		return "", err
 	}
 	// The active install is already fully moved aside; prune the backup to

@@ -196,13 +196,20 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 			report(shellinstaller.UserInstallProgress{Index: 1, Total: 5, State: "done"})
 			report(shellinstaller.UserInstallProgress{Index: 2, Total: 5, State: "running"})
 		}
+		// The worker prints the Main SDK marker only when its parent asks for
+		// it; the Windows worker environment forwards this same signal.
+		// Darwin runs the entry in-process, where the signal would print step
+		// lines over the TUI and the typed error already arrives intact.
+		if runtime.GOOS == "windows" {
+			defer shellRequestWorkerSteps()()
+		}
 		runErr := shellInstallEntry(ctx, self, args, nil, progress, progress)
 		if runErr != nil {
 			if output := strings.TrimSpace(workerLog.String()); output != "" {
 				runErr = fmt.Errorf("%w; worker output: %s", runErr, output)
 			}
 		}
-		return shellinstaller.MainSDKFailureFromWorker(runErr, workerLog.String())
+		return workerLog.mainSDKFailure(runErr)
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -222,7 +229,7 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 		if output := strings.TrimSpace(workerLog.String()); output != "" {
 			waitErr = fmt.Errorf("%w; worker output: %s", waitErr, output)
 		}
-		return shellinstaller.MainSDKFailureFromWorker(preserveShellFailure(waitErr), workerLog.String())
+		return workerLog.mainSDKFailure(preserveShellFailure(waitErr))
 	}
 	return nil
 }
@@ -275,14 +282,51 @@ func (w *shellStepWriter) observe(line string) {
 }
 
 type boundedWorkerLog struct {
-	mu    sync.Mutex
-	data  []byte
-	limit int
+	mu      sync.Mutex
+	data    []byte
+	limit   int
+	pending []byte // current unterminated line, bounded
+	marked  bool   // a full marker line was seen while streaming
+}
+
+const workerMarkerLineLimit = 1024
+
+// scan records the Main SDK marker as lines stream past, so a later long line
+// evicting it from the bounded tail cannot lose it. Callers hold w.mu.
+func (w *boundedWorkerLog) scan(p []byte) {
+	for _, b := range p {
+		if b == '\n' {
+			if strings.TrimSpace(string(w.pending)) == shellinstaller.MainSDKFailureMarker {
+				w.marked = true
+			}
+			w.pending = w.pending[:0]
+			continue
+		}
+		if len(w.pending) <= workerMarkerLineLimit {
+			w.pending = append(w.pending, b)
+		}
+	}
+}
+
+func (w *boundedWorkerLog) sawMarker() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.marked || (len(w.pending) <= workerMarkerLineLimit && strings.TrimSpace(string(w.pending)) == shellinstaller.MainSDKFailureMarker)
+}
+
+// mainSDKFailure restores ErrMainSDKInstall on err when the worker emitted the
+// marker anywhere in its output.
+func (w *boundedWorkerLog) mainSDKFailure(err error) error {
+	if w.sawMarker() {
+		return shellinstaller.MainSDKFailureFromWorker(err, shellinstaller.MainSDKFailureMarker)
+	}
+	return shellinstaller.MainSDKFailureFromWorker(err, w.String())
 }
 
 func (w *boundedWorkerLog) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.scan(p)
 	w.data = append(w.data, p...)
 	if len(w.data) > w.limit {
 		w.data = append([]byte(nil), w.data[len(w.data)-w.limit:]...)
@@ -432,11 +476,27 @@ func shellExecutionContext() (context.Context, context.CancelFunc, string, error
 
 // shellReportEntryError marks a Main SDK failure for the parent: a child
 // installer's typed error crosses the process boundary only as this line.
+// Only an inline parent asks for it (GENTLE_AI_SHELL_STEPS=1); a plain CLI
+// install keeps its stderr unchanged.
 func shellReportEntryError(err error, stderr io.Writer) error {
-	if errors.Is(err, shellinstaller.ErrMainSDKInstall) {
+	if errors.Is(err, shellinstaller.ErrMainSDKInstall) && os.Getenv("GENTLE_AI_SHELL_STEPS") == "1" {
 		_, _ = fmt.Fprintln(stderr, shellinstaller.MainSDKFailureMarker)
 	}
 	return err
+}
+
+// shellRequestWorkerSteps sets the inline-parent signal for a worker started
+// with the caller environment and returns the restore.
+func shellRequestWorkerSteps() func() {
+	previous, had := os.LookupEnv("GENTLE_AI_SHELL_STEPS")
+	_ = os.Setenv("GENTLE_AI_SHELL_STEPS", "1")
+	return func() {
+		if had {
+			_ = os.Setenv("GENTLE_AI_SHELL_STEPS", previous)
+		} else {
+			_ = os.Unsetenv("GENTLE_AI_SHELL_STEPS")
+		}
+	}
 }
 
 func preserveShellFailure(err error) error {
