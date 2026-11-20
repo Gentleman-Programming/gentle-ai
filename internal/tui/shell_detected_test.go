@@ -141,7 +141,7 @@ func TestShellManageChecksChannelUpdates(t *testing.T) {
 	if m.shellUpdate == nil || !m.shellUpdate.checking {
 		t.Fatalf("update check did not start: %+v", m.shellUpdate)
 	}
-	next, _ = m.Update(shellUpdateResult{info: shellinstaller.UserShellUpdate{Channel: "stable", Available: true, Components: []string{"Node runtime"}}})
+	next, _ = m.Update(shellUpdateResult{generation: m.shellUpdate.generation, info: shellinstaller.UserShellUpdate{Channel: "stable", Available: true, Components: []string{"Node runtime"}}})
 	m = next.(Model)
 	if view := m.View(); !strings.Contains(view, "Update available") || !strings.Contains(view, "Node runtime") || !strings.Contains(view, "stable") {
 		t.Fatalf("update result is incomplete:\n%s", view)

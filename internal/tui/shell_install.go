@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -35,7 +36,17 @@ type shellInstallRun struct {
 	spinner           int
 	bloom             int
 	fallbackAvailable bool
+	// cancel stops the worker; it is called only before publication. The
+	// state is written solely from Update: progress arrives as messages in the
+	// worker's order, so no lock is needed.
+	cancel        context.CancelFunc
+	confirmCancel bool
+	cancelled     bool
+	publishing    bool
+	notice        string
 }
+
+const shellPublicationNotice = "Publication has started and cannot be cancelled: interrupting it could leave a partial installation. Wait for it to finish."
 
 type shellInstallTick struct{}
 
@@ -140,7 +151,8 @@ func (m Model) launchShellInstall(request shellinstaller.UserInstallRequest, fal
 	}
 	steps[0].State = "running"
 	events := make(chan shellInstallEvent, 32)
-	m.shellInstallRun = &shellInstallRun{steps: steps}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.shellInstallRun = &shellInstallRun{steps: steps, cancel: cancel}
 	m.shellInstallEvents = events
 	m.shellPlan, m.shellPlanRequest = nil, shellinstaller.UserInstallRequest{}
 	runner := m.shellInstallRunner
@@ -152,7 +164,10 @@ func (m Model) launchShellInstall(request shellinstaller.UserInstallRequest, fal
 	go func() {
 		// The inspected request is immutable here; the runner revalidates its
 		// token and physical selection before any effect.
-		err := runner(context.Background(), request, func(progress shellinstaller.UserInstallProgress) {
+		// Its context is cancelled only by a confirmed cancel the TUI accepted
+		// before it saw the publish step.
+		defer cancel()
+		err := runner(ctx, request, func(progress shellinstaller.UserInstallProgress) {
 			events <- shellInstallEvent{progress: progress}
 		})
 		events <- shellInstallEvent{done: true, err: err}
@@ -167,21 +182,37 @@ type shellUpdateState struct {
 	info     shellinstaller.UserShellUpdate
 	err      error
 	checking bool
-	cursor   int
+	// checkFailed marks a failed update check: the screen offers Retry.
+	checkFailed bool
+	cursor      int
+	// generation identifies the check this screen waits for.
+	generation int
 }
 
+// shellUpdateResult carries the generation of the check that produced it;
+// a result from an abandoned check is ignored.
 type shellUpdateResult struct {
-	info shellinstaller.UserShellUpdate
-	err  error
+	generation int
+	info       shellinstaller.UserShellUpdate
+	err        error
 }
 
-func shellUpdateCommand(install shellinstaller.UserShellInstall) tea.Cmd {
+func shellUpdateCommand(install shellinstaller.UserShellInstall, generation int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		info, err := shellinstaller.CheckUserShellUpdate(ctx, install)
-		return shellUpdateResult{info: info, err: err}
+		return shellUpdateResult{generation: generation, info: info, err: err}
 	}
+}
+
+// startShellUpdateCheck issues a new check generation for the update screen.
+func (m Model) startShellUpdateCheck(update *shellUpdateState) (tea.Model, tea.Cmd) {
+	m.shellUpdateGeneration++
+	update.generation = m.shellUpdateGeneration
+	update.checking, update.checkFailed, update.err, update.cursor = true, false, nil, 0
+	m.shellUpdate = update
+	return m, shellUpdateCommand(update.install, update.generation)
 }
 
 type shellUninstallResult struct {
@@ -213,9 +244,8 @@ func (m Model) beginShellUpdate(config shellExperienceConfig) (tea.Model, tea.Cm
 	}
 	install := config.existing[0]
 	info := shellinstaller.UserShellUpdate{Channel: install.Channel}
-	m.shellUpdate = &shellUpdateState{install: install, config: config, info: info, checking: true}
 	m.shellExperience = nil
-	return m, shellUpdateCommand(install)
+	return m.startShellUpdateCheck(&shellUpdateState{install: install, config: config, info: info})
 }
 
 func (m Model) restoreUpdateConfig(update *shellUpdateState) Model {
@@ -368,9 +398,15 @@ func (m Model) updateShellUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if result, ok := msg.(shellUpdateResult); ok {
+		if !update.checking || result.generation != update.generation {
+			return m, nil // A result from an abandoned check.
+		}
 		update.checking, update.err = false, result.err
+		update.checkFailed = result.err != nil
 		if result.err == nil {
 			update.info = result.info
+		} else {
+			update.info.Available = false
 		}
 		return m, nil
 	}
@@ -385,7 +421,7 @@ func (m Model) updateShellUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	actions := 1
-	if update.info.Available {
+	if update.info.Available || update.checkFailed {
 		actions = 2
 	}
 	switch key.String() {
@@ -396,6 +432,9 @@ func (m Model) updateShellUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "esc", "ctrl+c":
 		return m.restoreUpdateConfig(update), nil
 	case "enter":
+		if update.checkFailed && update.cursor == 0 {
+			return m.startShellUpdateCheck(update)
+		}
 		if update.info.Available && update.cursor == 0 {
 			// A channel-only delta routes Update-now to the in-place overlay;
 			// every other change keeps the full component reconfigure.
@@ -753,7 +792,15 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if event.done {
 			run.done, run.err = true, event.err
-			if event.err != nil {
+			run.confirmCancel, run.notice = false, ""
+			if event.err != nil && run.cancelled {
+				if run.publishing {
+					// The cancel raced the publish step: not a clean cancellation.
+					run.err = fmt.Errorf("the run was stopped, but publication had already started; inspect the installation before retrying: %w", event.err)
+				} else {
+					run.err = fmt.Errorf("installation cancelled before publication: %w", event.err)
+				}
+			} else if event.err != nil {
 				request := m.shellInstallSelection.Request
 				if request.Experience != nil && request.Experience.SDKSource == "main-preview" && errors.Is(event.err, shellinstaller.ErrMainSDKInstall) && os.Getenv("GENTLE_AI_MAIN_FALLBACK") != "1" {
 					run.fallbackAvailable = true
@@ -773,6 +820,13 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		progress := event.progress
+		if progress.Index >= len(run.steps) {
+			// Publication started: any open question is withdrawn.
+			run.publishing = true
+			if run.confirmCancel {
+				run.confirmCancel, run.notice = false, shellPublicationNotice
+			}
+		}
 		if progress.Index >= 1 && progress.Index <= len(run.steps) {
 			step := &run.steps[progress.Index-1]
 			switch progress.State {
@@ -799,9 +853,13 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	run := m.shellInstallRun
-	if run == nil || !run.done {
-		// The worker owns the operation; no key can claim completion or cancel
-		// a possibly uncertain publication.
+	if run == nil {
+		return m, nil
+	}
+	if !run.done {
+		// The worker owns the operation; no key can claim completion, and a
+		// cancel is accepted only before publication.
+		run.handleRunningKey(key)
 		return m, nil
 	}
 	if run.err != nil {
@@ -830,6 +888,55 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 	clearShellRunEnvironment()
 	m.shellChannelRestore = nil // The confirmed channel is now installed.
 	return m, tea.Quit
+}
+
+// handleRunningKey asks before cancelling and refuses once publication has
+// started: an interrupted publication could leave a partial installation.
+func (run *shellInstallRun) handleRunningKey(key tea.KeyMsg) {
+	if run.cancelled {
+		return
+	}
+	if run.confirmCancel {
+		switch key.String() {
+		case "enter", "y", "ctrl+c":
+			run.confirmCancel = false
+			run.cancelled = true
+			run.cancel()
+		case "esc", "n":
+			run.confirmCancel = false
+		}
+		return
+	}
+	if key.Type != tea.KeyEsc && key.Type != tea.KeyCtrlC {
+		return
+	}
+	if run.publishing {
+		run.notice = shellPublicationNotice
+		return
+	}
+	run.confirmCancel, run.notice = true, ""
+}
+
+// runNotice is the extra line the running screen shows, if any.
+func (run *shellInstallRun) runNotice() string {
+	if run.confirmCancel {
+		return "Cancel the installation? Nothing has been published yet.  Enter/y: cancel  •  Esc/n: keep running"
+	}
+	return run.notice
+}
+
+// shellInstallScreenView renders a running install with its cancel notice;
+// every other state keeps the shared shell installer view.
+func (m Model) shellInstallScreenView() string {
+	run := m.shellInstallRun
+	if run == nil || run.done || len(m.shellDetected) > 0 || m.shellUpdate != nil || m.shellManage != nil {
+		return m.shellInstallView()
+	}
+	steps := make([]screens.ShellInstallStep, len(run.steps))
+	for index, step := range run.steps {
+		steps[index] = screens.ShellInstallStep{Label: step.Label, State: step.State, Details: step.Details}
+	}
+	return screens.RenderShellInstallRunning(steps, run.spinner, run.runNotice(), m.Width, m.Height)
 }
 
 // WithShellInstaller opts into selection within this existing TUI program.

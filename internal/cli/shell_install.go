@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 )
@@ -37,7 +38,16 @@ func runShellDirectWorker(ctx context.Context, self string, args []string, stdou
 	cmd := exec.CommandContext(ctx, "/usr/bin/setpriv", entry...)
 	cmd.Env = append(os.Environ(), "GENTLE_AI_SHELL_STEPS=1")
 	cmd.Stdout, cmd.Stderr = stdout, stderr
+	shellStopGracefully(cmd)
 	return cmd.Run()
+}
+
+// shellStopGracefully makes a cancelled worker receive SIGTERM first, so its
+// own signal handling cancels the run and its rollback runs; it is killed only
+// if it has not exited within a short delay.
+func shellStopGracefully(cmd *exec.Cmd) {
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 10 * time.Second
 }
 
 // Platform contracts live in shell_install_platform_{windows,other}.go:
@@ -186,6 +196,11 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 		// lines over the TUI and the typed error already arrives intact.
 		if runtime.GOOS == "windows" {
 			defer shellRequestWorkerSteps()()
+		}
+		if runtime.GOOS == "darwin" {
+			// The in-process installer has no output to parse: its own steps
+			// (publish included) reach the caller through the context.
+			ctx = shellinstaller.WithInstallProgress(ctx, report)
 		}
 		runErr := shellInstallEntry(ctx, self, args, nil, progress, progress)
 		if runErr != nil {

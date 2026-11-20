@@ -662,8 +662,10 @@ type Model struct {
 	shellPlanRequest      shellinstaller.UserInstallRequest
 	// shellChannelRestore holds the channel preference persisted before a
 	// channel-only update plan; cancel or failure restores it.
-	shellChannelRestore   *shellChannelRestore
-	shellRootRisk         *shellRootRiskPrompt
+	shellChannelRestore *shellChannelRestore
+	shellRootRisk       *shellRootRiskPrompt
+	// shellUpdateGeneration numbers update checks; stale results are ignored.
+	shellUpdateGeneration int
 	shellInstallRun       *shellInstallRun
 	shellInstallEvents    <-chan shellInstallEvent
 	shellInstallRunner    func(context.Context, shellinstaller.UserInstallRequest, func(shellinstaller.UserInstallProgress)) error
@@ -1526,7 +1528,7 @@ func (m Model) View() string {
 			screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll},
 		)
 	case ScreenShellInstall:
-		return m.shellInstallView()
+		return m.shellInstallScreenView()
 	case ScreenUpgrade:
 		return screens.RenderUpgradeWithWidth(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame, m.Width)
 	case ScreenSync:
