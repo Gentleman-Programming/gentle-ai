@@ -1271,7 +1271,7 @@ def main():
         expected_metadata = coding_metadata.read_bytes()
         require(json.loads(expected_metadata)['version'] == lock_pi, 'prior-parent recovery did not restore the locked cohort')
         require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'locked cohort did not launch after prior-parent refusal')
-        REPORT['priorParentUpdate'] = 'refused-and-recovered: 0.99.2 to locked %s keeps unadmitted prior packages; locked cohort restored' % lock_pi
+        REPORT['priorParentUpdate'] = 'refused+recovered %s' % lock_pi
         # On the modern cohort the stock updater reinstalls the locked release,
         # but `npm install -g` reshapes the graph the install sealed, so the
         # post-launch readback refuses it like every npm-driven Pi update and
@@ -1286,7 +1286,7 @@ def main():
         run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
         require(coding_metadata.read_bytes() == expected_metadata, 'locked force recovery did not restore known bytes')
         require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'locked cohort did not launch after force refusal')
-        REPORT['lockedForceUpdate'] = 'refused (global graph changed) and recovered: stock --force reinstall of locked %s; TEST-only Pi API selection' % lock_pi
+        REPORT['lockedForceUpdate'] = 'graph-refused+recovered %s' % lock_pi
         corrupted = json.loads(expected_metadata)
         corrupted['version'] = '9.9.9'
         coding_metadata.write_text(json.dumps(corrupted))
@@ -1313,7 +1313,7 @@ def main():
         run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
         require(coding_metadata.read_bytes() == expected_metadata, 'out-of-lock recovery did not restore known bytes')
         require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'authenticated cohort did not launch after out-of-lock refusal')
-        REPORT['outOfLockUpdate'] = 'actual stock self-update to 1.0.0 outside the lock refused, launch held, locked %s restored' % lock_pi
+        REPORT['outOfLockUpdate'] = '1.0.0 refused+recovered %s' % lock_pi
         shared_prefix, shared_agent = WORK / 'shared-prefix', WORK / 'shared-agent'
         shutil.copytree(manifest['Prefix'], shared_prefix, symlinks=True)
         drop_separate_companion(shared_prefix)
@@ -1372,17 +1372,27 @@ def main():
     finally:
         server.shutdown()
         server.server_close()
+    sys.stdout.buffer.write(bounded_report())
+
+
+def bounded_report():
+    # The workflow surfaces the whole Guest output only below 4096 bytes, and
+    # the pnpm root diagnostics printed earlier already use part of it. Every
+    # qualification assertion has run by now, so an oversized record is
+    # replaced by its reached keys plus the size and digest of the full record.
     output = (json.dumps(REPORT, sort_keys=True, separators=(',', ':')) + '\n').encode()
-    require(len(output) < 4096, 'entire raw Guest report withheld above bound')
-    sys.stdout.buffer.write(output)
+    if len(output) >= 2048:
+        compact = {'functionalReady': REPORT.get('functionalReady', False), 'reached': sorted(REPORT),
+                   'reportBytes': len(output), 'reportSHA256': hashlib.sha256(output).hexdigest()}
+        output = (json.dumps(compact, sort_keys=True, separators=(',', ':')) + '\n').encode()
+    require(len(output) < 2048, 'entire raw Guest report withheld above bound')
+    return output
 
 
 try:
     main()
     if MODE == 'smoke':
-        output = (json.dumps(REPORT, sort_keys=True, separators=(',', ':')) + '\n').encode()
-        require(len(output) < 4096, 'entire raw Guest report withheld above bound')
-        sys.stdout.buffer.write(output)
+        sys.stdout.buffer.write(bounded_report())
 except Exception as error:
     message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld',
                'elapsedSeconds': round(time.monotonic() - START), 'reached': sorted(key for key in REPORT if not key.startswith('pty'))}
