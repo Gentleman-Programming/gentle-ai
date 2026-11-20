@@ -24,6 +24,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/versions"
 )
 
@@ -1557,7 +1558,7 @@ func TestInjectHermesContext7IntoYAML(t *testing.T) {
 		t.Fatal("Inject(hermes) changed = false")
 	}
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(system.HermesConfigDir(home), "config.yaml")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("ReadFile(config.yaml) error = %v", err)
@@ -1599,7 +1600,7 @@ func TestInjectHermesContext7Idempotent(t *testing.T) {
 		t.Fatal("Inject(hermes) second changed = true (not idempotent)")
 	}
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(system.HermesConfigDir(home), "config.yaml")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("ReadFile(config.yaml) error = %v", err)
@@ -1635,7 +1636,7 @@ func TestInjectHermesStrategyMergeIntoYAMLDispatches(t *testing.T) {
 // must survive the MCP upsert.
 func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 	home := t.TempDir()
-	hermesDir := filepath.Join(home, ".hermes")
+	hermesDir := system.HermesConfigDir(home)
 	if err := os.MkdirAll(hermesDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}

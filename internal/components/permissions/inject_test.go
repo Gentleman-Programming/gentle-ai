@@ -22,6 +22,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestSelectedPermissionsRefuseNestedCommentsAndLockedMode(t *testing.T) {
@@ -484,7 +485,7 @@ func TestInjectHermesSkipsPermissions(t *testing.T) {
 	}
 
 	// Confirm no config.yaml or settings file was created.
-	hermesDir := filepath.Join(home, ".hermes")
+	hermesDir := system.HermesConfigDir(home)
 	if _, err := os.Stat(hermesDir); err == nil {
 		t.Fatal("Inject(hermes) created ~/.hermes directory, want no files written")
 	}
