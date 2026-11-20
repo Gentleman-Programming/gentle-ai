@@ -40,7 +40,16 @@ already contains this unreleased installer.
 A reconfigure that retires the installed tree renames it to a sibling
 `TARGET.replaced-<UTC>` backup (for example
 `C:\Users\...\gentle-shell.replaced-20260101T130000Z`) before publishing the
-replacement. After the new installation is published, verified and its
+replacement. The Main snapshot is acquired before that rename, so a failed
+Main download retires nothing. When any later step fails before the
+replacement is published (a download, provisioning, or a changed selection),
+the installer first stops its acquisitions and cleans the stage, then moves
+the backup back to `TARGET` and reports `previous Windows installation
+restored`. It never removes or overwrites a destination that exists: if one is
+present, or the backup's physical identity changed, or the rename fails, both
+trees are kept and the error names the path as `backup retained at ...`. A
+failure after publication (verification or launchers) keeps the published
+tree and the backup. After the new installation is published, verified and its
 launchers are confirmed, the installer bounds those backups to **one recent
 tree**: the backup it just created is always retained, and when the system
 clock has drifted the lexically latest candidate is retained as well, so clock
