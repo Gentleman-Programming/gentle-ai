@@ -71,6 +71,20 @@ func userWindowsRenameBusy(root, from, to string) error {
 	return userWindowsRetryBusy(root, func() error { return os.Rename(from, to) })
 }
 
+// userWindowsMoveNoReplaceBusy renames from to to like userWindowsRenameBusy
+// but without MOVEFILE_REPLACE_EXISTING: an existing destination is never
+// overwritten (ERROR_ALREADY_EXISTS is not a busy cause and returns at once).
+func userWindowsMoveNoReplaceBusy(root, from, to string) error {
+	source, sourceErr := windows.UTF16PtrFromString(from)
+	destination, destinationErr := windows.UTF16PtrFromString(to)
+	if sourceErr != nil || destinationErr != nil {
+		return errors.Join(sourceErr, destinationErr)
+	}
+	return userWindowsRetryBusy(root, func() error {
+		return windows.MoveFileEx(source, destination, windows.MOVEFILE_WRITE_THROUGH)
+	})
+}
+
 func userWindowsRemoveBusy(root, path string) error {
 	return userWindowsRetryBusy(root, func() error { return os.Remove(path) })
 }

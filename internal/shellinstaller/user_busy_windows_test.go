@@ -203,3 +203,41 @@ func TestUserWindowsReplaceFileWaitsForTransientReader(t *testing.T) {
 		t.Fatalf("replacement left a temporary sibling: %v", entries)
 	}
 }
+
+func TestUserWindowsMoveNoReplaceBusyRetriesAndNeverOverwrites(t *testing.T) {
+	previous := userWindowsBusySleep
+	userWindowsBusySleep = func(time.Duration) {}
+	t.Cleanup(func() { userWindowsBusySleep = previous })
+	root := t.TempDir()
+	from, to := filepath.Join(root, "from"), filepath.Join(root, "to")
+	if err := os.WriteFile(from, []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(to, []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsMoveNoReplaceBusy(root, from, to); err == nil {
+		t.Fatal("expected an existing destination to be refused")
+	}
+	if data, _ := os.ReadFile(to); string(data) != "old" {
+		t.Fatalf("destination overwritten: %q", data)
+	}
+	if err := os.Remove(to); err != nil {
+		t.Fatal(err)
+	}
+	held := userWindowsHoldFile(t, from, 50*time.Millisecond)
+	calls := 0
+	userWindowsBusySleep = func(time.Duration) {
+		calls++
+		<-held
+	}
+	if err := userWindowsMoveNoReplaceBusy(root, from, to); err != nil {
+		t.Fatalf("expected the move to succeed once the hold is released: %v", err)
+	}
+	if calls == 0 {
+		t.Fatal("expected at least one busy retry")
+	}
+	if data, _ := os.ReadFile(to); string(data) != "new" {
+		t.Fatalf("unexpected destination content %q", data)
+	}
+}
