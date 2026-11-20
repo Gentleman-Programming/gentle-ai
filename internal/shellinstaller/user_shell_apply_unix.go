@@ -20,6 +20,13 @@ func ApplyUserExperiencePreferences(install UserShellInstall, selected UserExper
 	if err := selected.Validate(); err != nil {
 		return err
 	}
+	_, err := userWithOperationLock(install.Target, func() (struct{}, error) {
+		return struct{}{}, userUnixApplyPreferences(install, selected)
+	})
+	return err
+}
+
+func userUnixApplyPreferences(install UserShellInstall, selected UserExperience) error {
 	manifest, err := userReadInstallationManifest(install.Target)
 	if err != nil || manifest.Mode != "separate" {
 		return errors.New("managed installation manifest is not a Separate install")

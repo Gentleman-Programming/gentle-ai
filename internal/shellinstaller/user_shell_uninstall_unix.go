@@ -19,6 +19,12 @@ func UninstallUserShellInstall(home string, install UserShellInstall) (string, e
 	if install.Mode != "separate" && install.Mode != "agent" {
 		return "", errors.New("uninstall keeps a backup only for Separate or agent installations")
 	}
+	// Held for the whole uninstall: a concurrent install, update or uninstall
+	// of the same target fails fast instead of racing on the rename.
+	return userWithOperationLock(install.Target, func() (string, error) { return userUnixUninstall(home, install) })
+}
+
+func userUnixUninstall(home string, install UserShellInstall) (string, error) {
 	manifest, err := userReadInstallationManifest(install.Target)
 	if err != nil || manifest.Destination != install.Target || manifest.Mode != install.Mode {
 		return "", errors.New("managed installation manifest does not match the selected install")
