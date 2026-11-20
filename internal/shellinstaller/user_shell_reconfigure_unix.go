@@ -3,12 +3,9 @@
 package shellinstaller
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -99,92 +96,6 @@ func userRestoreShellReplacement(destination, backup string) error {
 		return err
 	}
 	return userDirectorySync(filepath.Dir(destination))
-}
-
-const userReplacedStampLayout = "20060102T150405Z"
-
-// userReplacedStamp returns the canonical UTC stamp of an exact
-// <destination>.replaced-<stamp> sibling, refusing every other path.
-func userReplacedStamp(destination, path string) (string, bool) {
-	prefix := filepath.Base(destination) + ".replaced-"
-	name := filepath.Base(path)
-	if filepath.Dir(path) != filepath.Dir(destination) || !strings.HasPrefix(name, prefix) {
-		return "", false
-	}
-	stamp := strings.TrimPrefix(name, prefix)
-	parsed, err := time.Parse(userReplacedStampLayout, stamp)
-	return stamp, err == nil && parsed.Format(userReplacedStampLayout) == stamp
-}
-
-// userPruneReplacedBackups bounds the replaced trees a reconfigure leaves
-// beside the active installation, mirroring the Windows retention policy: the
-// exact keep (the backup just created) is retained, as is the lexically latest
-// candidate when clock skew dated it after the keep. Every other canonical
-// sibling is removed only through userRemoveReplacedBackup; uncertain trees
-// are preserved and reported in a joined error. Callers treat a failure as a
-// warning: it never retracts the published installation.
-func userPruneReplacedBackups(destination, keep string) error {
-	keepStamp, ok := userReplacedStamp(destination, keep)
-	if !ok {
-		return fmt.Errorf("replaced backup %q is not a canonical sibling of %q; older backups preserved", keep, destination)
-	}
-	if _, err := os.Lstat(keep); err != nil {
-		return fmt.Errorf("replaced backup %q is missing; older backups preserved: %w", keep, err)
-	}
-	entries, err := os.ReadDir(filepath.Dir(destination))
-	if err != nil {
-		return fmt.Errorf("replaced backups beside %q cannot be listed; preserved: %w", destination, err)
-	}
-	var candidates []string
-	latest := keepStamp
-	for _, entry := range entries {
-		candidate := filepath.Join(filepath.Dir(destination), entry.Name())
-		if stamp, ok := userReplacedStamp(destination, candidate); ok && stamp != keepStamp {
-			candidates = append(candidates, candidate)
-			if stamp > latest {
-				latest = stamp
-			}
-		}
-	}
-	var errs []error
-	for _, candidate := range candidates {
-		if stamp, _ := userReplacedStamp(destination, candidate); stamp == latest {
-			continue // clock skew dated it after the keep; retain it
-		}
-		if err := userRemoveReplacedBackup(destination, candidate); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// userRemoveReplacedBackup removes one replaced tree only when it is an owned
-// physical private directory (never a symlink) whose canonical manifest names
-// destination, and only when its identity is unchanged immediately before
-// removal. os.RemoveAll unlinks nested symlinks without following them.
-func userRemoveReplacedBackup(destination, backup string) error {
-	info, err := privateDirectory(backup)
-	if err != nil {
-		return errors.Join(err, fmt.Errorf("replaced backup %q is not an owned private directory; preserved", backup))
-	}
-	manifestPath := filepath.Join(backup, "installation.json")
-	manifestInfo, err := os.Lstat(manifestPath)
-	if err != nil || !manifestInfo.Mode().IsRegular() || manifestInfo.Size() > 4096 {
-		return errors.Join(err, fmt.Errorf("replaced backup %q has no canonical manifest; preserved", backup))
-	}
-	data, err := os.ReadFile(manifestPath)
-	var manifest userManifest
-	if err != nil || json.Unmarshal(data, &manifest) != nil || manifest.Schema != userSchema || manifest.Destination != destination {
-		return errors.Join(err, fmt.Errorf("replaced backup %q does not belong to %q; preserved", backup, destination))
-	}
-	current, err := os.Lstat(backup)
-	if err != nil || !os.SameFile(info, current) {
-		return errors.Join(err, fmt.Errorf("replaced backup %q changed during retention; preserved", backup))
-	}
-	if err := os.RemoveAll(backup); err != nil {
-		return fmt.Errorf("replaced backup %q could not be fully removed: %w", backup, err)
-	}
-	return nil
 }
 
 func userRecordPublishedShell(manifest userManifest) error {

@@ -142,9 +142,6 @@ func userInspectInstall(req UserInstallRequest) (string, error) {
 	if err := ValidateUserInstall(req); err != nil {
 		return "", err
 	}
-	if err := userPlatformPreflight(req); err != nil {
-		return "", err
-	}
 	if _, statErr := os.Lstat(req.Destination); statErr == nil {
 		data, err := os.ReadFile(filepath.Join(req.Destination, "installation.json"))
 		if err != nil {
@@ -695,12 +692,6 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 	// ephemeral caches. Failure is reported but never retracts the install.
 	if cleanupErr := userPublishEphemeralCleanup(manifest.Destination); cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "Installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", manifest.Destination, cleanupErr)
-	}
-	// Keep only the newest replaced backup; failure never retracts the install.
-	if replaced {
-		if retentionErr := userPruneReplacedBackups(manifest.Destination, backup); retentionErr != nil {
-			fmt.Fprintf(os.Stderr, "Installation is published and verified, but replaced-backup retention failed; older backups may remain beside %q: %v\n", manifest.Destination, retentionErr)
-		}
 	}
 	return UserInstallResult{manifest.Destination, manifest.Prefix, manifest.Agent, "ComponentInstalled", launcherNote}, nil
 }

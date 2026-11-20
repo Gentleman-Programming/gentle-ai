@@ -112,9 +112,9 @@ func UserKernelCheck() error {
 
 // ValidateUserInstall runs before any download (InspectUserInstall calls it
 // for the TUI confirmation and again inside the install flow), so unsupported
-// hosts and noexec targets are refused here with their exact condition.
+// architectures and noexec targets are refused here with their exact condition.
 func ValidateUserInstall(req UserInstallRequest) error {
-	if err := userHostPlatform(runtime.GOARCH, userHostShell); err != nil {
+	if err := userHostPlatform(runtime.GOARCH); err != nil {
 		return err
 	}
 	if err := userValidateInstall(req); err != nil {

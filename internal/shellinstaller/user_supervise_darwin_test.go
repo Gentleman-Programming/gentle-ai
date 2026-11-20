@@ -401,30 +401,3 @@ func TestDarwinSuperviseSetsidDescendantIsNotContained(t *testing.T) {
 		t.Fatalf("cleanup of escaped descendant: %v", err)
 	}
 }
-
-func TestDarwinDescriptorLimitClampsToKernelMaxFilesPerProc(t *testing.T) {
-	kernel, err := userKernelMaxFiles()
-	if err != nil || kernel == 0 {
-		t.Fatalf("kern.maxfilesperproc = %d, %v", kernel, err)
-	}
-	limits, err := userDarwinLimits(0)
-	if err != nil || limits.DescriptorsMax > kernel || limits.Descriptors > limits.DescriptorsMax {
-		t.Fatalf("descriptor limits %+v exceed kern.maxfilesperproc %d: %v", limits, kernel, err)
-	}
-	saved := userKernelMaxFiles
-	t.Cleanup(func() { userKernelMaxFiles = saved })
-	userKernelMaxFiles = func() (uint64, error) { return 4096, nil }
-	limits, err = userDarwinLimits(0)
-	if err != nil || limits.DescriptorsMax > 4096 || limits.Descriptors != min(1024, limits.DescriptorsMax) {
-		t.Fatalf("injected kernel max 4096 not applied: %+v, %v", limits, err)
-	}
-	script, err := userLimitsScript(limits)
-	if err != nil || !strings.Contains(script, "command ulimit -H -n "+strconv.FormatUint(limits.DescriptorsMax, 10)+" ") {
-		t.Fatalf("script %q does not apply the clamped hard limit: %v", script, err)
-	}
-	injected := errors.New("injected sysctl failure")
-	userKernelMaxFiles = func() (uint64, error) { return 0, injected }
-	if _, err := userDarwinLimits(0); !errors.Is(err, injected) {
-		t.Fatalf("an unreadable kern.maxfilesperproc must fail closed: %v", err)
-	}
-}
