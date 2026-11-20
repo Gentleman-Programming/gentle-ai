@@ -148,27 +148,17 @@ func TestShellRunPublicationWithdrawsPendingConfirmation(t *testing.T) {
 	m.shellInstallRun.control.cancel()
 }
 
-func stubShellNow(t *testing.T) *time.Time {
-	t.Helper()
-	now := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
-	old := shellInstallNow
-	shellInstallNow = func() time.Time { return now }
-	t.Cleanup(func() { shellInstallNow = old })
-	return &now
-}
-
 // The watchdog fails a run that reports no progress for the bounded period.
 func TestShellRunWatchdogStopsStalledRun(t *testing.T) {
-	now := stubShellNow(t)
 	m, cmd, contexts := blockingRun(t, 3, nil)
 	ctx := <-contexts
-	*now = now.Add(shellInstallInactivityLimit - time.Second)
+	m.shellInstallRun.lastProgress = time.Now().Add(-shellInstallInactivityLimit + time.Minute)
 	next, _ := m.Update(shellInstallTick{})
 	m = next.(Model)
 	if ctx.Err() != nil {
 		t.Fatal("watchdog fired before the inactivity limit")
 	}
-	*now = now.Add(2 * time.Second)
+	m.shellInstallRun.lastProgress = time.Now().Add(-shellInstallInactivityLimit - time.Second)
 	next, cmd = m.Update(shellInstallTick{})
 	m = next.(Model)
 	if ctx.Err() == nil {
@@ -183,11 +173,10 @@ func TestShellRunWatchdogStopsStalledRun(t *testing.T) {
 
 // The watchdog never cancels publication; it explains the wait instead.
 func TestShellRunWatchdogSparesPublication(t *testing.T) {
-	now := stubShellNow(t)
 	release := make(chan struct{})
 	m, cmd, contexts := blockingRun(t, 5, release)
 	ctx := <-contexts
-	*now = now.Add(shellInstallInactivityLimit + time.Minute)
+	m.shellInstallRun.lastProgress = time.Now().Add(-shellInstallInactivityLimit - time.Minute)
 	next, _ := m.Update(shellInstallTick{})
 	m = next.(Model)
 	if ctx.Err() != nil {

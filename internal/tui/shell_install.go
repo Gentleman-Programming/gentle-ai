@@ -53,9 +53,6 @@ type shellInstallRun struct {
 // often; ten minutes of silence is a stall, not a slow network.
 const shellInstallInactivityLimit = 10 * time.Minute
 
-// shellInstallNow is the watchdog clock; tests replace it.
-var shellInstallNow = time.Now
-
 const shellPublicationNotice = "Publication has started and cannot be cancelled: interrupting it could leave a partial installation. Wait for it to finish."
 
 // shellRunControl decides cancellation in the worker's own progress order:
@@ -206,7 +203,7 @@ func (m Model) launchShellInstall(request shellinstaller.UserInstallRequest, fal
 	events := make(chan shellInstallEvent, 32)
 	ctx, cancel := context.WithCancel(context.Background())
 	control := &shellRunControl{cancel: cancel}
-	m.shellInstallRun = &shellInstallRun{steps: steps, control: control, lastProgress: shellInstallNow()}
+	m.shellInstallRun = &shellInstallRun{steps: steps, control: control, lastProgress: time.Now()}
 	m.shellInstallEvents = events
 	m.shellPlan, m.shellPlanRequest = nil, shellinstaller.UserInstallRequest{}
 	runner := m.shellInstallRunner
@@ -880,7 +877,7 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		progress := event.progress
-		run.lastProgress = shellInstallNow()
+		run.lastProgress = time.Now()
 		if run.confirmCancel && progress.Index >= len(run.steps) {
 			// Publication started while the question was open.
 			run.confirmCancel, run.notice = false, shellPublicationNotice
@@ -981,7 +978,7 @@ func (run *shellInstallRun) handleRunningKey(key tea.KeyMsg) {
 // watchdog stops a run that reported no progress for the inactivity limit.
 // Publication is never interrupted; the screen explains the wait instead.
 func (run *shellInstallRun) watchdog() {
-	if run.control == nil || run.cancelling || shellInstallNow().Sub(run.lastProgress) < shellInstallInactivityLimit {
+	if run.control == nil || run.cancelling || time.Since(run.lastProgress) < shellInstallInactivityLimit {
 		return
 	}
 	if run.control.tryCancel() {

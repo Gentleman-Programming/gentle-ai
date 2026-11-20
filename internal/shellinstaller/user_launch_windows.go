@@ -326,14 +326,7 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 		if startErr != nil {
 			return errors.Join(startErr, closeChannel())
 		}
-		waitErr := command.Wait()
-		ctxErr := ctx.Err()
-		if waitErr == nil && args[0] == "install" {
-			// The worker exited successfully: a cancel that arrived after
-			// its publication commit does not retract the installation.
-			ctxErr = nil
-		}
-		return errors.Join(waitErr, release(), closeChannel(), ctxErr)
+		return errors.Join(command.Wait(), release(), closeChannel(), ctx.Err())
 	}
 	if err := userWindowsWorkerCheck(); err != nil {
 		return err
