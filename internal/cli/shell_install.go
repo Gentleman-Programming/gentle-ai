@@ -182,9 +182,12 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 		}
 		// The worker prints the Main SDK marker only when its parent asks for
 		// it; the Windows worker environment forwards this same signal.
-		restore := shellRequestWorkerSteps()
+		// Darwin runs the entry in-process, where the signal would print step
+		// lines over the TUI and the typed error already arrives intact.
+		if runtime.GOOS == "windows" {
+			defer shellRequestWorkerSteps()()
+		}
 		runErr := shellInstallEntry(ctx, self, args, nil, progress, progress)
-		restore()
 		if runErr != nil {
 			if output := strings.TrimSpace(workerLog.String()); output != "" {
 				runErr = fmt.Errorf("%w; worker output: %s", runErr, output)

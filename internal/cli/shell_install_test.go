@@ -387,6 +387,9 @@ func TestShellReportEntryErrorSilentWithoutInlineParent(t *testing.T) {
 // The non-direct (Windows) inline parent asks its worker for the marker and
 // restores its own environment afterwards.
 func TestShellInlineNonDirectRequestsMarkerFromWorker(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the worker crosses a process boundary only on Windows")
+	}
 	oldDirect, oldInspect, oldEntry := shellInlineDirect, shellInstallInspect, shellInstallEntry
 	t.Cleanup(func() { shellInlineDirect, shellInstallInspect, shellInstallEntry = oldDirect, oldInspect, oldEntry })
 	t.Setenv("GENTLE_AI_SHELL_STEPS", "")
@@ -433,10 +436,30 @@ func TestShellInlineKeepsMarkerBeyondBoundedLog(t *testing.T) {
 			t.Fatalf("direct=%v: marker evicted by long line: %v", direct, err)
 		}
 	}
-	// Prefixed lines stay rejected.
-	log := &boundedWorkerLog{limit: 8192}
-	_, _ = io.WriteString(log, "x "+shellinstaller.MainSDKFailureMarker+"\n")
-	if log.sawMarker() {
-		t.Fatal("prefixed marker accepted")
+}
+
+// A prefixed marker is ordinary output, not the typed failure.
+func TestShellInlineRejectsPrefixedMarker(t *testing.T) {
+	oldDirect, oldWorker, oldProbe, oldInspect, oldEntry := shellInlineDirect, shellDirectWorker, shellLaunchProbe, shellInstallInspect, shellInstallEntry
+	t.Cleanup(func() {
+		shellInlineDirect, shellDirectWorker, shellLaunchProbe, shellInstallInspect, shellInstallEntry = oldDirect, oldWorker, oldProbe, oldInspect, oldEntry
+	})
+	shellInstallInspect = func(req shellinstaller.UserInstallRequest) (string, error) { return req.Confirmation, nil }
+	shellLaunchProbe = func(context.Context, string) error { return nil }
+	emit := func(stderr io.Writer) error {
+		_, _ = io.WriteString(stderr, "x "+shellinstaller.MainSDKFailureMarker+"\n")
+		return exec.Command("false").Run()
+	}
+	shellDirectWorker = func(_ context.Context, _ string, _ []string, _, stderr io.Writer) error { return emit(stderr) }
+	shellInstallEntry = func(_ context.Context, _ string, _ []string, _ io.Reader, _, stderr io.Writer) error {
+		return emit(stderr)
+	}
+	selection := ShellInstallSelection{Confirmed: true, Request: shellinstaller.UserInstallRequest{Destination: t.TempDir(), Mode: "separate", Confirmation: "x"}}
+	for _, direct := range []bool{true, false} {
+		shellInlineDirect = direct
+		err := RunShellInstallInline(context.Background(), selection, func(shellinstaller.UserInstallProgress) {}, io.Discard)
+		if err == nil || errors.Is(err, shellinstaller.ErrMainSDKInstall) {
+			t.Fatalf("direct=%v: prefixed marker accepted or error lost: %v", direct, err)
+		}
 	}
 }
