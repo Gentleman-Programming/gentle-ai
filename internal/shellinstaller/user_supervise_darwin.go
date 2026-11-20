@@ -30,7 +30,6 @@ import (
 //	UMask=0077              -> umask 077
 //	LimitNOFILE 1024:524288 -> RLIMIT_NOFILE soft 1024, hard 524288 (systemd
 //	                           defaults), capped at the inherited hard limit
-//	                           and at kern.maxfilesperproc
 //	(no Linux equivalent)   -> RLIMIT_FSIZE 4 GiB per written file
 //
 // userSupervisionLimitation states what this does not contain.
@@ -41,17 +40,12 @@ const userSupervisionLimitation = "darwin containment is one process group plus 
 	"there is no NoNewPrivileges or capability drop"
 
 const (
-	userFileBytes   = 4 << 30
-	userLimitsShell = "/bin/sh"
-	userLimitsName  = "gentle-shell-limits"
+	userFileBytes      = 4 << 30
+	userDescriptors    = 1024
+	userDescriptorsMax = 524288
+	userLimitsShell    = "/bin/sh"
+	userLimitsName     = "gentle-shell-limits"
 )
-
-// userKernelMaxFiles reads kern.maxfilesperproc: setrlimit refuses an
-// RLIMIT_NOFILE above it even when the inherited hard limit is unlimited.
-var userKernelMaxFiles = func() (uint64, error) {
-	value, err := unix.SysctlUint32("kern.maxfilesperproc")
-	return uint64(value), err
-}
 
 type userLimits struct {
 	CPUSeconds     uint64        // RLIMIT_CPU soft and hard; 0 inherits
@@ -87,19 +81,16 @@ func userDarwinLimits(deadline time.Duration) (userLimits, error) {
 	if err == nil {
 		err = unix.Getrlimit(unix.RLIMIT_NOFILE, &nofile)
 	}
-	var kernelFiles uint64
-	if err == nil {
-		kernelFiles, err = userKernelMaxFiles()
-	}
 	if err != nil {
 		return userLimits{}, privateError("unavailable", err)
 	}
 	limits := userLimits{
-		Processes: min(uint64(processes)+userUnitTasksMax, nproc.Max),
-		FileBytes: userFileBytes,
-		Deadline:  deadline,
+		Processes:      min(uint64(processes)+userUnitTasksMax, nproc.Max),
+		FileBytes:      userFileBytes,
+		DescriptorsMax: min(userDescriptorsMax, nofile.Max),
+		Deadline:       deadline,
 	}
-	limits.Descriptors, limits.DescriptorsMax = userDescriptorCeiling(nofile.Max, kernelFiles)
+	limits.Descriptors = min(userDescriptors, limits.DescriptorsMax)
 	if deadline > 0 {
 		limits.CPUSeconds = uint64((deadline + time.Second - 1) / time.Second)
 	}

@@ -1,6 +1,7 @@
 package shellinstaller
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -29,5 +30,22 @@ func TestUserHomebrewHintIgnoresOtherAncestors(t *testing.T) {
 		if hint := userHomebrewHint(path); hint != "" {
 			t.Fatalf("userHomebrewHint(%q) = %q, want empty", path, hint)
 		}
+	}
+}
+
+func TestUserSupervisorAncestorRefusalCarriesHomebrewHintOnlyForHomebrew(t *testing.T) {
+	err := userSupervisorAncestorRefusal("/opt/homebrew/Cellar", 0, 0775)
+	var failure *PrivateRuntimeError
+	if !errors.As(err, &failure) || failure.Kind != "source" || failure.Cause == nil {
+		t.Fatalf("refusal = %v, want a source PrivateRuntimeError", err)
+	}
+	for _, want := range []string{`supervisor ancestor refused: path="/opt/homebrew/Cellar" owner=0 mode=0775`, "user-owned 0755 directory", "do not change Homebrew permissions"} {
+		if !strings.Contains(failure.Cause.Error(), want) {
+			t.Fatalf("refusal %q lacks %q", failure.Cause, want)
+		}
+	}
+	plain := userSupervisorAncestorRefusal("/Users/me/bin", 501, 0777)
+	if !errors.As(plain, &failure) || strings.Contains(failure.Cause.Error(), "Homebrew") {
+		t.Fatalf("non-Homebrew refusal must not carry the hint: %v", plain)
 	}
 }
