@@ -204,3 +204,40 @@ func TestUserMainDescriptorPreservesSourceOnlyContract(t *testing.T) {
 		t.Fatal("production producer issued canceled requests", result, err)
 	}
 }
+
+// A Main SDK failure keeps its message and cause while matching the typed
+// sentinel the TUI fallback relies on (#6176).
+func TestUserMainSDKFailureIsTyped(t *testing.T) {
+	cause := errors.New("private installation: nonzero")
+	err := userMainSDKFailure("Main SDK + stock provider", cause)
+	if !errors.Is(err, ErrMainSDKInstall) || !errors.Is(err, cause) {
+		t.Fatalf("Main SDK failure lost its sentinel or cause: %v", err)
+	}
+	if err.Error() != "Main SDK + stock provider: private installation: nonzero" {
+		t.Fatalf("Main SDK failure message changed: %q", err.Error())
+	}
+	if userMainSDKFailure("Main SDK overlay", nil) != nil {
+		t.Fatal("nil cause produced a Main SDK failure")
+	}
+	if errors.Is(fmt.Errorf("Main SDK + stock provider: %w", cause), ErrMainSDKInstall) {
+		t.Fatal("untyped Main SDK wording matched the sentinel")
+	}
+}
+
+// A child worker's error regains ErrMainSDKInstall only from the exact
+// marker line, with its message unchanged.
+func TestMainSDKFailureFromWorker(t *testing.T) {
+	cause := errors.New("exit status 1; worker output: Main SDK + stock provider: nonzero")
+	err := MainSDKFailureFromWorker(cause, "progress\n"+MainSDKFailureMarker+"\nerror: Main SDK + stock provider: nonzero\n")
+	if !errors.Is(err, ErrMainSDKInstall) || !errors.Is(err, cause) || err.Error() != cause.Error() {
+		t.Fatalf("marked worker failure = %v", err)
+	}
+	for _, output := range []string{"", "Main SDK + stock provider: nonzero", "prefix " + MainSDKFailureMarker} {
+		if got := MainSDKFailureFromWorker(cause, output); got != cause {
+			t.Fatalf("output %q changed the error: %v", output, got)
+		}
+	}
+	if MainSDKFailureFromWorker(nil, MainSDKFailureMarker) != nil {
+		t.Fatal("success became a failure")
+	}
+}

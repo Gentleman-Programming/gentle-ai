@@ -18,6 +18,55 @@ import (
 // retries after a Main composition failure.
 const userMainFallbackCommit = "63d6065f924ec366a321dd21f7396f04026c026f"
 
+// ErrMainSDKInstall marks a failed Main SDK composition. Callers match it
+// with errors.Is to offer the last qualified Main snapshot; the wording of
+// the wrapped error is never part of that contract.
+var ErrMainSDKInstall = errors.New("Main SDK installation failed")
+
+// userMainSDKError keeps the existing "<context>: <cause>" message while
+// matching ErrMainSDKInstall and unwrapping to the cause.
+type userMainSDKError struct {
+	context string
+	err     error
+}
+
+func (e *userMainSDKError) Error() string {
+	if e.context == "" {
+		return e.err.Error()
+	}
+	return e.context + ": " + e.err.Error()
+}
+func (e *userMainSDKError) Unwrap() error        { return e.err }
+func (e *userMainSDKError) Is(target error) bool { return target == ErrMainSDKInstall }
+
+// MainSDKFailureMarker is the stderr line a child installer prints when it
+// fails with ErrMainSDKInstall. Linux and Windows install in a child process,
+// so the typed error crosses the process boundary only as this line.
+const MainSDKFailureMarker = "gentle-ai shell: Main SDK composition failed"
+
+// MainSDKFailureFromWorker restores ErrMainSDKInstall on a child worker's
+// error when the worker output carries MainSDKFailureMarker on its own line.
+// The error message is unchanged; any other error is returned as is.
+func MainSDKFailureFromWorker(err error, output string) error {
+	if err == nil || errors.Is(err, ErrMainSDKInstall) {
+		return err
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == MainSDKFailureMarker {
+			return &userMainSDKError{err: err}
+		}
+	}
+	return err
+}
+
+// userMainSDKFailure wraps a Main SDK composition failure; nil stays nil.
+func userMainSDKFailure(context string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &userMainSDKError{context: context, err: err}
+}
+
 type userSnapshotArtifact struct {
 	URL, SHA, Archive, Prefix string
 	Bound, Size               int64

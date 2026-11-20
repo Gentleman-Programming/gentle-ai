@@ -311,20 +311,55 @@ func shellChannelOnlyDelta(current, selected shellinstaller.UserExperience) bool
 	return current == selected
 }
 
+// shellChannelRestore is the installed preference set a channel-only plan
+// replaced; it is written back when the plan is cancelled or its run fails.
+type shellChannelRestore struct {
+	install  shellinstaller.UserShellInstall
+	previous shellinstaller.UserExperience
+}
+
+// restoreShellChannel writes back the preference a cancelled or failed
+// channel-only plan replaced. Best effort: the next update check reports any
+// remaining channel delta.
+func (m Model) restoreShellChannel() Model {
+	if restore := m.shellChannelRestore; restore != nil {
+		_ = shellinstaller.ApplyUserExperiencePreferences(restore.install, restore.previous)
+	}
+	m.shellChannelRestore = nil
+	return m
+}
+
+// clearShellRunEnvironment drops the process-wide fallback and reconfigure
+// flags so a later run in the same TUI session never inherits them.
+func clearShellRunEnvironment() {
+	_ = os.Unsetenv("GENTLE_AI_MAIN_FALLBACK")
+	_ = os.Unsetenv("GENTLE_AI_RECONFIGURE_TARGET")
+}
+
 // beginChannelOverlayUpdate routes a channel-only change to the in-place
 // overlay: it persists the channel preference first (the overlay never
 // touches configuration), then prepares the shared update flow. The request's
 // experience carries the target channel, which the inspection derives and the
-// Windows worker recognizes as the channel-only reconfigure.
+// Windows worker recognizes as the channel-only reconfigure. The replaced
+// preference is kept so cancelling the plan or a failed run restores it.
 func (m Model) beginChannelOverlayUpdate(update *shellUpdateState) (tea.Model, error) {
-	if err := shellinstaller.ApplyUserExperiencePreferences(update.install, update.config.profile); err != nil {
-		return m, err
-	}
-	profile, err := shellinstaller.LoadUserShellExperience(update.install)
+	previous, err := shellinstaller.LoadUserShellExperience(update.install)
 	if err != nil {
 		return m, err
 	}
-	return m.beginShellUpdateInstall(update.install, profile, nil)
+	if err := shellinstaller.ApplyUserExperiencePreferences(update.install, update.config.profile); err != nil {
+		return m, err
+	}
+	m.shellChannelRestore = &shellChannelRestore{install: update.install, previous: previous}
+	profile, err := shellinstaller.LoadUserShellExperience(update.install)
+	if err != nil {
+		return m.restoreShellChannel(), err
+	}
+	next, err := m.beginShellUpdateInstall(update.install, profile, nil)
+	if err != nil {
+		return next.(Model).restoreShellChannel(), err
+	}
+	return next, nil
 }
 
 func (m Model) updateShellUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -368,7 +403,7 @@ func (m Model) updateShellUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				next, err := m.beginChannelOverlayUpdate(update)
 				if err != nil {
 					update.err = err
-					return m, nil
+					return next, nil
 				}
 				return next, nil
 			}
@@ -720,7 +755,7 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 			run.done, run.err = true, event.err
 			if event.err != nil {
 				request := m.shellInstallSelection.Request
-				if request.Experience != nil && request.Experience.SDKSource == "main-preview" && strings.Contains(event.err.Error(), "Main SDK") && os.Getenv("GENTLE_AI_MAIN_FALLBACK") != "1" {
+				if request.Experience != nil && request.Experience.SDKSource == "main-preview" && errors.Is(event.err, shellinstaller.ErrMainSDKInstall) && os.Getenv("GENTLE_AI_MAIN_FALLBACK") != "1" {
 					run.fallbackAvailable = true
 				}
 			}
@@ -769,30 +804,31 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// a possibly uncertain publication.
 		return m, nil
 	}
-	if key.Type != tea.KeyEnter {
-		return m, nil
-	}
 	if run.err != nil {
-		if run.fallbackAvailable {
-			switch key.Type {
-			case tea.KeyEnter:
-				request := m.shellInstallSelection.Request
-				return m.requestShellInstall(request, true)
-			case tea.KeyEsc, tea.KeyCtrlC:
-				_ = os.Unsetenv("GENTLE_AI_MAIN_FALLBACK")
-				m.shellInstallRun, m.shellInstallEvents = nil, nil
-				m.shellInstallSelection = cli.ShellInstallSelection{}
-				m.setScreen(ScreenWelcome)
-				return m, nil
+		switch key.Type {
+		case tea.KeyEnter:
+			if run.fallbackAvailable {
+				// Accepting keeps the reconfigure target and the replaced
+				// channel preference: the fallback retries the same request.
+				return m.requestShellInstall(m.shellInstallSelection.Request, true)
 			}
+		case tea.KeyEsc, tea.KeyCtrlC:
+			// Esc/Ctrl+C decline the fallback or leave the failure screen.
+		default:
 			return m, nil
 		}
+		clearShellRunEnvironment()
+		m = m.restoreShellChannel()
 		m.shellInstallRun, m.shellInstallEvents = nil, nil
 		m.shellInstallSelection = cli.ShellInstallSelection{}
 		m.setScreen(ScreenWelcome)
 		return m, nil
 	}
-	_ = os.Unsetenv("GENTLE_AI_MAIN_FALLBACK")
+	if key.Type != tea.KeyEnter {
+		return m, nil
+	}
+	clearShellRunEnvironment()
+	m.shellChannelRestore = nil // The confirmed channel is now installed.
 	return m, tea.Quit
 }
 
@@ -832,10 +868,14 @@ func (m Model) updateShellInstall(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyEnter:
 			return m.beginShellInstall()
 		case tea.KeyEsc:
+			// Continuing from configuration sets the target again.
+			_ = os.Unsetenv("GENTLE_AI_RECONFIGURE_TARGET")
+			m = m.restoreShellChannel()
 			m.shellExperience, m.shellPlanConfig = m.shellPlanConfig, nil
 			m.shellPlan, m.shellPlanRequest = nil, shellinstaller.UserInstallRequest{}
 			return m, nil
 		case tea.KeyCtrlC:
+			m = m.restoreShellChannel()
 			m.shellPlan, m.shellPlanConfig, m.shellExperience = nil, nil, nil
 			m.shellPlanRequest, m.shellInstallModel = shellinstaller.UserInstallRequest{}, nil
 			_ = os.Unsetenv("GENTLE_AI_RECONFIGURE_TARGET")

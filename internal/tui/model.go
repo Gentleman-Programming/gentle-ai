@@ -660,6 +660,9 @@ type Model struct {
 	shellPlan             []string
 	shellPlanConfig       *shellExperienceConfig
 	shellPlanRequest      shellinstaller.UserInstallRequest
+	// shellChannelRestore holds the channel preference persisted before a
+	// channel-only update plan; cancel or failure restores it.
+	shellChannelRestore   *shellChannelRestore
 	shellRootRisk         *shellRootRiskPrompt
 	shellInstallRun       *shellInstallRun
 	shellInstallEvents    <-chan shellInstallEvent

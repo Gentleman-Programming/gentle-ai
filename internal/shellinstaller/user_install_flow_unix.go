@@ -532,7 +532,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		userShellDetail(ctx, 4, 5, "Retaining the installed SDK channel")
 		mainSDK = existing.MainSDK
 	} else if mainSDK, err = userInstallMainSDK(ctx, root, req.Destination, prefix, agent, req.Experience); err != nil {
-		return result, fmt.Errorf("Main SDK + stock provider: %w", err)
+		return result, userMainSDKFailure("Main SDK + stock provider", err)
 	}
 	if _, statErr := os.Lstat(req.Destination); req.Mode == "agent" && errors.Is(statErr, os.ErrNotExist) {
 		// A fresh agent install sets Pi's own fd/rg aside inside the stage;
