@@ -709,3 +709,54 @@ func TestRunSyncWorkspaceScopeWritesProjectOpenCodeSettings(t *testing.T) {
 		})
 	}
 }
+
+// TestRunSyncRepairsEngramAllowRulesForPersistedMCPRegistration proves the
+// remedy the doctor offers for an Engram registered only in Claude Code's own
+// MCP config (no gentle-ai Engram component recorded): a plain sync repairs
+// the allow rules, and the doctor check then passes.
+func TestRunSyncRepairsEngramAllowRulesForPersistedMCPRegistration(t *testing.T) {
+	t.Setenv(scopeEnvVar, "")
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"engram":{"command":"engram"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	before := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentPersona})
+	if before.Status != CheckStatusWarn {
+		t.Fatalf("precondition: doctor status = %q, want warn", before.Status)
+	}
+
+	t.Chdir(workspace)
+	if _, err := RunSync([]string{"--agents", "claude-code"}); err != nil {
+		t.Fatalf("sync error = %v", err)
+	}
+
+	after := checkEngramClaudeAutoAllow(home, []string{"claude-code"}, []model.ComponentID{model.ComponentPersona})
+	if after.Status != CheckStatusPass {
+		t.Fatalf("doctor status after sync = %q, detail = %q; want pass: sync must repair the allow rules", after.Status, after.Detail)
+	}
+}

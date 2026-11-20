@@ -880,3 +880,33 @@ func TestReadPersistedStdioCommands_PreservesConfiguredCommandAndArguments(t *te
 		})
 	}
 }
+
+func TestHasClaudeCodeEngramMCPServer(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "no user config file at all", want: false},
+		{name: "empty mcpServers", content: `{"mcpServers":{}}`, want: false},
+		{name: "unrelated server only", content: `{"mcpServers":{"context7":{"command":"context7"}}}`, want: false},
+		{name: "bare engram server", content: `{"mcpServers":{"engram":{"command":"engram"}}}`, want: true},
+		{name: "plugin-prefixed server", content: `{"mcpServers":{"plugin_engram_engram":{"command":"engram"}}}`, want: true},
+		{name: "unparseable JSON", content: `not valid json`, want: false},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			if tt.content != "" {
+				if err := os.WriteFile(filepath.Join(homeDir, ".claude.json"), []byte(tt.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if got := HasClaudeCodeEngramMCPServer(homeDir); got != tt.want {
+				t.Errorf("HasClaudeCodeEngramMCPServer() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -10,6 +10,7 @@ const (
 	CheckStateJSON             CheckID = "state:json"
 	CheckInstalledAssetVersion CheckID = "installed:asset_version"
 	CheckEngramReachable       CheckID = "engram:reachable"
+	CheckEngramClaudeAutoAllow CheckID = "engram:claude_auto_allow"
 	CheckDiskSpace             CheckID = "disk:space"
 	CheckOpenCodeProfile       CheckID = "opencode:managed_profile"
 )

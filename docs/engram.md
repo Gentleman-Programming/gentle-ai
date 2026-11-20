@@ -141,6 +141,26 @@ Full upstream docs: [Engram Cloud](https://github.com/Gentleman-Programming/engr
 
 ---
 
+## Claude Code Auto Mode
+
+Claude Code's `auto` permission mode denies Engram's memory writes unless they are allowlisted. `engram setup claude-code` only offers to add those rules through an interactive prompt, which never runs when Gentle AI invokes it, so `gentle-ai install` and `gentle-ai sync` write the rules directly to `permissions.allow` in `~/.claude/settings.json`.
+
+**Tools allowed**, under both the `mcp__engram__` and `mcp__plugin_engram_engram__` prefixes: `mem_save`, `mem_update`, `mem_review`, `mem_save_prompt`, `mem_pin`, `mem_unpin`, `mem_session_summary`, `mem_session_start`, `mem_session_end`, `mem_capture_passive`, `mem_judge`, `mem_compare`.
+
+**Tools not allowed:** `mem_delete` and `mem_merge_projects` stay behind Claude Code's normal auto-mode classifier.
+
+The repair is additive and repeatable:
+
+- Existing `allow`, `ask`, and `deny` entries are kept, and only missing rules are appended. A rule already covered by a broader entry such as `mcp__engram` is not added again.
+- A tool matched by an `ask` or `deny` entry is not added. Claude Code evaluates deny, then ask, then allow, so that restriction still applies.
+- A `settings.json` that is not valid JSON, is not a JSON object, or has a non-object `permissions` or non-array `permissions.allow` is left untouched.
+- It is skipped for workspace-scoped runs, because the file is user-level and would grant the tools in every other project.
+- If the write fails, install prints a warning and sync reports a warning in its summary. Neither fails because of it.
+
+Run `gentle-ai doctor` to check the result. The `engram:claude_auto_allow` check warns when rules are missing and `gentle-ai sync` can add them, or when an `ask` or `deny` rule or the file's contents need your attention.
+
+---
+
 ## MCP Tools Reference
 
 These are the tools the AI agent uses behind the scenes. You never call them directly, but understanding them helps you know what your agent is doing.

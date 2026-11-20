@@ -1525,6 +1525,31 @@ func (s componentSyncStep) Run() error {
 				return fmt.Errorf("sync engram for %q: %w", adapter.Agent(), err)
 			}
 			s.countChanged(boolToInt(res.Changed), res.Files...)
+			// Only under ScopeGlobal: this repair always targets the
+			// user-level ~/.claude/settings.json, and Claude Code has no
+			// workspace-scoped equivalent it can target yet. Under
+			// ScopeWorkspace, running it would grant Engram's tools in every
+			// other project on the machine, not just this one (same leak
+			// #1074 fixed for the rest of this component's scope handling).
+			if adapter.Agent() == model.AgentClaudeCode && s.scope != ScopeWorkspace {
+				// Heals installs made before this fix existed, and installs
+				// where `engram setup` could not seed the allowlist
+				// non-interactively (Gentleman-Programming/engram#2231).
+				// A failure is reported as a manual action rather than
+				// returned — sync must not fail over a best-effort permission
+				// repair — but it must not be silently swallowed either: the
+				// doctor check only surfaces a persistently missing allowlist
+				// on its own next run, not why this attempt did not fix it.
+				allowChanged, allowErr := permissions.EnsureEngramClaudeAutoAllowRules(s.homeDir)
+				// The write may have landed even when it also reports an
+				// error, so record the change in either case.
+				if allowChanged {
+					s.countChanged(1, adapter.SettingsPath(s.homeDir))
+				}
+				if allowErr != nil && s.skipped != nil {
+					*s.skipped = append(*s.skipped, fmt.Sprintf("WARNING: could not ensure Engram Claude auto-mode allow rules: %v", allowErr))
+				}
+			}
 		}
 		return nil
 
