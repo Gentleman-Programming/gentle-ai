@@ -330,8 +330,10 @@ func UninstallUserShellInstall(_ string, install UserShellInstall) (string, erro
 	pruneErr := userWindowsPruneRemovedBackup(backup)
 	launcherErr := userWindowsRemoveLauncher(install.Target)
 	cacheErr := userWindowsRemoveDownloadCache()
-	if pruneErr != nil || launcherErr != nil || cacheErr != nil {
-		return backup, fmt.Errorf("installation moved to %s but cleanup failed; the backup keeps more than config, agent, home, selection.json and manifest.json, or the per-user download cache could not be removed: %w", backup, errors.Join(pruneErr, launcherErr, cacheErr))
+	// Keep at most one removed backup: drop the ones earlier uninstalls left.
+	retentionErr := userWindowsPruneRemovedBackups(install.Target, backup)
+	if pruneErr != nil || launcherErr != nil || cacheErr != nil || retentionErr != nil {
+		return backup, fmt.Errorf("installation moved to %s but cleanup failed; the backup keeps more than config, agent, home, selection.json and manifest.json, an earlier removed backup could not be pruned, or the per-user download cache could not be removed: %w", backup, errors.Join(pruneErr, launcherErr, cacheErr, retentionErr))
 	}
 	return backup, nil
 }
