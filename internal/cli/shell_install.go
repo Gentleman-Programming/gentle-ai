@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
 )
@@ -28,14 +27,7 @@ var (
 	// direct worker plus the delegated-unit launch probe.
 	shellInlineDirect = runtime.GOOS == "linux"
 	shellDirectWorker = runShellDirectWorker
-	// shellInlineProgressContext carries the inline reporter to an in-process
-	// installer; tests replace it to observe the wiring.
-	shellInlineProgressContext = shellinstaller.WithInstallProgress
 )
-
-// shellDirectWorkerGrace bounds how long a cancelled direct worker may take
-// to roll back its stage before it is killed.
-const shellDirectWorkerGrace = 120 * time.Second
 
 // runShellDirectWorker runs the portable direct installer under setpriv. Its
 // environment is inherited: the host's registry, reconfigure and Main
@@ -45,11 +37,6 @@ func runShellDirectWorker(ctx context.Context, self string, args []string, stdou
 	cmd := exec.CommandContext(ctx, "/usr/bin/setpriv", entry...)
 	cmd.Env = append(os.Environ(), "GENTLE_AI_SHELL_STEPS=1")
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	// A cancelled context asks the worker to stop instead of killing it:
-	// setpriv execs the worker, whose own signal context then runs the
-	// rollback. It is killed only if it outlives the grace period.
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = shellDirectWorkerGrace
 	return cmd.Run()
 }
 
@@ -203,7 +190,7 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 		if runtime.GOOS == "darwin" {
 			// The in-process installer has no output to parse: its own steps
 			// (publish included) reach the caller through the context.
-			ctx = shellInlineProgressContext(ctx, report)
+			ctx = shellinstaller.WithInstallProgress(ctx, report)
 		}
 		runErr := shellInstallEntry(ctx, self, args, nil, progress, progress)
 		if runErr != nil {

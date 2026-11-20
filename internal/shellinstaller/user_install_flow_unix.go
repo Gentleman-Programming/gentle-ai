@@ -673,14 +673,10 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 	}
 	switched = true
 	userMarkPublicationCommitted(ctx)
-	// The rename is the commit point. A cancel arriving now (a late SIGTERM
-	// from a TUI cancel) must not turn a published installation into an
-	// uncertain failure, so the readback ignores cancellation.
-	ctx = context.WithoutCancel(ctx)
 	if err = userDirectorySync(filepath.Dir(manifest.Destination)); err != nil {
 		return result, privateError("uncertain", err)
 	}
-	if _, err = userPublishReadback(ctx, manifest.Destination); err != nil {
+	if _, err = userReadManifest(ctx, manifest.Destination); err != nil {
 		return result, privateError("uncertain", err)
 	}
 	registryErr := userRecordPublishedShell(manifest)
@@ -713,10 +709,6 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 // verified publication. It is a variable only so tests can observe whether
 // the publish tail calls it; production always uses userInstallEphemeralCleanup.
 var userPublishEphemeralCleanup = userInstallEphemeralCleanup
-
-// userPublishReadback is the post-commit manifest readback. It is a variable
-// only so tests can observe the context it receives.
-var userPublishReadback = userReadManifest
 
 // userRecover restores the saved Shared preimages of ROOT after a fresh printed
 // confirmation. The restore command runs as an owned installer command:

@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,66 +36,17 @@ type shellInstallRun struct {
 	spinner           int
 	bloom             int
 	fallbackAvailable bool
-	// control owns the worker context; confirmCancel shows the cancel
-	// question, cancelling waits for the worker after a confirmed cancel,
-	// stalled marks a watchdog cancel and notice explains a refused cancel.
-	control       *shellRunControl
+	// cancel stops the worker; it is called only before publication. The
+	// state is written solely from Update: progress arrives as messages in the
+	// worker's order, so no lock is needed.
+	cancel        context.CancelFunc
 	confirmCancel bool
-	cancelling    bool
-	stalled       bool
+	cancelled     bool
+	publishing    bool
 	notice        string
-	lastProgress  time.Time
 }
-
-// shellInstallInactivityLimit bounds how long a run may report no progress
-// before the watchdog stops it. Downloads and npm installs report progress
-// often; ten minutes of silence is a stall, not a slow network.
-const shellInstallInactivityLimit = 10 * time.Minute
 
 const shellPublicationNotice = "Publication has started and cannot be cancelled: interrupting it could leave a partial installation. Wait for it to finish."
-
-// shellRunControl decides cancellation in the worker's own progress order:
-// the report callback marks publication before the worker publishes, so a
-// cancel accepted here always precedes publication.
-type shellRunControl struct {
-	mu         sync.Mutex
-	cancel     context.CancelFunc
-	publishing bool
-	cancelled  bool
-}
-
-// markProgress records that the final publish step has started.
-func (c *shellRunControl) markProgress(progress shellinstaller.UserInstallProgress) {
-	if progress.Index >= len(shellInstallStepLabels) {
-		c.mu.Lock()
-		c.publishing = true
-		c.mu.Unlock()
-	}
-}
-
-func (c *shellRunControl) inPublication() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.publishing
-}
-
-// tryCancel cancels the worker only before publication.
-func (c *shellRunControl) tryCancel() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.publishing {
-		return false
-	}
-	c.cancelled = true
-	c.cancel()
-	return true
-}
-
-func (c *shellRunControl) wasCancelled() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.cancelled
-}
 
 type shellInstallTick struct{}
 
@@ -202,8 +152,7 @@ func (m Model) launchShellInstall(request shellinstaller.UserInstallRequest, fal
 	steps[0].State = "running"
 	events := make(chan shellInstallEvent, 32)
 	ctx, cancel := context.WithCancel(context.Background())
-	control := &shellRunControl{cancel: cancel}
-	m.shellInstallRun = &shellInstallRun{steps: steps, control: control, lastProgress: time.Now()}
+	m.shellInstallRun = &shellInstallRun{steps: steps, cancel: cancel}
 	m.shellInstallEvents = events
 	m.shellPlan, m.shellPlanRequest = nil, shellinstaller.UserInstallRequest{}
 	runner := m.shellInstallRunner
@@ -215,11 +164,10 @@ func (m Model) launchShellInstall(request shellinstaller.UserInstallRequest, fal
 	go func() {
 		// The inspected request is immutable here; the runner revalidates its
 		// token and physical selection before any effect.
-		// Its context is cancelled only by a confirmed cancel or the watchdog,
-		// and only before the worker reports the publish step.
+		// Its context is cancelled only by a confirmed cancel the TUI accepted
+		// before it saw the publish step.
 		defer cancel()
 		err := runner(ctx, request, func(progress shellinstaller.UserInstallProgress) {
-			control.markProgress(progress)
 			events <- shellInstallEvent{progress: progress}
 		})
 		events <- shellInstallEvent{done: true, err: err}
@@ -834,7 +782,6 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.shellInstallRun.spinner++
-		m.shellInstallRun.watchdog()
 		return m, waitShellInstallEvent(m.shellInstallEvents)
 	}
 	event, ok := msg.(shellInstallEvent)
@@ -845,16 +792,12 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if event.done {
 			run.done, run.err = true, event.err
-			run.confirmCancel, run.cancelling, run.notice = false, false, ""
-			if event.err != nil && run.control != nil && run.control.wasCancelled() {
-				switch {
-				case run.control.inPublication():
-					// The worker reported publication after the cancel was
-					// accepted: the outcome is not a clean cancellation.
-					run.err = fmt.Errorf("the run was stopped, but the worker had already started publication; inspect the installation before retrying: %w", event.err)
-				case run.stalled:
-					run.err = fmt.Errorf("no installation progress for %s; the run was stopped before publication: %w", shellInstallInactivityLimit, event.err)
-				default:
+			run.confirmCancel, run.notice = false, ""
+			if event.err != nil && run.cancelled {
+				if run.publishing {
+					// The cancel raced the publish step: not a clean cancellation.
+					run.err = fmt.Errorf("the run was stopped, but publication had already started; inspect the installation before retrying: %w", event.err)
+				} else {
 					run.err = fmt.Errorf("installation cancelled before publication: %w", event.err)
 				}
 			} else if event.err != nil {
@@ -877,10 +820,12 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		progress := event.progress
-		run.lastProgress = time.Now()
-		if run.confirmCancel && progress.Index >= len(run.steps) {
-			// Publication started while the question was open.
-			run.confirmCancel, run.notice = false, shellPublicationNotice
+		if progress.Index >= len(run.steps) {
+			// Publication started: any open question is withdrawn.
+			run.publishing = true
+			if run.confirmCancel {
+				run.confirmCancel, run.notice = false, shellPublicationNotice
+			}
 		}
 		if progress.Index >= 1 && progress.Index <= len(run.steps) {
 			step := &run.steps[progress.Index-1]
@@ -948,18 +893,15 @@ func (m Model) updateShellInstallRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleRunningKey asks before cancelling and refuses once publication has
 // started: an interrupted publication could leave a partial installation.
 func (run *shellInstallRun) handleRunningKey(key tea.KeyMsg) {
-	if run.control == nil || run.cancelling {
+	if run.cancelled {
 		return
 	}
 	if run.confirmCancel {
 		switch key.String() {
 		case "enter", "y", "ctrl+c":
 			run.confirmCancel = false
-			if run.control.tryCancel() {
-				run.cancelling, run.notice = true, ""
-			} else {
-				run.notice = shellPublicationNotice
-			}
+			run.cancelled = true
+			run.cancel()
 		case "esc", "n":
 			run.confirmCancel = false
 		}
@@ -968,34 +910,17 @@ func (run *shellInstallRun) handleRunningKey(key tea.KeyMsg) {
 	if key.Type != tea.KeyEsc && key.Type != tea.KeyCtrlC {
 		return
 	}
-	if run.control.inPublication() {
+	if run.publishing {
 		run.notice = shellPublicationNotice
 		return
 	}
 	run.confirmCancel, run.notice = true, ""
 }
 
-// watchdog stops a run that reported no progress for the inactivity limit.
-// Publication is never interrupted; the screen explains the wait instead.
-func (run *shellInstallRun) watchdog() {
-	if run.control == nil || run.cancelling || time.Since(run.lastProgress) < shellInstallInactivityLimit {
-		return
-	}
-	if run.control.tryCancel() {
-		run.stalled, run.cancelling, run.confirmCancel = true, true, false
-		run.notice = fmt.Sprintf("No progress for %s: stopping the run before publication.", shellInstallInactivityLimit)
-		return
-	}
-	run.notice = fmt.Sprintf("No progress for %s. %s", shellInstallInactivityLimit, shellPublicationNotice)
-}
-
 // runNotice is the extra line the running screen shows, if any.
 func (run *shellInstallRun) runNotice() string {
-	switch {
-	case run.confirmCancel:
+	if run.confirmCancel {
 		return "Cancel the installation? Nothing has been published yet.  Enter/y: cancel  •  Esc/n: keep running"
-	case run.cancelling && !run.stalled:
-		return "Cancelling: waiting for the worker to stop and clean up…"
 	}
 	return run.notice
 }
