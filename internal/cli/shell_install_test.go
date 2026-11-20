@@ -358,6 +358,7 @@ func TestShellInlineRestoresMainSDKFailureAcrossWorkerBoundary(t *testing.T) {
 
 // The child entry prints the marker only for a typed Main SDK failure.
 func TestShellReportEntryErrorMarksOnlyMainSDKFailures(t *testing.T) {
+	t.Setenv("GENTLE_AI_SHELL_STEPS", "1")
 	var stderr bytes.Buffer
 	typed := fmt.Errorf("composition: %w", shellinstaller.ErrMainSDKInstall)
 	if err := shellReportEntryError(typed, &stderr); err != typed || stderr.String() != shellinstaller.MainSDKFailureMarker+"\n" {
@@ -370,5 +371,72 @@ func TestShellReportEntryErrorMarksOnlyMainSDKFailures(t *testing.T) {
 	}
 	if err := shellReportEntryError(nil, &stderr); err != nil || stderr.Len() != 0 {
 		t.Fatalf("success marked: err=%v stderr=%q", err, stderr.String())
+	}
+}
+
+// A plain CLI install (no inline parent) must not gain the marker line.
+func TestShellReportEntryErrorSilentWithoutInlineParent(t *testing.T) {
+	t.Setenv("GENTLE_AI_SHELL_STEPS", "")
+	var stderr bytes.Buffer
+	typed := fmt.Errorf("composition: %w", shellinstaller.ErrMainSDKInstall)
+	if err := shellReportEntryError(typed, &stderr); err != typed || stderr.Len() != 0 {
+		t.Fatalf("marker printed without inline parent: err=%v stderr=%q", err, stderr.String())
+	}
+}
+
+// The non-direct (Windows) inline parent asks its worker for the marker and
+// restores its own environment afterwards.
+func TestShellInlineNonDirectRequestsMarkerFromWorker(t *testing.T) {
+	oldDirect, oldInspect, oldEntry := shellInlineDirect, shellInstallInspect, shellInstallEntry
+	t.Cleanup(func() { shellInlineDirect, shellInstallInspect, shellInstallEntry = oldDirect, oldInspect, oldEntry })
+	t.Setenv("GENTLE_AI_SHELL_STEPS", "")
+	shellInlineDirect = false
+	shellInstallInspect = func(req shellinstaller.UserInstallRequest) (string, error) { return req.Confirmation, nil }
+	var seen string
+	shellInstallEntry = func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+		seen = os.Getenv("GENTLE_AI_SHELL_STEPS")
+		return nil
+	}
+	selection := ShellInstallSelection{Confirmed: true, Request: shellinstaller.UserInstallRequest{Destination: t.TempDir(), Mode: "separate", Confirmation: "x"}}
+	if err := RunShellInstallInline(context.Background(), selection, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "1" {
+		t.Fatalf("worker did not see GENTLE_AI_SHELL_STEPS=1: %q", seen)
+	}
+	if got := os.Getenv("GENTLE_AI_SHELL_STEPS"); got != "" {
+		t.Fatalf("parent environment not restored: %q", got)
+	}
+}
+
+// The marker must survive an Error line longer than the bounded log.
+func TestShellInlineKeepsMarkerBeyondBoundedLog(t *testing.T) {
+	oldDirect, oldWorker, oldProbe, oldInspect, oldEntry := shellInlineDirect, shellDirectWorker, shellLaunchProbe, shellInstallInspect, shellInstallEntry
+	t.Cleanup(func() {
+		shellInlineDirect, shellDirectWorker, shellLaunchProbe, shellInstallInspect, shellInstallEntry = oldDirect, oldWorker, oldProbe, oldInspect, oldEntry
+	})
+	shellInstallInspect = func(req shellinstaller.UserInstallRequest) (string, error) { return req.Confirmation, nil }
+	shellLaunchProbe = func(context.Context, string) error { return nil }
+	emit := func(stderr io.Writer) error {
+		_, _ = io.WriteString(stderr, shellinstaller.MainSDKFailureMarker+"\r\nError: "+strings.Repeat("x", 8300)+"\n")
+		return exec.Command("false").Run()
+	}
+	shellDirectWorker = func(_ context.Context, _ string, _ []string, _, stderr io.Writer) error { return emit(stderr) }
+	shellInstallEntry = func(_ context.Context, _ string, _ []string, _ io.Reader, _, stderr io.Writer) error {
+		return emit(stderr)
+	}
+	selection := ShellInstallSelection{Confirmed: true, Request: shellinstaller.UserInstallRequest{Destination: t.TempDir(), Mode: "separate", Confirmation: "x"}}
+	for _, direct := range []bool{true, false} {
+		shellInlineDirect = direct
+		err := RunShellInstallInline(context.Background(), selection, func(shellinstaller.UserInstallProgress) {}, io.Discard)
+		if err == nil || !errors.Is(err, shellinstaller.ErrMainSDKInstall) {
+			t.Fatalf("direct=%v: marker evicted by long line: %v", direct, err)
+		}
+	}
+	// Prefixed lines stay rejected.
+	log := &boundedWorkerLog{limit: 8192}
+	_, _ = io.WriteString(log, "x "+shellinstaller.MainSDKFailureMarker+"\n")
+	if log.sawMarker() {
+		t.Fatal("prefixed marker accepted")
 	}
 }
