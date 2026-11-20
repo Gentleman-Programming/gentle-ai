@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -1340,6 +1341,247 @@ func TestExecutePlanReportsManualCleanupForNonEmptyDirectory(t *testing.T) {
 	}
 	if !strings.Contains(result.ManualActions[0], nonEmptyDir) {
 		t.Fatalf("manual action should mention %q, got %q", nonEmptyDir, result.ManualActions[0])
+	}
+}
+
+// TestComponentOperationsContext7ClaudeWorkspaceScopeRemovesManagedEntry verifies
+// that workspace-scoped uninstall removes the managed context7 entry from
+// <workspace>/.mcp.json and the legacy inert settings.json block while
+// preserving unrelated servers, and that a second pass finds nothing to change
+// (issue #2213).
+func TestComponentOperationsContext7ClaudeWorkspaceScopeRemovesManagedEntry(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("Claude adapter not found in registry")
+	}
+
+	managedEntry := `{"command":"npx","args":["-y","--package=@upstash/context7-mcp@2.2.5","--","context7-mcp"]}`
+	workspaceMCPPath := filepath.Join(workspaceDir, ".mcp.json")
+	workspaceSettingsPath := adapter.SettingsPath(workspaceDir)
+	if err := os.MkdirAll(filepath.Dir(workspaceSettingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(workspaceMCPPath, []byte(`{"mcpServers":{"codegraph":{"command":"codegraph"},"context7":`+managedEntry+`}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace mcp.json) error = %v", err)
+	}
+	if err := os.WriteFile(workspaceSettingsPath, []byte(`{"mcpServers":{"context7":`+managedEntry+`},"theme":"dark"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace settings) error = %v", err)
+	}
+
+	ops, targets, err := svc.componentOperations(adapter, model.ComponentContext7)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	for _, want := range []string{workspaceMCPPath, workspaceSettingsPath} {
+		if !slices.Contains(targets, want) {
+			t.Fatalf("uninstall targets missing %q: %v", want, targets)
+		}
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("operation %v on %q error = %v", op.typeID, op.path, err)
+		}
+	}
+
+	mcp := readJSONFileForTest(t, workspaceMCPPath)
+	mcpServers, _ := mcp["mcpServers"].(map[string]any)
+	if _, still := mcpServers["context7"]; still {
+		t.Fatalf("workspace .mcp.json still contains managed mcpServers.context7: %#v", mcp)
+	}
+	if _, kept := mcpServers["codegraph"]; !kept {
+		t.Fatalf("workspace .mcp.json lost unrelated mcpServers.codegraph: %#v", mcp)
+	}
+
+	settings := readJSONFileForTest(t, workspaceSettingsPath)
+	if _, inert := settings["mcpServers"]; inert {
+		t.Fatalf("workspace settings still contains inert mcpServers block: %#v", settings)
+	}
+	if settings["theme"] != "dark" {
+		t.Fatalf("workspace settings lost theme: %#v", settings)
+	}
+
+	for _, op := range ops {
+		changed, removed, err := op.apply(op.path)
+		if err != nil {
+			t.Fatalf("second pass: operation %v on %q error = %v", op.typeID, op.path, err)
+		}
+		if changed || removed {
+			t.Fatalf("second pass: operation %v on %q changed=%v removed=%v, want no-op", op.typeID, op.path, changed, removed)
+		}
+	}
+}
+
+// TestComponentOperationsContext7ClaudeWorkspaceScopePreservesUnmanagedEntry
+// verifies workspace-scoped uninstall never deletes a hand-written context7
+// server: only the exact managed entry is removable, so a user-authored entry
+// missing the managed args or carrying custom args or headers survives
+// untouched in both <workspace>/.mcp.json and the workspace settings.
+func TestComponentOperationsContext7ClaudeWorkspaceScopePreservesUnmanagedEntry(t *testing.T) {
+	cases := []struct {
+		name  string
+		entry string
+	}{
+		{name: "missing args", entry: `{"command":"npx"}`},
+		{name: "custom args", entry: `{"command":"npx","args":["--yes","my-context7"]}`},
+		{name: "custom headers", entry: `{"headers":{"X-Api-Key":"user-key"},"type":"http","url":"https://context7.internal.example/mcp"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			workspaceDir := t.TempDir()
+
+			svc, err := NewService(homeDir, workspaceDir, "dev")
+			if err != nil {
+				t.Fatalf("NewService() error = %v", err)
+			}
+			adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+			if !ok {
+				t.Fatal("Claude adapter not found in registry")
+			}
+
+			workspaceMCPPath := filepath.Join(workspaceDir, ".mcp.json")
+			workspaceSettingsPath := adapter.SettingsPath(workspaceDir)
+			if err := os.MkdirAll(filepath.Dir(workspaceSettingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll(settings dir) error = %v", err)
+			}
+			mcpSeed := `{"mcpServers":{"codegraph":{"command":"codegraph"},"context7":` + tc.entry + `}}`
+			settingsSeed := `{"mcpServers":{"context7":` + tc.entry + `},"theme":"dark"}`
+			if err := os.WriteFile(workspaceMCPPath, []byte(mcpSeed), 0o644); err != nil {
+				t.Fatalf("WriteFile(workspace mcp.json) error = %v", err)
+			}
+			if err := os.WriteFile(workspaceSettingsPath, []byte(settingsSeed), 0o644); err != nil {
+				t.Fatalf("WriteFile(workspace settings) error = %v", err)
+			}
+
+			ops, _, err := svc.componentOperations(adapter, model.ComponentContext7)
+			if err != nil {
+				t.Fatalf("componentOperations() error = %v", err)
+			}
+			for _, op := range ops {
+				if _, _, err := op.apply(op.path); err != nil {
+					t.Fatalf("operation %v on %q error = %v", op.typeID, op.path, err)
+				}
+			}
+
+			gotMCP, err := os.ReadFile(workspaceMCPPath)
+			if err != nil {
+				t.Fatalf("ReadFile(workspace mcp.json) error = %v", err)
+			}
+			if string(gotMCP) != mcpSeed {
+				t.Fatalf("unmanaged context7 in workspace .mcp.json changed: %s", string(gotMCP))
+			}
+
+			gotSettings, err := os.ReadFile(workspaceSettingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(workspace settings) error = %v", err)
+			}
+			if string(gotSettings) != settingsSeed {
+				t.Fatalf("unmanaged context7 in workspace settings changed: %s", string(gotSettings))
+			}
+		})
+	}
+}
+
+// TestUninstallWorkspaceSnapshotRestoresAcrossRoots covers the restore side of
+// workspace-scoped uninstall (issue #2213): the plan legitimately snapshots
+// workspace files that live outside the home root, so the result carries that
+// root and the restore validates the entries it backed up. The same guard keeps
+// refusing those entries when only the home root is allowed.
+func TestUninstallWorkspaceSnapshotRestoresAcrossRoots(t *testing.T) {
+	homeDir := t.TempDir()
+	// A workspace root unrelated to homeDir, like the CLI fixtures that pass
+	// their own temp directory.
+	workspaceDir := t.TempDir()
+	// GGA lives under %APPDATA% on Windows; keep it inside the isolated home.
+	t.Setenv("APPDATA", filepath.Join(homeDir, "AppData", "Roaming"))
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	managedEntry := `{"command":"npx","args":["-y","--package=@upstash/context7-mcp@2.2.5","--","context7-mcp"]}`
+	workspaceMCPPath := filepath.Join(workspaceDir, ".mcp.json")
+	seed := `{"mcpServers":{"codegraph":{"command":"codegraph"},"context7":` + managedEntry + `}}`
+	if err := os.WriteFile(workspaceMCPPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace mcp.json) error = %v", err)
+	}
+
+	p, err := svc.buildPlan([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentContext7})
+	if err != nil {
+		t.Fatalf("buildPlan() error = %v", err)
+	}
+	if !slices.Contains(p.backupTargets, workspaceMCPPath) {
+		t.Fatalf("plan backup targets missing workspace .mcp.json: %v", p.backupTargets)
+	}
+
+	result, err := svc.executePlan(p, []model.AgentID{model.AgentClaudeCode})
+	if err != nil {
+		t.Fatalf("executePlan() error = %v", err)
+	}
+	uninstalled := readJSONFileForTest(t, workspaceMCPPath)
+	if servers, ok := uninstalled["mcpServers"].(map[string]any); ok {
+		if _, still := servers["context7"]; still {
+			t.Fatalf("uninstall kept the managed workspace mcpServers.context7: %#v", uninstalled)
+		}
+	}
+
+	if want := []string{homeDir, workspaceDir}; !slices.Equal(result.RestoreRoots, want) {
+		t.Fatalf("RestoreRoots = %v, want %v", result.RestoreRoots, want)
+	}
+
+	// The guard is unchanged: a home-only restore still refuses the workspace
+	// entries this plan snapshotted, and it refuses the whole manifest.
+	err = (backup.RestoreService{Roots: []string{homeDir}}).Restore(result.Manifest)
+	if err == nil || !strings.Contains(err.Error(), strings.Trim(strconv.Quote(workspaceDir), `"`)) || !strings.Contains(err.Error(), "must be an absolute path under an allowed root") {
+		t.Fatalf("home-only restore error = %v, want a refusal naming %q", err, workspaceDir)
+	}
+
+	if err := (backup.RestoreService{Roots: result.RestoreRoots}).Restore(result.Manifest); err != nil {
+		t.Fatalf("restore with the uninstall's own roots: %v", err)
+	}
+	if got := string(mustReadServiceFile(t, workspaceMCPPath)); got != seed {
+		t.Fatalf("restored workspace .mcp.json = %q, want %q", got, seed)
+	}
+}
+
+// TestUninstallRestoreRootsSkipHomeWorkspace pins the workspaceDir == homeDir
+// skip: a home-scope uninstall must not add a second restore root, and it must
+// not claim <home>/.mcp.json as a backup target either.
+func TestUninstallRestoreRootsSkipHomeWorkspace(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("APPDATA", filepath.Join(homeDir, "AppData", "Roaming"))
+
+	svc, err := NewService(homeDir, homeDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	p, err := svc.buildPlan([]model.AgentID{model.AgentClaudeCode}, []model.ComponentID{model.ComponentContext7})
+	if err != nil {
+		t.Fatalf("buildPlan() error = %v", err)
+	}
+	result, err := svc.executePlan(p, []model.AgentID{model.AgentClaudeCode})
+	if err != nil {
+		t.Fatalf("executePlan() error = %v", err)
+	}
+
+	if want := []string{homeDir}; !slices.Equal(result.RestoreRoots, want) {
+		t.Fatalf("RestoreRoots = %v, want only the home root %v", result.RestoreRoots, want)
+	}
+	if slices.Contains(p.backupTargets, filepath.Join(homeDir, ".mcp.json")) {
+		t.Fatalf("home-scope plan must not target <home>/.mcp.json: %v", p.backupTargets)
+	}
+	if err := (backup.RestoreService{Roots: result.RestoreRoots}).Restore(result.Manifest); err != nil {
+		t.Fatalf("home-scope restore with the home root: %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package legacyassets
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -246,6 +247,102 @@ func TestRetireOpenCodeSDDSettingsMissingAndNonRegular(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(target); string(data) != string(document) {
 		t.Fatal("symlink target changed")
+	}
+}
+
+func TestRetireOpenCodeSDDPromptsRejectsUnsafeReferencesBeforeProbe(t *testing.T) {
+	for _, tc := range []struct{ name, ref string }{
+		{"slash UNC", "//attacker.example/share/leak"},
+		{"backslash UNC", `\\attacker.example\share\leak`},
+		{"mixed separators", `\/attacker.example\share/leak`},
+		{"extended UNC", `\\?\UNC\attacker.example\share\leak`},
+		{"normalized extended UNC", `//?/unc/attacker.example/share/leak`},
+		{"device pipe", `\\.\pipe\example`},
+		{"normalized device pipe", `//./pipe/example`},
+		{"extended local device", `\\?\C:\prompts\example.md`},
+		{"normalized NT object UNC", "/??/UNC/host/share/x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "prompts", "sdd")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			original, err := os.ReadFile(filepath.Join("testdata", "v3.7.0", "opencode-prompt-sdd-apply.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompt := filepath.Join(dir, "sdd-apply.md")
+			if err := os.WriteFile(prompt, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Lstat(prompt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var probes []string
+			old := statPromptReference
+			statPromptReference = func(ref string) (os.FileInfo, error) {
+				probes = append(probes, ref)
+				if ref == tc.ref {
+					return info, nil // Prevent deletion even on the unfixed path.
+				}
+				return nil, os.ErrNotExist
+			}
+			t.Cleanup(func() { statPromptReference = old })
+			result, err := RetireOpenCodeSDDPrompts(dir, filepath.Join(dir, "other.md"), tc.ref)
+			want := fmt.Sprintf("invalid file reference %s: remote or device paths are not supported", tc.ref)
+			if err == nil || err.Error() != want {
+				t.Errorf("retirement error = %v, want %q", err, want)
+			}
+			if len(probes) != 0 {
+				t.Errorf("reference probes = %v, want none", probes)
+			}
+			if len(result.Removed)+len(result.Preserved)+len(result.Referenced) != 0 {
+				t.Errorf("retirement acted on a rejected input: %+v", result)
+			}
+			if after, err := os.ReadFile(prompt); err != nil || string(after) != string(original) {
+				t.Errorf("prompt changed: %v", err)
+			}
+		})
+	}
+}
+
+func TestRetireOpenCodeSDDPromptsKeepsLocalAliases(t *testing.T) {
+	for _, kind := range []string{"direct", "hardlink", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "prompts", "sdd")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			original, err := os.ReadFile(filepath.Join("testdata", "v3.7.0", "opencode-prompt-sdd-apply.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompt := filepath.Join(dir, "sdd-apply.md")
+			if err := os.WriteFile(prompt, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ref := prompt
+			if kind != "direct" {
+				ref = filepath.Join(root, "alias.md")
+				if kind == "hardlink" {
+					err = os.Link(prompt, ref)
+				} else {
+					err = os.Symlink(prompt, ref)
+				}
+				if err != nil {
+					t.Skipf("%s unavailable: %v", kind, err)
+				}
+			}
+			result, err := RetireOpenCodeSDDPrompts(dir, ref)
+			if err != nil || !slices.Equal(result.Referenced, []string{prompt}) || len(result.Removed) != 0 {
+				t.Fatalf("retirement = %+v, error = %v", result, err)
+			}
+			if after, err := os.ReadFile(prompt); err != nil || string(after) != string(original) {
+				t.Fatalf("referenced prompt changed: %v", err)
+			}
+		})
 	}
 }
 

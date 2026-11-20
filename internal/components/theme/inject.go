@@ -18,6 +18,10 @@ type InjectionResult struct {
 
 var themeOverlayJSON = []byte("{\n  \"theme\": \"gentleman\"\n}\n")
 
+// noThemeOverlayJSON is what an adapter without gentleman theme assets gets:
+// nothing merged in, so no theme key is ever written or selected.
+var noThemeOverlayJSON = []byte("{}\n")
+
 type claudeTheme struct {
 	Name      string            `json:"name"`
 	Base      string            `json:"base"`
@@ -87,7 +91,38 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	return injectSettings(agents.JSONSettingsPath(homeDir, adapter))
+	// The overlay selects the "gentleman" theme by name, so it only belongs on
+	// adapters whose visual theme assets register that name (today: Claude Code
+	// and OpenCode). Elsewhere, e.g. in Pi's settings.json, that key names a
+	// theme the agent cannot resolve and breaks its startup after every install
+	// or sync (issue #4775). Those adapters still get their settings file created
+	// when it is missing, because sync verification requires the file to exist,
+	// but nothing is merged into it. Known limitations, left as-is on purpose:
+	// the theme name stays hardcoded, and a "gentleman" key already persisted by
+	// an earlier run is not cleaned up.
+	settingsPath := agents.JSONSettingsPath(homeDir, adapter)
+	if len(VisualThemePaths(homeDir, adapter)) == 0 {
+		return ensureSettingsFile(settingsPath)
+	}
+
+	return injectSettings(settingsPath, themeOverlayJSON)
+}
+
+// ensureSettingsFile honors the sync contract that an adapter's settings file
+// exists after a sync, without rewriting a file the user already owns. Merging
+// an empty overlay instead would reformat and reorder the user's settings on
+// every run, so an existing file is left byte-for-byte untouched.
+func ensureSettingsFile(settingsPath string) (InjectionResult, error) {
+	if settingsPath == "" {
+		return InjectionResult{}, nil
+	}
+	if _, err := os.Stat(settingsPath); err == nil {
+		return InjectionResult{}, nil
+	} else if !os.IsNotExist(err) {
+		return InjectionResult{}, fmt.Errorf("stat settings file %q: %w", settingsPath, err)
+	}
+
+	return injectSettings(settingsPath, noThemeOverlayJSON)
 }
 
 // InjectAtPath writes the theme to a caller-selected settings file. OpenCode
@@ -101,15 +136,15 @@ func InjectAtPath(settingsPath string) (InjectionResult, error) {
 	if err := filemerge.RefuseLockedSettingsFile(settingsPath); err != nil {
 		return InjectionResult{}, err
 	}
-	return injectSettings(settingsPath)
+	return injectSettings(settingsPath, themeOverlayJSON)
 }
 
-func injectSettings(settingsPath string) (InjectionResult, error) {
+func injectSettings(settingsPath string, overlay []byte) (InjectionResult, error) {
 	if settingsPath == "" {
 		return InjectionResult{}, nil
 	}
 
-	writeResult, err := mergeJSONFile(settingsPath, themeOverlayJSON)
+	writeResult, err := mergeJSONFile(settingsPath, overlay)
 	if err != nil {
 		return InjectionResult{}, err
 	}

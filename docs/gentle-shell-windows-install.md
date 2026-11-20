@@ -1,7 +1,8 @@
 # Gentle Shell from the Windows installer TUI
 
 **Implementation candidate, not yet qualified for Windows users.** This change
-ports the existing Separate installer TUI to Windows 11 x64. Actual Windows
+ports the existing Separate installer TUI to Windows 10 22H2 (build 19045) and
+Windows 11 x64. Actual Windows
 installation, both UI openings and terminal restoration remain unverified.
 Cross-compilation is not a substitute for those checks.
 
@@ -24,7 +25,7 @@ already contains this unreleased installer.
 
 | Boundary | Implementation |
 |---|---|
-| Scope | Windows 11 x64, Separate only; Server and ARM64 refused |
+| Scope | Windows 10 22H2 (build 19045) and Windows 11 x64, Separate only; Server and ARM64 refused |
 | gentle-ai TUI experience | Persona, Background subagents, Strict TDD, Global RDD, CodeGraph and Context7 are staged on Stable and on Main preview; Main preview selects the Main channel; "On my existing Pi" is shown disabled with the Separate-only reason; `selection.json` never retains the profile |
 | Tooling | Private pinned Node 24.18.0 and Go 1.27.1 ZIPs |
 | Composition | Stock Pi 1.0.0 and gentle-pi 4.0.0, complete SHA512 source lock, no implicit lifecycle scripts |
@@ -33,6 +34,46 @@ already contains this unreleased installer.
 | Publication | Owned sibling stage, confirmation readback, no replace-existing rename |
 | Processes | Suspended child bound before resume; Job Object CPU/memory/process readback, inherited console, bounded cleanup |
 | Preservation | Isolated HOME/agent/config, caller CWD inherited; console modes saved/restored; personal PATH unchanged |
+
+## Replaced-backup retention
+
+A reconfigure that retires the installed tree renames it to a sibling
+`TARGET.replaced-<UTC>` backup (for example
+`C:\Users\...\gentle-shell.replaced-20260101T130000Z`) before publishing the
+replacement. The Main snapshot is acquired before that rename, so a failed
+Main download retires nothing. When any later step fails before the
+replacement is published (a download, provisioning, or a changed selection),
+the installer first stops its acquisitions and cleans the stage, then moves
+the backup back to `TARGET` and reports `previous Windows installation
+restored`. It never removes or overwrites a destination that exists: if one is
+present, or the backup's physical identity changed, or the rename fails, both
+trees are kept and the error names the path as `backup retained at ...`. A
+failure after publication (verification or launchers) keeps the published
+tree and the backup. After the new installation is published, verified and its
+launchers are confirmed, the installer bounds those backups to **one recent
+tree**: the backup it just created is always retained, and when the system
+clock has drifted the lexically latest candidate is retained as well, so clock
+skew never deletes the genuinely most recent tree. Every older candidate is
+removed only through the same positive validation as a single removal
+(canonical manifest, original active destination, current SID and physical
+identity, rechecked immediately before deletion). Unrelated folders, wrong
+markers and noncanonical timestamps are ignored; an invalid or uncertain
+candidate is preserved whole and reported. Retention failure is a warning and
+never retracts a valid installation.
+
+## Removed-backup retention
+
+An uninstall renames the installed tree to a sibling `TARGET.removed-<UTC>`
+backup and prunes it to the minimal retained set (config, agent, home,
+selection and manifest). The same one-tree bound applies: after the uninstall
+succeeds, the backup it just created is kept and every older `TARGET.removed-*`
+backup is removed. A removed backup is deleted only when it is an exact
+canonical sibling, a directory owned by the current account, carries a canonical
+manifest and selection for the original destination, and every top-level entry
+passes the owned-identity check, rechecked immediately before deletion. Replaced
+backups are a separate family and are never touched by this step. An uncertain
+older backup is preserved whole and reported; the uninstall itself is never
+undone.
 
 ## Persistent memory (Engram)
 
@@ -71,15 +112,19 @@ retained authorities. There is no size/mtime shortcut.
 
 **Runtime state** written after publication by the owned tools is not an
 artefact: `home` (GOPATH/GOMODCACHE, set explicitly), `state` (GOCACHE),
-`tmp`, `runtime\cache` (npm) and `agent\sessions` (Pi names sessions after the
-caller CWD). Launch walks them recursively with the same per-entry owner,
-DACL, reparse, hard-link, regular-file and resource checks as artefacts; the
-file-count, per-file (32 MiB) and aggregate (2 GiB) bounds include them. The
-only difference is naming: names strictly **below** these fixed roots are data
-and may contain `!`, `%`, `&` or `^` (Go's escaped module paths, CWD-named
-sessions). The roots, their ancestors, artefacts and bindings keep the strict
-names. Large real caches beyond those bounds are not yet qualified and fail
-closed.
+`tmp`, `runtime\cache` (npm), `agent\sessions` (Pi names sessions after the
+caller CWD) and `agent\npm` (the agent's own npm package tree, where
+user-installed Pi extensions place their native binaries). Launch walks them
+recursively with the same per-entry owner,
+DACL, reparse, hard-link, regular-file and resource checks as artefacts. The
+single file-count bound includes them; the per-file (32 MiB) and aggregate
+(2 GiB) byte bounds count installed artefacts only — runtime state below
+these fixed roots is exempt, because caches, sessions and agent-managed
+packages are not installed artefacts and grow with use. The only remaining
+difference is naming: names
+strictly **below** these fixed roots are data and may contain `!`, `%`, `&`
+or `^` (Go's escaped module paths, CWD-named sessions). The roots, their
+ancestors, artefacts and bindings keep the strict names.
 
 `agent\settings.json` keeps exact `packages`/`npmCommand` and the codemode
 exclusion. Following the pinned Pi 1.0.0 `SettingsManager`, it also accepts
@@ -101,13 +146,14 @@ Ownership controls assume cooperative same-account actors; they are not
 hostile same-SID custody, loaded-byte attestation or escaped-descendant immunity.
 
 Bootstrap bounds: Node ZIP 64 MiB, Go ZIP 128 MiB, tools 32 MiB; authenticated
-bootstrap executables up to 128 MiB; complete Windows inventory up to 2 GiB.
+bootstrap executables up to 128 MiB; complete Windows inventory up to 2 GiB of
+installed artefacts (runtime state below its fixed roots is exempt).
 The old Linux controls and frozen Linux work are unchanged.
 
 ## Acceptance still required
 
 - [ ] Original exact-head formatting, builds and applicable tests pass.
-- [ ] Credentialless, resource-bounded **actual Windows 11 x64** laboratory is independently established.
+- [ ] Credentialless, resource-bounded **actual Windows 10 22H2 and Windows 11 x64** laboratories are independently established.
 - [ ] A user installs through the existing TUI, not a fake installer or helper.
 - [ ] Both owned bindings open authentic UIs and settle their exits.
 - [ ] A launch after real Go module/build cache use, a model/theme change and a `!` CWD session opens again.

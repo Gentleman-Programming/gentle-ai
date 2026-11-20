@@ -15,6 +15,7 @@ import (
 func compileWholePublishedReviewSchema(t *testing.T, version, name string) *jsonschema.Schema {
 	t.Helper()
 	compiler := jsonschema.NewCompiler()
+	compiler.UseRegexpEngine(reviewSchemaRegexpEngine)
 	versions := []string{"v1"}
 	if version != "v1" {
 		versions = append(versions, version)

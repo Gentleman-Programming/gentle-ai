@@ -307,14 +307,20 @@ func resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx context.Con
 	if err != nil {
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
 	}
-	if record.State.LineageID != binding.LineageID || record.State.CapturePhaseRevision != binding.Revision ||
-		record.State.State != StateCorrectionRequired || record.State.ProposedCorrectionLines == nil || record.State.CorrectionAttemptConsumed() {
+	if !correctedInspectionAuthorityOpen(binding, record) {
 		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV2
 	}
 	if err := lease.Validate(ctx); err != nil {
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV2Resolution(err)
 	}
 	return identity.RepositoryRoot, binding, nil
+}
+
+// correctedInspectionAuthorityOpen reports whether record still holds the
+// open, unconsumed correction the binding names.
+func correctedInspectionAuthorityOpen(binding ReviewRepositoryContextBinding, record CompactRecord) bool {
+	return record.State.LineageID == binding.LineageID && record.State.CapturePhaseRevision == binding.Revision &&
+		record.State.State == StateCorrectionRequired && record.State.ProposedCorrectionLines != nil && !record.State.CorrectionAttemptConsumed()
 }
 
 func encodeReviewRepositoryContextV2Token(token reviewRepositoryContextV2Token) (string, error) {

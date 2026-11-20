@@ -43,7 +43,7 @@ func (a *Adapter) Tier() model.SupportTier {
 // --- Detection ---
 
 func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
-	configPath := filepath.Join(homeDir, ".codex")
+	configPath := system.CodexConfigDir(homeDir)
 
 	binaryPath, err := a.lookPath("codex")
 	installed := err == nil
@@ -82,19 +82,19 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 // --- Config paths ---
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
-	return filepath.Join(homeDir, ".codex")
+	return system.CodexConfigDir(homeDir)
 }
 
 func (a *Adapter) SystemPromptDir(homeDir string) string {
-	return filepath.Join(homeDir, ".codex")
+	return system.CodexConfigDir(homeDir)
 }
 
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, ".codex", "AGENTS.md")
+	return filepath.Join(system.CodexConfigDir(homeDir), "AGENTS.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {
-	return filepath.Join(homeDir, ".codex", "skills")
+	return filepath.Join(system.CodexConfigDir(homeDir), "skills")
 }
 
 func (a *Adapter) SettingsPath(_ string) string {
@@ -114,10 +114,12 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 
 // --- MCP ---
 
-// MCPConfigPath returns the path to Codex's TOML config file (~/.codex/config.toml).
-// The serverName argument is ignored — Codex uses a single config file for all MCP servers.
+// MCPConfigPath returns the path to Codex's TOML config file
+// (<resolved Codex home>/config.toml, honoring CODEX_HOME for the real user
+// home — issue #5031). The serverName argument is ignored — Codex uses a
+// single config file for all MCP servers.
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(homeDir, ".codex", "config.toml")
+	return filepath.Join(system.CodexConfigDir(homeDir), "config.toml")
 }
 
 // --- Optional capabilities ---

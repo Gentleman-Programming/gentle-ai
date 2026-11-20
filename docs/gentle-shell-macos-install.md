@@ -94,7 +94,7 @@ macOS has no cgroups or systemd user manager. Each installer command and the lau
 | Linux unit property | macOS equivalent |
 | --- | --- |
 | `KillMode=control-group` | Kill and reap the owned process group |
-| `TasksMax=64` | `RLIMIT_NPROC` = your current process count + 64 |
+| `TasksMax=512` | `RLIMIT_NPROC` = your current process count + 512 (capped at the inherited hard limit) |
 | `CPUQuota=100%` | `RLIMIT_CPU` = the command's deadline in seconds; none for a launched Pi session |
 | `UMask=0077` | `umask 077` |
 | `LimitNOFILE=1024:524288` | `RLIMIT_NOFILE` 1024 soft, 524288 hard (capped at the inherited hard limit) |

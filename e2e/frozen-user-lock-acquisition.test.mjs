@@ -20,7 +20,8 @@ const targetVersion = newestReviewedListVersion(reviewed);
 const rootNames = ['gentle-pi', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui', '@heyhuynhgiabuu/pi-pretty', 'typebox'];
 // The stand-in listed gentle-pi pins its companion like gentle-pi 4.1.0+.
 const companionPin = '0.4.2';
-// A stand-in for the listed gentle-pi tarball stock npm packs before the lock
+// A stand-in for the resolved gentle-pi tarball stock npm packs after the
+// first generated lock; the staged list binds its SRI like the real entry.
 // is generated; the staged list binds its SRI like the real reviewed entry.
 function packedGentlePi(t, pinned) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'frozen-user-pack-'));
@@ -122,17 +123,17 @@ test('prior acquisition uses the complete frozen lock and only npm ci', t => {
   assert.deepEqual(fs.readdirSync(path.join(f.root, 'agent')), []);
 });
 
-test('modern acquisition declares the newest listed gentle-pi and generates the lock', t => {
+test('modern acquisition declares the channel latest and generates the lock', t => {
   const f = fixture(t, 'modern');
   assert.notEqual(f.result.status, 0, 'the npm fixture deliberately stops acquisition');
-  assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install', 'ci'], f.result.stderr);
-  assert.deepEqual(f.calls[0].slice(0, 2), ['pack', `gentle-pi@${targetVersion}`]);
-  assert.ok(f.calls[0].includes('--ignore-scripts'));
-  assert.ok(f.calls[1].includes('--package-lock-only'));
-  assert.ok(f.calls[1].includes('--min-release-age=0'));
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'pack', 'install', 'ci'], f.result.stderr);
+  assert.ok(f.calls[0].includes('--package-lock-only'));
+  assert.ok(f.calls[0].includes('--min-release-age=0'));
+  assert.deepEqual(f.calls[1].slice(0, 2), ['pack', `gentle-pi@${targetVersion}`]);
+  assert.ok(f.calls[1].includes('--ignore-scripts'));
   const manifest = JSON.parse(fs.readFileSync(path.join(f.source, 'package.json')));
   assert.equal(manifest.name, 'gentle-shell-owned-seed');
-  // The companion is declared at the listed gentle-pi's exact pin, never latest.
+  // The companion is declared at the resolved gentle-pi's exact pin, never latest.
   assert.deepEqual(manifest.dependencies, { ...Object.fromEntries(rootNames.map(name => [name, name === 'gentle-pi' ? targetVersion : 'latest'])), 'gentle-engram': companionPin });
   const generated = JSON.parse(fs.readFileSync(path.join(f.source, 'package-lock.json')));
   assert.equal(generated.packages['node_modules/gentle-pi'].version, targetVersion);
@@ -141,11 +142,11 @@ test('modern acquisition declares the newest listed gentle-pi and generates the 
   assert.deepEqual(fs.readdirSync(path.join(f.root, 'tmp')), [], 'the packed tarball is not retained');
 });
 
-test('a listed gentle-pi that pins no companion declares the five roots without failing', t => {
+test('a resolved gentle-pi that pins no companion declares the five roots without failing', t => {
   const f = fixture(t, 'modern', undefined, { companion: false });
-  assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install', 'ci'], f.result.stderr);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'pack', 'ci'], f.result.stderr);
   const manifest = JSON.parse(fs.readFileSync(path.join(f.source, 'package.json')));
-  assert.deepEqual(manifest.dependencies, Object.fromEntries(rootNames.map(name => [name, name === 'gentle-pi' ? targetVersion : 'latest'])));
+  assert.deepEqual(manifest.dependencies, Object.fromEntries(rootNames.map(name => [name, 'latest'])));
 });
 
 // B1: the companion belongs to Separate only. An agent install keeps its
@@ -154,25 +155,24 @@ test('an agent install declares the five roots without packing a companion pin',
   const f = fixture(t, 'modern', undefined, { mode: 'agent' });
   assert.deepEqual(f.calls.map(args => args[0]), ['install', 'ci'], f.result.stderr);
   const manifest = JSON.parse(fs.readFileSync(path.join(f.source, 'package.json')));
-  assert.deepEqual(manifest.dependencies, Object.fromEntries(rootNames.map(name => [name, name === 'gentle-pi' ? targetVersion : 'latest'])));
+  assert.deepEqual(manifest.dependencies, Object.fromEntries(rootNames.map(name => [name, 'latest'])));
 });
 
-test('a packed gentle-pi whose bytes differ from the list SRI is refused before the lock', t => {
+test('a packed gentle-pi whose bytes differ from the lock SRI is refused before npm ci', t => {
   const f = fixture(t, 'modern', undefined, { listedIntegrity: reviewed['4.3.0'].integrity });
   assert.notEqual(f.result.status, 0);
-  assert.match(f.result.stderr, /stock supplier pin/);
-  assert.deepEqual(f.calls.map(args => args[0]), ['pack'], 'no lock is generated from an unverified supplier');
-  assert.equal(fs.existsSync(path.join(f.source, 'package.json')), false);
+  assert.match(f.result.stderr, /stock supplier pack SRI/);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'pack'], 'npm ci must not run from an unverified supplier pack');
 });
 
 test('modern npm ci keeps the reviewed profile without re-resolution flags', t => {
   const f = fixture(t, 'modern');
   assert.notEqual(f.result.status, 0);
-  assert.equal(f.calls[2][0], 'ci');
-  assert.ok(f.calls[2].includes('--ignore-scripts') && f.calls[2].includes('--engine-strict'));
-  assert.ok(f.calls[2].includes('--min-release-age=0'));
-  assert.equal(f.calls[2].includes('--install-strategy=shallow'), false);
-  assert.equal(f.calls[2].includes('--min-release-age=3'), false);
+  assert.equal(f.calls[3][0], 'ci');
+  assert.ok(f.calls[3].includes('--ignore-scripts') && f.calls[3].includes('--engine-strict'));
+  assert.ok(f.calls[3].includes('--min-release-age=0'));
+  assert.equal(f.calls[3].includes('--install-strategy=shallow'), false);
+  assert.equal(f.calls[3].includes('--min-release-age=3'), false);
 });
 
 // S23/M4: a Main preview install request stages no reviewed list and keeps
@@ -221,32 +221,33 @@ for (const [name, mutate] of Object.entries(mutations)) {
   test(`${name} refuses the generated lock before npm ci`, t => {
     const f = fixture(t, 'modern', lock => mutate(lock.packages['node_modules/@earendil-works/pi-ai']));
     assert.notEqual(f.result.status, 0);
-    assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install'], f.result.stderr);
+    assert.deepEqual(f.calls.map(args => args[0]), ['install'], f.result.stderr);
     assert.equal(fs.existsSync(path.join(f.root, 'prefix')), false);
     assert.deepEqual(fs.readdirSync(path.join(f.root, 'agent')), []);
   });
 }
 
-test('a generated lock whose gentle-pi SRI differs from the list entry is refused', t => {
+test('a generated lock whose gentle-pi SRI differs from the packed tarball is refused', t => {
   const wrong = reviewed['4.3.0'].integrity;
   const f = fixture(t, 'modern', undefined, { gentlePiIntegrity: wrong });
   assert.notEqual(wrong, f.packed.integrity);
   assert.notEqual(f.result.status, 0);
-  assert.match(f.result.stderr, /stock supplier pin/);
-  assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install'], 'npm ci must not run after a reviewed-list SRI mismatch');
+  assert.match(f.result.stderr, /stock supplier pack SRI/);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'pack'], 'npm ci must not run after a registry SRI mismatch');
 });
 
-test('a generated lock resolving gentle-pi off the listed release is refused', t => {
+test('a generated lock resolving gentle-pi off the listed release installs with an advisory', t => {
   const f = fixture(t, 'modern', undefined, { gentlePiVersion: '5.0.0' });
   assert.notEqual(f.result.status, 0);
-  assert.match(f.result.stderr, /stock supplier pin/);
-  assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install']);
+  assert.match(f.result.stderr, /global provision advisory: gentle-pi@5\.0\.0 is outside the reviewed supplier table/);
+  assert.doesNotMatch(f.result.stderr, /stock supplier pin/);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'pack', 'install', 'ci']);
 });
 
 test('unsafe package placement refuses before npm ci', t => {
   const f = fixture(t, 'modern', lock => { lock.packages['node_modules/../outside'] = lock.packages['node_modules/typebox']; });
   assert.notEqual(f.result.status, 0);
-  assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install']);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install']);
 });
 
 test('duplicate package identities cannot supply conflicting integrity', t => {
@@ -256,7 +257,7 @@ test('duplicate package identities cannot supply conflicting integrity', t => {
     };
   });
   assert.notEqual(f.result.status, 0);
-  assert.deepEqual(f.calls.map(args => args[0]), ['pack', 'install']);
+  assert.deepEqual(f.calls.map(args => args[0]), ['install', 'pack', 'install']);
 });
 
 test('prior root declarations and package identities must agree before npm ci', t => {

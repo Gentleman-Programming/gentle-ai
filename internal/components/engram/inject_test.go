@@ -2466,6 +2466,80 @@ func TestInjectClaudePreservesManagedLegacyParentLayouts(t *testing.T) {
 	}
 }
 
+// TestInjectClaudeReportsLegacyRemovalWhenParentPruneFails pins that the
+// removal of the managed legacy Engram config is reported even when the empty
+// parent directory cannot be pruned: the file is already gone, so the repair
+// must not be reported as a no-op mutation.
+func TestInjectClaudeReportsLegacyRemovalWhenParentPruneFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permission failures are not portable to Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	home := t.TempDir()
+	parent := filepath.Join(home, ".claude", "mcp")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", parent, err)
+	}
+	legacy := filepath.Join(parent, "engram.json")
+	if err := os.WriteFile(legacy, []byte(`{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", legacy, err)
+	}
+	// Deleting the managed file needs write+execute on its parent; reading that
+	// leftover directory afterwards to prune it is what fails here.
+	if err := os.Chmod(parent, 0o333); err != nil {
+		t.Fatalf("Chmod(%q) error = %v", parent, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+
+	result, err := Inject(home, claudeAdapter())
+	if err == nil {
+		t.Fatal("Inject() error = nil; want the unprunable legacy parent reported")
+	}
+	if _, statErr := os.Stat(legacy); !os.IsNotExist(statErr) {
+		t.Fatalf("managed legacy config %q must be deleted; stat error = %v", legacy, statErr)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false; want the landed legacy removal reported alongside the prune error")
+	}
+	if !strings.Contains(strings.Join(result.Files, "\n"), legacy) {
+		t.Fatalf("Inject() files = %v; want the removed legacy config %q reported", result.Files, legacy)
+	}
+}
+
+// TestInjectClaudeReportsLegacyRemovalAndPrunesEmptyParent pins the existing
+// success path: the managed legacy config is removed, its now-empty parent is
+// pruned, and the removed file is reported.
+func TestInjectClaudeReportsLegacyRemovalAndPrunesEmptyParent(t *testing.T) {
+	home := t.TempDir()
+	parent := filepath.Join(home, ".claude", "mcp")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", parent, err)
+	}
+	legacy := filepath.Join(parent, "engram.json")
+	if err := os.WriteFile(legacy, []byte(`{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", legacy, err)
+	}
+
+	result, err := Inject(home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false; want the legacy cleanup reported")
+	}
+	if _, statErr := os.Stat(legacy); !os.IsNotExist(statErr) {
+		t.Fatalf("managed legacy config %q must be removed; stat error = %v", legacy, statErr)
+	}
+	if _, statErr := os.Stat(parent); !os.IsNotExist(statErr) {
+		t.Fatalf("empty legacy parent %q must be pruned; stat error = %v", parent, statErr)
+	}
+	if !strings.Contains(strings.Join(result.Files, "\n"), legacy) {
+		t.Fatalf("Inject() files = %v; want the removed legacy config %q reported", result.Files, legacy)
+	}
+}
+
 // TestInjectClaudePreservesAbsoluteCommandIsIdempotent verifies that calling
 // Inject() twice when an absolute-path engram.json already exists does not
 // cause repeated writes (idempotency).
@@ -2917,9 +2991,9 @@ func TestInjectCodexInvalidRuntimeDoesNotMutateFiles(t *testing.T) {
 
 // ─── Codex multi-agent config injection tests ────────────────────────────────
 
-// TestInjectCodexMultiAgentDefaultOn asserts that after a plain Inject call,
-// config.toml contains [features] with multi_agent = true. Codex SDD enables
-// multi-agent delegation by default so the per-phase reasoning_effort table applies.
+// TestInjectCodexMultiAgentDefaultOn asserts that a plain Inject call uses the
+// current [agents].enabled switch and does not recreate the deprecated
+// [features].multi_agent key.
 func TestInjectCodexMultiAgentDefaultOn(t *testing.T) {
 	validCodexRuntime(t)
 	home := t.TempDir()
@@ -2934,19 +3008,16 @@ func TestInjectCodexMultiAgentDefaultOn(t *testing.T) {
 		t.Fatalf("ReadFile(config.toml) error = %v", err)
 	}
 	text := string(content)
-	if !strings.Contains(text, "[features]") {
-		t.Fatalf("config.toml missing [features] section; got:\n%s", text)
+	if strings.Contains(text, "multi_agent =") {
+		t.Fatalf("config.toml contains deprecated multi_agent key; got:\n%s", text)
 	}
-	if !strings.Contains(text, "multi_agent = true") {
-		t.Fatalf("config.toml missing multi_agent = true (enabled by default); got:\n%s", text)
-	}
-	if strings.Contains(text, "multi_agent = false") {
-		t.Fatalf("config.toml must NOT have multi_agent = false by default; got:\n%s", text)
+	if !strings.Contains(text, "enabled = true") {
+		t.Fatalf("config.toml missing agents.enabled = true (enabled by default); got:\n%s", text)
 	}
 }
 
-// TestInjectCodexMultiAgentOptIn asserts that InjectWithOptions with
-// CodexMultiAgent=true writes multi_agent = true in [features].
+// TestInjectCodexMultiAgentOptIn asserts that the retained compatibility flag
+// cannot recreate the deprecated [features].multi_agent key.
 func TestInjectCodexMultiAgentOptIn(t *testing.T) {
 	validCodexRuntime(t)
 	home := t.TempDir()
@@ -2962,8 +3033,11 @@ func TestInjectCodexMultiAgentOptIn(t *testing.T) {
 		t.Fatalf("ReadFile(config.toml) error = %v", err)
 	}
 	text := string(content)
-	if !strings.Contains(text, "multi_agent = true") {
-		t.Fatalf("config.toml missing multi_agent = true after opt-in; got:\n%s", text)
+	if strings.Contains(text, "multi_agent =") {
+		t.Fatalf("compatibility option recreated deprecated multi_agent key; got:\n%s", text)
+	}
+	if !strings.Contains(text, "enabled = true") {
+		t.Fatalf("config.toml missing agents.enabled = true after compatibility option; got:\n%s", text)
 	}
 }
 
@@ -3021,14 +3095,17 @@ func TestInjectCodexMultiAgentIdempotent(t *testing.T) {
 	}
 	text := string(content)
 
-	if count := strings.Count(text, "[features]"); count != 1 {
-		t.Fatalf("expected 1 [features] section, got %d; config.toml:\n%s", count, text)
+	if count := strings.Count(text, "[features]"); count != 0 {
+		t.Fatalf("expected no generated [features] section, got %d; config.toml:\n%s", count, text)
 	}
 	if count := strings.Count(text, "[agents]"); count != 1 {
 		t.Fatalf("expected 1 [agents] section, got %d; config.toml:\n%s", count, text)
 	}
-	if count := strings.Count(text, "multi_agent"); count != 1 {
-		t.Fatalf("expected 1 multi_agent key, got %d; config.toml:\n%s", count, text)
+	if count := strings.Count(text, "multi_agent ="); count != 0 {
+		t.Fatalf("expected no deprecated multi_agent key, got %d; config.toml:\n%s", count, text)
+	}
+	if count := strings.Count(text, "enabled = true"); count != 1 {
+		t.Fatalf("expected 1 agents.enabled key, got %d; config.toml:\n%s", count, text)
 	}
 	if count := strings.Count(text, "max_threads"); count != 1 {
 		t.Fatalf("expected 1 max_threads key, got %d; config.toml:\n%s", count, text)

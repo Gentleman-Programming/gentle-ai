@@ -66,13 +66,15 @@ func TestBuildOrchestratorModulesReconstructsPublicRender(t *testing.T) {
 		t.Logf("module %s: %d bytes", module.file, len(module.content))
 	}
 	t.Logf("core: %d bytes; public: %d bytes; fake contract: %d bytes", len(bundle.core), len(public), len(testModuleContract))
-	wantIDs := []string{"writer.edit-surfaces", "delegation.key-learnings", "skills.discovery", "skills.registry"}
+	// harness-continuity S8 retired delegation.key-learnings, the generic
+	// Key Learnings ritual, and with it the delegation module.
+	wantIDs := []string{"writer.edit-surfaces", "skills.discovery", "skills.registry"}
 	if !reflect.DeepEqual(ids, wantIDs) {
 		t.Fatalf("fragment order = %q, want %q", ids, wantIDs)
 	}
-	// Modules without a relevant body (verification, tracking, memory, prompts)
+	// Modules without a relevant body (delegation, verification, tracking, memory, prompts)
 	// are not built.
-	if want := []string{"delegation", "writer", "skills"}; !reflect.DeepEqual(names, want) {
+	if want := []string{"writer", "skills"}; !reflect.DeepEqual(names, want) {
 		t.Fatalf("modules = %q, want %q", names, want)
 	}
 
@@ -85,7 +87,7 @@ func TestBuildOrchestratorModulesReconstructsPublicRender(t *testing.T) {
 		}
 	}
 	for file, want := range map[string]int{
-		"orchestrator-delegation.md": 1, "orchestrator-verification.md": 0, "orchestrator-writer.md": 1, "orchestrator-skills.md": 2,
+		"orchestrator-delegation.md": 0, "orchestrator-verification.md": 0, "orchestrator-writer.md": 1, "orchestrator-skills.md": 2,
 	} {
 		if got := strings.Count(bundle.core, "read `"+testModuleDir+"/"+file+"`"); got != want {
 			t.Errorf("core references %s %d times, want %d", file, got, want)
@@ -123,13 +125,44 @@ func TestOrchestratorModulesCarryCanonicalBodies(t *testing.T) {
 		}
 	}
 
-	delegation := modules["delegation"].content
-	if !strings.HasPrefix(delegation, "# Gentle AI Orchestrator — Delegation Module\n") {
-		t.Errorf("delegation module heading = %q", strings.SplitN(delegation, "\n", 2)[0])
+	writer := modules["writer"].content
+	if !strings.HasPrefix(writer, "# Gentle AI Orchestrator — Writer Module\n") {
+		t.Errorf("writer module heading = %q", strings.SplitN(writer, "\n", 2)[0])
 	}
 	for _, module := range bundle.modules {
 		if strings.Contains(module.content, orchestratorFragmentMarkerToken) || strings.Contains(module.content, "{{GENTLE_AI_") {
 			t.Errorf("%s carries a marker or template token", module.file)
+		}
+	}
+}
+
+// gentle-ai#6067 (GS-03): every writer launch carries its edit surfaces and a
+// rejected launch is never repeated unchanged; the two sentences Gentle Shell
+// removed as redundant stay out of the writer module.
+func TestWriterModuleCarriesEditSurfacesOnEveryLaunch(t *testing.T) {
+	var writer string
+	for _, module := range buildClaudeTestModules(t).modules {
+		if module.name == "writer" {
+			writer = module.content
+		}
+	}
+	for _, want := range []string{
+		"Every new writer launch carries the section (a continuation inherits it); after a rejected launch, repair what the rejection names once, never relaunch the same prompt unchanged.",
+		"A bounded writer refuses to write outside the exact allowed edit surfaces and stops for interaction when they are missing. The parent owns that input.",
+		"If the surface genuinely cannot be derived, do not launch the writer, and do not ask the human to author paths.",
+		"present that enumerated list as an approve/decline choice under the Lossless Blocking Prompts rules.",
+		"Adjudicate a writer's edit-surface request yourself first",
+	} {
+		if !strings.Contains(writer, want) {
+			t.Errorf("writer module is missing %q", want)
+		}
+	}
+	for _, removed := range []string{
+		"Deriving it is part of planning the delegation",
+		"is never a valid escalation",
+	} {
+		if strings.Contains(writer, removed) {
+			t.Errorf("writer module still carries %q", removed)
 		}
 	}
 }
@@ -236,7 +269,6 @@ func TestBuildOrchestratorModulesRejectsUnsupportedBindings(t *testing.T) {
 		dir   string
 		want  error
 	}{
-		{"codex runtime", model.AgentCodex, testModuleDir, errOrchestratorModulesUnsupported},
 		{"pi runtime", model.AgentPi, testModuleDir, errOrchestratorModulesUnsupported},
 		{"empty binding", model.AgentClaudeCode, "", errInvalidOrchestratorModuleDir},
 		{"blank binding", model.AgentClaudeCode, "   ", errInvalidOrchestratorModuleDir},

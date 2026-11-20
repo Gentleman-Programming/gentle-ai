@@ -42,8 +42,13 @@ func providerDefectRouteForPublishedFix(installedBuild, fixChannel string, publi
 	return providerDefectAddOccurrenceComment
 }
 
-// generic is the provider-neutral source that every agent-specific handoff must project.
-const providerDefectHandoffCanonicalPath = "generic/orchestrator.md"
+// harness-continuity S9: the complete provider-defect report workflow lives once
+// in this installed shared reference; every orchestrator keeps only the
+// classification stub that loads it.
+const providerDefectHandoffCanonicalPath = "skills/_shared/provider-defect-report.md"
+
+// providerDefectStubPointer is the load pointer each orchestrator stub carries.
+const providerDefectStubPointer = "When a Gentle AI invocation produced it, read `_shared/provider-defect-report.md` from the runtime's installed skills directory and follow it before any report, consent prompt, or GitHub operation."
 
 var blockingPromptRoutes = map[string]blockingPromptRoute{
 	"antigravity/orchestrator.md": {},
@@ -257,8 +262,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "decline preserves ordinary delivery", text: "The result carries no lineage or receipt; ordinary delivery is unmanaged by the candidate choice, and the next candidate asks again."},
 		{name: "native negotiated status re-entry", text: "re-enter through native negotiated STATUS, then resume the already-held consumer continuation"},
 		{name: "continue paths reuse exact decline", text: "Both continue choices execute that exact captured decline invocation exactly once"},
-		{name: "review mode disable prohibition", text: "Do not invoke `gentle-ai review mode disable` at clone or global scope within this handoff."},
-		{name: "rdd mode preservation", text: "Do not turn RDD off or on within this handoff."},
+		{name: "review mode disable prohibition yields to explicit user request", text: "Unless the user explicitly asks, do not invoke `gentle-ai review mode disable` at clone or global scope or turn RDD off or on within this handoff."},
 		{name: "stop choice", text: "**Stop here**: Perform no GitHub operation and no decline invocation; preserve all consumer state and STOP."},
 		{name: "observed evidence", text: "Report observed evidence, not an unconfirmed root cause"},
 		{name: "sanitized diagnostics", text: "sanitized version/build, OS/architecture/client"},
@@ -273,27 +277,53 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "maintainer-authorized native recovery", text: "an explicit maintainer-authorized, documented native recovery or reset that the runtime contract supports"},
 		{name: "no unpublished code resume", text: "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request"},
 	}
-	allPaths := allODDOrchestratorAssetPaths(t)
-	canonicalFound := false
-	for _, path := range allPaths {
-		if path == providerDefectHandoffCanonicalPath {
-			canonicalFound = true
-			break
-		}
-	}
-	if !canonicalFound {
-		t.Fatalf("canonical provider-defect handoff source %q is not an orchestrator asset", providerDefectHandoffCanonicalPath)
-	}
-	canonical := providerDefectHandoffSection(t, providerDefectHandoffCanonicalPath)
-	semanticChoicePattern := regexp.MustCompile(`(?m)^[ \t]+[0-9]+\. \*\*[^*]+\*\*:`)
-	for _, path := range allPaths {
+	// Every orchestrator keeps the classification stub and the load pointer,
+	// never a restated copy of the workflow.
+	for _, path := range allODDOrchestratorAssetPaths(t) {
 		t.Run(path, func(t *testing.T) {
+			// An explicit user request to stop RDD must win over the handoff rule
+			// anywhere in the orchestrator, so the unscoped prohibition may not survive.
+			for _, unscoped := range []string{
+				"Do not invoke `gentle-ai review mode disable` at clone or global scope within this handoff.",
+				"Do not turn RDD off or on within this handoff.",
+			} {
+				if strings.Contains(MustRead(path), unscoped) {
+					t.Errorf("%s keeps the unscoped prohibition %q; an explicit user request must win", path, unscoped)
+				}
+			}
+			stub := providerDefectStubSection(t, path)
+			for _, required := range []string{
+				"Before losslessly relaying any blocking choice envelope, classify its semantic admissibility",
+				"**The test is what produced the failure, not what the work was doing when it happened.**",
+				"When anything other than a Gentle AI invocation (its non-zero exit, typed envelope, refusal, or documented contract refusing) produced it, there is no report and no handoff",
+				"do not name the component you believe is responsible, suggest where else to file it, or ask",
+				providerDefectStubPointer,
+				// Minimal and custom presets install no _shared references.
+				"If that file is not installed, file no report, open no consent prompt, and run no GitHub operation; tell the user the defect-report skill is not installed and keep the evidence.",
+			} {
+				if !strings.Contains(stub, required) {
+					t.Errorf("%s provider-defect stub missing %q", path, required)
+				}
+			}
+			for _, body := range []string{"report_and_continue", "complete a definitive lookup", "final privacy scan", "declined_this_candidate"} {
+				if strings.Contains(MustRead(path), body) {
+					t.Errorf("%s restates the provider-defect workflow body %q", path, body)
+				}
+			}
+		})
+	}
+
+	semanticChoicePattern := regexp.MustCompile(`(?m)^[ \t]+[0-9]+\. \*\*[^*]+\*\*:`)
+	for _, path := range []string{providerDefectHandoffCanonicalPath} {
+		t.Run(path, func(t *testing.T) {
+			skill := MustRead(path)
+			if !strings.HasPrefix(skill, "---\nname: gentle-ai-provider-defect-report\n") {
+				t.Errorf("%s does not carry the shared skill frontmatter name", path)
+			}
 			contract := providerDefectHandoffSection(t, path)
-			// Runtime-specific examples of client-owned failures may differ;
-			// the classification rule and the subsequent consent flow may not.
 			const boundary = "When anything else produced it, there is no report and no handoff."
-			start, canonicalStart := strings.Index(contract, boundary), strings.Index(canonical, boundary)
-			if start < 0 || canonicalStart < 0 {
+			start := strings.Index(contract, boundary)
+			if start < 0 {
 				t.Fatal("provider-defect classification missing the non-Gentle-AI failure boundary")
 			}
 			for _, required := range []string{
@@ -305,9 +335,6 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				if !strings.Contains(contract[:start], required) {
 					t.Errorf("provider-defect classification missing %q", required)
 				}
-			}
-			if contract[start:] != canonical[canonicalStart:] {
-				t.Error("provider-defect consent and continuation differ from the canonical cross-variant block")
 			}
 			choiceMatches := semanticChoicePattern.FindAllString(contract, -1)
 			if got := len(choiceMatches); got != 3 {
@@ -441,6 +468,13 @@ func providerDefectHandoffSection(t *testing.T, path string) string {
 	t.Helper()
 	const heading = "#### Gentle AI Provider Defect Handoff (MANDATORY)"
 	content := MustRead(path)
+	if path == providerDefectHandoffCanonicalPath {
+		// The shared reference is the whole workflow, its output contract included.
+		if !strings.Contains(content, "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request.") {
+			t.Fatalf("%s provider-defect handoff missing terminal release boundary", path)
+		}
+		return strings.TrimSpace(content)
+	}
 	start := strings.Index(content, heading)
 	if start == -1 {
 		t.Fatalf("%s missing %q", path, heading)
@@ -452,6 +486,23 @@ func providerDefectHandoffSection(t *testing.T, path string) string {
 		t.Fatalf("%s provider-defect handoff missing terminal release boundary", path)
 	}
 	return strings.TrimSpace(contract[:end+len(endMarker)])
+}
+
+// providerDefectStubSection returns an orchestrator's handoff stub, from its
+// heading up to the next heading.
+func providerDefectStubSection(t *testing.T, path string) string {
+	t.Helper()
+	const heading = "#### Gentle AI Provider Defect Handoff (MANDATORY)"
+	content := MustRead(path)
+	start := strings.Index(content, heading)
+	if start == -1 {
+		t.Fatalf("%s missing %q", path, heading)
+	}
+	rest := content[start+len(heading):]
+	if end := strings.Index(rest, "\n#"); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
 }
 
 func blockingPromptContractSection(t *testing.T, path string) string {

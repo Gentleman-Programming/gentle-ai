@@ -60,8 +60,8 @@ func UserKernelCheck() error {
 	if err := windows.IsWow64Process2(windows.CurrentProcess(), &processMachine, &nativeMachine); err != nil {
 		return err
 	}
-	if runtime.GOARCH != "amd64" || nativeMachine != 0x8664 || version.MajorVersion != 10 || version.BuildNumber < 22000 || version.ProductType != 1 {
-		return errors.New("Gentle Shell Separate requires Windows 11 x64; Windows Server and ARM64 are not qualified targets")
+	if err := windowsKernelQualificationError(runtime.GOARCH, nativeMachine, version.MajorVersion, version.BuildNumber, version.ProductType); err != nil {
+		return err
 	}
 	if windows.GetCurrentProcessToken().IsElevated() {
 		return errors.New("run Gentle Shell from your normal Windows account, not an Administrator terminal")
@@ -242,6 +242,16 @@ func userWindowsReconfigureTarget() string {
 }
 
 func userWindowsManifestRead(root string) (userWindowsManifest, error) {
+	return userWindowsManifestReadAs(root, root)
+}
+
+// userWindowsManifestReadAs validates the tree at root against the original
+// active destination it was published for. The active-tree path keeps
+// userWindowsManifestRead (root and destination are the same); a replaced
+// backup validates the selection and manifest against the destination the
+// retired tree still records, while its physical identity is re-read from
+// wherever the tree now lives.
+func userWindowsManifestReadAs(root, destination string) (userWindowsManifest, error) {
 	var manifest userWindowsManifest
 	data, err := userWindowsRead(filepath.Join(root, "manifest.json"), 4096)
 	if err != nil {
@@ -254,7 +264,7 @@ func userWindowsManifestRead(root string) (userWindowsManifest, error) {
 	if selectionErr != nil || userWindowsSHA(selection) != manifest.SelectionSHA {
 		return manifest, errors.Join(selectionErr, errors.New("Windows selection binding differs"))
 	}
-	selected, err := userWindowsSelection(selection, root)
+	selected, err := userWindowsSelection(selection, destination)
 	if err != nil {
 		return manifest, err
 	}
@@ -272,7 +282,7 @@ func userWindowsManifestRead(root string) (userWindowsManifest, error) {
 	canonical, _ := json.Marshal(manifest)
 	identity, identityErr := userWindowsIdentity(root, true)
 	sid, sidErr := userWindowsSID()
-	if string(data) != string(canonical)+"\n" || manifest.Schema != userWindowsSchema || manifest.Destination != root || manifest.SID != sid || manifest.Identity != identity || identityErr != nil || sidErr != nil {
+	if string(data) != string(canonical)+"\n" || manifest.Schema != userWindowsSchema || manifest.Destination != destination || manifest.SID != sid || manifest.Identity != identity || identityErr != nil || sidErr != nil {
 		return manifest, errors.Join(identityErr, sidErr, errors.New("Windows manifest/physical owner differs"))
 	}
 	return manifest, nil
@@ -353,9 +363,10 @@ func userWindowsProvision(ctx context.Context, root, action string, stdout, stde
 }
 
 // Runtime state written after publication by the owned Go, npm, Node and Pi
-// processes: GOPATH/GOMODCACHE, GOCACHE, TEMP, the npm cache and Pi sessions
-// named after the caller CWD. It is not an installed artefact.
-var userWindowsMutableState = []string{"home", "state", "tmp", "runtime/cache", "agent/sessions"}
+// processes: GOPATH/GOMODCACHE, GOCACHE, TEMP, the npm cache, the agent's own
+// npm package tree written when the user installs Pi extensions, and Pi
+// sessions named after the caller CWD. None of it is an installed artefact.
+var userWindowsMutableState = []string{"home", "state", "tmp", "runtime/cache", "agent/sessions", "agent/npm"}
 
 type userWindowsInventoryMode int
 
@@ -371,11 +382,30 @@ const (
 )
 
 func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
+	// Runtime state is not an installed artefact: caches and sessions written
+	// after publication legitimately grow past the artefact byte bounds. Only
+	// the fresh pre-publication stage keeps every one of its bytes bounded.
+	state := map[string]bool{}
+	if mode != userWindowsInventoryInstalled {
+		for _, relative := range userWindowsMutableState {
+			state[filepath.Join(root, filepath.FromSlash(relative))] = true
+		}
+	}
+	// Launch additionally treats names below these roots as data names.
 	mutable := map[string]bool{}
 	if mode == userWindowsInventoryLaunch {
-		for _, relative := range userWindowsMutableState {
-			mutable[filepath.Join(root, filepath.FromSlash(relative))] = true
+		mutable = state
+	}
+	stateDescendant := func(path string) bool {
+		if len(state) == 0 {
+			return false
 		}
+		for current := filepath.Dir(path); len(current) > len(root); current = filepath.Dir(current) {
+			if state[current] {
+				return true
+			}
+		}
+		return false
 	}
 	dataRoot := func(path string) string {
 		if mode == userWindowsInventoryCleanup {
@@ -412,6 +442,11 @@ func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
 			if !info.Mode().IsRegular() {
 				return errors.New("Windows inventory contains nonregular objects")
 			}
+			if stateDescendant(path) {
+				// Runtime data keeps the per-entry guards above, but its size
+				// belongs to no installed artefact bound.
+				return nil
+			}
 			total += info.Size()
 			bound := int64(32 << 20)
 			if strings.HasPrefix(path, filepath.Join(root, "runtime/node")+string(filepath.Separator)) || strings.HasPrefix(path, filepath.Join(root, "runtime/go")+string(filepath.Separator)) || strings.HasPrefix(path, filepath.Join(root, "runtime/codegraph")+string(filepath.Separator)) || path == filepath.Join(root, "runtime/archives/go.zip") || path == filepath.Join(root, "runtime/archives/node.zip") || path == filepath.Join(root, "supervisor.exe") {
@@ -436,6 +471,94 @@ func userWindowsStageRemove(stage, identity string) error {
 		return errors.Join(err, fmt.Errorf("uncertain Windows stage inventory; preserved %q", stage))
 	}
 	return os.RemoveAll(stage)
+}
+
+// userWindowsRetireReplacement renames the owned destination to a fresh
+// sibling TARGET.replaced-<UTC> backup and returns the backup path with the
+// physical identity it carries, so a failed replacement can restore exactly
+// that tree.
+func userWindowsRetireReplacement(destination string, now time.Time) (backup, identity string, err error) {
+	backup = destination + ".replaced-" + now.UTC().Format("20060102T150405Z")
+	if _, err := os.Lstat(backup); !os.IsNotExist(err) {
+		return "", "", errors.Join(err, errors.New("Windows replacement backup path is already occupied"))
+	}
+	identity, err = userWindowsIdentity(destination, true)
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.Rename(destination, backup); err != nil {
+		return "", "", err
+	}
+	return backup, identity, nil
+}
+
+// userWindowsRestoreReplacement moves the retired backup back to its original
+// destination after a failure before publication. Like the Unix
+// userRestoreShellReplacement it never removes or overwrites a destination
+// that exists: both trees are then retained and reported. A backup whose
+// physical identity changed since the retire is never restored.
+func userWindowsRestoreReplacement(destination, backup, identity string) error {
+	if _, err := os.Lstat(destination); err == nil {
+		return fmt.Errorf("replacement failure left a destination at %q; both trees retained, backup retained at %s", destination, backup)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(err, fmt.Errorf("Windows destination state is uncertain; backup retained at %s", backup))
+	}
+	if observed, err := userWindowsIdentity(backup, true); err != nil || observed != identity {
+		return errors.Join(err, fmt.Errorf("Windows replacement backup identity differs; not restored, backup retained at %s", backup))
+	}
+	restoreFrom, fromErr := windows.UTF16PtrFromString(backup)
+	restoreTo, toErr := windows.UTF16PtrFromString(destination)
+	if fromErr != nil || toErr != nil {
+		return errors.Join(fromErr, toErr, fmt.Errorf("previous Windows installation could not be restored; backup retained at %s", backup))
+	}
+	// No replace-existing flag: a destination that appeared after the Lstat
+	// check is never overwritten.
+	if err := windows.MoveFileEx(restoreFrom, restoreTo, windows.MOVEFILE_WRITE_THROUGH); err != nil {
+		return errors.Join(err, fmt.Errorf("previous Windows installation could not be restored; backup retained at %s", backup))
+	}
+	return nil
+}
+
+// userWindowsReplacementFailure joins a pre-publication failure with the
+// outcome of restoring the retired installation.
+func userWindowsReplacementFailure(cause error, destination, backup, identity string) error {
+	if restoreErr := userWindowsRestoreReplacement(destination, backup, identity); restoreErr != nil {
+		return errors.Join(cause, restoreErr)
+	}
+	return errors.Join(cause, fmt.Errorf("previous Windows installation restored to %q", destination))
+}
+
+// userWindowsWorker is a background acquisition that writes into the stage.
+// Stop cancels and joins it, so the stage is never removed while it writes.
+type userWindowsWorker struct {
+	cancel context.CancelFunc
+	done   chan error
+	joined bool
+	err    error
+}
+
+func userWindowsStartWorker(ctx context.Context, work func(context.Context) error) *userWindowsWorker {
+	workCtx, cancel := context.WithCancel(ctx)
+	worker := &userWindowsWorker{cancel: cancel, done: make(chan error, 1)}
+	go func() { worker.done <- work(workCtx) }()
+	return worker
+}
+
+// Wait joins the worker and returns its result; later calls repeat it.
+func (w *userWindowsWorker) Wait() error {
+	if !w.joined {
+		w.err, w.joined = <-w.done, true
+		w.cancel()
+	}
+	return w.err
+}
+
+// Stop cancels a still-running worker and waits for it to return.
+func (w *userWindowsWorker) Stop() {
+	if !w.joined {
+		w.cancel()
+		_ = w.Wait()
+	}
 }
 
 func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserInstallResult, err error) {
@@ -466,6 +589,11 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil || confirmation != req.Confirmation {
 		return result, errors.Join(err, errors.New("physical Windows selection confirmation differs"))
 	}
+	release, err := userAcquireOperationLock(req.Destination)
+	if err != nil {
+		return result, err
+	}
+	defer userReleaseOperationLock(release, &err)
 	var backup string
 	// A component-scoped update reuses the recorded installation: the scope is
 	// bound to the reconfigure target and the recorded manifest supplies the
@@ -476,6 +604,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	var installed *userWindowsManifest
 	goReuse := false
+	retire := false
 	if _, err := os.Lstat(req.Destination); err == nil {
 		// A reconfigure/replace of the managed target (channel switch or
 		// component update) is a fresh install over a retired backup, so the
@@ -538,17 +667,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			// agent.
 			installed = &recorded
 		}
-		backup = req.Destination + ".replaced-" + time.Now().UTC().Format("20060102T150405Z")
-		if _, err := os.Lstat(backup); !os.IsNotExist(err) {
-			return result, errors.Join(err, errors.New("Windows replacement backup path is already occupied"))
-		}
-		if _, err := userWindowsIdentity(req.Destination, true); err != nil {
-			return result, err
-		}
-		if err := os.Rename(req.Destination, backup); err != nil {
-			return result, err
-		}
-		fmt.Fprintf(os.Stderr, "Windows install phase: replaced previous installation %s -> %s\n", req.Destination, backup)
+		retire = true
 	}
 	if !scope.full && installed == nil {
 		return result, errors.New("a component update requires a recorded installation")
@@ -566,6 +685,27 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		}
 		fmt.Fprintf(os.Stderr, "Frozen canonical Gentle Shell Main: %s archive SHA256 %s (TLS publisher, not signed binary)\n", mainArtifact.Prefix, mainArtifact.SHA)
 	}
+	published := false
+	if retire {
+		// Reconfigure: retire the previous tree to its .replaced- backup so the
+		// fresh install below can publish into the confirmed destination. The
+		// pure acquisition above runs first, so a failed download never
+		// retires anything.
+		var backupIdentity string
+		backup, backupIdentity, err = userWindowsRetireReplacement(req.Destination, time.Now())
+		if err != nil {
+			return result, err
+		}
+		fmt.Fprintf(os.Stderr, "Windows install phase: replaced previous installation %s -> %s\n", req.Destination, backup)
+		// Registered before the stage cleanup, so it runs after it: every
+		// failure before publication moves the retired tree back. A published
+		// destination is never touched.
+		defer func() {
+			if !published {
+				err = userWindowsReplacementFailure(err, req.Destination, backup, backupIdentity)
+			}
+		}()
+	}
 	parent := filepath.Dir(req.Destination)
 	stage, err := os.MkdirTemp(parent, ".gentle-shell-windows-stage-")
 	if err != nil {
@@ -575,7 +715,6 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if identityErr != nil {
 		return result, identityErr // Do not claim ownership or remove an unknown stage.
 	}
-	published := false
 	defer func() {
 		if published {
 			return
@@ -619,10 +758,12 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-acquire")
-	codegraph := make(chan error, 1)
-	go func() {
-		codegraph <- userWindowsCodeGraphAcquire(ctx, stage, req, scope)
-	}()
+	codegraph := userWindowsStartWorker(ctx, func(ctx context.Context) error {
+		return userWindowsCodeGraphAcquire(ctx, stage, req, scope)
+	})
+	// Registered after the stage cleanup, so it runs before it: an early
+	// return cancels and joins the acquisition before the stage is removed.
+	defer codegraph.Stop()
 	// The Windows stock provision helper requires its exact six-field
 	// selection ABI. Preferences are already materialized in the staged
 	// config/state/mcp files and must not widen this helper boundary.
@@ -693,7 +834,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			}
 		}
 	}
-	if err := <-codegraph; err != nil {
+	if err := codegraph.Wait(); err != nil {
 		return result, err
 	}
 	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-ready")
@@ -787,6 +928,13 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 		fmt.Fprintln(os.Stderr, "Windows install phase: overlay-ready main")
+	}
+	// Declaration files and source maps are never loaded at run time. Each file
+	// costs a real-time antivirus scan on first use, so dropping them shortens
+	// the first launch. Best effort: only a cancelled context fails the install.
+	phase("prune", "prefix")
+	if err := userPrunePrefix(ctx, stage, scope.reused[UserComponentSDK], os.Stderr); err != nil {
+		return result, err
 	}
 	if installed != nil && !scope.reused[UserComponentSDK] {
 		// A rebuilt agent must not look like a fresh installation to the
@@ -900,6 +1048,16 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	// Failure is reported but never retracts the published installation.
 	if cleanupErr := userWindowsEphemeralCleanup(req.Destination); cleanupErr != nil {
 		fmt.Fprintf(os.Stderr, "Windows installation is published and verified, but ephemeral cleanup failed; installer caches may remain in %q: %v\n", req.Destination, cleanupErr)
+	}
+	// A reconfigure retired the previous installation to its .replaced-
+	// backup. Bound those backups to one recent tree now that the replacement
+	// is published, verified and launched. Retention failure is reported but
+	// never retracts the valid installation; uncertain candidates are
+	// preserved whole and named.
+	if backup != "" {
+		if retentionErr := userWindowsPruneReplacedBackups(req.Destination, backup); retentionErr != nil {
+			fmt.Fprintf(os.Stderr, "Windows installation is published and verified, but replaced-backup retention failed; older backups may remain beside %q: %v\n", req.Destination, retentionErr)
+		}
 	}
 	return UserInstallResult{req.Destination, filepath.Join(req.Destination, "prefix"), filepath.Join(req.Destination, "agent"), "installed", result.LauncherNote}, nil
 }

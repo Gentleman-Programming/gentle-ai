@@ -112,6 +112,7 @@ jobs:
             def completed_once($id):
               [.journeys[] | select(.id == $id)] as $matches
               | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j129-correction-request-unavailable-zero-budget") and
             completed_once("j51-negotiated-status-correction-continuation") and
             completed_once("j59-current-status-and-start-ignore-sibling-worktree-transaction") and
             completed_once("j60-explicit-active-lineage-keeps-four-lens-correction-and-validator-flow") and

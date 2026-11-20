@@ -20,8 +20,10 @@ COMMANDS
                Missing mappings or unsafe shell config leave config unchanged with guidance.
   codegraph init --cwd <project-root>
                Initialize a project's CodeGraph index; codegraph [init] --help shows local help
-  skill-registry refresh
-               Refresh .atl/skill-registry.md with cache-hit fast path
+  skill-registry refresh [--force] [--quiet] [--no-gitignore] [--cwd <project>]
+               Rescan disk skills and update the shared index only when bytes change
+  skill-registry list [--json] [--cwd <project>]
+               List the same disk skill winners without writing
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>] [--locale <en|es>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
                Admit one reviewer result; the final capture closes and burns its review

@@ -461,3 +461,44 @@ func TestDefaultAgentsFromDetection_AllAgentsMappedCorrectly(t *testing.T) {
 		})
 	}
 }
+
+// TestParseInstallFlagsAcceptsForceCommunityTools covers #984's flag parsing:
+// the install flag is off unless the user passes it.
+func TestParseInstallFlagsAcceptsForceCommunityTools(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "flag omitted", want: false},
+		{name: "flag set", args: []string{"--force-community-tools"}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			flags, err := ParseInstallFlags(test.args)
+			if err != nil {
+				t.Fatalf("ParseInstallFlags(%v) error = %v", test.args, err)
+			}
+			if flags.ForceCommunityTools != test.want {
+				t.Fatalf("ForceCommunityTools = %t, want %t", flags.ForceCommunityTools, test.want)
+			}
+		})
+	}
+}
+
+// TestPrintInstallHelpDescribesTheRealForceCommunityToolsBehaviour keeps the
+// help text honest: the flag reinstalls the community tools at @latest and
+// re-runs the reconcile; it does not merely re-run an upgrade path, and it
+// never uninstalls everything first.
+func TestPrintInstallHelpDescribesTheRealForceCommunityToolsBehaviour(t *testing.T) {
+	var help strings.Builder
+	PrintInstallHelp(&help)
+	text := help.String()
+	for _, want := range []string{"--force-community-tools", "@latest", "reconcile"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("install help is missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "re-runs the upgrade path") {
+		t.Fatalf("install help overstates the flag:\n%s", text)
+	}
+}

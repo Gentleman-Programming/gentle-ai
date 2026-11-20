@@ -741,6 +741,13 @@ func TestOverBudgetCorrectionStopCarriesTheReleaseContinuation(t *testing.T) {
 	}, &status); err != nil {
 		t.Fatalf("status on the over-budget correction failed: %v\n%s", err, status.String())
 	}
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), status.Bytes())
+	var legacy bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", "gentle-ai.review-integration/v1", "--cwd", repo,
+		"--lineage", record.State.LineageID, "--next-transition", "--projection", "staged", "--agent", string(model.AgentPi)}, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, "v1", "status-v2.schema.json"), legacy.Bytes())
 	var parsed struct {
 		NextTransition struct {
 			Kind         string `json:"kind"`

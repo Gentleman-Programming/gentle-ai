@@ -12,7 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
-// ggaConfigDir returns the platform-appropriate directory that GGA reads its
+// ConfigDir returns the platform-appropriate directory that GGA reads its
 // global config from.
 //
 // On Windows, GGA reads from %APPDATA%\gga (i.e. AppData\Roaming\gga).
@@ -24,7 +24,9 @@ import (
 // reporting no provider even when the config file was generated.
 //
 // goos is injected so unit tests can override runtime.GOOS without build tags.
-func ggaConfigDir(homeDir string, goos string) string {
+// backup.WithConfigRoots reuses it to admit this directory as a restore root
+// when %APPDATA% is redirected outside the profile (issue #6024).
+func ConfigDir(homeDir string, goos string) string {
 	if goos == "windows" {
 		appData := os.Getenv("APPDATA")
 		if appData == "" {
@@ -125,12 +127,12 @@ func BuildConfig(provider string) []byte {
 
 // ConfigPath returns the GGA global config file path.
 func ConfigPath(homeDir string) string {
-	return filepath.Join(ggaConfigDir(homeDir, runtime.GOOS), "config")
+	return filepath.Join(ConfigDir(homeDir, runtime.GOOS), "config")
 }
 
 // AgentsTemplatePath returns the starter AGENTS.md template path.
 func AgentsTemplatePath(homeDir string) string {
-	return filepath.Join(ggaConfigDir(homeDir, runtime.GOOS), "AGENTS.md")
+	return filepath.Join(ConfigDir(homeDir, runtime.GOOS), "AGENTS.md")
 }
 
 // Inject writes the GGA global config and starter AGENTS.md template.

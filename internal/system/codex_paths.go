@@ -23,6 +23,17 @@ func ValidateCodexHome(homeDir string) error {
 	return err
 }
 
+// CodexHomeOverridden reports whether an explicit CODEX_HOME applies to homeDir.
+// The override is a caller-provided directory that ValidateCodexHome requires to
+// exist and that may live outside the home, unlike the default ~/.codex.
+func CodexHomeOverridden(homeDir string) bool {
+	if os.Getenv("CODEX_HOME") == "" {
+		return false
+	}
+	userHome, err := os.UserHomeDir()
+	return err == nil && filepath.Clean(homeDir) == filepath.Clean(userHome)
+}
+
 // resolveCodexHome validates and canonicalizes an applicable override without writes.
 // Isolated homes and an unset or empty override use the local .codex fallback.
 func resolveCodexHome(homeDir string) (string, error) {

@@ -23,7 +23,7 @@ func TestNativeAgentRenderStaysStableForExistingRuntimes(t *testing.T) {
 		dir        string
 		wantDigest string
 	}{
-		{model.AgentClaudeCode, filepath.Join(home, ".claude", "agents"), "sha256:d7a7385460ccefd24c324c3282c376e425e8b9f304b28b47a4b1b209eeefa263"},
+		{model.AgentClaudeCode, filepath.Join(home, ".claude", "agents"), "sha256:a53f9a75e452cc8a31aeca46eaf3f5501fdc20a239bd0620fb0b132e2118fa72"},
 		{model.AgentCursor, filepath.Join(home, ".cursor", "agents"), "sha256:42ecb0185e9ae6b89d744c17092c8716030e6246cb8ac14d0e09c1055054ec7f"},
 		{model.AgentKiroIDE, filepath.Join(home, ".kiro", "agents"), "sha256:9c77aad65d788632676be8b48c3fa6c00c0ff5984763f1c6b34e1533751d62b9"},
 	}

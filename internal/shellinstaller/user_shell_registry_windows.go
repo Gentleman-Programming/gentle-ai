@@ -214,6 +214,16 @@ func ApplyUserExperiencePreferences(install UserShellInstall, selected UserExper
 	if err := selected.Validate(); err != nil {
 		return err
 	}
+	if !filepath.IsAbs(install.Target) {
+		return errors.New("in-place preferences require an absolute Separate installation")
+	}
+	_, err := userWithOperationLock(install.Target, func() (struct{}, error) {
+		return struct{}{}, userWindowsApplyPreferences(install, selected)
+	})
+	return err
+}
+
+func userWindowsApplyPreferences(install UserShellInstall, selected UserExperience) error {
 	userForceGGAInert(&selected)
 	if _, err := userWindowsManifestRead(install.Target); err != nil {
 		return fmt.Errorf("managed Windows installation manifest is not canonical: %w", err)
@@ -314,6 +324,12 @@ func UninstallUserShellInstall(_ string, install UserShellInstall) (string, erro
 	if install.Mode != "separate" || !filepath.IsAbs(install.Target) {
 		return "", errors.New("Windows uninstall requires an absolute Separate installation")
 	}
+	// Held for the whole uninstall: a concurrent install, update or uninstall
+	// of the same target fails fast instead of racing on the rename.
+	return userWithOperationLock(install.Target, func() (string, error) { return userWindowsUninstall(install) })
+}
+
+func userWindowsUninstall(install UserShellInstall) (string, error) {
 	if _, err := userWindowsIdentity(install.Target, true); err != nil {
 		return "", err
 	}
@@ -330,8 +346,10 @@ func UninstallUserShellInstall(_ string, install UserShellInstall) (string, erro
 	pruneErr := userWindowsPruneRemovedBackup(backup)
 	launcherErr := userWindowsRemoveLauncher(install.Target)
 	cacheErr := userWindowsRemoveDownloadCache()
-	if pruneErr != nil || launcherErr != nil || cacheErr != nil {
-		return backup, fmt.Errorf("installation moved to %s but cleanup failed; the backup keeps more than config, agent, home, selection.json and manifest.json, or the per-user download cache could not be removed: %w", backup, errors.Join(pruneErr, launcherErr, cacheErr))
+	// Keep at most one removed backup: drop the ones earlier uninstalls left.
+	retentionErr := userWindowsPruneRemovedBackups(install.Target, backup)
+	if pruneErr != nil || launcherErr != nil || cacheErr != nil || retentionErr != nil {
+		return backup, fmt.Errorf("installation moved to %s but cleanup failed; the backup keeps more than config, agent, home, selection.json and manifest.json, an earlier removed backup could not be pruned, or the per-user download cache could not be removed: %w", backup, errors.Join(pruneErr, launcherErr, cacheErr, retentionErr))
 	}
 	return backup, nil
 }

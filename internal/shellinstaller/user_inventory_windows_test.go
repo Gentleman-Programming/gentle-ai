@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -91,6 +92,70 @@ func TestUserWindowsInventoryLaunchAcceptsMutableState(t *testing.T) {
 	}
 }
 
+// Runtime state is not an installed artefact: caches and sessions written
+// after publication may exceed the artefact byte bounds. Every per-entry
+// guard still applies and only a fresh pre-publication stage keeps every one
+// of its bytes bounded.
+func TestUserWindowsInventoryLaunchByteBoundsExemptRuntimeState(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "home/go/pkg/mod/cache/download/github.com/giant/@v/v9.9.9.zip"), (2<<30)+(1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "tmp/npm-audit.jsonl"), 40<<20); err != nil {
+		t.Fatal(err)
+	}
+	// A user-installed Pi extension may place a 300 MiB native binary in the
+	// agent's own npm package tree (see the reported 284 MiB claude.exe).
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "agent/npm/node_modules/@tower/claw/claude.exe"), 300<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryLaunch); err != nil {
+		t.Fatalf("grown runtime state refused at launch: %v", err)
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryInstalled); err == nil {
+		t.Fatal("pre-publication inventory admitted unbounded runtime bytes")
+	}
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "prefix/node_modules/giant-pi/blob"), 33<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryLaunch); err == nil {
+		t.Fatal("oversized artefact byte admitted inside prefix")
+	}
+}
+
+// An installation failure must not strand the worker's stage: its owned tools
+// may have primed caches beyond the artefact bounds before the stage was
+// abandoned.
+func TestUserWindowsInventoryCleanupRemovesGrownRuntimeState(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "runtime/cache/_cacache/content-v2/big"), 33<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "home/alias-blob"), (2<<30)+(1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryCleanup); err != nil {
+		t.Fatalf("grown stage runtime state made the stage unremovable: %v", err)
+	}
+}
+
+// The aggregate artefact bound survives the runtime-state exemption: only
+// installed artefact bytes count towards the 2 GiB total.
+func TestUserWindowsInventoryLaunchKeepsAggregateArtefactBound(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	for i := 0; i < 70; i++ {
+		if err := os.Truncate(userWindowsInventoryFile(t, root, "prefix/node_modules/blob"+strconv.Itoa(i)), 31<<20); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryLaunch); err == nil {
+		t.Fatal("aggregate artefact bytes admitted beyond the 2 GiB bound")
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryCleanup); err == nil {
+		t.Fatal("cleanup aggregate artefact bytes admitted beyond the bound")
+	}
+}
+
 func TestUserWindowsInventoryLaunchKeepsArtefactGuards(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
@@ -123,6 +188,13 @@ func TestUserWindowsInventoryLaunchKeepsArtefactGuards(t *testing.T) {
 			userWindowsInventoryFile(t, root, "prefix/node_modules/a&b/index.js")
 		}},
 		// Descendants of mutable state keep every per-entry guard.
+		{"nested junction in agent npm tree", func(t *testing.T, root string) {
+			parent := filepath.Join(root, filepath.FromSlash("agent/npm/node_modules/@tower/claw"))
+			if err := os.MkdirAll(parent, 0700); err != nil {
+				t.Fatal(err)
+			}
+			userWindowsJunction(t, filepath.Join(parent, "pkg"), t.TempDir())
+		}},
 		{"nested junction in module cache", func(t *testing.T, root string) {
 			parent := filepath.Join(root, filepath.FromSlash("home/go/pkg/mod/github.com/!burnt!sushi"))
 			if err := os.MkdirAll(parent, 0700); err != nil {
@@ -153,11 +225,6 @@ func TestUserWindowsInventoryLaunchKeepsArtefactGuards(t *testing.T) {
 			userWindowsInventoryFile(t, root, "agent/sessions/--C--x--/keep")
 			if err := os.Link(foreign, filepath.Join(root, "agent/sessions/--C--x--/linked.jsonl")); err != nil {
 				t.Skipf("cross-directory hard link unavailable: %v", err)
-			}
-		}},
-		{"oversized nested cache file", func(t *testing.T, root string) {
-			if err := os.Truncate(userWindowsInventoryFile(t, root, "runtime/cache/_cacache/content-v2/big"), 33<<20); err != nil {
-				t.Fatal(err)
 			}
 		}},
 	} {

@@ -70,6 +70,10 @@ type reviewIntegrationOperationMetadata struct {
 	IntFlags         []string
 	MutatesAuthority bool
 	JoinOnTimeout    bool
+	// TimeoutRetryable marks an operation whose aggregate timeout is safe to
+	// retry as-is. It applies only while the request carries no authorization
+	// input (see reviewIntegrationTimeoutRetryable); a request that does keeps
+	// the conservative stop route.
 	TimeoutRetryable bool
 	ReadOnlyFlag     string
 }
@@ -109,7 +113,7 @@ var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	{Command: "recover", Operation: "review.recover", Label: "Review RECOVER"},
 	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", Negotiated: true, ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
 	{Command: "start", Operation: "review.start", Label: "Review START", Negotiated: true, ValueFlags: []string{"cwd", "agent", "target", "target-evidence", "lineage", "policy", "request-context", "escalate-item", "escalate-reason", "lenses", "lenses-reason", "focus", "base-ref", "projection", "trace", "consent", "locale", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
-	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization", "untracked-scope", "intended-untracked", "expected-untracked-inventory", "request-context", "escalate-item", "escalate-reason", "lenses", "lenses-reason"}, BoolFlags: []string{"committed-only", "workspace-overlay", "action-eligibility", "next-transition", "phase-timings"}},
+	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization", "untracked-scope", "intended-untracked", "expected-untracked-inventory", "request-context", "escalate-item", "escalate-reason", "lenses", "lenses-reason"}, BoolFlags: []string{"committed-only", "workspace-overlay", "action-eligibility", "next-transition", "phase-timings"}, TimeoutRetryable: true},
 	{Command: "validate", Operation: ReviewIntegrationOperationValidate, Label: "Review VALIDATE", Negotiated: true, ValueFlags: []string{"cwd", "lineage", "gate", "base-ref", "pre-pr-ci-attestation", "policy", "release-configuration", "release-generated", "release-provenance", "release-publication-boundary", "release-evidence-freshness"}},
 }
 
@@ -1225,7 +1229,7 @@ func reviewOperationTimeoutFailure(failure ReviewIntegrationFailure, operation s
 	failure.Code = "operation_timeout"
 	failure.Message = "The negotiated review operation exceeded its aggregate time budget."
 	metadata, known := reviewIntegrationOperationByName(operation)
-	if known && metadata.TimeoutRetryable {
+	if known && reviewIntegrationTimeoutRetryable(metadata, args) {
 		failure.Phase = "pre_native"
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
@@ -1346,6 +1350,27 @@ func reviewIntegrationOperationFlagShape(operation string) map[string]reviewInte
 	shape["h"] = reviewIntegrationBoolFlag
 	shape["help"] = reviewIntegrationBoolFlag
 	return shape
+}
+
+// reviewIntegrationTimeoutRetryable reports whether a timed-out request may be
+// retried as-is. Issue gentle-shell#213: a read-only STATUS is the command that
+// completes the authority inventory, so its timeout must not forbid its own
+// retry. Any repair-* or recovery-* authorization input, or arguments that do
+// not parse against the operation's flag shape, keep the conservative route.
+func reviewIntegrationTimeoutRetryable(metadata reviewIntegrationOperationMetadata, args []string) bool {
+	if !metadata.TimeoutRetryable || reviewIntegrationOperationMutates(metadata, args) {
+		return false
+	}
+	values, valid := safeReviewIntegrationArguments(metadata.Operation, args)
+	if !valid {
+		return false
+	}
+	for name := range values {
+		if strings.HasPrefix(name, "repair-") || strings.HasPrefix(name, "recovery-") {
+			return false
+		}
+	}
+	return true
 }
 
 func reviewIntegrationOperationMutates(metadata reviewIntegrationOperationMetadata, args []string) bool {

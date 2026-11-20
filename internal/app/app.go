@@ -761,8 +761,17 @@ func appCommunityToolIDsToStrings(tools []model.CommunityToolID) []string {
 }
 
 // tuiRestore restores a backup from its manifest.
+//
+// The roots come from the same place the CLI restore command takes them: the
+// home root plus this process's working directory when an entry resolves inside
+// it. Without that, a snapshot an uninstall took in a workspace outside the home
+// root could not be restored from the TUI either.
 func tuiRestore(manifest backup.Manifest) error {
-	return backup.RestoreService{}.Restore(manifest)
+	roots, err := cli.StandaloneRestoreRoots(manifest)
+	if err != nil {
+		return err
+	}
+	return backup.RestoreService{Roots: roots}.Restore(manifest)
 }
 
 // tuiUpgrade returns a tui.UpgradeFunc that wraps upgrade.Execute.

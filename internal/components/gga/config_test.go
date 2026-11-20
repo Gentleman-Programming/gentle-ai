@@ -356,19 +356,19 @@ func TestGGAConfigDirLinux(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ggaConfigDir(tt.homeDir, "linux")
+			got := ConfigDir(tt.homeDir, "linux")
 			if got != tt.want {
-				t.Fatalf("ggaConfigDir(%q, \"linux\") = %q, want %q", tt.homeDir, got, tt.want)
+				t.Fatalf("ConfigDir(%q, \"linux\") = %q, want %q", tt.homeDir, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestGGAConfigDirDarwin(t *testing.T) {
-	got := ggaConfigDir("/Users/testuser", "darwin")
+	got := ConfigDir("/Users/testuser", "darwin")
 	want := filepath.Join("/Users/testuser", ".config", "gga")
 	if got != want {
-		t.Fatalf("ggaConfigDir(%q, \"darwin\") = %q, want %q", "/Users/testuser", got, want)
+		t.Fatalf("ConfigDir(%q, \"darwin\") = %q, want %q", "/Users/testuser", got, want)
 	}
 }
 
@@ -395,9 +395,9 @@ func TestGGAConfigDirWindows(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("APPDATA", tt.appDataEnv)
-			got := ggaConfigDir(tt.homeDir, "windows")
+			got := ConfigDir(tt.homeDir, "windows")
 			if got != tt.wantSuffix {
-				t.Fatalf("ggaConfigDir(%q, \"windows\") = %q, want %q", tt.homeDir, got, tt.wantSuffix)
+				t.Fatalf("ConfigDir(%q, \"windows\") = %q, want %q", tt.homeDir, got, tt.wantSuffix)
 			}
 		})
 	}
@@ -406,10 +406,10 @@ func TestGGAConfigDirWindows(t *testing.T) {
 func TestGGAConfigDirWindowsNoAPPDATA(t *testing.T) {
 	// When APPDATA is unset, the fallback must be derived from homeDir.
 	t.Setenv("APPDATA", "")
-	got := ggaConfigDir(`C:\Users\testuser`, "windows")
+	got := ConfigDir(`C:\Users\testuser`, "windows")
 	want := filepath.Join(`C:\Users\testuser`, "AppData", "Roaming", "gga")
 	if got != want {
-		t.Fatalf("ggaConfigDir fallback = %q, want %q", got, want)
+		t.Fatalf("ConfigDir fallback = %q, want %q", got, want)
 	}
 }
 

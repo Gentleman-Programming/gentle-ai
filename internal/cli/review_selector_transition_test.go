@@ -376,8 +376,21 @@ func testAccountingOnlyRecoveryShape(t *testing.T, tc accountingRecoveryScenario
 		}
 		recoverArgs, conflictFlag = append(recoverArgs, "--focus", ""), "--focus"
 	}
+	var recoveryInventory string
 	if tc.conflictFocus || tc.conflictPolicy || tc.emptyFocus {
-		recoverArgs = append(recoverArgs, "--projection", "workspace", "--untracked-scope", "exclude", "--expected-untracked-inventory", probe.EligibleUntrackedInventory)
+		// Explicit selection uses the v2 inventory contract. Keep the v1
+		// transition probe above, but do not rely on fields its schema forbids.
+		var inventoryOutput bytes.Buffer
+		if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--projection", "workspace"}, &inventoryOutput); err != nil {
+			t.Fatal(err)
+		}
+		var inventoryStatus ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, inventoryOutput.Bytes(), &inventoryStatus)
+		recoveryInventory = inventoryStatus.EligibleUntrackedInventory
+		if recoveryInventory == "" {
+			t.Fatal("v2 STATUS must provide the explicit-selection inventory")
+		}
+		recoverArgs = append(recoverArgs, "--projection", "workspace", "--untracked-scope", "exclude", "--expected-untracked-inventory", recoveryInventory)
 	}
 	if tc.wrongAuthorization || tc.emptyAuthorization {
 		arguments := setSelectorTransitionArgument(append([]ReviewTransitionArgument(nil), status.NextTransition.Execute.Arguments...), "maintainer-authorization", "")
@@ -440,7 +453,7 @@ func testAccountingOnlyRecoveryShape(t *testing.T, tc accountingRecoveryScenario
 		if !tc.emptyFocus {
 			want = append(want, "--cwd", repo)
 		}
-		want = append(want, "--expected-untracked-inventory="+probe.EligibleUntrackedInventory,
+		want = append(want, "--expected-untracked-inventory="+recoveryInventory,
 			"--projection=workspace", "--untracked-scope=exclude")
 		if !reflect.DeepEqual(recoverArgs, want) {
 			t.Fatalf("conflict continuation lost bindings/selectors or retained overrides: %v, want %v", recoverArgs, want)

@@ -18,6 +18,8 @@ type InstallFlags struct {
 	Channel    string
 	DryRun     bool
 
+	ForceCommunityTools bool
+
 	OpenCodeBackgroundSubagents    string
 	OpenCodeBackgroundSubagentsSet bool
 
@@ -51,6 +53,8 @@ FLAGS
                                      auto inherits managed on/off and never enables by itself; only managed policy files are ever overwritten
   --pi-exclude-package <list>        Skip these managed Pi packages (exact sources, e.g. npm:gentle-pi; not npm:gentle-engram)
                                      during the pi install (env: GENTLE_AI_PI_EXCLUDE_PACKAGES); not saved in state
+  --force-community-tools            Reinstall the selected community tools at @latest and re-run their reconcile
+                                     even when the installed CLI is already current and reconciled; nothing is uninstalled first
   --claude-orchestrator-modules      Global Claude only: install the orchestrator as a core plus on-demand modules
                                      under ~/.claude/gentle-ai/orchestrator/ (default off; see docs/rollback.md)
   --dry-run                          Preview plan without executing
@@ -88,6 +92,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	fs.StringVar(&opts.PiBackgroundSubagents, "pi-background-subagents", "", "--pi-background-subagents=auto|on|off; env: GENTLE_AI_PI_BACKGROUND_SUBAGENTS; the resolved policy is projected for gentle-pi")
 	registerListFlag(fs, "pi-exclude-package", &opts.PiExcludePackages)
 	fs.BoolVar(&opts.ClaudeOrchestratorModules, "claude-orchestrator-modules", false, "global Claude only: install the orchestrator as a core plus on-demand modules")
+	fs.BoolVar(&opts.ForceCommunityTools, "force-community-tools", false, "reinstall the selected community tools at @latest and re-run their reconcile even when the installed CLI is current")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 
 	if err := fs.Parse(args); err != nil {

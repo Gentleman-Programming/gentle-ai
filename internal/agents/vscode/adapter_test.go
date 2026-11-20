@@ -157,3 +157,61 @@ func TestMCPConfigPathUsesVSCodeUserProfile(t *testing.T) {
 		}
 	}
 }
+
+// useRealUserHome makes home the current user's home for os.UserHomeDir on
+// every host, so the APPDATA and XDG_CONFIG_HOME overrides apply to it.
+func useRealUserHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
+// TestUserDirPerGOOS pins the injectable resolver behind SettingsPath and
+// MCPConfigPath, which backup.WithConfigRoots reuses to admit a redirected
+// %APPDATA%\Code\User. Overrides apply only to the real user home.
+func TestUserDirPerGOOS(t *testing.T) {
+	realHome := t.TempDir()
+	otherHome := t.TempDir()
+	appData := filepath.Join(t.TempDir(), "Roaming")
+	xdg := filepath.Join(t.TempDir(), "xdg")
+	useRealUserHome(t, realHome)
+	tests := []struct {
+		name    string
+		home    string
+		goos    string
+		appData string
+		xdg     string
+		want    string
+	}{
+		{name: "windows APPDATA for the real home", home: realHome, goos: "windows", appData: appData, want: filepath.Join(appData, "Code", "User")},
+		{name: "windows APPDATA for another home", home: otherHome, goos: "windows", appData: appData, want: filepath.Join(otherHome, "AppData", "Roaming", "Code", "User")},
+		{name: "windows relative APPDATA", home: realHome, goos: "windows", appData: filepath.Join("relative", "Roaming"), want: filepath.Join(realHome, "AppData", "Roaming", "Code", "User")},
+		{name: "windows unset APPDATA", home: realHome, goos: "windows", want: filepath.Join(realHome, "AppData", "Roaming", "Code", "User")},
+		{name: "darwin", home: realHome, goos: "darwin", appData: appData, xdg: xdg, want: filepath.Join(realHome, "Library", "Application Support", "Code", "User")},
+		{name: "linux XDG_CONFIG_HOME for the real home", home: realHome, goos: "linux", appData: appData, xdg: xdg, want: filepath.Join(xdg, "Code", "User")},
+		{name: "linux XDG_CONFIG_HOME for another home", home: otherHome, goos: "linux", appData: appData, xdg: xdg, want: filepath.Join(otherHome, ".config", "Code", "User")},
+		{name: "linux unset XDG_CONFIG_HOME", home: realHome, goos: "linux", appData: appData, want: filepath.Join(realHome, ".config", "Code", "User")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("APPDATA", tt.appData)
+			t.Setenv("XDG_CONFIG_HOME", tt.xdg)
+			if got := UserDir(tt.home, tt.goos); got != tt.want {
+				t.Fatalf("UserDir(%q) = %q, want %q", tt.goos, got, tt.want)
+			}
+		})
+	}
+	t.Run("SettingsPath and MCPConfigPath use the host GOOS", func(t *testing.T) {
+		t.Setenv("APPDATA", appData)
+		t.Setenv("XDG_CONFIG_HOME", xdg)
+		a := NewAdapter()
+		for _, home := range []string{realHome, otherHome} {
+			if got, want := a.SettingsPath(home), filepath.Join(UserDir(home, runtime.GOOS), "settings.json"); got != want {
+				t.Fatalf("SettingsPath(%q) = %q, want %q", home, got, want)
+			}
+			if got, want := a.MCPConfigPath(home, "context7"), filepath.Join(UserDir(home, runtime.GOOS), "mcp.json"); got != want {
+				t.Fatalf("MCPConfigPath(%q) = %q, want %q", home, got, want)
+			}
+		}
+	})
+}

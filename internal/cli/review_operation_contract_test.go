@@ -2,11 +2,15 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
@@ -169,4 +173,173 @@ func readReviewOperationFile(t *testing.T, path string) []byte {
 func reviewOperationBindingPath(store reviewtransaction.CompactStore, change string) string {
 	common := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(store.Dir))))
 	return filepath.Join(common, "gentle-ai", "sdd-runtime", "v1", change, "HEAD")
+}
+
+// Issue gentle-shell#213: a read-only STATUS that exceeds its aggregate budget
+// is the very command that completes the authority inventory, so its timeout
+// must stay retryable. A STATUS carrying repair or recovery authorization
+// inputs keeps the conservative stop route.
+func TestNegotiatedStatusAggregateTimeoutRetriesOnlyReadOnlyRequests(t *testing.T) {
+	originalRunner := reviewFacadeCommandRunner
+	originalTimeout := reviewFacadeOperationTimeout
+	t.Cleanup(func() {
+		reviewFacadeCommandRunner = originalRunner
+		reviewFacadeOperationTimeout = originalTimeout
+	})
+	reviewFacadeOperationTimeout = 25 * time.Millisecond
+	reviewFacadeCommandRunner = func(context.Context, []string, io.Writer) error { time.Sleep(100 * time.Millisecond); return nil }
+	for _, tt := range []struct {
+		name          string
+		args          []string
+		retrySafe     bool
+		replayability reviewtransaction.Replayability
+		nextAction    string
+	}{
+		{
+			name: "read only", args: []string{"status", "--contract", ReviewIntegrationContractV1},
+			retrySafe: true, replayability: reviewtransaction.ReplayabilityNotReplayable, nextAction: "retry",
+		},
+		{
+			name: "read only projection selectors", args: []string{"status", "--contract", ReviewIntegrationContractV1, "--lineage", "status-timeout", "--next-transition", "--action-eligibility"},
+			retrySafe: true, replayability: reviewtransaction.ReplayabilityNotReplayable, nextAction: "retry",
+		},
+		{
+			name: "repair authorization", args: []string{"status", "--contract", ReviewIntegrationContractV1, "--repair-actor", "maintainer", "--repair-reason", "fix"},
+			replayability: reviewtransaction.ReplayabilityManualActionRequired, nextAction: "stop",
+		},
+		{
+			name: "recovery authorization", args: []string{"status", "--contract", ReviewIntegrationContractV1, "--recovery-successor-lineage=successor", "--recovery-actor", "maintainer"},
+			replayability: reviewtransaction.ReplayabilityManualActionRequired, nextAction: "stop",
+		},
+		{
+			name: "unparseable arguments", args: []string{"status", "--contract", ReviewIntegrationContractV1, "--unknown-flag"},
+			replayability: reviewtransaction.ReplayabilityManualActionRequired, nextAction: "stop",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview(tt.args, &output); err == nil {
+				t.Fatal("timed out STATUS succeeded")
+			}
+			failure := decodeReviewIntegrationFailure(t, output.Bytes())
+			if failure.Operation != "review.status" || failure.Code != "operation_timeout" || failure.Phase != "pre_native" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "not_evaluated" ||
+				failure.RetrySafe != tt.retrySafe || failure.Replayability != tt.replayability || failure.NextAction != tt.nextAction {
+				t.Fatalf("STATUS timeout failure = %#v", failure)
+			}
+			if err := failure.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// Every other operation keeps its pre-#213 timeout classification: mutating
+// requests route to STATUS with an unknown outcome, everything else stops.
+func TestReviewOperationTimeoutClassificationUnchangedOutsideReadOnlyStatus(t *testing.T) {
+	for _, metadata := range reviewIntegrationOperationRegistry {
+		if metadata.Operation == "review.status" {
+			continue
+		}
+		argSets := [][]string{nil}
+		if metadata.ReadOnlyFlag != "" {
+			argSets = append(argSets, []string{"--" + metadata.ReadOnlyFlag + "=true"}, []string{"--" + metadata.ReadOnlyFlag + "=false"})
+		}
+		for _, args := range argSets {
+			t.Run(metadata.Operation+"/"+strings.Join(args, " "), func(t *testing.T) {
+				failure := reviewOperationTimeoutFailure(ReviewIntegrationFailure{Operation: metadata.Operation}, metadata.Operation, args)
+				want := ReviewIntegrationFailure{
+					Operation: metadata.Operation, Code: "operation_timeout",
+					Message: "The negotiated review operation exceeded its aggregate time budget.",
+					Phase:   "pre_native", MutationOutcome: ReviewMutationNotStarted, AuthorityApplicability: "not_evaluated",
+					Replayability: reviewtransaction.ReplayabilityManualActionRequired, NextAction: "stop",
+				}
+				if reviewIntegrationOperationMutates(metadata, args) {
+					want.Phase, want.MutationOutcome = "native_running", ReviewMutationUnknown
+					want.Replayability, want.NextAction = reviewtransaction.ReplayabilityStatusRequired, "review.status"
+				}
+				if !reflect.DeepEqual(failure, want) {
+					t.Fatalf("timeout failure = %#v, want %#v", failure, want)
+				}
+			})
+		}
+	}
+}
+
+// Pins the independent verifier's end-to-end probes for gentle-shell#213: the
+// real STATUS route, with exclusive maintenance held so every request reaches
+// the aggregate deadline. Read-only selectors stay retryable; any repair-* or
+// recovery-* authorization input, or an argument outside the STATUS flag
+// shape, keeps the stop route; argument forms that only look like
+// authorization inputs are refused at preflight, never classified as a
+// retryable timeout.
+func TestNegotiatedStatusDeadlineRetryTruthUnderMaintenanceLock(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started := startFacadeReview(t, repo)
+	lockContext, cancelLock := context.WithTimeout(context.Background(), time.Second)
+	defer cancelLock()
+	exclusive, err := reviewtransaction.AcquireReviewMaintenanceExclusive(lockContext, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer exclusive.Release()
+
+	originalTimeout := reviewFacadeOperationTimeout
+	t.Cleanup(func() { reviewFacadeOperationTimeout = originalTimeout })
+	reviewFacadeOperationTimeout = 50 * time.Millisecond
+
+	base := []string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID}
+	retry := func(extra ...string) []string { return extra }
+	for _, tt := range []struct {
+		name  string
+		extra []string
+		code  string
+		retry bool
+		next  string
+	}{
+		{name: "plain", extra: retry(), code: "operation_timeout", retry: true, next: "retry"},
+		{name: "gate", extra: retry("--gate", "pre-commit"), code: "operation_timeout", retry: true, next: "retry"},
+		{name: "action eligibility", extra: retry("--action-eligibility"), code: "operation_timeout", retry: true, next: "retry"},
+		{name: "next transition", extra: retry("--next-transition"), code: "operation_timeout", retry: true, next: "retry"},
+		{name: "phase timings", extra: retry("--phase-timings"), code: "operation_timeout", retry: true, next: "retry"},
+		{name: "escalate and lenses", extra: retry("--next-transition", "--escalate-item", "2", "--escalate-reason", "weakens a permission check", "--lenses", "risk", "--lenses-reason", "touches authority"), code: "operation_timeout", retry: true, next: "retry"},
+
+		{name: "repair actor", extra: []string{"--repair-actor", "maintainer"}, code: "operation_timeout", next: "stop"},
+		{name: "repair reason", extra: []string{"--repair-reason", "fix"}, code: "operation_timeout", next: "stop"},
+		{name: "repair authorization", extra: []string{"--repair-authorization", "token"}, code: "operation_timeout", next: "stop"},
+		{name: "recovery successor lineage", extra: []string{"--recovery-successor-lineage", "successor"}, code: "operation_timeout", next: "stop"},
+		{name: "recovery reason", extra: []string{"--recovery-reason", "fix"}, code: "operation_timeout", next: "stop"},
+		{name: "recovery actor", extra: []string{"--recovery-actor", "maintainer"}, code: "operation_timeout", next: "stop"},
+		{name: "recovery authorization", extra: []string{"--recovery-authorization", "token"}, code: "operation_timeout", next: "stop"},
+		{name: "single dash equals", extra: []string{"-repair-actor=maintainer"}, code: "operation_timeout", next: "stop"},
+		{name: "empty repair value", extra: []string{"--repair-reason="}, code: "operation_timeout", next: "stop"},
+		{name: "empty recovery value", extra: []string{"--recovery-successor-lineage="}, code: "operation_timeout", next: "stop"},
+		{name: "repository context", extra: []string{"--repository-context", "context"}, code: "operation_timeout", next: "stop"},
+
+		{name: "positional authorization", extra: []string{"positional", "--repair-authorization", "x"}, code: "invalid_request", retry: true, next: "correct_request"},
+		{name: "after terminator", extra: []string{"--", "--recovery-authorization", "x"}, code: "invalid_request", retry: true, next: "correct_request"},
+		{name: "bool value consumed as positional", extra: []string{"--committed-only", "true", "--repair-authorization", "x"}, code: "invalid_request", retry: true, next: "correct_request"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview(append(append([]string{}, base...), tt.extra...), &output); err == nil {
+				t.Fatal("STATUS succeeded while exclusive maintenance held")
+			}
+			failure := decodeReviewIntegrationFailure(t, output.Bytes())
+			phase := "pre_native"
+			if tt.code == "invalid_request" {
+				phase = "preflight"
+			}
+			if failure.Operation != "review.status" || failure.Code != tt.code || failure.Phase != phase ||
+				failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe != tt.retry || failure.NextAction != tt.next {
+				t.Fatalf("STATUS deadline failure = %#v", failure)
+			}
+			if tt.code != "operation_timeout" && failure.NextAction == "retry" {
+				t.Fatalf("deceptive authorization form classified as a retryable timeout: %#v", failure)
+			}
+			if err := failure.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
