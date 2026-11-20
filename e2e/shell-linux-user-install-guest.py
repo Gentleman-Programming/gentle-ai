@@ -1266,16 +1266,27 @@ def main():
         upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
         run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
         coding_metadata = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/package.json'
-        require(json.loads(coding_metadata.read_text())['version'] == lock_pi, 'prior-parent recovery did not restore the locked cohort')
+        # The recovered locked cohort's metadata is the reference every later
+        # recovery must restore byte for byte.
+        expected_metadata = coding_metadata.read_bytes()
+        require(json.loads(expected_metadata)['version'] == lock_pi, 'prior-parent recovery did not restore the locked cohort')
         require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'locked cohort did not launch after prior-parent refusal')
         REPORT['priorParentUpdate'] = 'refused-and-recovered: 0.99.2 to locked %s keeps unadmitted prior packages; locked cohort restored' % lock_pi
-        # On the modern cohort the stock updater reinstalls the locked release.
-        run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180)
-        require(lock_pi in run([str(target / 'bin/pi'), '--version'], cwd=WORK / 'project'), 'locked force reinstall did not launch')
-        require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'update replaced physical selected roots')
-        require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'update changed owned command bindings')
-        REPORT['lockedForceUpdate'] = 'actual stock --force reinstall of locked %s; TEST-only Pi API selection, not public latest authority' % lock_pi
-        expected_metadata = coding_metadata.read_bytes()
+        # On the modern cohort the stock updater reinstalls the locked release,
+        # but `npm install -g` reshapes the graph the install sealed, so the
+        # post-launch readback refuses it like every npm-driven Pi update and
+        # confirmed recovery restores the sealed cohort.
+        refused = run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180, good=False)
+        require('global graph changed' in refused, 'locked force reinstall was not refused for its changed graph')
+        require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'refused update replaced physical selected roots')
+        require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'refused update changed owned command bindings')
+        run([str(target / 'bin/pi'), '--version'], good=False)
+        upgrade_recovery = run([SUPERVISOR, 'shell', 'recover', str(target), 'inspect'])
+        upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
+        run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
+        require(coding_metadata.read_bytes() == expected_metadata, 'locked force recovery did not restore known bytes')
+        require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'locked cohort did not launch after force refusal')
+        REPORT['lockedForceUpdate'] = 'refused (global graph changed) and recovered: stock --force reinstall of locked %s; TEST-only Pi API selection' % lock_pi
         corrupted = json.loads(expected_metadata)
         corrupted['version'] = '9.9.9'
         coding_metadata.write_text(json.dumps(corrupted))
@@ -1288,11 +1299,12 @@ def main():
         REPORT['upgradeRecovery'] = 'actual unknown cohort refused, full saved trees restored and authenticated retry observed'
         # A stock self-update to a release outside the reviewed lock (#6170):
         # npm writes it, the post-launch readback refuses its unauthenticated
-        # packages, the next launch stays refused, and confirmed recovery
-        # restores the authenticated locked cohort.
+        # packages or the changed graph (whichever check fires first), the
+        # next launch stays refused, and confirmed recovery restores the
+        # authenticated locked cohort.
         PI_LATEST = '1.0.0'
         refused = run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180, good=False)
-        require('global package lacks authenticated metadata' in refused, 'out-of-lock self-update was not refused for its unauthenticated packages')
+        require('global package lacks authenticated metadata' in refused or 'global graph changed' in refused, 'out-of-lock self-update was not refused by the global readback')
         require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'refused update replaced physical selected roots')
         require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'refused update changed owned command bindings')
         run([str(target / 'bin/pi'), '--version'], good=False)
