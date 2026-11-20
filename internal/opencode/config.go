@@ -363,7 +363,7 @@ func legacyConfiguredAssignments(root map[string]any) map[string]AssignmentPrese
 			// Presence is the pre-write evidence that an existing assignment was
 			// cleared. Restoration may exempt a managed definition when its active
 			// mode intentionally generates agents without model fields.
-			assignments[key] = AssignmentPresence{Present: true, Cleared: true, Managed: looksLikeManagedOpenCodeAgent(def)}
+			assignments[key] = AssignmentPresence{Present: true, Cleared: true, Managed: looksLikeManagedOpenCodeAgent(name, def)}
 			continue
 		}
 		assignment, ok := model.ParseModelReference(modelSpec)
@@ -379,15 +379,15 @@ func legacyConfiguredAssignments(root map[string]any) map[string]AssignmentPrese
 	return assignments
 }
 
-func looksLikeManagedOpenCodeAgent(def map[string]any) bool {
-	hidden, _ := def["hidden"].(bool)
-	if !hidden {
+func looksLikeManagedOpenCodeAgent(name string, def map[string]any) bool {
+	hidden, ok := def["hidden"].(bool)
+	if !ok || (!hidden && !strings.HasPrefix(name, "gentle-ai-")) {
 		return false
 	}
 	if _, ok := def["prompt"].(string); !ok {
 		return false
 	}
-	_, ok := def["permission"].(map[string]any)
+	_, ok = def["permission"].(map[string]any)
 	return ok
 }
 
@@ -411,7 +411,7 @@ func managedConfigPriority(path string) int {
 	}
 	for _, key := range managedOpenCodeAgentKeys() {
 		def, _ := agents[key].(map[string]any)
-		if looksLikeManagedOpenCodeAgent(def) {
+		if looksLikeManagedOpenCodeAgent(key, def) {
 			return 1
 		}
 	}

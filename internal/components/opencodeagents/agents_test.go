@@ -3,10 +3,12 @@ package opencodeagents
 import (
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
 )
 
 func TestShapeVerifierOwnership(t *testing.T) {
@@ -78,5 +80,82 @@ func TestShapeVerifierOwnership(t *testing.T) {
 				t.Fatalf("%s: %v, %v", s.Name, got, err)
 			}
 		}
+	}
+}
+
+func TestEntryEmitsExpectedVisibility(t *testing.T) {
+	for _, spec := range Parity(model.AgentOpenCode) {
+		entry, err := Entry(spec)
+		if err != nil {
+			t.Fatalf("Entry(%q): %v", spec.Name, err)
+		}
+		if entry["mode"] != "subagent" {
+			t.Fatalf("%s mode = %#v, want \"subagent\"", spec.Name, entry["mode"])
+		}
+		wantHidden := !strings.HasPrefix(spec.Name, "gentle-ai-")
+		if entry["hidden"] != wantHidden {
+			t.Fatalf("%s hidden = %#v, want %v", spec.Name, entry["hidden"], wantHidden)
+		}
+	}
+	if Refuter()["hidden"] != true {
+		t.Fatalf("Refuter hidden = %#v, want true", Refuter()["hidden"])
+	}
+	if Validator()["hidden"] != true {
+		t.Fatalf("Validator hidden = %#v, want true", Validator()["hidden"])
+	}
+}
+
+func TestShapeRecognizesCurrentAndLegacyODDVisibility(t *testing.T) {
+	for _, spec := range Parity(model.AgentOpenCode) {
+		cur, err := Entry(spec)
+		if err != nil {
+			t.Fatalf("Entry(%q): %v", spec.Name, err)
+		}
+		if got, err := Shape(spec.Name, cur); err != nil || !got {
+			t.Fatalf("%s current Shape = (%v, %v), want (true, nil)", spec.Name, got, err)
+		}
+		if strings.HasPrefix(spec.Name, "gentle-ai-") {
+			legacyHidden := maps.Clone(cur)
+			legacyHidden["hidden"] = true
+			legacyHidden["model"] = "user/model"
+			legacyHidden["variant"] = "high"
+			if got, err := Shape(spec.Name, legacyHidden); err != nil || !got {
+				t.Fatalf("%s legacy hidden Shape = (%v, %v), want (true, nil)", spec.Name, got, err)
+			}
+
+			missingHidden := maps.Clone(cur)
+			delete(missingHidden, "hidden")
+			if got, err := Shape(spec.Name, missingHidden); err != nil || got {
+				t.Fatalf("%s missing hidden Shape = (%v, %v), want (false, nil)", spec.Name, got, err)
+			}
+
+			stringHidden := maps.Clone(cur)
+			stringHidden["hidden"] = "false"
+			if got, err := Shape(spec.Name, stringHidden); err != nil || got {
+				t.Fatalf("%s non-bool hidden Shape = (%v, %v), want (false, nil)", spec.Name, got, err)
+			}
+			continue
+		}
+
+		unhiddenNonODD := maps.Clone(cur)
+		unhiddenNonODD["hidden"] = false
+		if got, err := Shape(spec.Name, unhiddenNonODD); err != nil || got {
+			t.Fatalf("%s unhidden non-ODD Shape = (%v, %v), want (false, nil)", spec.Name, got, err)
+		}
+	}
+
+	verifyEntry, err := Entry(parity[1]) // gentle-ai-verify
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPrompt, err := legacyVerifyPrompt(verifyEntry["prompt"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyLegacy := maps.Clone(verifyEntry)
+	verifyLegacy["prompt"] = legacyPrompt
+	verifyLegacy["hidden"] = true
+	if got, err := Shape("gentle-ai-verify", verifyLegacy); err != nil || !got {
+		t.Fatalf("gentle-ai-verify pre-refactor+legacy-hidden Shape = (%v, %v), want (true, nil)", got, err)
 	}
 }
