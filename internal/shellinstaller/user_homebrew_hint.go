@@ -1,6 +1,10 @@
 package shellinstaller
 
-import "strings"
+import (
+	"fmt"
+	"os"
+	"strings"
+)
 
 // userHomebrewPrefixes are the shared Homebrew trees whose admin-group 0775
 // directories the supervisor provenance check refuses as ancestors (#5814
@@ -21,4 +25,10 @@ func userHomebrewHint(path string) string {
 		}
 	}
 	return ""
+}
+
+// userSupervisorAncestorRefusal is the action-time refusal of an unsafe
+// supervisor ancestor; a Homebrew ancestor adds its private-directory hint.
+func userSupervisorAncestorRefusal(path string, owner uint32, mode os.FileMode) error {
+	return privateError("source", fmt.Errorf("supervisor ancestor refused: path=%q owner=%d mode=%#o%s", path, owner, mode, userHomebrewHint(path)))
 }
