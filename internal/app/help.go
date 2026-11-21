@@ -38,7 +38,7 @@ COMMANDS
   review validate --gate <gate> [--cwd <repo>]
                Validate delivery-gate syntax; ordinary repository policy decides delivery
   review status [--cwd <repo>]
-               Read-only inventory of compact-v2 and shipped legacy-v1 authority
+               Read-only inventory of compact-v2 authority
   review repair --preflight [--cwd <repo>]
                Classify the complete authority inventory before provider-owned repair
   review mode <enable|disable|status> [--cwd <repo>] [--scope <global|clone>]
@@ -51,10 +51,6 @@ COMMANDS
                without a terminal reviews the change and says so instead of asking
 
 COMPATIBILITY COMMANDS
-  review-start --cwd <repo> --lineage <id> --policy-file <path>
-               Read-only legacy v1 surface; rejects new v1 authority and directs users to 'review start'
-  review-step --cwd <repo> --lineage <id> --operation <operation> --input <json>
-               Read-only legacy v1 surface; rejects mutation
   review-resume --cwd <repo> --lineage <id>
                Read shipped v1 authority without mutation
   review-bundle-export --cwd <repo> --lineage <id> --out <path>

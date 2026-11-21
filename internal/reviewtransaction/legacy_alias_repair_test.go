@@ -140,26 +140,6 @@ func TestRepairHistoricalLegacyCompleteFixAliasUsesValidationCanonicalOperation(
 	}
 }
 
-func TestRepairHistoricalLegacyAliasLeavesInventoryFailClosedForOtherCorruption(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	_, head, _ := legacyAliasRepairFixture(t, repo, "alias-repair-first")
-	legacyAliasRepairFixture(t, repo, "alias-repair-unhandled", "review/unknown-fix")
-	request := legacyAliasRepairRequest(t, repo, "alias-repair-first", head)
-	if _, err := repairHistoricalLegacyAlias(context.Background(), repo, request, legacyAliasRepairOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	report, err := InventoryAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The unhandled alias entry stays invalid on its own account. Repairing
-	// one entry was never allowed to make another entry healthy, and one
-	// unhandled entry was never a statement about the repaired one.
-	if !hasAuthorityInventoryStatus(report.Entries, "alias-repair-unhandled", AuthorityStatusInvalid) {
-		t.Fatalf("repair incorrectly cleared the unhandled alias entry: %#v", report)
-	}
-}
-
 func TestRepairHistoricalLegacyAliasRefusesOutsideApprovedClass(t *testing.T) {
 	tests := []struct {
 		name    string

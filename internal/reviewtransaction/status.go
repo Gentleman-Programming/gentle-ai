@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 
@@ -36,19 +35,12 @@ const (
 	AuthorityStatusSuperseded  AuthorityStatus = "superseded"
 	AuthorityStatusRecovered   AuthorityStatus = "recovered"
 	AuthorityStatusCollision   AuthorityStatus = "same-lineage-mixed-collision"
-	// AuthorityStatusHistorical marks a structurally valid terminal legacy-v1
-	// chain that predates the receipt contract: its receipt file is absent
-	// (never corrupt or mismatched). Such chains stay inventory-readable
-	// without forcing the global inventory incomplete, but they are never
-	// discoverable as gate or receipt authority because no receipt exists.
-	AuthorityStatusHistorical AuthorityStatus = "historical-pre-receipt"
 )
 
 type AuthorityVersion string
 
 const (
 	AuthorityVersionCompact AuthorityVersion = "compact-v2"
-	AuthorityVersionLegacy  AuthorityVersion = "legacy-v1"
 )
 
 type AuthorityLockStatus string
@@ -135,15 +127,11 @@ func InventoryAuthority(ctx context.Context, repo string) (AuthorityStatusReport
 		})
 	}
 
-	legacy := inventoryVersion(ctx, repository, root, "v1", AuthorityVersionLegacy)
 	compact := inventoryVersion(ctx, repository, root, "v2", AuthorityVersionCompact)
-	report.Entries = append(report.Entries, legacy.entries...)
 	report.Entries = append(report.Entries, compact.entries...)
-	report.Locks = append(report.Locks, legacy.locks...)
 	report.Locks = append(report.Locks, compact.locks...)
-	report.Diagnostics = append(report.Diagnostics, legacy.diagnostics...)
 	report.Diagnostics = append(report.Diagnostics, compact.diagnostics...)
-	if !legacy.complete || !compact.complete {
+	if !compact.complete {
 		report.Complete = false
 	}
 	for _, lock := range report.Locks {
@@ -152,7 +140,6 @@ func InventoryAuthority(ctx context.Context, repo string) (AuthorityStatusReport
 		}
 	}
 	markCompactGraph(&report)
-	markMixedCollisions(&report)
 	// Completeness is a statement about the INVENTORY, not about every entry
 	// in it. A per-entry defect already has a per-entry home: the entry keeps
 	// its own Invalid/Incomplete/Reset/Collision status and its own problems,
@@ -242,14 +229,12 @@ func inventoryVersion(ctx context.Context, repo, root, directory string, version
 		}
 		return inventoryVersionProblem(result, versionRoot, err)
 	}
-	if version == AuthorityVersionCompact {
-		if lock, exists := inventoryLock(version, "", filepath.Join(versionRoot, "LOCK")); exists {
-			result.locks = append(result.locks, lock)
-		}
+	if lock, exists := inventoryLock(version, "", filepath.Join(versionRoot, "LOCK")); exists {
+		result.locks = append(result.locks, lock)
 	}
 	for _, item := range entries {
 		path := filepath.Join(versionRoot, item.Name())
-		if version == AuthorityVersionCompact && item.Name() == "LOCK" && !item.IsDir() {
+		if item.Name() == "LOCK" && !item.IsDir() {
 			continue
 		}
 		if !item.IsDir() {
@@ -306,11 +291,6 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 		return entry, nil, nil
 	}
 	locks := []AuthorityLockEvidence{}
-	if version == AuthorityVersionLegacy {
-		if lock, exists := inventoryLock(version, lineage, filepath.Join(path, "LOCK")); exists {
-			locks = append(locks, lock)
-		}
-	}
 	for _, item := range items {
 		if strings.HasPrefix(item.Name(), ".atomic-") {
 			entry.Status = AuthorityStatusReset
@@ -320,71 +300,39 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 	if entry.Status == AuthorityStatusReset {
 		return entry, locks, nil
 	}
-	if version == AuthorityVersionCompact {
-		if _, statErr := os.Stat(filepath.Join(path, compactStateFileName)); os.IsNotExist(statErr) && !compactStoreHoldsAuthority(items) {
-			entry.Status = AuthorityStatusIncomplete
-			entry.Problems = []string{"compact store entry has no review-state.json and no authoritative artifacts; declare it lost and quarantine it with gentle-ai review abandon --cwd " + pathquote.Quote(repo) + " --lineage " + lineage}
-			return entry, locks, nil
-		}
-		store := CompactStore{Dir: path, lineageID: lineage, repo: repo}
-		record, err := store.LoadContext(ctx)
-		if err != nil {
-			// A semantic-validation failure is quarantined regardless of its
-			// lifecycle state (issue-1813): diagnostic-only and excluded from
-			// selector-free inventory. Structural failures (JSON decode, schema,
-			// checksum) still fail this entry closed as AuthorityStatusInvalid.
-			if _, quarantinable := compactLineageQuarantinable(err); quarantinable {
-				return entry, locks, &AuthorityInventoryDiagnostic{Path: path, Problem: "quarantined-semantic-lineage: " + err.Error()}
-			}
-			// This entry refuses for itself, and now it has to say how to
-			// leave: it is no longer accompanied by a repository-wide refusal
-			// that somebody else was going to have to diagnose. The exit is
-			// named rather than described, because a refusal whose
-			// continuation is a paraphrase is a dead end with better prose.
-			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{compactUnreadableEntryProblem(lineage, err)}
-			return entry, locks, nil
-		}
-		entry.Revision, entry.State, entry.Recovery = record.Revision, record.State.State, record.State.Recovery
-		entry.SnapshotIdentity = record.State.InitialSnapshot.Identity
-		if discarded, summaryErr := compactDiscardedWorkSummary(ctx, store, record); summaryErr == nil {
-			entry.DiscardedWork = &discarded
-		} else {
-			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"inspect discarded work: " + summaryErr.Error()}
-		}
-		entry.compact = &record
-		if entry.Status != AuthorityStatusInvalid {
-			entry.Status = authorityStatusForState(record.State.State)
-		}
+	if _, statErr := os.Stat(filepath.Join(path, compactStateFileName)); os.IsNotExist(statErr) && !compactStoreHoldsAuthority(items) {
+		entry.Status = AuthorityStatusIncomplete
+		entry.Problems = []string{"compact store entry has no review-state.json and no authoritative artifacts; declare it lost and quarantine it with gentle-ai review abandon --cwd " + pathquote.Quote(repo) + " --lineage " + lineage}
 		return entry, locks, nil
 	}
-	store := Store{Dir: path, lineageID: lineage, repo: repo, readOnly: true}
-	chain, err := store.LoadChain()
+	store := CompactStore{Dir: path, lineageID: lineage, repo: repo}
+	record, err := store.LoadContext(ctx)
 	if err != nil {
-		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{err.Error()}
+		// A semantic-validation failure is quarantined regardless of its
+		// lifecycle state (issue-1813): diagnostic-only and excluded from
+		// selector-free inventory. Structural failures (JSON decode, schema,
+		// checksum) still fail this entry closed as AuthorityStatusInvalid.
+		if _, quarantinable := compactLineageQuarantinable(err); quarantinable {
+			return entry, locks, &AuthorityInventoryDiagnostic{Path: path, Problem: "quarantined-semantic-lineage: " + err.Error()}
+		}
+		// This entry refuses for itself, and now it has to say how to
+		// leave: it is no longer accompanied by a repository-wide refusal
+		// that somebody else was going to have to diagnose. The exit is
+		// named rather than described, because a refusal whose
+		// continuation is a paraphrase is a dead end with better prose.
+		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{compactUnreadableEntryProblem(lineage, err)}
 		return entry, locks, nil
 	}
-	transaction := chain.Records[len(chain.Records)-1].Transaction
-	entry.State, entry.Revision, entry.ChainIdentity = transaction.State, chain.HeadRevision, chain.Identity
-	entry.Status = authorityStatusForState(transaction.State)
-	receiptPath := filepath.Join(path, "artifacts", "receipt.json")
-	if payload, err := os.ReadFile(receiptPath); err == nil {
-		receipt, parseErr := ParseReceipt(payload)
-		authoritative, authorityErr := transaction.Receipt()
-		if parseErr != nil {
-			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"invalid legacy receipt: " + parseErr.Error()}
-		} else if authorityErr != nil || !reflect.DeepEqual(receipt, authoritative) {
-			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"legacy receipt does not match terminal authority"}
-		}
-	} else if os.IsNotExist(err) && (transaction.State == StateApproved || transaction.State == StateEscalated) {
-		// A structurally valid terminal legacy-v1 chain whose receipt file is
-		// absent predates the receipt contract. It stays inventory-readable as
-		// historical context without forcing the global inventory incomplete,
-		// yet remains ineligible as gate or discovery authority because every
-		// receipt consumer requires the receipt file itself. A present-but-wrong
-		// receipt is handled above and stays invalid.
-		entry.Status = AuthorityStatusHistorical
-	} else if !os.IsNotExist(err) {
-		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"read legacy receipt: " + err.Error()}
+	entry.Revision, entry.State, entry.Recovery = record.Revision, record.State.State, record.State.Recovery
+	entry.SnapshotIdentity = record.State.InitialSnapshot.Identity
+	if discarded, summaryErr := compactDiscardedWorkSummary(ctx, store, record); summaryErr == nil {
+		entry.DiscardedWork = &discarded
+	} else {
+		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"inspect discarded work: " + summaryErr.Error()}
+	}
+	entry.compact = &record
+	if entry.Status != AuthorityStatusInvalid {
+		entry.Status = authorityStatusForState(record.State.State)
 	}
 	return entry, locks, nil
 }
@@ -528,26 +476,6 @@ func markCompactGraph(report *AuthorityStatusReport) {
 				break
 			}
 			current = entry.Recovery.PredecessorLineageID
-		}
-	}
-}
-
-func markMixedCollisions(report *AuthorityStatusReport) {
-	versions := map[string]map[AuthorityVersion]bool{}
-	for _, entry := range report.Entries {
-		if entry.LineageID == "" {
-			continue
-		}
-		if versions[entry.LineageID] == nil {
-			versions[entry.LineageID] = map[AuthorityVersion]bool{}
-		}
-		versions[entry.LineageID][entry.Version] = true
-	}
-	for index := range report.Entries {
-		entry := &report.Entries[index]
-		if versions[entry.LineageID][AuthorityVersionCompact] && versions[entry.LineageID][AuthorityVersionLegacy] {
-			entry.Status = AuthorityStatusCollision
-			entry.Problems = append(entry.Problems, "lineage exists in both compact-v2 and legacy-v1 authority stores")
 		}
 	}
 }

@@ -20,7 +20,7 @@ func ExactReviewLineageOccupied(ctx context.Context, repo, lineageID string) (bo
 	if err != nil {
 		return false, err
 	}
-	for _, version := range []string{"v1", "v2", "v3"} {
+	for _, version := range []string{"v2", "v3"} {
 		_, statErr := os.Lstat(filepath.Join(base, version, lineageID))
 		switch {
 		case statErr == nil:

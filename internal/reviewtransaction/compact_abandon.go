@@ -18,7 +18,7 @@ import (
 // abandonment maintainer authorization binding. The first eight lines are the
 // frozen format gentle-shell renders; an abandonment that moves more than the
 // named lineage's readable record (an unverifiable summary, recovery
-// successors, a legacy-v1 entry) gets extra lines appended after `actor=`, so
+// successors) gets extra lines appended after `actor=`, so
 // the human approves exactly what moves.
 //
 // It is exported so a refusal in another package that names `review abandon`
@@ -29,8 +29,8 @@ const CompactAbandonAuthorizationSchema = "gentle-ai.review-abandon-authorizatio
 const compactLegacyAbandonAuthorizationSchema = "gentle-ai.review-abandon-authorization/v1"
 
 // compactAbandonUnavailable stands in for the revision and snapshot identity of
-// an entry whose record cannot be read (unreadable or missing review-state.json,
-// or a legacy-v1 entry): the binding still names them, with this word.
+// an entry whose record cannot be read (unreadable or missing review-state.json):
+// the binding still names them, with this word.
 const compactAbandonUnavailable = "unavailable"
 
 // CompactAbandonRequest identifies one review lineage to declare lost and
@@ -46,10 +46,8 @@ type CompactAbandonRequest struct {
 }
 
 // CompactAbandonResult is the outcome of one abandonment. The embedded record
-// is the requested lineage's own v2 quarantine (or, for a lineage that only
-// exists as a legacy-v1 entry, that entry's). Cascaded lists every other entry
-// quarantined with it: recovery successors, leaf first, and a same-lineage
-// legacy-v1 entry.
+// is the requested lineage's own v2 quarantine. Cascaded lists every other
+// entry quarantined with it: recovery successors, leaf first.
 type CompactAbandonResult struct {
 	CompactReclaimRecord
 	Cascaded []CompactReclaimRecord
@@ -109,7 +107,7 @@ func validCompactAbandonReason(reason string) bool {
 
 // RenderCompactAbandonAuthorization renders the eight-line V2 authorization
 // binding over the exact discarded work the gate re-derives. A lineage whose
-// abandonment also moves successors or a legacy-v1 entry needs the lines
+// abandonment also moves successors needs the lines
 // Eligibility.Authorization appends.
 func RenderCompactAbandonAuthorization(lineage, revision, snapshotIdentity, actor, reason string, discarded CompactDiscardedWorkSummary) string {
 	return compactAbandonAuthorizationBindingV2(lineage, revision, snapshotIdentity, actor, reason, discarded)
@@ -225,7 +223,7 @@ func (e CompactAbandonEligibility) Authorization(lineage, actor, reason string) 
 
 // InspectCompactPristineAbandonment answers, read-only, whether
 // AbandonCompactStore could act on this lineage: abandonment accepts any
-// lineage that holds a v2 or legacy-v1 entry, whatever its state or
+// lineage that holds a v2 entry, whatever its state or
 // readability. It takes no lock and writes nothing. The maintainer
 // authorization and the compare-and-swap are deliberately NOT predicted: they
 // are the operator's own act.
@@ -244,14 +242,10 @@ func InspectCompactPristineAbandonment(ctx context.Context, repo, lineage string
 	if err != nil {
 		return CompactAbandonEligibility{}, err
 	}
-	v1Present, err := compactAbandonEntryPresent(filepath.Join(base, "v1", lineage))
-	if err != nil {
-		return CompactAbandonEligibility{}, err
-	}
-	if !v2Present && !v1Present {
+	if !v2Present {
 		return CompactAbandonEligibility{}, nil
 	}
-	plan, err := planCompactAbandon(ctx, repo, base, lineage, v2Present, v1Present)
+	plan, err := planCompactAbandon(ctx, repo, base, lineage, v2Present)
 	if err != nil {
 		return CompactAbandonEligibility{}, err
 	}
@@ -316,14 +310,12 @@ type compactAbandonStep struct {
 	dir     string
 	residue []string
 	proof   CompactAbandonmentProof
-	// primary marks the requested lineage's own entries (v2 and legacy-v1):
-	// their proof carries the authorization binding for replay.
+	// primary marks the requested lineage's own entry: its proof carries the authorization binding for replay.
 	primary bool
 }
 
 // compactAbandonPlan is everything one abandonment moves, in quarantine order
-// (recovery successors deepest first, the lineage's own v2 entry, then its
-// legacy-v1 entry), plus the values its authorization binding is made of.
+// (recovery successors deepest first, then the lineage's own v2 entry), plus the values its authorization binding is made of.
 type compactAbandonPlan struct {
 	steps            []compactAbandonStep
 	revision         string
@@ -352,7 +344,7 @@ func compactAbandonResidue(dir string) ([]string, error) {
 // planCompactAbandon derives, read-only, every entry an abandonment of lineage
 // moves and the binding suffix that names them. The caller decides whether it
 // holds the store lock.
-func planCompactAbandon(ctx context.Context, repo, base, lineage string, v2Present, v1Present bool) (compactAbandonPlan, error) {
+func planCompactAbandon(ctx context.Context, repo, base, lineage string, v2Present bool) (compactAbandonPlan, error) {
 	plan := compactAbandonPlan{
 		revision: compactAbandonUnavailable, snapshotIdentity: compactAbandonUnavailable,
 		discarded: CompactDiscardedWorkSummary{CapturedLensResults: []string{}, Unverifiable: true},
@@ -428,16 +420,6 @@ func planCompactAbandon(ctx context.Context, repo, base, lineage string, v2Prese
 			return compactAbandonPlan{}, fmt.Errorf("review abandon refused: %w", graphErr)
 		}
 	}
-	if v1Present {
-		v1Dir := filepath.Join(base, "v1", lineage)
-		residue, err := compactAbandonResidue(v1Dir)
-		if err != nil {
-			return compactAbandonPlan{}, err
-		}
-		plan.steps = append(plan.steps, compactAbandonStep{lineage: lineage, dir: v1Dir, residue: residue, primary: true, proof: unreadable(lineage)})
-		plan.cascade = append(plan.cascade, "v1/"+lineage)
-		lines = append(lines, "legacy_v1_entry="+lineage)
-	}
 	if len(lines) > 0 {
 		plan.suffix = "\n" + strings.Join(lines, "\n")
 	}
@@ -455,8 +437,6 @@ func planCompactAbandon(ctx context.Context, repo, base, lineage string, v2Prese
 //   - a lineage that is the predecessor of recovery successors: the
 //     successors are abandoned with it, deepest first, so no orphan recovery
 //     edge ever remains. Ancestors and unrelated lineages are never touched;
-//   - a same-lineage legacy-v1 entry, quarantined alongside it, or a lineage
-//     that exists only as a legacy-v1 entry.
 //
 // The authorization binding names the lineage and every extra entry that
 // moves with it, so the human approves exactly what is abandoned. A
@@ -485,7 +465,6 @@ func AbandonCompactStore(ctx context.Context, repo string, request CompactAbando
 	}
 	versionRoot := filepath.Join(base, "v2")
 	dir := filepath.Join(versionRoot, request.LineageID)
-	v1Dir := filepath.Join(base, "v1", request.LineageID)
 	lock, err := acquireStoreLock(filepath.Join(versionRoot, "LOCK"))
 	if err != nil {
 		return CompactAbandonResult{}, err
@@ -495,22 +474,11 @@ func AbandonCompactStore(ctx context.Context, repo string, request CompactAbando
 	if err != nil {
 		return CompactAbandonResult{}, err
 	}
-	v1Present, err := compactAbandonEntryPresent(v1Dir)
-	if err != nil {
-		return CompactAbandonResult{}, err
-	}
-	if !v2Present && !v1Present {
+	if !v2Present {
 		replayed, replayErr := replayCommittedCompactAbandonment(base, request)
 		return CompactAbandonResult{CompactReclaimRecord: replayed}, replayErr
 	}
-	if v1Present {
-		// A legacy lineage lock is its own kernel lock, not covered by the v2
-		// one. Probe without creating anything: a live holder fails fast.
-		if status := probeAuthorityRepairLock(filepath.Join(v1Dir, "LOCK")); status == authorityRepairLockHeld || status == authorityRepairLockUnknown {
-			return CompactAbandonResult{}, storeLockBusyError{}
-		}
-	}
-	plan, err := planCompactAbandon(ctx, repo, base, request.LineageID, v2Present, v1Present)
+	plan, err := planCompactAbandon(ctx, repo, base, request.LineageID, v2Present)
 	if err != nil {
 		return CompactAbandonResult{}, err
 	}
@@ -538,7 +506,7 @@ func AbandonCompactStore(ctx context.Context, repo string, request CompactAbando
 	records := make([]CompactReclaimRecord, 0, len(plan.steps))
 	for _, step := range plan.steps {
 		proof := step.proof
-		// Only an extended binding (cascade, v1 entry, unverifiable work) is
+		// Only an extended binding (cascade, unverifiable work) is
 		// kept: the replay rebuilds the plain eight-line binding from the proof,
 		// so a simple abandonment record stays byte-compatible with older readers.
 		if step.primary && plan.suffix != "" {

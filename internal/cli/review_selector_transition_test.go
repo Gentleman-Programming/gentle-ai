@@ -1009,7 +1009,6 @@ func recoveryAuthorizationFromStatus(t *testing.T, status ReviewTargetStatusResu
 func TestNativeRecoveryIgnoresUnrelatedAuthorityDamage(t *testing.T) {
 	reviewEnabledHome(t)
 	for _, tc := range []struct{ name, version, file string }{
-		{"ambiguous-legacy-lock", "v1", "LOCK"},
 		{"malformed-compact-record", "v2", "review-state.json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1030,19 +1029,12 @@ func TestNativeRecoveryIgnoresUnrelatedAuthorityDamage(t *testing.T) {
 			if err := os.WriteFile(foreignPath, []byte("not-json\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if tc.version == "v1" {
-				report, err := reviewtransaction.InventoryAuthority(t.Context(), repo)
-				if err != nil || report.Complete {
-					t.Fatalf("fixture must make the global inventory incomplete: %v, complete=%t", err, report.Complete)
-				}
-			} else {
-				foreign, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, "unrelated-damaged")
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := foreign.LoadContext(t.Context()); err == nil || reviewtransaction.IsCompactAuthorityOperationalFailure(err) {
-					t.Fatalf("fixture must be quarantinable content damage: %v", err)
-				}
+			foreign, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, "unrelated-damaged")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := foreign.LoadContext(t.Context()); err == nil || reviewtransaction.IsCompactAuthorityOperationalFailure(err) {
+				t.Fatalf("fixture must be quarantinable content damage: %v", err)
 			}
 			status := selectorTransitionStatus(t, repo, "--lineage", predecessor.State.LineageID)
 			if status.Action != reviewtransaction.TargetStatusActionRecover || status.NextTransition.Execute == nil || len(status.NextTransition.Execute.Arguments) != 4 {

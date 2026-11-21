@@ -837,29 +837,6 @@ func TestReviewStatusValidateRejectsMalformedForecast(t *testing.T) {
 	}
 }
 
-func TestReviewStatusEscalationParityPreservesLegacyAuthority(t *testing.T) {
-	identity := "sha256:" + strings.Repeat("a", 64)
-	status := newReviewTargetStatusResultForContract(reviewtransaction.TargetStatusResult{
-		Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionLegacy,
-		LineageID: "legacy-escalated", State: reviewtransaction.StateEscalated, Generation: 1, Revision: identity,
-		Action: reviewtransaction.TargetStatusActionStop, Replayability: reviewtransaction.ReplayabilityManualActionRequired, TargetIdentity: identity,
-	}, ReviewIntegrationContractV2)
-	status.Projection = ReviewTargetStatusProjection{
-		Schema: ReviewIntegrationProjectionSchema, Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
-		BaseTree: strings.Repeat("a", 40), InitialReviewTree: strings.Repeat("b", 40), CurrentCandidateTree: strings.Repeat("c", 40),
-		PathsDigest: identity, IntendedUntrackedProof: identity, InitialSnapshotIdentity: identity, CurrentSnapshotIdentity: identity,
-		Paths: []string{}, IntendedUntracked: []string{},
-	}
-	payload, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), payload)
-	if err := status.Validate(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestReviewStatusEscalationRequiresCurrentSchema(t *testing.T) {
 	identity := "sha256:" + strings.Repeat("a", 64)
 	native := reviewtransaction.TargetStatusResult{

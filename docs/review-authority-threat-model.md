@@ -59,7 +59,7 @@ Synthetic Git trees used by persisted snapshots remain subject to repository obj
 - A local hash chain presented as protection from the out-of-scope actor.
 - Mandatory bundles, policy mirrors, ledger mirrors, evidence mirrors, fix-delta mirrors, or gate-context mirrors for ordinary review.
 
-Legacy v1 chains and bundles remain readable for compatibility, but their history cannot be appended, rewritten, or migrated in place. The sole repair exception is an audited whole-lineage quarantine described below; it never makes the historical bytes valid.
+Legacy v1 authority is no longer supported: status, inspection, abandon, lineage-name occupancy and import collision checks do not read `review-transactions/v1`, and nothing deletes or rewrites what is already there. A clone that still carries a v1 directory keeps working as if it were absent; `gentle-ai review store-reset` is the human tool that removes it.
 
 ## Historical Alias Quarantine
 
@@ -104,7 +104,6 @@ A legacy-v1 lineage that would have needed this quarantine today has no repair p
 - Discovery authorizes only review continuation or recovery from a unique valid unsuperseded leaf. Forks, dangling or mismatched predecessor links, cycles, and unrelated leaves fail closed inside the review lifecycle. Explicitly selecting a superseded lineage permits historical inspection but not review continuation or delivery authorization.
 - Recovery imports an explicitly exported compact authority record and binds it to the live delivered tree and original base-to-final path scope; it does not require or reconstruct obsolete intermediate trees or event history.
 - Invalid temporary or imported data never replaces the current valid authority.
-- Legacy v1 transport remains available only for legacy lineages.
 - WU6 can be rolled back by removing the compact store and routing new facade writes back to the preserved v1 implementation. Existing compact records must be exported or intentionally discarded before that rollback; v1 lineages are unaffected.
 
 ## Further Reading
