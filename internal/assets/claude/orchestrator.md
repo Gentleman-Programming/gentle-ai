@@ -48,6 +48,8 @@ Core principle: **does this inflate the parent context without need?** If yes, u
 
 Use Claude Code's native Agent/Task mechanism for delegated-direct work. Summarize any needed handoff explicitly.
 
+`odd-explorer`, `odd-worker`, and `odd-verify` are worker classes, not installed named agents. When delegating one, pass the model and effort from the routing section's Claude ODD worker assignments table as the Agent tool `model` and `effort` parameters, omitting `effort` when the table says `default` or the Agent tool offers no `effort` parameter (Claude Code before 2.1.292).
+
 Pass the authorized edit surfaces, acceptance criteria, the applicable test-first policy and runner from `## Implementation Routing`, applicable verification commands, and relevant prior context explicitly to bounded implementation workers. Workers preserve unrelated working-tree changes and return observed outcomes and checks.
 
 Keep each delegated writer bounded, with a short synthesized handoff.
