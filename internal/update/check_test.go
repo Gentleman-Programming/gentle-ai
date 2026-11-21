@@ -398,6 +398,69 @@ func TestCheckSingleToolGentleAIPseudoVersionComparesMainHeadWithoutChannel(t *t
 	}
 }
 
+func TestCheckFilteredGentleAIResolvesOnlyPlainBetaReleaseTags(t *testing.T) {
+	const sha = "972997650b51abcdef0123456789abcdef012345"
+	for _, tc := range []struct {
+		name, channel, version, wantLatest string
+		brew, wantTag                      bool
+		wantStatus                         UpdateStatus
+	}{
+		{name: "prefixed beta release", channel: "beta", version: "v4.6.0", wantTag: true, wantStatus: UpToDate, wantLatest: "main@972997650b51"},
+		{name: "beta pseudo-version", channel: "beta", version: "v4.6.1-0.20261121151827-972997650b51", wantStatus: UpToDate, wantLatest: "main@972997650b51"},
+		{name: "stable release", channel: "stable", version: "4.6.0", wantStatus: UpdateAvailable, wantLatest: "4.6.1"},
+		{name: "Homebrew on beta", channel: "beta", version: "4.6.0", brew: true, wantStatus: UpdateAvailable, wantLatest: "4.6.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GENTLE_AI_CHANNEL", tc.channel)
+			profile := system.PlatformProfile{OS: "darwin"}
+			if tc.brew {
+				profile.PackageManager = "brew"
+				original := homebrewOwnershipDetector
+				t.Cleanup(func() { homebrewOwnershipDetector = original })
+				homebrewOwnershipDetector = func(string) (HomebrewOwnership, error) { return HomebrewFormula, nil }
+			}
+
+			var tagRequests, mainRequests, releaseRequests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/Gentleman-Programming/gentle-ai/commits/refs/tags/v4.6.0":
+					tagRequests.Add(1)
+					json.NewEncoder(w).Encode(githubCommit{SHA: sha})
+				case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+					mainRequests.Add(1)
+					json.NewEncoder(w).Encode(githubCommit{SHA: sha})
+				case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+					releaseRequests.Add(1)
+					json.NewEncoder(w).Encode(githubRelease{TagName: "v4.6.1"})
+				default:
+					t.Errorf("unexpected request: %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(server.Close)
+			original := httpClient
+			t.Cleanup(func() { httpClient = original })
+			httpClient = server.Client()
+			httpClient.Transport = &testTransport{server: server}
+
+			results := CheckFiltered(context.Background(), tc.version, profile, []string{"gentle-ai"})
+			if len(results) != 1 {
+				t.Fatalf("check returned %d results, want one", len(results))
+			}
+			assertResult(t, results[0], "gentle-ai", tc.wantStatus, tc.version, tc.wantLatest)
+			if got := tagRequests.Load(); got > 1 || (got == 1) != tc.wantTag {
+				t.Errorf("tag requests = %d, want tag request = %v", got, tc.wantTag)
+			}
+			if wantMain := tc.channel == "beta" && !tc.brew; (mainRequests.Load() == 1) != wantMain || (releaseRequests.Load() == 1) == wantMain {
+				t.Errorf("main requests = %d, release requests = %d; want only one request, main = %v", mainRequests.Load(), releaseRequests.Load(), wantMain)
+			}
+			if tc.brew && results[0].UpdateHint != "brew upgrade --formula gentle-ai" {
+				t.Errorf("Homebrew hint = %q", results[0].UpdateHint)
+			}
+		})
+	}
+}
+
 func TestUsesBetaMainHeadCheck(t *testing.T) {
 	tests := []struct {
 		name           string

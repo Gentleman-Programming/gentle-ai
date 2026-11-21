@@ -113,7 +113,7 @@ GENTLE_AI_CHANNEL=beta gentle-ai upgrade
 $env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade
 ```
 
-`gentle-ai upgrade` advances the `gentle-ai` binary from `main` and refreshes managed tools on macOS, Linux, and Windows with Go on `PATH`.
+With Go on `PATH`, `gentle-ai upgrade` can update the beta binary to the checked commit on `main`. If the installed binary reports a release version, beta compares that tag's commit with `main`. It skips reinstalling when they match and offers an update when `main` moves. If the tag cannot be resolved, `upgrade` leaves the binary untouched and prints a `go install` command pinned to the checked `main` commit.
 
 If you re-run an installer, pass beta explicitly because both installers default to stable:
 

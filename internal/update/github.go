@@ -93,9 +93,13 @@ func fetchLatestRelease(ctx context.Context, owner, repo string) (githubRelease,
 }
 
 func fetchMainCommit(ctx context.Context, owner, repo string) (githubCommit, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/main", owner, repo)
+	return fetchCommit(ctx, owner, repo, "main")
+}
 
-	resp, err := doGitHubRequest(ctx, url)
+func fetchCommit(ctx context.Context, owner, repo, ref string) (githubCommit, error) {
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s", owner, repo, url.PathEscape(ref))
+
+	resp, err := doGitHubRequest(ctx, endpoint)
 	if err != nil {
 		return githubCommit{}, err
 	}

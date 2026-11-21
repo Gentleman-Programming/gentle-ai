@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -131,7 +132,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 		}
 		result.BetaCommit = strings.ToLower(mainCommit.SHA)
 		result.BetaModulePath = module
-		return applyBetaMainHeadStatus(result, localVersion, mainCommit)
+		return applyBetaMainHeadStatus(ctx, result, localVersion, mainCommit)
 	}
 
 	result.LatestVersion = normalizeVersion(release.TagName)
@@ -188,7 +189,7 @@ func isBetaUpdateChannel() bool {
 	}
 }
 
-func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit githubCommit) UpdateResult {
+func applyBetaMainHeadStatus(ctx context.Context, result UpdateResult, localVersion string, commit githubCommit) UpdateResult {
 	remoteSHA := strings.TrimSpace(commit.SHA)
 	shortRemote := shortCommit(remoteSHA)
 	if shortRemote == "" {
@@ -212,6 +213,15 @@ func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit gi
 	}
 
 	localSHA := localBuildCommit(localVersion)
+	if tag := plainReleaseTag(localVersion); tag != "" {
+		// Resolve the tag to its commit, not to an annotated tag object or a
+		// same-named branch. The validated main target remains usable as a
+		// manual fallback when we cannot establish the installed commit.
+		tagCommit, err := fetchCommit(ctx, result.Tool.Owner, result.Tool.Repo, "refs/tags/"+tag)
+		if err == nil && validBetaCommit(tagCommit.SHA) {
+			localSHA = tagCommit.SHA
+		}
+	}
 	if localSHA == "" {
 		result.Status = VersionUnknown
 		return result
@@ -256,6 +266,16 @@ func pseudoVersionTime(version string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return ts.UTC(), true
+}
+
+var plainReleasePattern = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
+func plainReleaseTag(version string) string {
+	version = strings.TrimSpace(version)
+	if !plainReleasePattern.MatchString(version) {
+		return ""
+	}
+	return "v" + strings.TrimPrefix(version, "v")
 }
 
 func localBuildCommit(version string) string {

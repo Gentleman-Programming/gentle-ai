@@ -43,6 +43,16 @@ func ValidatedBetaSourceInstallCommand(r UpdateResult) (string, error) {
 	return BetaSourceInstallCommand(r.BetaModulePath, r.BetaCommit), nil
 }
 
+// BetaReleaseRecoveryCommand returns the pinned manual install command when a
+// plain release build could not be compared with a verified beta main target.
+func BetaReleaseRecoveryCommand(r UpdateResult) string {
+	if r.Status != VersionUnknown || plainReleaseTag(r.InstalledVersion) == "" {
+		return ""
+	}
+	command, _ := ValidatedBetaSourceInstallCommand(r)
+	return command
+}
+
 // updateHint returns a platform-specific instruction string for updating the given tool.
 func updateHint(tool ToolInfo, profile system.PlatformProfile) string {
 	switch tool.Name {
@@ -68,7 +78,7 @@ func updateHintForOwnership(tool ToolInfo, profile system.PlatformProfile, owner
 
 // gentleAIHint is the stable-channel instruction only. When the checker
 // resolves a main-head beta target, applyBetaMainHeadStatus overrides this
-// hint with GentleAISourceInstallCommand so the printed instruction installs
+// hint with BetaSourceInstallCommand so the printed instruction installs
 // the advertised target instead of the latest stable release.
 func gentleAIHint(profile system.PlatformProfile) string {
 	if profile.PackageManager == "brew" && homebrewPackageInstalled("gentle-ai") {
