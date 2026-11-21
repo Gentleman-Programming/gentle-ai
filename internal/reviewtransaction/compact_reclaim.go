@@ -167,7 +167,7 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 	residue := make([]string, 0, len(items))
 	for _, item := range items {
 		if compactAuthoritativeArtifact(item.Name()) {
-			return CompactReclaimRecord{}, compactReclaimAuthorityRefusal(ctx, root, dir, request.LineageID, item.Name())
+			return CompactReclaimRecord{}, compactReclaimAuthorityRefusal(ctx, root, request.LineageID, item.Name())
 		}
 		residue = append(residue, item.Name())
 	}
@@ -183,42 +183,18 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 }
 
 // compactReclaimAuthorityRefusal explains why reclaim does not apply to a
-// store entry holding an authoritative artifact, and names the operation that
-// actually admits THIS entry's shape. Reclaim only quarantines entries that
-// never held authority. The honest continuation is derived read-only from
-// the entry itself:
-//
-//   - a pristine entry the abandonment gate's own read-only prediction accepts
-//     is quarantined whole with `review abandon`;
-//   - an unreadable record, a recovery successor whose edge classifies into
-//     one of reconciliation's former anomaly classes (Wave 7 S3a: the
-//     `review reconcile-authority` verb that used to admit these retired
-//     with no replacement — see compact_inspect.go's
-//     SanctionedCompactRecoveryExits), and every other shape no advertised
-//     operation admits, gets the precise diagnosis and the inspection to
-//     capture, never a command that would then refuse.
-func compactReclaimAuthorityRefusal(ctx context.Context, repo, dir, lineageID, artifact string) error {
+// store entry holding an authoritative artifact. Reclaim only quarantines
+// entries that never held authority; every other shape is declared lost and
+// quarantined whole by `review abandon`, which accepts any state, including an
+// unreadable or missing review-state.json, and needs the maintainer's
+// authorization of exactly what moves.
+func compactReclaimAuthorityRefusal(ctx context.Context, repo, lineageID, artifact string) error {
 	refused := fmt.Sprintf("review reclaim refused: store entry %q holds authoritative artifact %q, and reclaim only quarantines entries that never held authority.", lineageID, artifact)
-	record, loadErr := (CompactStore{Dir: dir, lineageID: lineageID}).Load()
-	if loadErr != nil {
-		if os.IsNotExist(loadErr) {
-			return fmt.Errorf("%s The entry holds no readable review-state.json beside that artifact, so nothing can prove the artifact never carried authority, and no advertised operation admits this shape today."+
-				" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report", refused, pathquote.Quote(repo))
-		}
-		return fmt.Errorf("%s Its record cannot be loaded (%v) — inspection classifies it %s — and no advertised operation admits an unreadable record:"+
-			" reconciliation re-derives its proof from readable state, and admitting bytes that can prove nothing is a maintainer policy decision, not a repair."+
-			" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report",
-			refused, loadErr, compactRecoveryEntryProblem(loadErr), pathquote.Quote(repo))
+	eligibility, err := InspectCompactPristineAbandonment(ctx, repo, lineageID)
+	if err != nil || !eligibility.Eligible {
+		return fmt.Errorf("%s Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report", refused, pathquote.Quote(repo))
 	}
-	eligibility, eligibilityErr := InspectCompactPristineAbandonment(ctx, repo, lineageID)
-	if eligibilityErr == nil && eligibility.Eligible {
-		return fmt.Errorf("%s The entry is eligible for abandonment, so `gentle-ai review abandon` quarantines it whole: %s",
-			refused, compactAbandonCommandText(repo, lineageID, eligibility))
-	}
-	return fmt.Errorf("%s No advertised operation admits it: %s."+
-		" Nothing quarantines this shape today; the entry stays exactly as persisted."+
-		" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report",
-		refused, compactAbandonBlockerText(record.State), pathquote.Quote(repo))
+	return fmt.Errorf("%s `gentle-ai review abandon` declares it lost and quarantines it whole: %s", refused, compactAbandonCommandText(repo, lineageID, eligibility))
 }
 
 // quarantineCompactStoreEntry runs the shared two-phase audited move for one

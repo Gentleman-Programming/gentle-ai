@@ -3,6 +3,8 @@ package reviewtransaction
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -90,29 +92,35 @@ func TestMalformedLegacyFreezeEventStaysConfinedToItsOwnEntry(t *testing.T) {
 		t.Logf("verbatim inventory classification: status=%s problems=%q", entry.Status, entry.Problems)
 	}
 
-	// The audited quarantine family routes the anomaly nowhere: reclaim and
-	// abandon both operate on compact-v2 entries only. (reconcile-authority
-	// used to be checked here too, for the same reason; the verb and its
-	// provider retired in Wave 7 S3a/S3b. quarantine-legacy -- the ONE verb
-	// that actually did handle this exact malformed-freeze diagnostic --
-	// retired in Wave 7 S5a/S5b; this anomaly class now has no sanctioned
-	// exit at all, and this test's two refusals below are the whole proof of
-	// that. The confinement assertions above are a separate claim: the entry
-	// has no exit, and that is now its own problem rather than everybody's.)
+	// Reclaim still refuses (it only quarantines entries that never held
+	// authority), but `review abandon` quarantines a legacy-v1-only entry
+	// whole, uninterpreted, and leaves every other lineage alone.
 	if _, err := ReclaimIncompleteCompactStore(context.Background(), repo, CompactReclaimRequest{
 		LineageID: "legacy-freeze-broken", Reason: "retire malformed legacy history", Actor: "maintainer@example.com",
 	}); err == nil || !strings.Contains(err.Error(), "inspect reclaim target") {
 		t.Fatalf("reclaim refusal = %v", err)
-	} else {
-		t.Logf("verbatim reclaim refusal: %v", err)
 	}
-	if _, err := AbandonPristineCompactStore(context.Background(), repo, CompactAbandonRequest{
-		LineageID: "legacy-freeze-broken", ExpectedRevision: hash("3"),
-		Reason: "retire malformed legacy history", Actor: "maintainer@example.com",
-		MaintainerAuthorization: "irrelevant",
-	}); err == nil || !strings.Contains(err.Error(), "no committed abandonment record matches") {
-		t.Fatalf("abandon refusal = %v", err)
-	} else {
-		t.Logf("verbatim abandon refusal: %v", err)
+	committed, err := abandonAuthorized(t, context.Background(), repo, CompactAbandonRequest{
+		LineageID: "legacy-freeze-broken", Reason: CompactAbandonReasonRetiredSchema, Actor: "maintainer@example.com",
+	})
+	if err != nil || committed.Status != CompactReclaimCommitted || len(committed.Cascaded) != 0 {
+		t.Fatalf("abandon of the legacy-v1-only entry = %#v, %v", committed, err)
+	}
+	if proof := committed.Abandonment; proof == nil || !proof.DiscardedWork.Unverifiable {
+		t.Fatalf("legacy abandonment proof = %#v", committed.Abandonment)
+	}
+	if _, statErr := os.Stat(store.Dir); !os.IsNotExist(statErr) {
+		t.Fatalf("legacy-v1 entry still present: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(committed.QuarantinePath, "residue")); statErr != nil {
+		t.Fatalf("legacy-v1 residue not quarantined: %v", statErr)
+	}
+	after, err := InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasAuthorityInventoryStatus(after.Entries, "legacy-freeze-broken", AuthorityStatusInvalid) ||
+		!hasAuthorityInventoryStatus(after.Entries, "legacy-quarantine-unrelated-approved", AuthorityStatusApproved) {
+		t.Fatalf("post-abandon inventory = %#v", after.Entries)
 	}
 }
