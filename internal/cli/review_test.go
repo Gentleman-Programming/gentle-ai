@@ -1,11 +1,8 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,87 +11,6 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
-
-func TestFlatReviewStartRejectsBeforeCreatingLegacyAuthority(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	policy := filepath.Join(t.TempDir(), "policy.md")
-	mirror := filepath.Join(t.TempDir(), "transaction.json")
-	if err := os.WriteFile(policy, []byte("legacy policy\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	err := RunReviewStart([]string{
-		"--cwd", repo, "--lineage", "flat-start-read-only", "--policy-file", policy,
-		"--machine-transaction-out", mirror,
-	}, io.Discard)
-	if !errors.Is(err, reviewtransaction.ErrLegacyReadOnly) || !strings.Contains(err.Error(), "gentle-ai review start") {
-		t.Fatalf("flat review-start error = %v", err)
-	}
-	store, storeErr := reviewtransaction.AuthoritativeStore(context.Background(), repo, "flat-start-read-only")
-	if storeErr != nil {
-		t.Fatal(storeErr)
-	}
-	if _, err := store.LoadChain(); !os.IsNotExist(err) {
-		t.Fatalf("flat review-start created v1 authority: %v", err)
-	}
-	if _, err := os.Stat(mirror); !os.IsNotExist(err) {
-		t.Fatalf("flat review-start created mirror: %v", err)
-	}
-}
-
-func TestLegacyV1MutationCommandsRejectWithoutChangingHead(t *testing.T) {
-	fixture := newLegacyCLIFixture(t, "legacy-mutation-rejected")
-	headPath := filepath.Join(fixture.store.Dir, "HEAD")
-	before, err := os.ReadFile(headPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	input := filepath.Join(t.TempDir(), "input.json")
-	if err := os.WriteFile(input, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	err = RunReviewStep([]string{
-		"--cwd", fixture.repo, "--lineage", fixture.lineage,
-		"--operation", "begin-final-verification", "--input", input,
-	}, io.Discard)
-	if !errors.Is(err, reviewtransaction.ErrLegacyReadOnly) {
-		t.Fatalf("legacy review-step error = %v", err)
-	}
-	fresh, err := reviewtransaction.AuthoritativeStore(context.Background(), fixture.repo, fixture.lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, _, err := fresh.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fresh.Append(fixture.head, reviewtransaction.Record{Operation: "review/complete-final-verification", Transaction: record.Transaction}); !errors.Is(err, reviewtransaction.ErrLegacyReadOnly) {
-		t.Fatalf("legacy direct append error = %v", err)
-	}
-	after, err := os.ReadFile(headPath)
-	if err != nil || !bytes.Equal(after, before) {
-		t.Fatalf("legacy mutation changed HEAD: %v", err)
-	}
-}
-
-func TestReviewSubcommandHelpLabelsLegacyMutationReadOnly(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		run  func([]string, io.Writer) error
-	}{
-		{name: "review-start", run: RunReviewStart},
-		{name: "review-step", run: RunReviewStep},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var output bytes.Buffer
-			if err := test.run([]string{"--help"}, &output); err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(strings.ToLower(output.String()), "read-only") {
-				t.Fatalf("legacy help does not label mutation read-only:\n%s", output.String())
-			}
-		})
-	}
-}
 
 func TestReviewGateActionScopeChangedRequiresExplicitMaintainerAction(t *testing.T) {
 	for _, tt := range []struct {

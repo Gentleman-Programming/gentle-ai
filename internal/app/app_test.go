@@ -382,7 +382,6 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 		command string
 		want    string
 	}{
-		{command: "review-start", want: "review-start requires --cwd, --lineage, and --policy-file"},
 		{command: "review-resume", want: "review-resume requires --cwd and --lineage"},
 		{command: "review-bundle-export", want: "review-bundle-export requires --cwd, --lineage, and --out"},
 		{command: "review-bundle-import", want: "review-bundle-import requires --cwd and --bundle"},
@@ -399,7 +398,7 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 }
 
 func TestRunArgsReviewSubcommandHelpExitsSuccessfully(t *testing.T) {
-	for _, command := range []string{"review-start", "review-step", "review-resume", "review-validate", "review-bundle-export", "review-bundle-import"} {
+	for _, command := range []string{"review-resume", "review-validate", "review-bundle-export", "review-bundle-import"} {
 		t.Run(command, func(t *testing.T) {
 			var output bytes.Buffer
 			if err := RunArgs([]string{command, "--help"}, &output); err != nil {

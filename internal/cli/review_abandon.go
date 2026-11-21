@@ -11,8 +11,7 @@ import (
 
 // ReviewAbandonResult is the JSON `review abandon` prints. Record is the
 // requested lineage's own quarantine. Cascaded is present only when the
-// abandonment moved more entries (recovery successors, deepest first, and a
-// same-lineage legacy-v1 entry); the authorization binding names exactly those,
+// abandonment moved more entries (recovery successors, deepest first); the authorization binding names exactly those,
 // so a caller that could not have authorized them never receives the field.
 type ReviewAbandonResult struct {
 	Operation string                                   `json:"operation"`
@@ -51,8 +50,8 @@ snapshot_identity = entries[].snapshot_identity
 discarded_work = entries[].discarded_work; use captured_lens_results comma-joined with "," in listed order
 --reason = %q or %q
 You choose --actor; the binding uses it with surrounding whitespace trimmed.
-For an entry whose record cannot be read (unreadable or missing review-state.json, or a legacy-v1 entry) revision and snapshot_identity are "unavailable".
-If abandoning the lineage also moves recovery successors or a legacy-v1 entry, or its discarded work cannot be verified, the binding gains extra lines after actor= (discarded_work=unverifiable, one cascade=<lineage>@<revision> ... line per successor, legacy_v1_entry=<lineage>); a refusal for a wrong binding prints the exact one, so the human reads and approves exactly what moves.
+For an entry whose record cannot be read (unreadable or missing review-state.json) revision and snapshot_identity are "unavailable".
+If abandoning the lineage also moves recovery successors, or its discarded work cannot be verified, the binding gains extra lines after actor= (discarded_work=unverifiable, one cascade=<lineage>@<revision> ... line per successor); a refusal for a wrong binding prints the exact one, so the human reads and approves exactly what moves.
 --maintainer-authorization is exactly these final eight lines, joined by LF, with no trailing newline:
 %s`, cwd, reviewtransaction.CompactAbandonReasonOperatorDisposition, reviewtransaction.CompactAbandonReasonRetiredSchema,
 		strings.NewReplacer("captured_lens_results=", "captured_lens_results=<entries[].discarded_work.captured_lens_results comma-joined with \",\" in listed order>", "findings_present=false", "findings_present=<entries[].discarded_work.findings_present>", "evidence_records_present=false", "evidence_records_present=<entries[].discarded_work.evidence_records_present>").Replace(
@@ -60,7 +59,7 @@ If abandoning the lineage also moves recovery successors or a legacy-v1 entry, o
 }
 
 func RunReviewAbandon(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review abandon", stdout, "Declare one review lineage lost and move it to the audited quarantine, bound to the maintainer's exact authorization of what moves. Accepts every state: terminal (approved, escalated, invalidated), unreadable or missing review-state.json, and a legacy-v1 entry. Recovery successors of the lineage are abandoned with it, deepest first, so no orphan recovery edge remains; ancestors and unrelated lineages are never touched. Nothing is deleted. The authorization binding names the lineage and every successor and legacy-v1 entry that moves with it. The v2 store lock is taken without waiting: a live holder fails the command with the lock-busy error and nothing moves. An exact replay of a committed abandonment converges idempotently. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
+	flags := newReviewFlagSet("review abandon", stdout, "Declare one review lineage lost and move it to the audited quarantine, bound to the maintainer's exact authorization of what moves. Accepts every state: terminal (approved, escalated, invalidated) and unreadable or missing review-state.json. Recovery successors of the lineage are abandoned with it, deepest first, so no orphan recovery edge remains; ancestors and unrelated lineages are never touched. Nothing is deleted. The authorization binding names the lineage and every successor that moves with it. The v2 store lock is taken without waiting: a live holder fails the command with the lock-busy error and nothing moves. An exact replay of a committed abandonment converges idempotently. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
 	cwd := flags.String("cwd", ".", "repository path")
 	lineage := flags.String("lineage", "", "compact store lineage to abandon")
 	expected := flags.String("expected-revision", "", "exact current authority revision")

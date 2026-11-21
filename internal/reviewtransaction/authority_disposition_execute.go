@@ -576,16 +576,15 @@ func discoverAuthorityDispositionRecord(ctx context.Context, base, seed, planDig
 }
 
 // resumeAuthorityDispositionRecord completes a prepared-but-interrupted
-// disposition quarantine, reusing canonicalClassifiedRepairDirectory
-// (classified_authority_replay.go) to decide whether the residue rename
-// already ran.
+// disposition quarantine, using canonicalPreparedQuarantineDirectory to decide
+// whether the residue rename already ran.
 func resumeAuthorityDispositionRecord(ctx context.Context, record CompactReclaimRecord) (CompactReclaimRecord, error) {
 	residuePath := filepath.Join(record.QuarantinePath, "residue")
-	sourceExists, err := canonicalClassifiedRepairDirectory(record.SourcePath)
+	sourceExists, err := canonicalPreparedQuarantineDirectory(record.SourcePath)
 	if err != nil {
 		return record, err
 	}
-	residueExists, err := canonicalClassifiedRepairDirectory(residuePath)
+	residueExists, err := canonicalPreparedQuarantineDirectory(residuePath)
 	if err != nil {
 		return record, err
 	}
@@ -686,4 +685,22 @@ func cloneAuthorityDispositionRevisions(revisions map[string]string) map[string]
 		cloned[lineage] = revision
 	}
 	return cloned
+}
+
+// canonicalPreparedQuarantineDirectory reports whether path is an existing,
+// canonical (non-symlink, fully resolved) directory; a missing path is
+// (false, nil) and anything unsafe is an error.
+func canonicalPreparedQuarantineDirectory(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	canonical, canonicalErr := filepath.EvalSymlinks(path)
+	if canonicalErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || filepath.Clean(canonical) != path {
+		return false, errors.New("authority disposition execution refused unsafe source or residue directory; run `gentle-ai review inspect-authority` and escalate the report")
+	}
+	return true, nil
 }

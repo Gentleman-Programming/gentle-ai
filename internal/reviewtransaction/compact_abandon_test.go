@@ -808,9 +808,9 @@ func TestAbandonAbsorbsInterruptedStartWithoutReviewState(t *testing.T) {
 	}
 }
 
-// TestAbandonQuarantinesLegacyV1CollisionAlongsideV2: a lineage id present in
-// both stores has both entries quarantined, v2 reported as the primary.
-func TestAbandonQuarantinesLegacyV1CollisionAlongsideV2(t *testing.T) {
+// TestAbandonLeavesLegacyV1TwinUntouched: a lineage id that also exists in a
+// v1 store abandons only its v2 entry; v1 is not part of the authority.
+func TestAbandonLeavesLegacyV1TwinUntouched(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\ncollision change\n")
 	_, store := pristineReviewingFixture(t, repo, "abandon-collision")
@@ -829,18 +829,17 @@ func TestAbandonQuarantinesLegacyV1CollisionAlongsideV2(t *testing.T) {
 		LineageID: "abandon-collision", Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 	})
 	if err != nil {
-		t.Fatalf("abandon v1/v2 collision: %v", err)
+		t.Fatalf("abandon with a v1 twin: %v", err)
 	}
-	if committed.SourcePath != store.Dir || len(committed.Cascaded) != 1 || committed.Cascaded[0].SourcePath != v1Dir ||
-		committed.Cascaded[0].Status != CompactReclaimCommitted {
-		t.Fatalf("collision records = %#v", committed)
+	if committed.SourcePath != store.Dir || len(committed.Cascaded) != 0 {
+		t.Fatalf("v1 twin was treated as authority: %#v", committed)
 	}
-	moved, err := os.ReadFile(filepath.Join(committed.Cascaded[0].QuarantinePath, "residue", "HEAD"))
-	if err != nil || string(moved) != "legacy\n" {
-		t.Fatalf("v1 residue = %q, %v", moved, err)
+	kept, err := os.ReadFile(filepath.Join(v1Dir, "HEAD"))
+	if err != nil || string(kept) != "legacy\n" {
+		t.Fatalf("v1 twin changed: %q, %v", kept, err)
 	}
-	if _, statErr := os.Stat(v1Dir); !os.IsNotExist(statErr) || !abandonEntryAbsent(t, repo, "abandon-collision") {
-		t.Fatal("collision entries still present")
+	if !abandonEntryAbsent(t, repo, "abandon-collision") {
+		t.Fatal("v2 entry still present")
 	}
 }
 

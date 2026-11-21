@@ -784,46 +784,13 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.NextAction = "review.status"
 		return failure
 	}
-	var repairProgress *reviewtransaction.ClassifiedAuthorityRepairProgressError
-	if errors.As(runErr, &repairProgress) {
-		progress := repairProgress.Progress
-		failure.LineageID = progress.LineageID
-		failure.RequestDigest = progress.RequestDigest
-		failure.ProgressIdentity = progress.RecordIdentity
-		failure.AuthorityApplicability = "not_evaluated"
-		failure.RetrySafe = false
-		failure.RequiredInputs = []string{"lineage_id"}
-		if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
-			failure.Code = "operation_timeout"
-			failure.Message = "The negotiated review repair timed out after durable native repair progress."
-		} else {
-			failure.Code = "repair_progress_pending"
-			failure.Message = "The negotiated review repair stopped after durable native repair progress."
-		}
-		if progress.Status == reviewtransaction.CompactReclaimCommitted {
-			failure.Phase = "native_committed"
-			failure.MutationOutcome = ReviewMutationCommitted
-		} else {
-			failure.Phase = "native_running"
-			failure.MutationOutcome = ReviewMutationUnknown
-		}
-		if repairProgress.ExactReplaySafe {
-			failure.RetrySafe = true
-			failure.Replayability = reviewtransaction.ReplayabilityExactReplaySafe
-			failure.NextAction = "review.repair"
-		} else {
-			failure.Replayability = reviewtransaction.ReplayabilityStatusRequired
-			failure.NextAction = "review.status"
-		}
-		return failure
-	}
 	// Transient advisory contention, proven non-mutating by where it is
 	// produced rather than by how it reads (1861). ErrStoreLockContended is
 	// only ever returned by the non-blocking acquisition syscall refusing an
 	// already-held lock, so the guarded body never ran and this operation
 	// wrote nothing under it. Every branch above already claimed any failure
 	// that followed a committed native transition -- reviewFacadeOperationProgressError
-	// and ClassifiedAuthorityRepairProgressError wrap those -- so a contention
+	// wraps those -- so a contention
 	// error that reaches here has no durable native transition behind it.
 	//
 	// This is deliberately narrow. `operation_outcome_unknown` exists for
