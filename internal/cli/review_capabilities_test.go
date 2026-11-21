@@ -137,6 +137,66 @@ func TestReviewCapabilitiesV26AdvertisementIsCurrent(t *testing.T) {
 	validateReviewCapabilitiesSchema(t, "capabilities-v2.6.schema.json", ReviewIntegrationCapabilitiesSchemaIDV26, output.Bytes())
 }
 
+// Legacy v1 is unsupported: capabilities v2.6 no longer announces it -- no
+// legacy_v1_target_scoped_read_only mandatory feature, modes is only
+// compact-v2, and there is no legacy_window. Negotiated v1 output belongs to a
+// frozen published contract and is unchanged.
+func TestReviewCapabilitiesV26DoesNotAnnounceLegacyV1(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunReview([]string{"capabilities", "--contract", ReviewIntegrationContractV2}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(output.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	compatibility, _ := raw["compatibility"].(map[string]any)
+	if _, present := compatibility["legacy_window"]; present {
+		t.Fatalf("v2.6 still announces legacy_window: %#v", compatibility)
+	}
+	if !reflect.DeepEqual(compatibility["modes"], []any{"compact-v2"}) {
+		t.Fatalf("v2.6 modes = %#v, want [compact-v2]", compatibility["modes"])
+	}
+	var got ReviewCapabilitiesResult
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, feature := range append(append([]ReviewCapabilityFeature{}, got.Features.Mandatory...), got.Features.Optional...) {
+		if feature.Name == "legacy_v1_target_scoped_read_only" {
+			t.Fatalf("v2.6 still announces %s", feature.Name)
+		}
+	}
+	if len(got.Features.Mandatory) != 6 {
+		t.Fatalf("v2.6 mandatory features = %#v", got.Features.Mandatory)
+	}
+	if strings.Contains(output.String(), "legacy-v1") || strings.Contains(output.String(), "legacy_v1") {
+		t.Fatalf("v2.6 output mentions legacy v1:\n%s", output.String())
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	schema := validateReviewCapabilitiesSchema(t, "capabilities-v2.6.schema.json", ReviewIntegrationCapabilitiesSchemaIDV26, output.Bytes())
+	// The published v2.6 schema, corrected in place, no longer admits the
+	// legacy announcement either.
+	compatibility["legacy_window"] = map[string]any{"mode": "legacy-v1", "state": "active", "read_only": true, "deprecation_started": true, "removal": "not-scheduled", "minimum_compatibility_releases": 1}
+	if err := schema.Validate(raw); err == nil {
+		t.Fatal("capabilities v2.6 schema accepted a legacy_window")
+	}
+	delete(compatibility, "legacy_window")
+	compatibility["modes"] = []any{"compact-v2", "legacy-v1"}
+	if err := schema.Validate(raw); err == nil {
+		t.Fatal("capabilities v2.6 schema accepted the legacy-v1 mode")
+	}
+
+	var v1 bytes.Buffer
+	if err := RunReview([]string{"capabilities", "--contract", ReviewIntegrationContractV1}, &v1); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(v1.String(), `"legacy-v1"`) || !strings.Contains(v1.String(), "legacy_window") {
+		t.Fatalf("frozen v1.5 capabilities changed:\n%s", v1.String())
+	}
+}
+
 func TestReviewCapabilitiesV22ArtifactRemainsReadable(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.2.fixture.json"))
 	if err != nil {
@@ -660,7 +720,7 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 	if !reflect.DeepEqual(result.Features.Mandatory, wantMandatory) || !reflect.DeepEqual(result.Features.Optional, wantOptional) {
 		t.Fatalf("feature requirements = %#v", result.Features)
 	}
-	if result.Compatibility.LegacyWindow.State != "active" || !result.Compatibility.LegacyWindow.ReadOnly || !result.Compatibility.LegacyWindow.DeprecationStarted || result.Compatibility.LegacyWindow.Removal != "not-scheduled" || result.Compatibility.LegacyWindow.MinimumCompatibilityReleases != 1 {
+	if result.Compatibility.LegacyWindow == nil || result.Compatibility.LegacyWindow.State != "active" || !result.Compatibility.LegacyWindow.ReadOnly || !result.Compatibility.LegacyWindow.DeprecationStarted || result.Compatibility.LegacyWindow.Removal != "not-scheduled" || result.Compatibility.LegacyWindow.MinimumCompatibilityReleases != 1 {
 		t.Fatalf("legacy compatibility window = %#v", result.Compatibility.LegacyWindow)
 	}
 	result.Features.Optional = result.Features.Optional[3:4]
