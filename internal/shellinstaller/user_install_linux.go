@@ -306,6 +306,9 @@ func userServiceWithPlan(ctx context.Context, self string, args []string, stdin 
 		}
 	}()
 	env = append(env, "GENTLE_SHELL_UNIT="+unit, "GENTLE_SHELL_UNIT_RECEIPT="+filepath.Join(receiptDir, "kernel.json"))
+	// Gentle Shell Desktop reads a per-session feed; gentle-pi only writes it when the
+	// program identity says it is running as gentle-shell (the JS launcher sets this).
+	env = append(env, "PI_PROGRAM_STATUS_APP=gentle-shell")
 	env = append(env, userProgressEnvironment(ctx)...)
 	// The unit sees only this list: forward the registry, reconfigure and
 	// Main fallback intents explicitly or the worker silently loses them.
