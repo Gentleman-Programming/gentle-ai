@@ -327,7 +327,7 @@ func TestUserLaunchCommandAddsOnlyTheEngramDecision(t *testing.T) {
 	for _, mode := range []string{"separate", "shared", "agent"} {
 		t.Run(mode, func(t *testing.T) {
 			manifest := userManifest{Mode: mode, Prefix: filepath.Join(root, "prefix"), Agent: filepath.Join(root, "agent")}
-			baseline := append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0")
+			baseline := append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0", "PI_PROGRAM_STATUS_APP=gentle-shell")
 			// A Separate launch without a decision fails closed: the declared
 			// companion would otherwise run an unverified PATH engram.
 			want := baseline
