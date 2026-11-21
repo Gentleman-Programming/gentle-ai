@@ -335,8 +335,6 @@ jobs:
             'TestConcurrentStoreLockRecoverersCannotBothWin',
             'TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline',
             'TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance',
-            'TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays',
-            'TestRepairClassifiedAuthorityResumesEachDurablePhase',
             'TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts',
             'TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef',
             'TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection',
