@@ -22,9 +22,12 @@ func HermesConfigDir(homeDir string) string {
 //
 // Environment overrides apply only when homeDir is the real user home, so a
 // caller supplying an isolated home keeps every Hermes path inside it.
-// %LOCALAPPDATA% is honored only when it lies inside homeDir (its default
-// location), so redirecting HOME/USERPROFILE, as tests and sandboxes do, never
-// leaks writes into the ambient profile.
+// %LOCALAPPDATA% is honored when it lies inside homeDir (its default location)
+// or when homeDir is the operating-system profile reported by the process
+// token, which covers folder redirection. A faked HOME/USERPROFILE, as tests
+// and sandboxes use, matches neither, so it never leaks writes into the
+// ambient profile. Tradeoff: a sandbox that keeps the real profile as its home
+// also keeps the real %LOCALAPPDATA%; it must set HERMES_HOME to isolate.
 func HermesConfigDirFor(homeDir, goos string) string {
 	realHome := isRealUserHome(homeDir)
 
@@ -39,7 +42,7 @@ func HermesConfigDirFor(homeDir, goos string) string {
 
 	if goos == "windows" {
 		localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
-		if realHome && filepath.IsAbs(localAppData) && isWithin(homeDir, localAppData) {
+		if realHome && filepath.IsAbs(localAppData) && (isWithin(homeDir, localAppData) || isOSProfile(homeDir)) {
 			return filepath.Join(localAppData, "hermes")
 		}
 		return filepath.Join(homeDir, "AppData", "Local", "hermes")
@@ -57,4 +60,14 @@ func isRealUserHome(homeDir string) bool {
 func isWithin(root, path string) bool {
 	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+// osProfileDirFn is the operating-system profile lookup, replaceable in tests.
+var osProfileDirFn = osProfileDir
+
+// isOSProfile reports whether homeDir is the profile folder the operating
+// system reports for the current user. Lookup failures count as no match.
+func isOSProfile(homeDir string) bool {
+	profile, err := osProfileDirFn()
+	return err == nil && profile != "" && strings.EqualFold(filepath.Clean(profile), filepath.Clean(homeDir))
 }

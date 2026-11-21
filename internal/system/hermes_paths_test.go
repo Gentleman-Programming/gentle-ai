@@ -105,3 +105,44 @@ func TestHermesConfigDirIgnoresLocalAppDataOutsideHome(t *testing.T) {
 		t.Fatalf("HermesConfigDirFor() = %q, want %q", got, want)
 	}
 }
+
+// TestHermesConfigDirRedirectedLocalAppData checks that %LOCALAPPDATA% outside
+// the home is honored only when the home is the operating-system profile,
+// which covers folder redirection without trusting a faked HOME/USERPROFILE.
+func TestHermesConfigDirRedirectedLocalAppData(t *testing.T) {
+	tests := []struct {
+		name      string
+		isProfile bool
+		want      func(home, localAppData string) string
+	}{
+		{
+			name:      "real profile with redirected LOCALAPPDATA",
+			isProfile: true,
+			want:      func(_, lad string) string { return filepath.Join(lad, "hermes") },
+		},
+		{
+			name: "faked home with ambient LOCALAPPDATA",
+			want: func(home, _ string) string { return filepath.Join(home, "AppData", "Local", "hermes") },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv("HERMES_HOME", "")
+			localAppData := filepath.Join(t.TempDir(), "redirected-localappdata")
+			t.Setenv("LOCALAPPDATA", localAppData)
+			profile := filepath.Join(t.TempDir(), "other-profile")
+			if tt.isProfile {
+				profile = home
+			}
+			system.SetOSProfileDirForTest(t, func() (string, error) { return profile, nil })
+
+			got := system.HermesConfigDirFor(home, "windows")
+			if want := tt.want(home, localAppData); got != want {
+				t.Fatalf("HermesConfigDirFor() = %q, want %q", got, want)
+			}
+		})
+	}
+}
