@@ -17,7 +17,7 @@ import (
 // stale relative to the live worktree. It is the reviewing sibling of
 // pristineInvalidatedCLIFixture: the exact shape issue #2528 reports locked in,
 // a review that was started, never captured a lens result, and went stale.
-func pristineReviewingCLIFixture(t *testing.T, repo string) (revision, snapshotIdentity string) {
+func pristineReviewingCLIFixture(t *testing.T, repo string) {
 	t.Helper()
 	stale := filepath.Join(repo, "stale.go")
 	if err := os.WriteFile(stale, []byte("package stale\n"), 0o644); err != nil {
@@ -30,42 +30,19 @@ func pristineReviewingCLIFixture(t *testing.T, repo string) (revision, snapshotI
 	}
 	started := atomicStartV2(t, repo, "abandon-stale-reviewing")
 	store := atomicCompactStartStore(t, repo, started.LineageID)
-	record, err := store.Load()
-	if err != nil {
+	if _, err := store.Load(); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(stale); err != nil {
 		t.Fatal(err)
 	}
-	return record.Revision, record.State.InitialSnapshot.Identity
 }
 
-func abandonBindingFromInventory(t *testing.T, repo, lineage, revision, snapshotIdentity, actor, reason string) string {
-	t.Helper()
-	report, err := reviewtransaction.InventoryAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range report.Entries {
-		if entry.LineageID == lineage && entry.DiscardedWork != nil {
-			return reviewtransaction.RenderCompactAbandonAuthorization(lineage, revision, snapshotIdentity, actor, reason, *entry.DiscardedWork)
-		}
-	}
-	t.Fatalf("review status publishes no abandoned-work summary for %q", lineage)
-	return ""
-}
-
-func staleReviewingAbandonBinding(t *testing.T, repo, revision, snapshotIdentity string) string {
-	return abandonBindingFromInventory(t, repo, "abandon-stale-reviewing", revision, snapshotIdentity,
-		"maintainer@example.com", reviewtransaction.CompactAbandonReasonOperatorDisposition)
-}
-
-func staleReviewingAbandonArgs(repo, revision, authorization string) []string {
+func staleReviewingAbandonArgs(repo string) []string {
 	return []string{
 		"abandon", "--cwd", repo,
-		"--lineage", "abandon-stale-reviewing", "--expected-revision", revision,
+		"--lineage", "abandon-stale-reviewing",
 		"--reason", reviewtransaction.CompactAbandonReasonOperatorDisposition, "--actor", "maintainer@example.com",
-		"--maintainer-authorization", authorization,
 	}
 }
 
@@ -78,11 +55,11 @@ func staleReviewingAbandonArgs(repo, revision, authorization string) []string {
 func TestReviewAbandonSucceedsWhileKillSwitchDisabled(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
+	pristineReviewingCLIFixture(t, repo)
 	disableReviewForClone(t, repo)
 
 	var output bytes.Buffer
-	if err := RunReview(staleReviewingAbandonArgs(repo, revision, staleReviewingAbandonBinding(t, repo, revision, snapshotIdentity)), &output); err != nil {
+	if err := RunReview(staleReviewingAbandonArgs(repo), &output); err != nil {
 		t.Fatalf("review abandon while the kill switch is off: %v\n%s", err, output.String())
 	}
 	var result ReviewAbandonResult
@@ -101,14 +78,13 @@ func TestReviewAbandonSucceedsWhileKillSwitchDisabled(t *testing.T) {
 	}
 }
 
-// TestReviewAbandonWhileDisabledStillRequiresTheExactBinding pins that the
-// relaxation removes only the kill-switch gate, never the maintainer
-// authorization: a wrong binding is refused while disabled exactly as while
-// enabled, and the refused abandon mutates nothing.
-func TestReviewAbandonWhileDisabledStillRequiresTheExactBinding(t *testing.T) {
+// TestReviewAbandonWhileDisabledWithoutLineageListsThemAndMutatesNothing pins
+// the flagless form the negotiated continuation carries: it refuses with the
+// lineages and the exact command, also while disabled, and writes nothing.
+func TestReviewAbandonWhileDisabledWithoutLineageListsThemAndMutatesNothing(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
+	pristineReviewingCLIFixture(t, repo)
 	statePath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "abandon-stale-reviewing", "review-state.json")
 	payload, err := os.ReadFile(statePath)
 	if err != nil {
@@ -116,37 +92,15 @@ func TestReviewAbandonWhileDisabledStillRequiresTheExactBinding(t *testing.T) {
 	}
 	disableReviewForClone(t, repo)
 
-	wrong := staleReviewingAbandonBinding(t, repo, snapshotIdentity, revision)
-	if err := RunReview(staleReviewingAbandonArgs(repo, revision, wrong), &bytes.Buffer{}); err == nil ||
-		!strings.Contains(err.Error(), "exact maintainer authorization binding") {
-		t.Fatalf("inexact abandon binding while disabled error = %v", err)
+	err = RunReview([]string{"abandon", "--cwd", repo}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "requires --lineage") ||
+		!strings.Contains(err.Error(), "--lineage abandon-stale-reviewing") ||
+		strings.Contains(err.Error(), "maintainer-authorization") || strings.Contains(err.Error(), "expected-revision") {
+		t.Fatalf("flagless abandon while disabled error = %v", err)
 	}
 	current, err := os.ReadFile(statePath)
 	if err != nil || !bytes.Equal(current, payload) {
-		t.Fatalf("refused abandon mutated the entry: %v", err)
-	}
-}
-
-// TestReviewAbandonWhileDisabledKeepsEligibilityAndRevisionChecks proves the
-// cleanup classification does not admit arbitrary destruction: a stale revision
-// remains refused with the switch off.
-func TestReviewAbandonWhileDisabledKeepsEligibilityAndRevisionChecks(t *testing.T) {
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
-	statePath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "abandon-stale-reviewing", "review-state.json")
-	payload, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	disableReviewForClone(t, repo)
-	wrongRevision := "sha256:" + strings.Repeat("0", 64)
-	if err := RunReview(staleReviewingAbandonArgs(repo, wrongRevision, staleReviewingAbandonBinding(t, repo, revision, snapshotIdentity)), &bytes.Buffer{}); !errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
-		t.Fatalf("stale abandon revision while disabled = %v", err)
-	}
-	current, err := os.ReadFile(statePath)
-	if err != nil || !bytes.Equal(current, payload) {
-		t.Fatalf("stale revision mutated pristine authority: %v", err)
+		t.Fatalf("flagless abandon mutated the entry: %v", err)
 	}
 }
 
@@ -249,11 +203,10 @@ func TestReviewAbandonOfAPristineLineageIgnoresAnUnrelatedUnloadableLineage(t *t
 	runReviewCLIGit(t, repo, "commit", "-qm", "foreign active candidate")
 	breakForeignCompactSnapshotIdentity(t, repo, foreignStarted.LineageID)
 
-	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
-	binding := staleReviewingAbandonBinding(t, repo, revision, snapshotIdentity)
+	pristineReviewingCLIFixture(t, repo)
 
 	var output bytes.Buffer
-	if err := RunReview(staleReviewingAbandonArgs(repo, revision, binding), &output); err != nil {
+	if err := RunReview(staleReviewingAbandonArgs(repo), &output); err != nil {
 		t.Fatalf("an unrelated unloadable lineage refused the sanctioned exit of a pristine one: %v\n%s", err, output.String())
 	}
 	var result ReviewAbandonResult

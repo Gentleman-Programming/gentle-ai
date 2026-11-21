@@ -144,8 +144,8 @@ func TestStatusReportsUnbuildableCorrectionRequestTruthfully(t *testing.T) {
 	if err != nil || !eligibility.Eligible {
 		t.Fatalf("fixture release eligibility = %#v, error = %v", eligibility, err)
 	}
-	if continuation := status.NextTransition.Continuation; continuation == nil || continuation.Operation != "abandon" || !strings.Contains(continuation.Detail, "--maintainer-authorization") {
-		t.Fatalf("eligible stop must offer authorization-aware manual release, got %#v", continuation)
+	if continuation := status.NextTransition.Continuation; continuation == nil || continuation.Operation != "abandon" || !strings.Contains(continuation.Detail, "--lineage <id>") {
+		t.Fatalf("eligible stop must offer the manual release, got %#v", continuation)
 	}
 	if status.Forecast == nil || status.Forecast.Horizon != ForecastHorizonTerminal || len(status.Forecast.Steps) != 1 ||
 		status.Forecast.Steps[0].ReasonCode != "correction_request_unavailable" || status.ValidationRequest != nil {

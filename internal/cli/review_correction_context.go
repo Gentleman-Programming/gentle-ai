@@ -15,10 +15,9 @@ import (
 // nothing has to be released; at the correction stage the opposite is true.
 // Review authority exists, lens results are already admitted, so
 // compactPristineReviewing is false and `review invalidate` refuses. The one
-// exit that still accepts this state is `review abandon`
-// (compactAbandonTerminalState refuses only approved, escalated and
-// invalidated), and an operator who is handed the lens continuation here is
-// told to do the one thing that cannot work.
+// exit that still accepts this state is `review abandon` (it accepts every
+// state), and an operator who is handed the lens continuation here is told to
+// do the one thing that cannot work.
 const reviewCorrectionContextBudgetCode = "correction_context_budget_exceeded"
 
 // reviewCorrectionContextBudgetReason classifies the correction-stage refusal
@@ -126,11 +125,10 @@ func reviewProviderCaptureBudgetRefusal(err error) error {
 // reviewCorrectionContextBudgetAction renders the operator-facing exit.
 //
 // InspectCompactPristineAbandonment is read-only, takes no lock and writes
-// nothing, and it publishes Revision and SnapshotIdentity precisely so a
-// caller naming the abandonment can print those values concrete. Where it
-// says the lineage is not eligible, this says so plainly rather than printing
-// a command that would be refused: a followable refusal is the whole point,
-// and an unrunnable command is worse than an honest "ask a maintainer".
+// nothing. Where it says the lineage holds no entry, this says so plainly
+// rather than printing a command that would be refused: a followable refusal
+// is the whole point, and an unrunnable command is worse than an honest "ask
+// a maintainer".
 func reviewCorrectionContextBudgetAction(eligibility reviewtransaction.CompactAbandonEligibility, repo, lineage string) string {
 	if !eligibility.Eligible {
 		return reviewCorrectionContextBudgetPreamble +
@@ -138,10 +136,10 @@ func reviewCorrectionContextBudgetAction(eligibility reviewtransaction.CompactAb
 			reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead."
 	}
 	return reviewCorrectionContextBudgetPreamble + fmt.Sprintf(
-		" Review authority DOES exist for this work, so it has to be released rather than left in place: run `gentle-ai review abandon --cwd %q --lineage %q --expected-revision %q --reason operator_disposition --actor <you> --maintainer-authorization <binding>`"+
-			" (run `gentle-ai review abandon` with no flags to print the exact binding template and where every value is read; the frozen candidate it binds is %q)."+
+		" Review authority DOES exist for this work, so it has to be released rather than left in place: run `gentle-ai review abandon --cwd %q --lineage %q`"+
+			" (it moves this review into the audited quarantine, never deletes it; the frozen candidate it discards is %q)."+
 			" Then review this change as smaller candidates, or run `%s` %s to deliver under ordinary repository policy instead.",
-		repo, lineage, eligibility.Revision, eligibility.SnapshotIdentity,
+		repo, lineage, eligibility.SnapshotIdentity,
 		reviewModeDisableCloneCommand, reviewModeDisableCloneCaveat)
 }
 
@@ -160,12 +158,10 @@ const reviewCorrectionContextBudgetPreamble = "This candidate's correction evide
 // ledger row's "the release command the stop's `continuation` names" is the
 // only channel through which that route can reach a Pi maintainer.
 //
-// The command is the FLAGLESS abandon form, deliberately. The complete
-// abandonment needs an actor and an eight-line maintainer binding that no
-// producer may invent, and a printed command carrying placeholders for them
-// would break the rule that a named command runs exactly as printed. The
-// flagless form does run exactly as printed, and its refusal prints the
-// binding template plus where every remaining value is read.
+// The command is the FLAGLESS abandon form, deliberately: the negotiated
+// continuation schema admits only `review abandon --cwd <repo>`. Run without
+// --lineage, abandon writes nothing and answers with every lineage in the
+// store and the exact command that abandons one.
 //
 // Where eligibility says the authority cannot be released, this returns
 // nothing rather than naming a command the live operation would refuse --
@@ -180,7 +176,7 @@ func reviewCorrectionReleaseContinuation(repo, agent string, eligibility *review
 		Operation: "abandon",
 		Command:   managedAssetsContinuationExecutable() + " review abandon --cwd " + reviewTransitionShellWord(repo),
 		Agent:     strings.TrimSpace(agent),
-		Detail: "Runs the release this stop requires. Printed flagless on purpose: it refuses with the exact binding template and names where every remaining value is read (" +
-			"--lineage, --expected-revision, --actor, --reason and the eight-line --maintainer-authorization), which no producer may invent on a maintainer's behalf.",
+		Detail: "Runs the release this stop requires. Printed flagless on purpose: it writes nothing and lists the lineages in this repository's review store " +
+			"with the exact `--lineage <id>` command that abandons one.",
 	}
 }

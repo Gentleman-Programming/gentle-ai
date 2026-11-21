@@ -25,7 +25,7 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 		},
 		"abandon": func(t *testing.T, home, repo string) (bool, error) {
 			staleManagedReviewerAssets(t, home)
-			return true, RunReviewAbandon([]string{"--cwd", repo, "--lineage", "lineage", "--expected-revision", "revision", "--reason", "reason", "--actor", "actor", "--maintainer-authorization", "authorization"}, &bytes.Buffer{})
+			return true, RunReviewAbandon([]string{"--cwd", repo, "--lineage", "lineage", "--reason", "reason", "--actor", "actor"}, &bytes.Buffer{})
 		},
 		"bundle import": func(t *testing.T, home, repo string) (bool, error) {
 			staleManagedReviewerAssets(t, home)
@@ -107,7 +107,7 @@ func TestPlainReviewVerbsRenderManagedAssetsContinuation(t *testing.T) {
 			return RunReviewBundleImport([]string{"--cwd", repo, "--bundle", filepath.Join(t.TempDir(), "bundle.json")}, output)
 		},
 		"abandon": func(repo string, output *bytes.Buffer) error {
-			return RunReviewAbandon([]string{"--cwd", repo, "--lineage", "lineage", "--expected-revision", "revision", "--reason", "reason", "--actor", "actor", "--maintainer-authorization", "authorization"}, output)
+			return RunReviewAbandon([]string{"--cwd", repo, "--lineage", "lineage", "--reason", "reason", "--actor", "actor"}, output)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

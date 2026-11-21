@@ -208,12 +208,10 @@ func TestForgedRecoveryAuthorizationDeadEndHasRunnableExit(t *testing.T) {
 			t.Fatalf("successor %q is not abandonable; the named continuation does not run", successor.State.LineageID)
 		}
 		request := CompactAbandonRequest{
-			LineageID: successor.State.LineageID, ExpectedRevision: eligibility.Revision,
-			Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
+			LineageID: successor.State.LineageID,
+			Reason:    CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 		}
-		request.MaintainerAuthorization = RenderCompactAbandonAuthorization(
-			request.LineageID, eligibility.Revision, eligibility.SnapshotIdentity, request.Actor, request.Reason, eligibility.DiscardedWork)
-		record, err := AbandonPristineCompactStore(ctx, repo, request)
+		record, err := AbandonCompactStore(ctx, repo, request)
 		if err != nil {
 			t.Fatalf("abandon %q: %v", successor.State.LineageID, err)
 		}

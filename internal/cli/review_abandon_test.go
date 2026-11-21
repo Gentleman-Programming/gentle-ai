@@ -52,64 +52,85 @@ func pristineInvalidatedCLIFixture(t *testing.T, repo string) (revision, snapsho
 	return revision, state.InitialSnapshot.Identity
 }
 
-func abandonCLIArgs(repo, revision, authorization string) []string {
+func abandonCLIArgs(repo string) []string {
 	return []string{
 		"abandon", "--cwd", repo,
-		"--lineage", "abandon-accidental", "--expected-revision", revision,
+		"--lineage", "abandon-accidental",
 		"--reason", reviewtransaction.CompactAbandonReasonOperatorDisposition, "--actor", "maintainer@example.com",
-		"--maintainer-authorization", authorization,
 	}
 }
 
-func abandonCLIBinding(t *testing.T, repo, revision, snapshotIdentity string) string {
-	return abandonBindingFromInventory(t, repo, "abandon-accidental", revision, snapshotIdentity,
-		"maintainer@example.com", reviewtransaction.CompactAbandonReasonOperatorDisposition)
-}
-
-func TestReviewAbandonRefusesTerminalInvalidatedLineage(t *testing.T) {
+func TestReviewAbandonQuarantinesTerminalInvalidatedLineage(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	revision, snapshotIdentity := pristineInvalidatedCLIFixture(t, repo)
+	pristineInvalidatedCLIFixture(t, repo)
 	statePath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "abandon-accidental", "review-state.json")
 	payload, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = RunReview(abandonCLIArgs(repo, revision, abandonCLIBinding(t, repo, revision, snapshotIdentity)), &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), `holds terminal "invalidated" authority`) {
-		t.Fatalf("review abandon terminal invalidated = %v", err)
+	var output bytes.Buffer
+	if err := RunReview(abandonCLIArgs(repo), &output); err != nil {
+		t.Fatalf("review abandon terminal invalidated: %v\n%s", err, output.String())
 	}
-	current, err := os.ReadFile(statePath)
-	if err != nil || !bytes.Equal(current, payload) {
-		t.Fatalf("terminal invalidated abandon mutated authority: %v", err)
+	var result ReviewAbandonResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Record.Status != reviewtransaction.CompactReclaimCommitted || len(result.Cascaded) != 0 {
+		t.Fatalf("terminal invalidated abandonment = %#v", result)
+	}
+	moved, err := os.ReadFile(filepath.Join(result.Record.QuarantinePath, "residue", "review-state.json"))
+	if err != nil || !bytes.Equal(moved, payload) {
+		t.Fatalf("quarantined bytes differ: %v", err)
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("abandoned entry still present: %v", err)
 	}
 }
 
-func TestReviewAbandonRequiresFlagsAndExactBinding(t *testing.T) {
+// TestReviewAbandonNeedsOnlyALineageAndDefaultsTheAuditFields: no revision, no
+// authorization binding, and neither --reason nor --actor are required.
+func TestReviewAbandonNeedsOnlyALineageAndDefaultsTheAuditFields(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
+	pristineReviewingCLIFixture(t, repo)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{"abandon", "--cwd", repo, "--lineage", "abandon-stale-reviewing"}, &output); err != nil {
+		t.Fatalf("review abandon with only a lineage: %v\n%s", err, output.String())
+	}
+	var result ReviewAbandonResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Record.Reason != reviewtransaction.CompactAbandonReasonOperatorDisposition || strings.TrimSpace(result.Record.Actor) == "" ||
+		result.Record.Status != reviewtransaction.CompactReclaimCommitted {
+		t.Fatalf("defaulted audit fields = %#v", result.Record)
+	}
+	for _, retired := range []string{"--expected-revision", "--maintainer-authorization"} {
+		err := RunReview([]string{"abandon", "--cwd", repo, "--lineage", "abandon-stale-reviewing", retired, "x"}, &bytes.Buffer{})
+		if err == nil {
+			t.Fatalf("retired flag %s is still accepted", retired)
+		}
+	}
+}
+
+// TestReviewAbandonWithoutLineageNamesTheLineagesAndWritesNothing is the form
+// the negotiated STATUS continuation carries.
+func TestReviewAbandonWithoutLineageNamesTheLineagesAndWritesNothing(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	pristineReviewingCLIFixture(t, repo)
 	statePath := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "abandon-stale-reviewing", "review-state.json")
 	payload, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if err := RunReview([]string{
-		"abandon", "--cwd", repo, "--lineage", "abandon-stale-reviewing",
-	}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "requires") {
-		t.Fatalf("incomplete abandon flags error = %v", err)
-	}
-
-	wrong := staleReviewingAbandonBinding(t, repo, snapshotIdentity, revision)
-	if err := RunReview(staleReviewingAbandonArgs(repo, revision, wrong), &bytes.Buffer{}); err == nil ||
-		!strings.Contains(err.Error(), "exact maintainer authorization binding") {
-		t.Fatalf("inexact abandon binding error = %v", err)
+	err = RunReview([]string{"abandon", "--cwd", repo}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "requires --lineage") || !strings.Contains(err.Error(), "--lineage abandon-stale-reviewing") {
+		t.Fatalf("flagless abandon error = %v", err)
 	}
 	current, err := os.ReadFile(statePath)
 	if err != nil || !bytes.Equal(current, payload) {
-		t.Fatalf("refused abandon mutated the entry: %v", err)
+		t.Fatalf("flagless abandon mutated the entry: %v", err)
 	}
 }
 
@@ -118,7 +139,9 @@ func TestReviewHelpListsAbandon(t *testing.T) {
 	if err := RunReview([]string{"abandon", "--help"}, &output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "non-terminal") {
-		t.Fatalf("review abandon help does not describe non-terminal lineages: %s", output.String())
+	for _, want := range []string{"terminal", "successors", "lock-busy"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("review abandon help does not describe %q: %s", want, output.String())
+		}
 	}
 }

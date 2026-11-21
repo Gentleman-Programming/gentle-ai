@@ -149,8 +149,8 @@ func TestReviewStatusContractedLineageScopesInventoryInsteadOfLiveTarget(t *test
 func TestReviewStatusContractedAbandonedLineageMatchesUncontractedExistenceCheck(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
-	revision, snapshotIdentity := pristineReviewingCLIFixture(t, repo)
-	if err := RunReview(staleReviewingAbandonArgs(repo, revision, staleReviewingAbandonBinding(t, repo, revision, snapshotIdentity)), &bytes.Buffer{}); err != nil {
+	pristineReviewingCLIFixture(t, repo)
+	if err := RunReview(staleReviewingAbandonArgs(repo), &bytes.Buffer{}); err != nil {
 		t.Fatalf("abandon failed: %v", err)
 	}
 

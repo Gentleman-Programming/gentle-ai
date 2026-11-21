@@ -4,61 +4,66 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os/user"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 )
 
+// ReviewAbandonResult is the JSON `review abandon` prints. Record is the
+// requested lineage's own quarantine; Cascaded lists every other entry
+// quarantined with it (recovery successors, deepest first, and a same-lineage
+// legacy-v1 entry).
 type ReviewAbandonResult struct {
-	Operation string                                 `json:"operation"`
-	Record    reviewtransaction.CompactReclaimRecord `json:"record"`
+	Operation string                                   `json:"operation"`
+	Record    reviewtransaction.CompactReclaimRecord   `json:"record"`
+	Cascaded  []reviewtransaction.CompactReclaimRecord `json:"cascaded,omitempty"`
 }
 
-// reviewAbandonInputsRefusal names, for every value the gate demands, the one
-// command that publishes it and the exact field to read it from, then prints
-// the authorization template as its own final eight lines so the reader can
-// fill it in without opening the source. The lookup command is the authority
-// inventory rather than the negotiated target status on purpose: abandonment
-// is defined over persisted bytes, so it must keep working for a lineage that
-// has gone stale, and the negotiated status recomputes its snapshot identity
-// from the live worktree and drops the authority block once the target drifts,
-// so following it there would produce a token this gate rejects.
-//
-// Deliberately NOT a --prepare emitter, unlike review reopen-results. The
-// values reopen-results derives are ones the maintainer already supplied as
-// flags; its --prepare only spares them the string formatting. Abandonment
-// has no --snapshot-identity flag, so the binding is the sole carrier of the
-// claim "I read this specific lineage's frozen state". A mode that minted the
-// token from --lineage alone would let a caller abandon a lineage it never
-// looked at, which is the one thing this gate exists to prevent. Naming the
-// field to read keeps the human act; emitting the token would remove it.
-// (openspec/changes/organic-dx task 6.6 generalizes the emitter to the eight
-// gated commands lacking one; for abandon that task must first add the
-// snapshot identity as an operator-supplied input, or it weakens the gate.)
-func reviewAbandonInputsRefusal(cwd string) error {
-	return fmt.Errorf(`review abandon requires --lineage, --expected-revision, --reason, --actor, and --maintainer-authorization.
-Read every value you cannot invent from the persisted authority, in the entries[] row for the lineage you are abandoning, with:
-gentle-ai review status --cwd %s
---lineage = entries[].lineage_id
---expected-revision = entries[].revision
-snapshot_identity = entries[].snapshot_identity
-discarded_work = entries[].discarded_work; use captured_lens_results comma-joined with "," in listed order
---reason = %q or %q
-You choose --actor; the binding uses it with surrounding whitespace trimmed.
---maintainer-authorization is exactly these final eight lines, joined by LF, with no trailing newline:
-%s`, cwd, reviewtransaction.CompactAbandonReasonOperatorDisposition, reviewtransaction.CompactAbandonReasonRetiredSchema,
-		strings.NewReplacer("captured_lens_results=", "captured_lens_results=<entries[].discarded_work.captured_lens_results comma-joined with \",\" in listed order>", "findings_present=false", "findings_present=<entries[].discarded_work.findings_present>", "evidence_records_present=false", "evidence_records_present=<entries[].discarded_work.evidence_records_present>").Replace(
-			reviewtransaction.RenderCompactAbandonAuthorization("<--lineage>", "<--expected-revision>", "<entries[].snapshot_identity>", "<--actor>", "<--reason>", reviewtransaction.CompactDiscardedWorkSummary{})))
+// reviewAbandonLineageRefusal answers a flagless `review abandon`, which is the
+// one form the negotiated STATUS continuation can carry: it names every
+// lineage in the repository's authority store with its status, and the exact
+// command that abandons one. It writes nothing.
+func reviewAbandonLineageRefusal(ctx context.Context, cwd string) error {
+	message := "review abandon requires --lineage: the review lineage to declare lost and quarantine"
+	root, err := (reviewtransaction.SnapshotBuilder{Repo: cwd}).ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return fmt.Errorf("%s. Run `gentle-ai review abandon --cwd %s --lineage <lineage_id>`", message, pathquote.Quote(cwd))
+	}
+	report, err := reviewtransaction.InventoryAuthority(ctx, root)
+	if err != nil || len(report.Entries) == 0 {
+		return fmt.Errorf("%s. Run `gentle-ai review abandon --cwd %s --lineage <lineage_id>`; `gentle-ai review status --cwd %s` lists the lineages", message, pathquote.Quote(root), pathquote.Quote(root))
+	}
+	lines := make([]string, 0, len(report.Entries))
+	for _, entry := range report.Entries {
+		if entry.LineageID == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("gentle-ai review abandon --cwd %s --lineage %s", pathquote.Quote(root), entry.LineageID))
+	}
+	if len(lines) == 0 {
+		return fmt.Errorf("%s. Run `gentle-ai review abandon --cwd %s --lineage <lineage_id>`; `gentle-ai review status --cwd %s` lists the lineages", message, pathquote.Quote(root), pathquote.Quote(root))
+	}
+	return fmt.Errorf("%s. Run `gentle-ai review abandon --cwd <repo> --lineage <lineage_id>` for the one to abandon, i.e. one of:\n%s\nAbandoning a lineage also abandons its recovery successors; every entry is moved to the audited quarantine, never deleted", message, strings.Join(lines, "\n"))
+}
+
+// reviewAbandonDefaultActor names who ran the abandonment when --actor is not
+// given: the OS account, since abandonment no longer carries an authorization
+// binding naming a maintainer.
+func reviewAbandonDefaultActor() string {
+	if account, err := user.Current(); err == nil && strings.TrimSpace(account.Username) != "" {
+		return strings.TrimSpace(account.Username)
+	}
+	return "operator"
 }
 
 func RunReviewAbandon(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review abandon", stdout, "Quarantine one non-terminal compact-v2 review lineage with a persisted v2 audit record bound to its discarded-work summary. Eligibility is proven from persisted bytes and store topology, never the live worktree, so stale lineages remain abandonable. Terminal and superseded lineages are refused; an exact replay of a committed abandonment converges idempotently. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
+	flags := newReviewFlagSet("review abandon", stdout, "Declare one review lineage lost and move it to the audited quarantine. Accepts every state: terminal (approved, escalated, invalidated), unreadable or missing review-state.json, and a legacy-v1 entry. Recovery successors of the lineage are abandoned with it, deepest first, so no orphan recovery edge remains; ancestors and unrelated lineages are never touched. Nothing is deleted and no authorization binding is required. The v2 store lock is taken without waiting: a live holder fails the command with the lock-busy error and nothing moves. An exact replay of a committed abandonment converges idempotently. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
 	cwd := flags.String("cwd", ".", "repository path")
-	lineage := flags.String("lineage", "", "non-terminal compact store lineage to abandon")
-	expected := flags.String("expected-revision", "", "exact current authority revision")
-	reason := flags.String("reason", "", "abandonment reason: operator_disposition or retired_schema")
-	actor := flags.String("actor", "", "abandonment actor")
-	authorization := flags.String("maintainer-authorization", "", "exact eight-line LF-only v2 binding; run review abandon with no flags to print the template and where every value is read")
+	lineage := flags.String("lineage", "", "review lineage to abandon")
+	reason := flags.String("reason", "", "abandonment reason recorded in the audit record (default: "+reviewtransaction.CompactAbandonReasonOperatorDisposition+")")
+	actor := flags.String("actor", "", "abandonment actor recorded in the audit record (default: the OS account)")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -68,26 +73,30 @@ func RunReviewAbandon(args []string, stdout io.Writer) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review abandon argument %q", flags.Arg(0))
 	}
-	for _, required := range []string{*lineage, *expected, *reason, *actor, *authorization} {
-		if strings.TrimSpace(required) == "" {
-			return reviewAbandonInputsRefusal(*cwd)
-		}
+	if strings.TrimSpace(*lineage) == "" {
+		return reviewAbandonLineageRefusal(context.Background(), *cwd)
+	}
+	if strings.TrimSpace(*reason) == "" {
+		*reason = reviewtransaction.CompactAbandonReasonOperatorDisposition
+	}
+	if strings.TrimSpace(*actor) == "" {
+		*actor = reviewAbandonDefaultActor()
 	}
 	root, err := resolveReviewOperationRoot(context.Background(), *cwd, reviewtransaction.RDDOperationAbandon)
 	if err != nil {
 		return withPlainReviewContinuation(fmt.Errorf("resolve review repository root: %w", err))
 	}
-	record, err := reviewtransaction.AbandonPristineCompactStore(context.Background(), root, reviewtransaction.CompactAbandonRequest{
-		LineageID: *lineage, ExpectedRevision: *expected,
-		Reason: *reason, Actor: *actor, MaintainerAuthorization: *authorization,
+	result, err := reviewtransaction.AbandonCompactStore(context.Background(), root, reviewtransaction.CompactAbandonRequest{
+		LineageID: *lineage, Reason: *reason, Actor: *actor,
 	})
+	output := ReviewAbandonResult{Operation: "review/abandon", Record: result.CompactReclaimRecord, Cascaded: result.Cascaded}
 	if err != nil {
 		// A partial abandonment persisted the prepared audit record and may have
 		// moved the entry; surface the quarantine location for reconciliation.
-		if record.QuarantinePath != "" {
-			_ = encodeReviewJSON(stdout, ReviewAbandonResult{Operation: "review/abandon", Record: record})
+		if result.QuarantinePath != "" || len(result.Cascaded) != 0 {
+			_ = encodeReviewJSON(stdout, output)
 		}
 		return err
 	}
-	return encodeReviewJSON(stdout, ReviewAbandonResult{Operation: "review/abandon", Record: record})
+	return encodeReviewJSON(stdout, output)
 }
