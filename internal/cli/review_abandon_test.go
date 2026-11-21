@@ -143,3 +143,28 @@ func TestReviewHelpListsAbandon(t *testing.T) {
 		t.Fatalf("review abandon help does not describe the widened coverage and the binding: %s", output.String())
 	}
 }
+
+// A simple abandonment keeps the same record keys as before the widened
+// coverage, so older readers decode it (gentle-ai#6207).
+func TestReviewAbandonSimpleLineageRecordMatchesBaselineKeys(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	revision, snapshotIdentity := pristineInvalidatedCLIFixture(t, repo)
+	var stdout bytes.Buffer
+	if err := RunReview(abandonCLIArgs(repo, revision, abandonCLIBinding(t, repo, revision, snapshotIdentity)), &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Record struct{ Abandonment map[string]json.RawMessage }
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for key := range decoded.Record.Abandonment {
+		switch key {
+		case "schema", "lineage_id", "revision", "snapshot_identity", "discarded_work":
+		default:
+			t.Fatalf("simple-lineage abandonment record gained key %q: %s", key, stdout.String())
+		}
+	}
+}

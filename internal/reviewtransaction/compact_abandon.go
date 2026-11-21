@@ -538,7 +538,10 @@ func AbandonCompactStore(ctx context.Context, repo string, request CompactAbando
 	records := make([]CompactReclaimRecord, 0, len(plan.steps))
 	for _, step := range plan.steps {
 		proof := step.proof
-		if step.primary {
+		// Only an extended binding (cascade, v1 entry, unverifiable work) is
+		// kept: the replay rebuilds the plain eight-line binding from the proof,
+		// so a simple abandonment record stays byte-compatible with older readers.
+		if step.primary && plan.suffix != "" {
 			proof.AuthorizationBinding = binding
 		}
 		quarantined, quarantineErr := quarantineCompactStoreEntry(ctx, base, step.dir, CompactReclaimRecord{

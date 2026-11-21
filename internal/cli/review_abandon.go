@@ -66,7 +66,7 @@ func RunReviewAbandon(args []string, stdout io.Writer) error {
 	expected := flags.String("expected-revision", "", "exact current authority revision")
 	reason := flags.String("reason", "", "abandonment reason: operator_disposition or retired_schema")
 	actor := flags.String("actor", "", "abandonment actor")
-	authorization := flags.String("maintainer-authorization", "", "exact eight-line LF-only v2 binding; run review abandon with no flags to print the template and where every value is read")
+	authorization := flags.String("maintainer-authorization", "", "exact LF-only v2 binding (eight lines, plus one line per extra entry that moves); run review abandon with no flags to print the template and where every value is read")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
