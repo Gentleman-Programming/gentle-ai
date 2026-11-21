@@ -134,8 +134,12 @@ report `disabled/unmanaged` when no exact receipt applies and never fabricate ap
 Review authority accumulates without bound: every candidate leaves a lineage
 behind and nothing removes a delivered one, so a long-lived clone eventually
 holds hundreds of lineages and hundreds of megabytes of candidate checkouts.
-`review abandon` refuses terminal states and `review reclaim` refuses any entry
-holding authoritative artifacts, so until now a degraded store had no exit.
+`review abandon` accepts every state (terminal, unreadable, missing
+`review-state.json`, legacy-v1) and moves the lineage and its recovery
+successors into the audited quarantine one lineage at a time, only with the
+maintainer's `--expected-revision` and authorization binding, which names the
+lineage and every successor and legacy-v1 entry that moves with it; `review
+store-reset` is the clone-wide human tool for removing the whole store.
 
 | Command | Effect |
 |---|---|
