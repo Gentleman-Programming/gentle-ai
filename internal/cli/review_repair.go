@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
@@ -178,21 +177,8 @@ func (result ReviewRepairResult) Validate() error {
 				previous = lineages
 			}
 		}
-		if result.Assessment.Status != reviewtransaction.AuthorityRepairEligible {
-			if result.ProviderInputs != nil || len(result.RequiredInputs) != 0 {
-				return errors.New("stopped review repair preflight contains executable inputs")
-			}
-			return nil
-		}
-		candidate := result.Assessment.Candidate
-		inputs := result.ProviderInputs
-		if candidate == nil || inputs == nil ||
-			inputs.Class != result.Assessment.Class || inputs.LineageID != candidate.LineageID ||
-			inputs.ExpectedRevision != candidate.Revision || inputs.Cause != result.Assessment.Cause ||
-			inputs.Disposition != result.Assessment.Disposition || inputs.RepositoryBinding != result.Assessment.RepositoryBinding ||
-			inputs.AuthorizationSchema != reviewtransaction.AuthorityRepairAuthorizationSchema ||
-			!reflect.DeepEqual(result.RequiredInputs, []string{"actor", "reason", "maintainer_authorization"}) {
-			return errors.New("eligible review repair preflight inputs are incomplete")
+		if result.ProviderInputs != nil || len(result.RequiredInputs) != 0 {
+			return errors.New("stopped review repair preflight contains executable inputs")
 		}
 	case ReviewRepairModeExecute:
 		if result.ProviderInputs != nil || len(result.RequiredInputs) != 0 || result.DispositionProviderInputs != nil || len(result.DispositionSelectors) != 0 {
@@ -244,15 +230,9 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", ReviewIntegrationContractV1, "review integration contract")
 	preflight := flags.Bool("preflight", false, "perform deterministic read-only classification without authority mutation")
-	class := flags.String("class", "", "provider-owned classified repair class")
 	lineage := flags.String("lineage", "", "optional preflight selector or exact provider-owned lineage")
-	expectedRevision := flags.String("expected-revision", "", "exact provider-owned authority revision")
-	cause := flags.String("cause", "", "provider-owned classified repair cause")
-	disposition := flags.String("disposition", "", "provider-owned classified repair disposition")
-	repositoryBinding := flags.String("repository-binding", "", "opaque provider-owned repository binding")
 	actor := flags.String("actor", "", "maintainer actor; never emitted in public output")
 	reason := flags.String("reason", "", "maintainer reason; never emitted in public output")
-	authorization := flags.String("maintainer-authorization", "", "exact nine-line LF-only maintainer authorization; never emitted in public output")
 	planDigest := flags.String("plan-digest", "", "exact provider-owned leaf authority disposition plan digest")
 	inventoryRevision := flags.String("inventory-revision", "", "exact provider-owned authority inventory revision the plan is bound to")
 	dispositionAuthorization := flags.String("authorization", "", "exact maintainer authorization binding for an eligible leaf authority disposition plan; never emitted in public output")
@@ -316,13 +296,9 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		return &reviewRepairOperationError{message: "review repair assessment failed safely", cause: err}
 	}
 	if *preflight {
-		if repairExecutionInputPresent(*class, *expectedRevision, *cause, *disposition, *repositoryBinding, *actor, *reason, *authorization) ||
+		if repairExecutionInputPresent(*actor, *reason) ||
 			repairExecutionInputPresent(*planDigest, *inventoryRevision, *dispositionAuthorization) {
 			return reviewPreflightError(errors.New("review repair --preflight does not accept execution inputs"))
-		}
-		if *lineage != "" && assessment.Status == reviewtransaction.AuthorityRepairEligible &&
-			(assessment.Candidate == nil || assessment.Candidate.LineageID != *lineage) {
-			return reviewPreflightError(errors.New("review repair selector does not match the unique classified candidate"))
 		}
 		result := newReviewRepairPreflightResult(assessment, *contract)
 		// A read-only preview: actor/reason stay empty, so nothing maintainer-
@@ -366,9 +342,6 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		return encodeReviewJSON(stdout, result)
 	}
 	if repairExecutionInputPresent(*planDigest, *inventoryRevision, *dispositionAuthorization) {
-		if repairExecutionInputPresent(*class, *lineage, *expectedRevision, *cause, *disposition, *repositoryBinding, *authorization) {
-			return reviewPreflightError(errors.New("review repair execution accepts either classified repair inputs or leaf authority disposition inputs, not both; run `gentle-ai review repair` again with only one input set"))
-		}
 		for _, required := range []string{*planDigest, *inventoryRevision, *actor, *reason, *dispositionAuthorization} {
 			if strings.TrimSpace(required) == "" {
 				return reviewPreflightError(errors.New("review repair leaf authority disposition execution requires --plan-digest --inventory-revision --actor --reason --authorization; run `gentle-ai review repair --preflight` first to obtain --plan-digest and --inventory-revision"))
@@ -477,14 +450,5 @@ func newReviewRepairPreflightResult(assessment reviewtransaction.AuthorityRepair
 		result.Continuation = reviewRepairTruncatedContinuation
 		return result
 	}
-	if assessment.Status != reviewtransaction.AuthorityRepairEligible || assessment.Candidate == nil {
-		return result
-	}
-	result.ProviderInputs = &ReviewRepairProviderInputs{
-		Class: assessment.Class, LineageID: assessment.Candidate.LineageID, ExpectedRevision: assessment.Candidate.Revision,
-		Cause: assessment.Cause, Disposition: assessment.Disposition, RepositoryBinding: assessment.RepositoryBinding,
-		AuthorizationSchema: assessment.AuthorizationSchema,
-	}
-	result.RequiredInputs = []string{"actor", "reason", "maintainer_authorization"}
 	return result
 }

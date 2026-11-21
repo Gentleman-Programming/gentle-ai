@@ -21,7 +21,6 @@ const (
 	AuthorityRepairAssessmentSchemaID  = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/authority-repair-assessment.schema.json"
 	AuthorityRepairAuthorizationSchema = "gentle-ai.review-repair-authorization/v1"
 
-	AuthorityRepairEligible          AuthorityRepairStatus = "eligible"
 	AuthorityRepairUnsupported       AuthorityRepairStatus = "unsupported"
 	AuthorityRepairAmbiguous         AuthorityRepairStatus = "ambiguous"
 	AuthorityRepairConflicting       AuthorityRepairStatus = "conflicting"
@@ -83,18 +82,6 @@ type AuthorityRepairCounts struct {
 	EligibleCandidates  int `json:"eligible_candidates"`
 	UnsupportedLineages int `json:"unsupported_lineages"`
 	Conflicts           int `json:"conflicts"`
-}
-
-type ClassifiedAuthorityRepairRequest struct {
-	Class                   AuthorityRepairClass
-	LineageID               string
-	ExpectedRevision        string
-	Cause                   AuthorityRepairCause
-	Disposition             AuthorityRepairDisposition
-	RepositoryBinding       string
-	Actor                   string
-	Reason                  string
-	MaintainerAuthorization string
 }
 
 type authorityRepairBudget struct {
@@ -518,39 +505,6 @@ func (assessment AuthorityRepairAssessment) Validate() error {
 		return errors.New("authority repair assessment truncation fields require a truncated status")
 	}
 	return nil
-}
-
-func authorityRepairAuthorizationBinding(request ClassifiedAuthorityRepairRequest) string {
-	return AuthorityRepairAuthorizationSchema +
-		"\nrepository=" + request.RepositoryBinding +
-		"\nclass=" + string(request.Class) +
-		"\nlineage=" + request.LineageID +
-		"\nrevision=" + request.ExpectedRevision +
-		"\ncause=" + string(request.Cause) +
-		"\ndisposition=" + string(request.Disposition) +
-		"\nactor=" + request.Actor +
-		"\nreason=" + request.Reason
-}
-
-func validateClassifiedAuthorityRepairRequest(request ClassifiedAuthorityRepairRequest, assessment AuthorityRepairAssessment) error {
-	if assessment.Status != AuthorityRepairEligible || assessment.Candidate == nil {
-		return errors.New("classified authority repair is not eligible")
-	}
-	if request.Class != assessment.Class || request.LineageID != assessment.Candidate.LineageID || request.ExpectedRevision != assessment.Candidate.Revision ||
-		request.Cause != assessment.Cause || request.Disposition != assessment.Disposition || request.RepositoryBinding != assessment.RepositoryBinding {
-		return errors.New("classified authority repair inputs do not match the current assessment")
-	}
-	if strings.TrimSpace(request.Actor) != request.Actor || strings.TrimSpace(request.Reason) != request.Reason ||
-		request.Actor == "" || request.Reason == "" || len(request.Actor) > 256 || len(request.Reason) > 512 ||
-		strings.ContainsAny(request.Actor, "\r\n") || strings.ContainsAny(request.Reason, "\r\n") || strings.Contains(request.MaintainerAuthorization, "\r") ||
-		request.MaintainerAuthorization != authorityRepairAuthorizationBinding(request) {
-		return errors.New("classified authority repair authorization is not exact")
-	}
-	return nil
-}
-
-func ValidateClassifiedAuthorityRepairRequest(request ClassifiedAuthorityRepairRequest, assessment AuthorityRepairAssessment) error {
-	return validateClassifiedAuthorityRepairRequest(request, assessment)
 }
 
 // repairAuthorityDispositionAtRepo is the production seam that ties

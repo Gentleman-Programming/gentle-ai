@@ -17,11 +17,6 @@ import (
 const CompactReclaimRecordSchema = "gentle-ai.review-reclaim-record/v1"
 
 const (
-	ClassifiedAuthorityRepairAuditSchema = "gentle-ai.review-classified-authority-repair-audit/v1"
-	ClassifiedAuthorityRepairRoute       = "classified_authority_repair"
-)
-
-const (
 	CompactReclaimPrepared  = "prepared"
 	CompactReclaimCommitted = "committed"
 )
@@ -35,14 +30,6 @@ const (
 	compactReclaimPhaseRenamed   = "renamed"
 	compactReclaimPhaseCommitted = "committed"
 )
-
-type ClassifiedAuthorityRepairAudit struct {
-	Schema           string                    `json:"schema"`
-	Route            string                    `json:"route"`
-	Assessment       AuthorityRepairAssessment `json:"assessment"`
-	AssessmentDigest string                    `json:"assessment_digest"`
-	RequestDigest    string                    `json:"request_digest"`
-}
 
 // CompactReclaimRequest identifies one explicit incomplete compact-v2 store
 // entry to quarantine, together with the maintainer audit inputs.
@@ -88,18 +75,15 @@ type CompactReclaimRecord struct {
 	IncompleteAbandonment *CompactIncompleteAbandonmentProof `json:"incomplete_abandonment,omitempty"`
 	// Abandonment carries the single v2 authorization proof.
 	Abandonment *CompactAbandonmentProof `json:"abandonment,omitempty"`
-	// MalformedLegacyFreeze, LegacyAliasRepair and LegacyFixScopeQuarantine
-	// are the proofs of quarantines the retired legacy-v1 repair providers
-	// committed. Legacy v1 is unsupported, so a record carrying one is closed
+	// MalformedLegacyFreeze, LegacyAliasRepair, ClassifiedAuthorityRepair and
+	// LegacyFixScopeQuarantine are the proofs of quarantines the retired
+	// legacy-v1 and classified repair providers committed. Legacy v1 is unsupported, so a record carrying one is closed
 	// history: it stays decodable and listable, byte-preserved as opaque JSON,
 	// and nothing re-derives or interprets its proof.
-	MalformedLegacyFreeze json.RawMessage `json:"malformed_legacy_freeze,omitempty"`
-	LegacyAliasRepair     json.RawMessage `json:"legacy_alias_repair,omitempty"`
-	// ClassifiedAuthorityRepair binds a generic review.repair quarantine to the
-	// exact provider assessment and authorization-free request digest. Records
-	// created by the compatibility command intentionally omit this proof.
-	ClassifiedAuthorityRepair *ClassifiedAuthorityRepairAudit `json:"classified_authority_repair,omitempty"`
-	LegacyFixScopeQuarantine  json.RawMessage                 `json:"legacy_fix_scope_quarantine,omitempty"`
+	MalformedLegacyFreeze     json.RawMessage `json:"malformed_legacy_freeze,omitempty"`
+	LegacyAliasRepair         json.RawMessage `json:"legacy_alias_repair,omitempty"`
+	ClassifiedAuthorityRepair json.RawMessage `json:"classified_authority_repair,omitempty"`
+	LegacyFixScopeQuarantine  json.RawMessage `json:"legacy_fix_scope_quarantine,omitempty"`
 	// AuthorityDisposition binds a leaf disposition-plan quarantine
 	// (authority_disposition_execute.go) to the exact digest-bound
 	// AuthorityDispositionPlan it executed. It is set only for quarantines
