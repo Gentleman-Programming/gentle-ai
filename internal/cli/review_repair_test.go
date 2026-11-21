@@ -783,24 +783,26 @@ func TestReviewRepairResultRejectsAMisplacedContinuation(t *testing.T) {
 	}
 }
 
-// Legacy v1 alias repair is deleted: the only classified repair class is gone,
-// so execution with classified provider inputs refuses without touching the
-// store and names the disposition route that remains.
-func TestReviewRepairClassifiedExecutionIsRefusedWithoutMutation(t *testing.T) {
+// Classified repair is gone: its provider-owned flags are no longer defined,
+// so passing one is a usage error that names the flag, and the store is never
+// touched. The leaf disposition route (--preflight) is what remains.
+func TestReviewRepairRemovedClassifiedFlagsAreUsageErrors(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	legacy := addPristineLegacyAuthority(t, repo, "repair-v1-bystander")
 	before := readLegacyAuthorityTree(t, filepath.Dir(legacy.Dir))
+	for _, flag := range []string{"--class", "--cause", "--disposition", "--repository-binding", "--maintainer-authorization", "--expected-revision"} {
+		var output bytes.Buffer
+		err := RunReview([]string{"repair", "--cwd", repo, flag, "x"}, &output)
+		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+strings.TrimPrefix(flag, "--")) {
+			t.Fatalf("review repair %s error = %v, want an unknown-flag usage error", flag, err)
+		}
+	}
 	var output bytes.Buffer
-	err := RunReview([]string{
-		"repair", "--cwd", repo, "--class", "legacy_v1_historical_alias", "--lineage", "repair-v1-bystander",
-		"--expected-revision", "sha256:" + strings.Repeat("a", 64), "--cause", "unsupported_historical_v1_operation_alias",
-		"--disposition", "quarantine-approved-historical-alias", "--repository-binding", "sha256:" + strings.Repeat("b", 64),
-		"--actor", "maintainer@example.com", "--reason", "retire", "--maintainer-authorization", "unused",
-	}, &output)
-	if err == nil || !strings.Contains(err.Error(), "executes only a leaf authority disposition plan") ||
+	if err := RunReview([]string{"repair", "--cwd", repo}, &output); err == nil ||
+		!strings.Contains(err.Error(), "executes only a leaf authority disposition plan") ||
 		!strings.Contains(err.Error(), "gentle-ai review repair --preflight") {
-		t.Fatalf("classified repair execution error = %v", err)
+		t.Fatalf("bare repair execution error = %v", err)
 	}
 	if after := readLegacyAuthorityTree(t, filepath.Dir(legacy.Dir)); !reflect.DeepEqual(after, before) {
 		t.Fatal("refused repair execution modified the v1 store")
