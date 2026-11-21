@@ -134,3 +134,42 @@ func TestAbandonAndOccupancyIgnoreLegacyV1Store(t *testing.T) {
 		t.Fatalf("v1 tree changed:\nbefore=%s\nafter=%s", before, after)
 	}
 }
+
+func TestSameLineageLegacyV1EntryNeitherCollidesNorExtendsTheAbandonBinding(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	record, _ := pristineReviewingFixture(t, repo, "collide-ignored")
+	storeLegacyReviewingStatus(t, repo, record.State.LineageID, record.State.InitialSnapshot)
+	base, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1Root := filepath.Join(base, "v1")
+	before := legacyV1TreeDigest(t, v1Root)
+
+	report, err := InventoryAuthority(context.Background(), repo)
+	if err != nil || !report.Complete {
+		t.Fatalf("inventory = %#v, %v", report, err)
+	}
+	if len(report.Entries) != 1 || report.Entries[0].Version != AuthorityVersionCompact ||
+		report.Entries[0].Status != AuthorityStatusActive || len(report.Entries[0].Problems) != 0 {
+		t.Fatalf("same-lineage v1 entry leaked into inventory: %#v", report.Entries)
+	}
+	eligibility, err := InspectCompactPristineAbandonment(context.Background(), repo, record.State.LineageID)
+	if err != nil || !eligibility.Eligible || len(eligibility.Cascade) != 0 {
+		t.Fatalf("eligibility = %#v, %v", eligibility, err)
+	}
+	request := abandonFixtureRequest(record)
+	got := eligibility.Authorization(request.LineageID, request.Actor, request.Reason)
+	want := RenderCompactAbandonAuthorization(request.LineageID, eligibility.Revision, eligibility.SnapshotIdentity, request.Actor, request.Reason, eligibility.DiscardedWork)
+	if got != want || strings.Count(got, "\n") != 7 || strings.Contains(got, "legacy_v1_entry") {
+		t.Fatalf("binding is not the frozen eight lines:\n%s", got)
+	}
+	committed, err := abandonAuthorized(t, context.Background(), repo, request)
+	if err != nil || committed.Status != CompactReclaimCommitted || len(committed.Cascaded) != 0 {
+		t.Fatalf("abandon = %#v, %v", committed, err)
+	}
+	if after := legacyV1TreeDigest(t, v1Root); after != before {
+		t.Fatalf("v1 tree changed:\nbefore=%s\nafter=%s", before, after)
+	}
+}
