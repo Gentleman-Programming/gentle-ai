@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -131,7 +132,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 		}
 		result.BetaCommit = strings.ToLower(mainCommit.SHA)
 		result.BetaModulePath = module
-		return applyBetaMainHeadStatus(result, localVersion, mainCommit)
+		return applyBetaMainHeadStatus(ctx, result, localVersion, mainCommit)
 	}
 
 	result.LatestVersion = normalizeVersion(release.TagName)
@@ -188,7 +189,7 @@ func isBetaUpdateChannel() bool {
 	}
 }
 
-func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit githubCommit) UpdateResult {
+func applyBetaMainHeadStatus(ctx context.Context, result UpdateResult, localVersion string, commit githubCommit) UpdateResult {
 	remoteSHA := strings.TrimSpace(commit.SHA)
 	shortRemote := shortCommit(remoteSHA)
 	if shortRemote == "" {
@@ -212,6 +213,16 @@ func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit gi
 	}
 
 	localSHA := localBuildCommit(localVersion)
+	tag := plainReleaseTag(localVersion)
+	if tag != "" {
+		// Resolve the tag to its commit, not to an annotated tag object or a
+		// same-named branch. The validated main target remains usable as a
+		// manual fallback when we cannot establish the installed commit.
+		tagCommit, err := fetchCommit(ctx, result.Tool.Owner, result.Tool.Repo, "refs/tags/"+tag)
+		if err == nil && validBetaCommit(tagCommit.SHA) {
+			localSHA = tagCommit.SHA
+		}
+	}
 	if localSHA == "" {
 		result.Status = VersionUnknown
 		return result
@@ -222,11 +233,15 @@ func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit gi
 		return result
 	}
 
-	// Ordering guard: a prefix mismatch alone does not mean the local build is
-	// behind main. When the local pseudo-version timestamp is newer than the
-	// fetched commit's date, offering an "update" advertises a downgrade
-	// (issue #2319 offer half). Unknown dates fail open and keep the offer.
-	if localTime, ok := pseudoVersionTime(localVersion); ok {
+	if tag != "" {
+		if reason := betaReleaseBlockReason(ctx, result.Tool, strings.ToLower(localSHA), result.BetaCommit); reason != "" {
+			result.Status = VersionUnknown
+			result.UpdateHint = reason
+			return result
+		}
+	} else if localTime, ok := pseudoVersionTime(localVersion); ok {
+		// Preserve the pseudo-version ordering guard (issue #2319); unknown
+		// dates fail open here, not for resolved release tags.
 		remoteTime := commit.Commit.Committer.Date
 		if !remoteTime.IsZero() && localTime.After(remoteTime) {
 			result.Status = UpToDate
@@ -237,6 +252,25 @@ func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit gi
 	result.Status = UpdateAvailable
 	result.ReleaseURL = fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", result.Tool.Owner, result.Tool.Repo, shortCommit(localSHA), shortRemote)
 	return result
+}
+
+// betaReleaseBlockReason requires evidence of strict advancement before offering
+// a release-to-main update. An unresolved tag is handled before this comparison.
+func betaReleaseBlockReason(ctx context.Context, tool ToolInfo, localSHA, mainSHA string) string {
+	comparison, err := compareCommits(ctx, tool.Owner, tool.Repo, localSHA, mainSHA)
+	if err == nil {
+		switch comparison.Status {
+		case "ahead":
+			if comparison.AheadBy > 0 && comparison.BehindBy != nil && *comparison.BehindBy == 0 {
+				return ""
+			}
+		case "behind":
+			return "Beta main is behind the installed release; keep the installed binary."
+		case "diverged":
+			return "Beta main has diverged from the installed release; keep the installed binary."
+		}
+	}
+	return "Could not verify that beta main advances the installed release; keep the installed binary."
 }
 
 // pseudoVersionTime extracts the UTC timestamp a Go pseudo-version embeds
@@ -256,6 +290,16 @@ func pseudoVersionTime(version string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return ts.UTC(), true
+}
+
+var plainReleasePattern = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
+func plainReleaseTag(version string) string {
+	version = strings.TrimSpace(version)
+	if !plainReleasePattern.MatchString(version) {
+		return ""
+	}
+	return "v" + strings.TrimPrefix(version, "v")
 }
 
 func localBuildCommit(version string) string {
