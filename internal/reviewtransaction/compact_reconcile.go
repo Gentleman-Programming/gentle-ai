@@ -137,10 +137,14 @@ func classifyCompactRecoveryEdgeAnomalies(predecessor, successor CompactRecord) 
 }
 
 // compactAbandonCommandText renders the exact runnable abandonment invocation
-// for one lineage. Abandonment needs no authorization binding and no revision:
-// the command printed is the command that runs.
-func compactAbandonCommandText(repo, lineage string) string {
-	return fmt.Sprintf("`gentle-ai review abandon --cwd %s --lineage %q`;"+
-		" the abandonment moves the entry into the audited quarantine and rewrites nothing, so every persisted byte survives exactly as it was",
-		pathquote.Quote(repo), lineage)
+// for one lineage, with the persisted values the abandonment gate verifies and
+// the authorization template it accepts. Only a caller whose own read-only
+// prediction (InspectCompactPristineAbandonment) accepted the lineage may
+// render this, so the command printed is the command that runs.
+func compactAbandonCommandText(repo, lineage string, eligibility CompactAbandonEligibility) string {
+	return fmt.Sprintf("`gentle-ai review abandon --cwd %s --lineage %q --expected-revision %q --reason %q --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`;"+
+		" the abandonment moves the entry (and every entry listed in the binding) into the audited quarantine and rewrites nothing, so the recorded bytes survive exactly as persisted."+
+		" --maintainer-authorization is exactly these lines, joined by LF, with no trailing newline, using the same --actor:\n%s",
+		pathquote.Quote(repo), lineage, eligibility.Revision, CompactAbandonReasonOperatorDisposition,
+		eligibility.Authorization(lineage, "<actor>", CompactAbandonReasonOperatorDisposition))
 }

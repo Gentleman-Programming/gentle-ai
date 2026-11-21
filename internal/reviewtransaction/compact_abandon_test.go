@@ -115,6 +115,29 @@ func approvedCompactFixture(t *testing.T, repo, lineage string) (CompactRecord, 
 	return record, store
 }
 
+// authorizeAbandon fills the request's expected revision and maintainer
+// authorization from the read-only inspection, unless the request already
+// carries them or the lineage is not present. Tests that pin the binding's
+// exact text build it by hand instead.
+func authorizeAbandon(t *testing.T, ctx context.Context, repo string, request CompactAbandonRequest) CompactAbandonRequest {
+	t.Helper()
+	if request.MaintainerAuthorization != "" || strings.TrimSpace(request.Reason) == "" || strings.TrimSpace(request.Actor) == "" {
+		return request
+	}
+	eligibility, err := InspectCompactPristineAbandonment(ctx, repo, request.LineageID)
+	if err != nil || !eligibility.Eligible {
+		return request
+	}
+	request.ExpectedRevision = eligibility.Revision
+	request.MaintainerAuthorization = eligibility.Authorization(request.LineageID, request.Actor, request.Reason)
+	return request
+}
+
+func abandonAuthorized(t *testing.T, ctx context.Context, repo string, request CompactAbandonRequest) (CompactAbandonResult, error) {
+	t.Helper()
+	return AbandonCompactStore(ctx, repo, authorizeAbandon(t, ctx, repo, request))
+}
+
 func abandonFixtureRequest(record CompactRecord, _ ...CompactDiscardedWorkSummary) CompactAbandonRequest {
 	return CompactAbandonRequest{
 		LineageID: record.State.LineageID,
@@ -141,8 +164,8 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 		t.Fatal(err)
 	}
 
-	request := abandonFixtureRequest(record)
-	committed, err := AbandonCompactStore(context.Background(), repo, request)
+	request := authorizeAbandon(t, context.Background(), repo, abandonFixtureRequest(record))
+	committed, err := abandonAuthorized(t, context.Background(), repo, request)
 	if err != nil {
 		t.Fatalf("abandon stale pristine reviewing lineage: %v", err)
 	}
@@ -204,7 +227,7 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 	}
 
 	// Exact replay converges on the committed record without a second quarantine.
-	replayed, err := AbandonCompactStore(context.Background(), repo, request)
+	replayed, err := abandonAuthorized(t, context.Background(), repo, request)
 	if err != nil {
 		t.Fatalf("idempotent abandonment replay: %v", err)
 	}
@@ -219,7 +242,7 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 	// A differing request over the quarantined lineage is refused.
 	differing := request
 	differing.Reason = "different reason"
-	if _, err := AbandonCompactStore(context.Background(), repo, differing); err == nil ||
+	if _, err := abandonAuthorized(t, context.Background(), repo, differing); err == nil ||
 		!strings.Contains(err.Error(), "no committed abandonment record matches") {
 		t.Fatalf("differing abandonment replay = %v", err)
 	}
@@ -254,7 +277,7 @@ func TestAbandonQuarantinesTerminalInvalidatedLineage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	committed, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(record))
+	committed, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(record))
 	if err != nil {
 		t.Fatalf("terminal invalidated abandonment: %v", err)
 	}
@@ -279,7 +302,7 @@ func TestAbandonAcceptsEveryStateAndRefusesOnlyInvalidRequests(t *testing.T) {
 
 	t.Run("terminal approved lineage", func(t *testing.T) {
 		record, store := approvedCompactFixture(t, repo, "abandon-terminal-approved")
-		committed, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(record))
+		committed, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(record))
 		if err != nil || committed.Status != CompactReclaimCommitted {
 			t.Fatalf("terminal approved abandonment = %#v, %v", committed, err)
 		}
@@ -299,7 +322,7 @@ func TestAbandonAcceptsEveryStateAndRefusesOnlyInvalidRequests(t *testing.T) {
 			t.Fatal(err)
 		}
 		record := writeCompactFixtureRecord(t, store, state)
-		if committed, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err != nil || committed.Status != CompactReclaimCommitted {
+		if committed, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(record)); err != nil || committed.Status != CompactReclaimCommitted {
 			t.Fatalf("terminal escalated abandonment = %#v, %v", committed, err)
 		}
 	})
@@ -316,7 +339,7 @@ func TestAbandonAcceptsEveryStateAndRefusesOnlyInvalidRequests(t *testing.T) {
 			t.Fatal(err)
 		}
 		request := abandonFixtureRequest(record, summary)
-		if _, err := AbandonCompactStore(context.Background(), repo, request); err != nil {
+		if _, err := abandonAuthorized(t, context.Background(), repo, request); err != nil {
 			t.Fatalf("captured review data abandonment = %v", err)
 		}
 	})
@@ -327,7 +350,7 @@ func TestAbandonAcceptsEveryStateAndRefusesOnlyInvalidRequests(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(store.Dir, "finalize-attempt-journal.json"), []byte("{}\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err != nil {
+		if _, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(record)); err != nil {
 			t.Fatalf("finalize journal abandonment = %v", err)
 		}
 	})
@@ -338,7 +361,7 @@ func TestAbandonAcceptsEveryStateAndRefusesOnlyInvalidRequests(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(store.Dir, ".atomic-12345"), []byte("partial\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err != nil {
+		if _, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(record)); err != nil {
 			t.Fatalf("atomic residue abandonment = %v", err)
 		}
 	})
@@ -352,7 +375,7 @@ func TestAbandonAcceptsEveryStateAndRefusesOnlyInvalidRequests(t *testing.T) {
 		}
 		missing := abandonFixtureRequest(record)
 		missing.Reason = "  "
-		if _, err := AbandonCompactStore(context.Background(), repo, missing); err == nil ||
+		if _, err := abandonAuthorized(t, context.Background(), repo, missing); err == nil ||
 			!strings.Contains(err.Error(), "non-empty reason and actor") {
 			t.Fatalf("missing reason = %v", err)
 		}
@@ -364,9 +387,9 @@ func TestAbandonAcceptsEveryStateAndRefusesOnlyInvalidRequests(t *testing.T) {
 
 	t.Run("absent lineage without committed record", func(t *testing.T) {
 		request := CompactAbandonRequest{
-			LineageID: "abandon-never-existed", Reason: "retire ghost", Actor: "maintainer@example.com",
+			LineageID: "abandon-never-existed", ExpectedRevision: "r", Reason: "retire ghost", Actor: "maintainer@example.com",
 		}
-		if _, err := AbandonCompactStore(context.Background(), repo, request); err == nil ||
+		if _, err := abandonAuthorized(t, context.Background(), repo, request); err == nil ||
 			!strings.Contains(err.Error(), "no committed abandonment record matches") {
 			t.Fatalf("absent lineage refusal = %v", err)
 		}
@@ -386,7 +409,7 @@ func TestAbandonBindsActualAdmittedReviewerResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	committed, err := AbandonCompactStore(context.Background(), fixture.store.repo, abandonFixtureRequest(record, summary))
+	committed, err := abandonAuthorized(t, context.Background(), fixture.store.repo, abandonFixtureRequest(record, summary))
 	if err != nil {
 		t.Fatalf("abandon admitted reviewer result: %v", err)
 	}
@@ -458,7 +481,7 @@ func TestAbandonCrashBeforeRenameLeavesPreparedRecordAndRetrySucceeds(t *testing
 		return errors.New("simulated crash before residue rename")
 	}
 	t.Cleanup(func() { reclaimQuarantineResidue = original })
-	prepared, err := AbandonCompactStore(context.Background(), repo, request)
+	prepared, err := abandonAuthorized(t, context.Background(), repo, request)
 	if err == nil {
 		t.Fatal("interrupted abandonment reported success")
 	}
@@ -470,7 +493,7 @@ func TestAbandonCrashBeforeRenameLeavesPreparedRecordAndRetrySucceeds(t *testing
 	}
 
 	reclaimQuarantineResidue = original
-	committed, err := AbandonCompactStore(context.Background(), repo, request)
+	committed, err := abandonAuthorized(t, context.Background(), repo, request)
 	if err != nil {
 		t.Fatalf("retry after interrupted abandonment: %v", err)
 	}
@@ -494,7 +517,7 @@ func TestAbandonCommitRewriteFailureRefusesReplayAgainstPreparedOrphan(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := abandonFixtureRequest(record)
+	request := authorizeAbandon(t, context.Background(), repo, abandonFixtureRequest(record))
 
 	original := persistReclaimRecord
 	persistReclaimRecord = func(record CompactReclaimRecord) error {
@@ -504,7 +527,7 @@ func TestAbandonCommitRewriteFailureRefusesReplayAgainstPreparedOrphan(t *testin
 		return original(record)
 	}
 	t.Cleanup(func() { persistReclaimRecord = original })
-	prepared, err := AbandonCompactStore(context.Background(), repo, request)
+	prepared, err := abandonAuthorized(t, context.Background(), repo, request)
 	if err == nil {
 		t.Fatal("failed committed rewrite reported success")
 	}
@@ -541,7 +564,7 @@ func TestAbandonCommitRewriteFailureRefusesReplayAgainstPreparedOrphan(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, replayErr := AbandonCompactStore(context.Background(), repo, request); replayErr == nil ||
+	if _, replayErr := abandonAuthorized(t, context.Background(), repo, request); replayErr == nil ||
 		!strings.Contains(replayErr.Error(), "no committed abandonment record matches") ||
 		!strings.Contains(replayErr.Error(), filepath.Join(root, "quarantine")) {
 		t.Fatalf("replay against prepared orphan = %v", replayErr)
@@ -587,11 +610,11 @@ func TestAbandonQuarantinesCorruptedNonPristineInvalidatedRecord(t *testing.T) {
 	}
 	payload = append(corrupted, '\n')
 
-	committed, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(record))
+	committed, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(record))
 	if err != nil || committed.Status != CompactReclaimCommitted {
 		t.Fatalf("corrupted invalidated abandonment = %#v, %v", committed, err)
 	}
-	if proof := committed.Abandonment; proof == nil || !proof.DiscardedWork.Unverifiable || proof.Revision != "" || proof.SnapshotIdentity != "" {
+	if proof := committed.Abandonment; proof == nil || !proof.DiscardedWork.Unverifiable || proof.Revision != compactAbandonUnavailable || proof.SnapshotIdentity != compactAbandonUnavailable {
 		t.Fatalf("uninterpreted abandonment proof = %#v", committed.Abandonment)
 	}
 	moved, err := os.ReadFile(filepath.Join(committed.QuarantinePath, "residue", "review-state.json"))
@@ -662,7 +685,8 @@ func TestAbandonCascadesToRecoverySuccessorsWithoutOrphanEdges(t *testing.T) {
 	}
 
 	// Abandon the MIDDLE lineage: it and its successor go, the root stays.
-	committed, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(chain[1]))
+	cascadeRequest := authorizeAbandon(t, context.Background(), repo, abandonFixtureRequest(chain[1]))
+	committed, err := AbandonCompactStore(context.Background(), repo, cascadeRequest)
 	if err != nil {
 		t.Fatalf("cascade abandonment: %v", err)
 	}
@@ -693,13 +717,13 @@ func TestAbandonCascadesToRecoverySuccessorsWithoutOrphanEdges(t *testing.T) {
 	}
 
 	// Exact replay converges on the committed primary record.
-	replayed, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(chain[1]))
+	replayed, err := AbandonCompactStore(context.Background(), repo, cascadeRequest)
 	if err != nil || replayed.QuarantinePath != committed.QuarantinePath {
 		t.Fatalf("cascade replay = %#v, %v", replayed, err)
 	}
 
 	// A leaf abandons alone; abandoning the root afterwards has nothing left to cascade to.
-	alone, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(chain[0]))
+	alone, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(chain[0]))
 	if err != nil || len(alone.Cascaded) != 0 {
 		t.Fatalf("root abandonment = %#v, %v", alone, err)
 	}
@@ -718,7 +742,7 @@ func TestAbandonQuarantinesUnreadableRecordWithoutInterpretingIt(t *testing.T) {
 	_, store := pristineReviewingFixture(t, repo, "abandon-unreadable")
 	truncated := truncateCompactStateFile(t, store)
 
-	committed, err := AbandonCompactStore(context.Background(), repo, CompactAbandonRequest{
+	committed, err := abandonAuthorized(t, context.Background(), repo, CompactAbandonRequest{
 		LineageID: "abandon-unreadable", Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 	})
 	if err != nil {
@@ -726,7 +750,7 @@ func TestAbandonQuarantinesUnreadableRecordWithoutInterpretingIt(t *testing.T) {
 	}
 	proof := committed.Abandonment
 	if committed.Status != CompactReclaimCommitted || proof == nil || !proof.DiscardedWork.Unverifiable ||
-		proof.Revision != "" || proof.SnapshotIdentity != "" {
+		proof.Revision != compactAbandonUnavailable || proof.SnapshotIdentity != compactAbandonUnavailable {
 		t.Fatalf("unreadable abandonment record = %#v", committed.CompactReclaimRecord)
 	}
 	moved, err := os.ReadFile(filepath.Join(committed.QuarantinePath, "residue", compactStateFileName))
@@ -767,7 +791,7 @@ func TestAbandonAbsorbsInterruptedStartWithoutReviewState(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		committed, err := AbandonCompactStore(context.Background(), repo, CompactAbandonRequest{
+		committed, err := abandonAuthorized(t, context.Background(), repo, CompactAbandonRequest{
 			LineageID: name, Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 		})
 		if err != nil || committed.Status != CompactReclaimCommitted || len(committed.Residue) != len(files) {
@@ -801,7 +825,7 @@ func TestAbandonQuarantinesLegacyV1CollisionAlongsideV2(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(v1Dir, "HEAD"), []byte("legacy\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := AbandonCompactStore(context.Background(), repo, CompactAbandonRequest{
+	committed, err := abandonAuthorized(t, context.Background(), repo, CompactAbandonRequest{
 		LineageID: "abandon-collision", Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 	})
 	if err != nil {
@@ -839,7 +863,7 @@ func TestAbandonFailsFastWithLockBusyAndMutatesNothingWhileStoreIsHeld(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, abandonErr := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(record))
+	_, abandonErr := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(record))
 	holder.release()
 	if !errors.Is(abandonErr, ErrStoreLockContended) || !errors.Is(abandonErr, ErrConcurrentUpdate) {
 		t.Fatalf("abandon under a held lock = %v", abandonErr)
@@ -878,7 +902,7 @@ func TestAbandonResolvesSeveralLineagesStuckInReviewing(t *testing.T) {
 			}
 			before[other.State.LineageID] = payload
 		}
-		committed, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(record))
+		committed, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(record))
 		if err != nil || committed.Status != CompactReclaimCommitted || len(committed.Cascaded) != 0 {
 			t.Fatalf("abandon %s = %#v, %v", record.State.LineageID, committed, err)
 		}

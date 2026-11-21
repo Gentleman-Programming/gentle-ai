@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pathquote"
 )
 
 const CompactReclaimRecordSchema = "gentle-ai.review-reclaim-record/v1"
@@ -165,7 +167,7 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 	residue := make([]string, 0, len(items))
 	for _, item := range items {
 		if compactAuthoritativeArtifact(item.Name()) {
-			return CompactReclaimRecord{}, compactReclaimAuthorityRefusal(root, request.LineageID, item.Name())
+			return CompactReclaimRecord{}, compactReclaimAuthorityRefusal(ctx, root, request.LineageID, item.Name())
 		}
 		residue = append(residue, item.Name())
 	}
@@ -184,10 +186,15 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 // store entry holding an authoritative artifact. Reclaim only quarantines
 // entries that never held authority; every other shape is declared lost and
 // quarantined whole by `review abandon`, which accepts any state, including an
-// unreadable or missing review-state.json.
-func compactReclaimAuthorityRefusal(repo, lineageID, artifact string) error {
-	return fmt.Errorf("review reclaim refused: store entry %q holds authoritative artifact %q, and reclaim only quarantines entries that never held authority. `gentle-ai review abandon` declares it lost and quarantines it whole: %s",
-		lineageID, artifact, compactAbandonCommandText(repo, lineageID))
+// unreadable or missing review-state.json, and needs the maintainer's
+// authorization of exactly what moves.
+func compactReclaimAuthorityRefusal(ctx context.Context, repo, lineageID, artifact string) error {
+	refused := fmt.Sprintf("review reclaim refused: store entry %q holds authoritative artifact %q, and reclaim only quarantines entries that never held authority.", lineageID, artifact)
+	eligibility, err := InspectCompactPristineAbandonment(ctx, repo, lineageID)
+	if err != nil || !eligibility.Eligible {
+		return fmt.Errorf("%s Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report", refused, pathquote.Quote(repo))
+	}
+	return fmt.Errorf("%s `gentle-ai review abandon` declares it lost and quarantines it whole: %s", refused, compactAbandonCommandText(repo, lineageID, eligibility))
 }
 
 // quarantineCompactStoreEntry runs the shared two-phase audited move for one

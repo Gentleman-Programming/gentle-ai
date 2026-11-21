@@ -115,9 +115,9 @@ const (
 	RDDOperationStart RDDOperation = "start"
 	// RDDOperationMutate advances existing authority. Disabled mode rejects it.
 	RDDOperationMutate RDDOperation = "mutate"
-	// RDDOperationAbandon delegates to the abandon storage gate (store lock and
-	// audited quarantine). Disabled mode permits that cleanup; it cannot issue
-	// or advance a terminal receipt.
+	// RDDOperationAbandon delegates eligibility to the abandon storage gate,
+	// which admits only its explicitly sanctioned cleanup classes. Disabled mode
+	// permits that cleanup; it cannot issue or advance a terminal receipt.
 	RDDOperationAbandon RDDOperation = "abandon"
 	// RDDOperationRead covers status, exact replay, receipt validation, and
 	// diagnostics. Disabled mode never rejects it.

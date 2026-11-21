@@ -24,12 +24,12 @@ func TestAbandonMidCascadeCommitFailureRerunCompletes(t *testing.T) {
 		return original(record)
 	}
 	t.Cleanup(func() { persistReclaimRecord = original })
-	if _, err := AbandonCompactStore(context.Background(), repo, request); err == nil {
+	if _, err := abandonAuthorized(t, context.Background(), repo, request); err == nil {
 		t.Fatal("mid-cascade commit failure reported success")
 	}
 	persistReclaimRecord = original
 
-	result, err := AbandonCompactStore(context.Background(), repo, request)
+	result, err := abandonAuthorized(t, context.Background(), repo, request)
 	if err != nil {
 		t.Fatalf("rerun after mid-cascade failure: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestAbandonLeafLeavesAncestorsByteIdentical(t *testing.T) {
 		}
 		before = append(before, payload)
 	}
-	result, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(chain[2]))
+	result, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(chain[2]))
 	if err != nil || len(result.Cascaded) != 0 || result.LineageID != chain[2].State.LineageID {
 		t.Fatalf("leaf abandonment = %#v, %v", result, err)
 	}

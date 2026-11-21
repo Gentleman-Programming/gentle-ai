@@ -17,10 +17,10 @@ import (
 //
 // Review authority accumulates without bound under <git-common-dir>/gentle-ai:
 // every candidate leaves a lineage behind, every lineage stays after delivery,
-// and nothing removes a delivered one. `review abandon` quarantines one
-// lineage (and its recovery successors) at a time; this is the clone-wide
-// exit for a store that has degraded beyond that, and it is deliberately the
-// bluntest operation in the package: it does
+// and nothing removes a delivered one. `review abandon` refuses terminal
+// states and `review reclaim` refuses any entry holding authoritative
+// artifacts, so a store that has degraded has no exit at all. This is that
+// exit, and it is deliberately the bluntest operation in the package: it does
 // not repair, migrate, or reconcile anything. It removes the lineage state for
 // one clone so the next review starts from nothing.
 //

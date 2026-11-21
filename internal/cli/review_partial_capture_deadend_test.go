@@ -64,20 +64,28 @@ func TestPartialCaptureCollectTransitionNeverTerminates(t *testing.T) {
 	}
 }
 
-// TestAbandonQuarantinesPartialReviewAndRecordsTheDiscardedResults proves
-// issue #1958: a dead-end partial review is retired with no authorization, and
-// the audit proof still names the exact admitted results it discards.
-func TestAbandonQuarantinesPartialReviewAndRecordsTheDiscardedResults(t *testing.T) {
+// TestAbandonQuarantinesPartialReviewWithV2Binding proves the V2 contract for
+// issue #1958: an authorized disposition may retire the dead-end, but its
+// binding and audit proof must name the exact admitted results it discards.
+func TestAbandonQuarantinesPartialReviewWithV2Binding(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, lineage, _, _, _ := partiallyCapturedReview(t)
+	repo, lineage, snapshotIdentity, _, _ := partiallyCapturedReview(t)
 	eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(context.Background(), repo, lineage)
-	if err != nil || !eligibility.Eligible || len(eligibility.DiscardedWork.CapturedLensResults) == 0 {
+	if err != nil || !eligibility.Eligible {
 		t.Fatalf("partial review abandonment eligibility = %#v, %v", eligibility, err)
 	}
+	const actor = "maintainer@example.com"
+	const reason = reviewtransaction.CompactAbandonReasonOperatorDisposition
+	authorization := reviewtransaction.RenderCompactAbandonAuthorization(
+		lineage, eligibility.Revision, snapshotIdentity, actor, reason, eligibility.DiscardedWork)
 
 	var out bytes.Buffer
-	if err := RunReview([]string{"abandon", "--cwd", repo, "--lineage", lineage}, &out); err != nil {
-		t.Fatalf("review abandon of a partial review: %v\n%s", err, out.String())
+	if err := RunReview([]string{
+		"abandon", "--cwd", repo, "--lineage", lineage,
+		"--expected-revision", eligibility.Revision, "--reason", reason, "--actor", actor,
+		"--maintainer-authorization", authorization,
+	}, &out); err != nil {
+		t.Fatalf("review abandon with v2 binding: %v\n%s", err, out.String())
 	}
 
 	var result ReviewAbandonResult
@@ -85,11 +93,35 @@ func TestAbandonQuarantinesPartialReviewAndRecordsTheDiscardedResults(t *testing
 	proof := result.Record.Abandonment
 	if proof == nil || proof.Schema != reviewtransaction.CompactAbandonAuthorizationSchema ||
 		strings.Join(proof.DiscardedWork.CapturedLensResults, ",") != strings.Join(eligibility.DiscardedWork.CapturedLensResults, ",") ||
-		proof.DiscardedWork.FindingsPresent != eligibility.DiscardedWork.FindingsPresent || proof.DiscardedWork.Unverifiable {
-		t.Fatalf("abandonment proof = %#v, want discarded work %#v", proof, eligibility.DiscardedWork)
+		proof.DiscardedWork.FindingsPresent != eligibility.DiscardedWork.FindingsPresent {
+		t.Fatalf("v2 abandonment proof = %#v, want discarded work %#v", proof, eligibility.DiscardedWork)
 	}
 	if _, err := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", lineage)); !os.IsNotExist(err) {
 		t.Fatalf("abandoned entry still present: %v", err)
+	}
+}
+
+func TestAbandonRefusesBindingWithChangedDiscardedWork(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, lineage, snapshotIdentity, _, _ := partiallyCapturedReview(t)
+	eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(context.Background(), repo, lineage)
+	if err != nil || !eligibility.Eligible || len(eligibility.DiscardedWork.CapturedLensResults) == 0 {
+		t.Fatalf("partial review abandonment eligibility = %#v, %v", eligibility, err)
+	}
+	understated := eligibility.DiscardedWork
+	understated.CapturedLensResults = nil
+	err = RunReview([]string{
+		"abandon", "--cwd", repo, "--lineage", lineage,
+		"--expected-revision", eligibility.Revision,
+		"--reason", reviewtransaction.CompactAbandonReasonOperatorDisposition, "--actor", "maintainer@example.com",
+		"--maintainer-authorization", reviewtransaction.RenderCompactAbandonAuthorization(
+			lineage, eligibility.Revision, snapshotIdentity, "maintainer@example.com", reviewtransaction.CompactAbandonReasonOperatorDisposition, understated),
+	}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "exact maintainer authorization binding") {
+		t.Fatalf("understated discarded work binding = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", lineage)); statErr != nil {
+		t.Fatalf("refused abandonment still moved the entry: %v", statErr)
 	}
 }
 

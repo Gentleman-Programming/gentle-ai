@@ -211,7 +211,7 @@ func TestForgedRecoveryAuthorizationDeadEndHasRunnableExit(t *testing.T) {
 			LineageID: successor.State.LineageID,
 			Reason:    CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 		}
-		record, err := AbandonCompactStore(ctx, repo, request)
+		record, err := abandonAuthorized(t, ctx, repo, request)
 		if err != nil {
 			t.Fatalf("abandon %q: %v", successor.State.LineageID, err)
 		}

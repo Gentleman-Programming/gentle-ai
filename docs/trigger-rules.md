@@ -136,7 +136,9 @@ behind and nothing removes a delivered one, so a long-lived clone eventually
 holds hundreds of lineages and hundreds of megabytes of candidate checkouts.
 `review abandon` accepts every state (terminal, unreadable, missing
 `review-state.json`, legacy-v1) and moves the lineage and its recovery
-successors into the audited quarantine one lineage at a time; `review
+successors into the audited quarantine one lineage at a time, only with the
+maintainer's `--expected-revision` and authorization binding, which names the
+lineage and every successor and legacy-v1 entry that moves with it; `review
 store-reset` is the clone-wide human tool for removing the whole store.
 
 | Command | Effect |

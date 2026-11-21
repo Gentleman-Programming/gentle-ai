@@ -405,7 +405,7 @@ func TestAbandonSucceedsAcrossAnUnachievableDeclarationAndQuarantinedRecordValid
 		t.Fatalf("unachievable attempt count = %d, want 1", len(record.State.UnachievableLensAttempts))
 	}
 
-	committed, err := AbandonCompactStore(context.Background(), repo, abandonFixtureRequest(record))
+	committed, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(record))
 	if err != nil {
 		t.Fatalf("abandon a reviewing lineage with a standing unachievable declaration: %v", err)
 	}

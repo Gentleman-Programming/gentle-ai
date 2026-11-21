@@ -100,8 +100,8 @@ func TestMalformedLegacyFreezeEventStaysConfinedToItsOwnEntry(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "inspect reclaim target") {
 		t.Fatalf("reclaim refusal = %v", err)
 	}
-	committed, err := AbandonCompactStore(context.Background(), repo, CompactAbandonRequest{
-		LineageID: "legacy-freeze-broken", Reason: "retire malformed legacy history", Actor: "maintainer@example.com",
+	committed, err := abandonAuthorized(t, context.Background(), repo, CompactAbandonRequest{
+		LineageID: "legacy-freeze-broken", Reason: CompactAbandonReasonRetiredSchema, Actor: "maintainer@example.com",
 	})
 	if err != nil || committed.Status != CompactReclaimCommitted || len(committed.Cascaded) != 0 {
 		t.Fatalf("abandon of the legacy-v1-only entry = %#v, %v", committed, err)

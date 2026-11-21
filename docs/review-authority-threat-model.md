@@ -77,7 +77,7 @@ On success it moves the complete immutable lineage into `review-transactions/qua
 
 ## Rejected Validator Terminal Disposition
 
-A canonical rejected targeted-validator verdict is valid authority, not corruption. An unchanged candidate still stops, and recovery restrictions remain in force; `gentle-ai review abandon --cwd <repo> --lineage <id>` still quarantines any lineage without an authorization binding. For an isolated terminal with a consumed correction and no recovery dependencies, `gentle-ai review repair --preflight` offers an exact successor-only selector, not permission to mutate.
+A canonical rejected targeted-validator verdict is valid authority, not corruption. An unchanged candidate still stops, and ordinary abandonment and recovery restrictions remain in force. For an isolated terminal with a consumed correction and no recovery dependencies, `gentle-ai review repair --preflight` offers an exact successor-only selector, not permission to mutate.
 
 1. Select the exact entry by repeating preflight with its returned `--successor-lineage` and `--successor-revision`.
 2. Review the disposition plan and supply actor, reason, and its exact digest/inventory-bound `gentle-ai.review-disposition-authorization/v1` binding through the existing repair execution inputs.

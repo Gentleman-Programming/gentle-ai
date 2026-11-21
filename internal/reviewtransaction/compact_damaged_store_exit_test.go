@@ -50,7 +50,7 @@ func abandonPerEligibility(t *testing.T, repo, lineage, _ string) CompactReclaim
 	if !eligibility.Eligible {
 		t.Fatalf("successor %q is not abandonable; the named continuation does not run", lineage)
 	}
-	record, err := AbandonCompactStore(ctx, repo, CompactAbandonRequest{
+	record, err := abandonAuthorized(t, ctx, repo, CompactAbandonRequest{
 		LineageID: lineage, Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 	})
 	if err != nil {

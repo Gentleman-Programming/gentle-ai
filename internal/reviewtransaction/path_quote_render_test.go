@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -14,7 +15,11 @@ import (
 
 func TestCompactAbandonCommandTextRendersWindowsPathVerbatim(t *testing.T) {
 	repo := `C:\Users\dev\repo`
-	text := compactAbandonCommandText(repo, "lineage-1")
+	text := compactAbandonCommandText(repo, "lineage-1", CompactAbandonEligibility{
+		Eligible:         true,
+		Revision:         "rev-1",
+		SnapshotIdentity: "snap-1",
+	})
 	want := `--cwd "C:\Users\dev\repo"`
 	if !strings.Contains(text, want) {
 		t.Fatalf("abandon invocation does not contain the path as the filesystem knows it:\nwant substring: %s\ngot: %s", want, text)
@@ -24,7 +29,7 @@ func TestCompactAbandonCommandTextRendersWindowsPathVerbatim(t *testing.T) {
 func TestCompactReclaimAuthorityRefusalRendersWindowsPathVerbatim(t *testing.T) {
 	repo := `C:\Users\dev\repo`
 	want := `--cwd "C:\Users\dev\repo"`
-	err := compactReclaimAuthorityRefusal(repo, "reclaim-audit", "review-receipt.json")
+	err := compactReclaimAuthorityRefusal(context.Background(), repo, "reclaim-audit", "review-receipt.json")
 	if err == nil {
 		t.Fatal("reclaim accepted a store entry holding an authoritative artifact")
 	}

@@ -108,7 +108,7 @@ func TestSanctionedRecoveryExitNamesMaintainerPathForInteriorReconciliationAnoma
 
 	// Driving the named exit abandons l2 AND its successor l3, and leaves the
 	// escalated predecessor l1 alone.
-	committed, err := AbandonCompactStore(ctx, repo, CompactAbandonRequest{
+	committed, err := abandonAuthorized(t, ctx, repo, CompactAbandonRequest{
 		LineageID: l2State.LineageID, Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 	})
 	if err != nil || len(committed.Cascaded) != 1 || committed.Cascaded[0].LineageID != l3State.LineageID {

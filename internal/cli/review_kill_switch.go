@@ -36,7 +36,8 @@ import (
 // commit, push, and PR delivery proceed unmanaged.
 //
 // `review abandon` passes RDDOperationAbandon through the same mode
-// resolver. Its store lock and quarantine audit record remain its own gates. Other
+// resolver. Its expected revision, authorization binding, persisted
+// pristineness proof, and quarantine audit record remain its own gates. Other
 // cleanup-shaped verbs remain RDDOperationMutate until separately sanctioned.
 
 // resolveReviewMutationRoot resolves the repository a mutating review verb is

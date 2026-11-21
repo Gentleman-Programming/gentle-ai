@@ -624,7 +624,7 @@ func TestOverBudgetCorrectionStopsTypedInsteadOfReofferingTargetedValidation(t *
 // TestOverBudgetCorrectionNamesAbandonAndTheLineageIsActuallyAbandonable
 // proves the continuation this stop names is the one that works. The
 // narration is checked against the real eligibility probe, and then the real
-// `review abandon` is executed exactly as the stop prints it: a
+// `review abandon` is executed with its real maintainer authorization: a
 // named exit that a live authority refuses is the same dead end with better
 // prose.
 func TestOverBudgetCorrectionNamesAbandonAndTheLineageIsActuallyAbandonable(t *testing.T) {
@@ -645,12 +645,19 @@ func TestOverBudgetCorrectionNamesAbandonAndTheLineageIsActuallyAbandonable(t *t
 		t.Fatalf("over-budget correction abandonment eligibility = %#v, %v; the stop names an exit the authority refuses", eligibility, err)
 	}
 	rendered := reviewCorrectionContextBudgetAction(eligibility, repo, lineage)
-	if !strings.Contains(rendered, "--lineage \""+lineage+"\"") || strings.Contains(rendered, "--maintainer-authorization") || strings.Contains(rendered, "--expected-revision") {
-		t.Fatalf("rendered correction budget exit is not the runnable authorization-free command: %q", rendered)
+	if !strings.Contains(rendered, eligibility.Revision) || !strings.Contains(rendered, lineage) {
+		t.Fatalf("rendered correction budget exit does not carry the concrete values the operator would otherwise look up: %q", rendered)
 	}
 
 	var abandoned bytes.Buffer
-	if err := RunReview([]string{"abandon", "--cwd", repo, "--lineage", lineage}, &abandoned); err != nil {
+	if err := RunReview([]string{
+		"abandon", "--cwd", repo, "--lineage", lineage,
+		"--expected-revision", eligibility.Revision,
+		"--reason", reviewtransaction.CompactAbandonReasonOperatorDisposition, "--actor", "maintainer@example.com",
+		"--maintainer-authorization", reviewtransaction.RenderCompactAbandonAuthorization(
+			lineage, eligibility.Revision, eligibility.SnapshotIdentity, "maintainer@example.com",
+			reviewtransaction.CompactAbandonReasonOperatorDisposition, eligibility.DiscardedWork),
+	}, &abandoned); err != nil {
 		t.Fatalf("the exit this stop names was refused by the real operation: %v\n%s", err, abandoned.String())
 	}
 }
@@ -773,19 +780,19 @@ func TestOverBudgetCorrectionStopCarriesTheReleaseContinuation(t *testing.T) {
 	if continuation.Command != wantCommand {
 		t.Fatalf("continuation command = %q, want %q", continuation.Command, wantCommand)
 	}
-	if !strings.Contains(continuation.Detail, "--lineage <id>") {
+	if !strings.Contains(continuation.Detail, "binding template") {
 		t.Fatalf("continuation detail does not say what running the command produces: %q", continuation.Detail)
 	}
 
-	// Runnable exactly as printed: the flagless form refuses with the runnable
-	// per-lineage command rather than silently doing nothing.
+	// Runnable exactly as printed: the flagless form refuses with the binding
+	// template rather than silently doing nothing.
 	var template bytes.Buffer
 	err := RunReview([]string{"abandon", "--cwd", repo}, &template)
 	if err == nil {
-		t.Fatalf("the named release command did not list the lineages:\n%s", template.String())
+		t.Fatalf("the named release command did not print the binding template:\n%s", template.String())
 	}
-	if !strings.Contains(err.Error(), "--lineage ") || strings.Contains(err.Error(), "--maintainer-authorization") {
-		t.Fatalf("the named release command is not the lineage-listing step the continuation claims: %v", err)
+	if !strings.Contains(err.Error(), "--maintainer-authorization") {
+		t.Fatalf("the named release command is not the binding-template step the continuation claims: %v", err)
 	}
 }
 
