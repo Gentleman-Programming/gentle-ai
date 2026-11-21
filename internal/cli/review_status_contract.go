@@ -516,7 +516,14 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		// stale lineages as optional, discoverable recovery candidates. An
 		// unrelated target with zero candidates remains equally valid.
 		terminalConsumed := result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityNotReplayable
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !terminalConsumed && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
+		// Issue #6156: an undeclared untracked population rewrites the terminal
+		// stop into the typed intended_untracked_selection_required collect, and
+		// the root action follows that transition (#3928). The collect input is
+		// still validated in full by validateNextTransitionTargets.
+		untrackedSelectionRequired := result.NextTransition != nil &&
+			result.NextTransition.Kind == reviewNextTransitionCollect &&
+			result.NextTransition.ReasonCode == "intended_untracked_selection_required"
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !terminalConsumed && !(result.Action == reviewtransaction.TargetStatusActionCollect && untrackedSelectionRequired) && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:

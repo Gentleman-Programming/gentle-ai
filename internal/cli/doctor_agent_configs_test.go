@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // Exercise the public doctor entry point with isolated homes and deterministic
@@ -40,6 +42,9 @@ func TestRunDoctor_AgentConfigDirectories(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/present=%t", tt.id, present), func(t *testing.T) {
 				home := t.TempDir()
 				dir := filepath.Join(home, filepath.FromSlash(tt.dir))
+				if tt.id == "hermes" {
+					dir = system.HermesConfigDir(home)
+				}
 				if present {
 					if err := os.MkdirAll(dir, 0o755); err != nil {
 						t.Fatal(err)

@@ -55,7 +55,10 @@ func userKernelIdentity(fields map[string]string, uid int) error {
 }
 
 func userKernelStatus(status string, uid int) error {
-	if uid <= 0 || runtime.GOARCH != "amd64" {
+	if runtime.GOARCH != "amd64" {
+		return privateError("unavailable", userUnsupportedHost("Linux "+runtime.GOARCH))
+	}
+	if uid <= 0 {
 		return privateError("unavailable", errors.New("Linux amd64 non-root user required"))
 	}
 	fields, err := userKernelFields(status)
@@ -70,7 +73,7 @@ func userKernelStatus(status string, uid int) error {
 // reachable through the entry kernel checks after RootRiskAccepted() held.
 func userKernelStatusRoot(status string) error {
 	if runtime.GOARCH != "amd64" {
-		return privateError("unavailable", errors.New("Linux amd64 non-root user required"))
+		return privateError("unavailable", userUnsupportedHost("Linux "+runtime.GOARCH))
 	}
 	fields, err := userKernelFields(status)
 	if err != nil {
@@ -107,8 +110,17 @@ func UserKernelCheck() error {
 	return privateKernel() // Real mount, membership, cgroup2 statfs and exact leaf limits.
 }
 
+// ValidateUserInstall runs before any download (InspectUserInstall calls it
+// for the TUI confirmation and again inside the install flow), so unsupported
+// architectures and noexec targets are refused here with their exact condition.
 func ValidateUserInstall(req UserInstallRequest) error {
-	return userValidateInstall(req)
+	if err := userHostPlatform(runtime.GOARCH); err != nil {
+		return err
+	}
+	if err := userValidateInstall(req); err != nil {
+		return err
+	}
+	return userExecutableMount(filepath.Dir(req.Destination), unix.Statfs)
 }
 
 func InspectUserInstall(req UserInstallRequest) (string, error) {
@@ -126,18 +138,59 @@ func userRuntimeDirEnv() string {
 	return value
 }
 
+// userManagerRemedy is how an operator gets the delegated user manager the
+// probe needs; the installer itself never creates a delegation.
+const userManagerRemedy = "start the systemd user manager by logging in through a systemd session (desktop, console or ssh with pam_systemd) or run `loginctl enable-linger $USER`; on WSL set `[boot] systemd=true` in /etc/wsl.conf and run `wsl --shutdown`"
+
+// userRuntimeDirCheck names which XDG_RUNTIME_DIR condition failed and the
+// exact value expected; the leading clause is the stable refusal callers match.
+func userRuntimeDirCheck(value, expected string) error {
+	if value == expected {
+		return nil
+	}
+	const refused = "set XDG_RUNTIME_DIR to your existing /run/user/UID; delegated user manager required"
+	if value == "" {
+		return fmt.Errorf("%s: XDG_RUNTIME_DIR is unset, expected %q; log in through a systemd session (pam_systemd exports it)", refused, expected)
+	}
+	return fmt.Errorf("%s: XDG_RUNTIME_DIR is %q, expected %q; a su or sudo shell keeps another user's value, so log in as this user directly", refused, value, expected)
+}
+
+// userBusSocketCheck requires the user-manager bus to be an existing socket
+// owned by uid and names the condition that failed.
+func userBusSocketCheck(bus string, uid int) error {
+	condition := ""
+	info, err := os.Lstat(bus)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		condition = "does not exist"
+	case err != nil:
+		condition = "cannot be inspected (" + err.Error() + ")"
+	case info.Mode()&os.ModeSocket == 0:
+		condition = "is not a socket"
+	case info.Sys().(*syscall.Stat_t).Uid != uint32(uid):
+		condition = "is not owned by you"
+	default:
+		return nil
+	}
+	return fmt.Errorf("existing user-manager bus unavailable; no delegation is created automatically: %s %s; %s", bus, condition, userManagerRemedy)
+}
+
 func userBusEnvironment() ([]string, error) {
 	runtimeDir := "/run/user/" + strconv.Itoa(os.Getuid())
-	if userRuntimeDirEnv() != runtimeDir {
-		return nil, errors.New("set XDG_RUNTIME_DIR to your existing /run/user/UID; delegated user manager required")
-	}
-	if _, err := privateDirectory(runtimeDir); err != nil {
+	if err := userRuntimeDirCheck(userRuntimeDirEnv(), runtimeDir); err != nil {
 		return nil, err
 	}
+	if _, err := privateDirectory(runtimeDir); err != nil {
+		var private *PrivateRuntimeError
+		var cause error
+		if errors.As(err, &private) {
+			cause = private.Cause
+		}
+		return nil, privateError("filesystem", errors.Join(fmt.Errorf("user runtime directory %s is missing or not a private 0700 directory owned by you; %s", runtimeDir, userManagerRemedy), cause))
+	}
 	bus := filepath.Join(runtimeDir, "bus")
-	info, err := os.Lstat(bus)
-	if err != nil || info.Mode()&os.ModeSocket == 0 || info.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
-		return nil, errors.New("existing user-manager bus unavailable; no delegation is created automatically")
+	if err := userBusSocketCheck(bus, os.Getuid()); err != nil {
+		return nil, err
 	}
 	home := os.Getenv("HOME")
 	if err := privateNativeHome(home); err != nil {
@@ -151,7 +204,13 @@ func userManagerProbe(ctx context.Context) *exec.Cmd {
 }
 
 func userManagerVersion(version []byte) error {
-	refused := errors.New("existing systemd user manager version >=254 required")
+	found := strings.TrimSpace(string(version))
+	if len(found) > 64 {
+		found = found[:64] + "..."
+	} else if found == "" {
+		found = "(none)"
+	}
+	refused := fmt.Errorf("existing systemd user manager version >=254 required: found %q; use a distribution that ships systemd 254 or newer (for example Ubuntu 24.04 or Debian 13)", found)
 	value := strings.TrimSuffix(string(version), "\n")
 	if value == "" || len(version) > 4096 {
 		return refused
@@ -214,7 +273,7 @@ func userServiceWithPlan(ctx context.Context, self string, args []string, stdin 
 	probe.Env = env
 	version, err := probe.Output()
 	if err != nil {
-		return fmt.Errorf("read existing systemd user manager version: %w", err)
+		return fmt.Errorf("read existing systemd user manager version: %w; %s", err, userManagerRemedy)
 	}
 	if err := userManagerVersion(version); err != nil {
 		return err

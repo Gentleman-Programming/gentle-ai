@@ -55,3 +55,13 @@ func userShellStep(ctx context.Context, index, total int, label string) {
 	}
 	fmt.Fprintf(os.Stdout, "✓ %d/%d %s\n", index, total, label)
 }
+
+// WithInstallProgress attaches a progress reporter to ctx for an installer that
+// runs in this process (darwin), so its steps reach the caller in order and
+// before the effect they announce.
+func WithInstallProgress(ctx context.Context, report func(UserInstallProgress)) context.Context {
+	if report == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, userInstallProgressKey{}, report)
+}
