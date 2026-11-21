@@ -100,13 +100,12 @@ type ReviewRepairResult struct {
 	Assessment reviewtransaction.AuthorityRepairAssessment `json:"assessment"`
 	// Continuation is populated only for a truncated preflight, and is then
 	// exactly reviewRepairTruncatedContinuation.
-	Continuation              string                                                `json:"continuation,omitempty"`
-	ProviderInputs            *ReviewRepairProviderInputs                           `json:"provider_inputs,omitempty"`
-	RequiredInputs            []string                                              `json:"required_inputs"`
-	Execution                 *reviewtransaction.ClassifiedAuthorityRepairExecution `json:"execution,omitempty"`
-	DispositionProviderInputs *ReviewRepairDispositionProviderInputs                `json:"disposition_provider_inputs,omitempty"`
-	DispositionSelectors      []reviewtransaction.AuthorityDispositionSelector      `json:"disposition_selectors,omitempty"`
-	DispositionExecution      *ReviewRepairDispositionExecution                     `json:"disposition_execution,omitempty"`
+	Continuation              string                                           `json:"continuation,omitempty"`
+	ProviderInputs            *ReviewRepairProviderInputs                      `json:"provider_inputs,omitempty"`
+	RequiredInputs            []string                                         `json:"required_inputs"`
+	DispositionProviderInputs *ReviewRepairDispositionProviderInputs           `json:"disposition_provider_inputs,omitempty"`
+	DispositionSelectors      []reviewtransaction.AuthorityDispositionSelector `json:"disposition_selectors,omitempty"`
+	DispositionExecution      *ReviewRepairDispositionExecution                `json:"disposition_execution,omitempty"`
 }
 
 func (result ReviewRepairResult) Validate() error {
@@ -133,7 +132,7 @@ func (result ReviewRepairResult) Validate() error {
 	}
 	switch result.Mode {
 	case ReviewRepairModePreflight:
-		if result.Execution != nil || result.DispositionExecution != nil {
+		if result.DispositionExecution != nil {
 			return errors.New("review repair preflight contains execution output")
 		}
 		if result.DispositionProviderInputs != nil {
@@ -201,9 +200,6 @@ func (result ReviewRepairResult) Validate() error {
 		}
 		switch {
 		case result.DispositionExecution != nil:
-			if result.Execution != nil {
-				return errors.New("review repair execution shape is invalid")
-			}
 			exec := result.DispositionExecution
 			if exec.Schema != reviewtransaction.AuthorityDispositionProofSchema || exec.Status != string(reviewtransaction.CompactReclaimCommitted) ||
 				strings.TrimSpace(exec.LineageID) == "" || !validReviewCapabilitySHA256(exec.PlanDigest) ||
@@ -211,19 +207,6 @@ func (result ReviewRepairResult) Validate() error {
 				!validReviewCapabilitySHA256(exec.AuthorizationSHA256) {
 				// refusal:by-design human-authority: this result is built by newReviewRepairDispositionExecutionResult from a committed CompactReclaimRecord RepairAuthorityDisposition itself returned; reaching this means a product defect a maintainer must fix
 				return errors.New("review repair disposition execution output is invalid")
-			}
-		case result.Execution != nil:
-			execution := result.Execution
-			if execution.Status != reviewtransaction.CompactReclaimCommitted ||
-				execution.Class != reviewtransaction.AuthorityRepairClassLegacyV1HistoricalAlias ||
-				execution.Cause != reviewtransaction.AuthorityRepairCauseUnsupportedHistoricalV1OperationAlias ||
-				execution.Disposition != reviewtransaction.AuthorityRepairDispositionQuarantineHistoricalAlias ||
-				strings.TrimSpace(execution.LineageID) == "" || !validReviewCapabilitySHA256(execution.Revision) ||
-				!validReviewCapabilitySHA256(execution.ChainIdentity) ||
-				!validReviewCapabilitySHA256(execution.AssessmentDigest) ||
-				!validReviewCapabilitySHA256(execution.RequestDigest) ||
-				!validReviewCapabilitySHA256(execution.RecordIdentity) {
-				return errors.New("review repair execution output is invalid")
 			}
 		default:
 			return errors.New("review repair execution shape is invalid")
@@ -257,7 +240,7 @@ func (err *reviewRepairOperationError) Error() string {
 func (err *reviewRepairOperationError) Unwrap() error { return err.cause }
 
 func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When content-mismatched leaves, historical entries, or isolated canonical rejected-validator terminals require selection, --preflight enumerates exact selectors; re-run it with one selector before executing its plan. Rejected-validator disposition preserves the verdict and consumed correction; it releases active authority without approval or an automatic review restart.")
+	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only a leaf authority disposition plan. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. When content-mismatched leaves, historical entries, or isolated canonical rejected-validator terminals require selection, --preflight enumerates exact selectors; re-run it with one selector before executing its plan. Rejected-validator disposition preserves the verdict and consumed correction; it releases active authority without approval or an automatic review restart.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", ReviewIntegrationContractV1, "review integration contract")
 	preflight := flags.Bool("preflight", false, "perform deterministic read-only classification without authority mutation")
@@ -440,36 +423,7 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	if selectorPresent {
 		return reviewPreflightError(errors.New("review repair exact selector requires --plan-digest --inventory-revision --actor --reason --authorization; run `gentle-ai review repair --preflight` with the selector first"))
 	}
-	for _, required := range []string{*class, *lineage, *expectedRevision, *cause, *disposition, *repositoryBinding, *actor, *reason, *authorization} {
-		if strings.TrimSpace(required) == "" {
-			return reviewPreflightError(errors.New("review repair execution requires provider inputs, actor, reason, and maintainer authorization"))
-		}
-	}
-	request := reviewtransaction.ClassifiedAuthorityRepairRequest{
-		Class: reviewtransaction.AuthorityRepairClass(*class), LineageID: *lineage, ExpectedRevision: *expectedRevision,
-		Cause: reviewtransaction.AuthorityRepairCause(*cause), Disposition: reviewtransaction.AuthorityRepairDisposition(*disposition),
-		RepositoryBinding: *repositoryBinding, Actor: *actor, Reason: *reason, MaintainerAuthorization: *authorization,
-	}
-	if assessment.Status == reviewtransaction.AuthorityRepairEligible {
-		if err := reviewtransaction.ValidateClassifiedAuthorityRepairRequest(request, assessment); err != nil {
-			return reviewPreflightError(&reviewRepairOperationError{message: "review repair authorization does not match the provider assessment", cause: err})
-		}
-	}
-	execution, err := reviewtransaction.RepairClassifiedAuthority(ctx, root, request)
-	if err != nil {
-		return &reviewRepairOperationError{message: "review repair did not complete", cause: err}
-	}
-	result := ReviewRepairResult{
-		Schema: ReviewIntegrationRepairSchema, Contract: ReviewIntegrationContractV1, Operation: "review.repair",
-		Mode: ReviewRepairModeExecute, Assessment: assessment, RequiredInputs: []string{}, Execution: &execution,
-	}
-	if *contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract = ReviewIntegrationRepairSchemaV2, ReviewIntegrationContractV2
-	}
-	if err := result.Validate(); err != nil {
-		return fmt.Errorf("validate review repair execution: %w", err)
-	}
-	return encodeReviewJSON(stdout, result)
+	return reviewPreflightError(errors.New("review repair executes only a leaf authority disposition plan; run `gentle-ai review repair --preflight` and re-run with the --plan-digest and --inventory-revision it returns"))
 }
 
 // newReviewRepairDispositionExecutionResult projects a committed leaf

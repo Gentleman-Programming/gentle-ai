@@ -18,356 +18,18 @@ import (
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-func TestNegotiatedStatusKeepsExplicitHealthyTargetIsolatedFromUnrelatedRepair(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	appendClassifiedRepairCLIFixture(t, repo, "unrelated-repair-alias")
-	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	risk, lines, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ClassifySnapshotRisk(context.Background(), snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lenses := []string{}
-	if risk == reviewtransaction.RiskMedium {
-		lenses = []string{reviewtransaction.LensReliability}
-	} else if risk == reviewtransaction.RiskHigh {
-		lenses = []string{
-			reviewtransaction.LensRisk,
-			reviewtransaction.LensResilience,
-			reviewtransaction.LensReadability,
-			reviewtransaction.LensReliability,
-		}
-	}
-	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
-		LineageID: "selected-healthy-compact", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
-		Snapshot: snapshot, PolicyHash: "sha256:" + strings.Repeat("d", 64),
-		RiskLevel: risk, SelectedLenses: lenses,
-		OriginalChangedLines: &lines,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Replace("", "review/start", state); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, variant := range []struct {
-		name string
-		args []string
-	}{
-		{name: "status"},
-		{name: "eligibility", args: []string{"--action-eligibility"}},
-		{name: "transition", args: []string{"--next-transition"}},
-		{name: "eligibility and transition", args: []string{"--action-eligibility", "--next-transition"}},
-	} {
-		t.Run(variant.name, func(t *testing.T) {
-			args := []string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", state.LineageID}
-			args = append(args, variant.args...)
-			var output bytes.Buffer
-			if err := RunReview(args, &output); err != nil {
-				t.Fatalf("explicit healthy STATUS absorbed unrelated repair: %v\n%s", err, output.String())
-			}
-			var status ReviewTargetStatusResult
-			decodeStrictReviewJSON(t, output.Bytes(), &status)
-			if err := status.Validate(); err != nil {
-				t.Fatalf("explicit healthy STATUS validation: %v\n%s", err, output.String())
-			}
-			if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
-				status.Authority.LineageID != state.LineageID || status.Repair.Status != reviewtransaction.AuthorityRepairUnsupported ||
-				status.Repair.Candidate != nil {
-				t.Fatalf("explicit healthy STATUS was contaminated by unrelated repair: %#v", status)
-			}
-			if status.Eligibility != nil && len(status.Eligibility.AllowedActions) == 1 &&
-				status.Eligibility.AllowedActions[0].Action == "review.repair" {
-				t.Fatalf("explicit healthy STATUS offered unrelated repair: %#v", status.Eligibility)
-			}
-			if status.NextTransition != nil && status.NextTransition.Execute != nil &&
-				status.NextTransition.Execute.Operation == "review.repair" {
-				t.Fatalf("explicit healthy STATUS routed unrelated repair: %#v", status.NextTransition)
-			}
-		})
-	}
-}
-
-func classifiedRepairAuthorization(assessment reviewtransaction.AuthorityRepairAssessment, actor, reason string) string {
-	candidate := assessment.Candidate
-	return reviewtransaction.AuthorityRepairAuthorizationSchema +
-		"\nrepository=" + assessment.RepositoryBinding +
-		"\nclass=" + string(assessment.Class) +
-		"\nlineage=" + candidate.LineageID +
-		"\nrevision=" + candidate.Revision +
-		"\ncause=" + string(assessment.Cause) +
-		"\ndisposition=" + string(assessment.Disposition) +
-		"\nactor=" + actor +
-		"\nreason=" + reason
-}
-
-func classifiedRepairCLIFixture(t *testing.T, lineage string) (string, string, string) {
-	t.Helper()
-	repo := initReviewCLIRepo(t)
-	head := appendClassifiedRepairCLIFixture(t, repo, lineage)
-	return repo, lineage, head
-}
-
-func appendClassifiedRepairCLIFixture(t *testing.T, repo, lineage string) string {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tx, err := reviewtransaction.NewTransaction(reviewtransaction.Start{
-		LineageID: lineage, Mode: reviewtransaction.ModeOrdinary4R, Generation: 1, Snapshot: snapshot,
-		PolicyHash: "sha256:" + strings.Repeat("a", 64),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.StartReview(); err != nil {
-		t.Fatal(err)
-	}
-	store, err := reviewtransaction.AuthoritativeStore(context.Background(), repo, lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	head := appendLegacyCLIRecord(t, store, "", "review/start", *tx)
-	finding := reviewtransaction.Finding{ID: "R1-ALIAS", Severity: "CRITICAL"}
-	ledger, err := reviewtransaction.CanonicalLedger([]reviewtransaction.Finding{finding})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ledgerSum := sha256.Sum256(ledger)
-	ledgerHash := "sha256:" + hex.EncodeToString(ledgerSum[:])
-	if err := tx.FreezeFindings([]reviewtransaction.Finding{finding}, ledger, ledgerHash); err != nil {
-		t.Fatal(err)
-	}
-	head = appendLegacyCLIRecord(t, store, head, "review/freeze-findings", *tx)
-	if _, err := tx.ClassifyEvidence([]reviewtransaction.FindingEvidence{{
-		FindingID: finding.ID, Class: reviewtransaction.EvidenceDeterministic,
-		Causality: reviewtransaction.CausalIntroduced, Proof: "historical proof",
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	head = appendLegacyCLIRecord(t, store, head, "review/classify-evidence", *tx)
-	if err := tx.BeginFix("sha256:" + strings.Repeat("b", 64)); err != nil {
-		t.Fatal(err)
-	}
-	head = appendLegacyCLIRecord(t, store, head, "review/begin-fix", *tx)
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate fixed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	fix, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
-		Kind: reviewtransaction.TargetFixDiff, BaseRef: tx.FinalCandidateTree,
-		IntendedUntracked: []string{}, LedgerIDs: []string{finding.ID},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.CompleteFix(fix, "", fix.LedgerIDs); err != nil {
-		t.Fatal(err)
-	}
-	head = appendLegacyCLIRecord(t, store, head, "review/complete-fix", *tx)
-	validated := *tx
-	if err := validated.ValidateFixDelta(validated.FixFindingIDs, true); err != nil {
-		t.Fatal(err)
-	}
-	bad := reviewtransaction.Record{
-		Schema: reviewtransaction.RecordSchema, Operation: "review/validate-fix", PreviousRevision: head, Transaction: validated,
-	}
-	payload, err := json.MarshalIndent(bad, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload = append(payload, '\n')
-	sum := sha256.Sum256(payload)
-	head = "sha256:" + hex.EncodeToString(sum[:])
-	eventPath := filepath.Join(store.Dir, "events", strings.TrimPrefix(head, "sha256:")+".json")
-	if err := os.WriteFile(eventPath, payload, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(store.Dir, "HEAD"), []byte(head+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return head
-}
-
-func TestClassifiedRepairAuthorizationHelperIsExact(t *testing.T) {
-	repo, _, _ := classifiedRepairCLIFixture(t, "repair-authorization-helper")
-	assessment, err := reviewtransaction.AssessAuthorityRepair(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := classifiedRepairAuthorization(assessment, "actor", "reason")
-	second := classifiedRepairAuthorization(assessment, "actor", "reason")
-	if first != second || strings.Contains(first, "\r") || len(strings.Split(first, "\n")) != 9 || reflect.DeepEqual(first, "") {
-		t.Fatalf("authorization helper = %q", first)
-	}
-}
-
-func TestReviewRepairPreflightIsReadOnlyAndExactExecutionReplays(t *testing.T) {
-	reviewEnabledHome(t)
-	repo, lineage, head := classifiedRepairCLIFixture(t, "repair-command")
-	store, err := reviewtransaction.AuthoritativeStore(context.Background(), repo, lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	headBefore, err := os.ReadFile(filepath.Join(store.Dir, "HEAD"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	preflightArgs := []string{"repair", "--preflight", "--cwd", repo}
-	var first, second bytes.Buffer
-	if err := RunReview(preflightArgs, &first); err != nil {
-		t.Fatal(err)
-	}
-	if err := RunReview(preflightArgs, &second); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(first.Bytes(), second.Bytes()) {
-		t.Fatalf("repair preflight changed between reads:\n%s\n%s", first.String(), second.String())
-	}
-	var preflight ReviewRepairResult
-	decoder := json.NewDecoder(bytes.NewReader(first.Bytes()))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&preflight); err != nil {
-		t.Fatal(err)
-	}
-	if err := preflight.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if preflight.Mode != ReviewRepairModePreflight || preflight.Assessment.Status != reviewtransaction.AuthorityRepairEligible ||
-		preflight.ProviderInputs == nil || preflight.ProviderInputs.LineageID != lineage || preflight.ProviderInputs.ExpectedRevision != head ||
-		!reflect.DeepEqual(preflight.RequiredInputs, []string{"actor", "reason", "maintainer_authorization"}) {
-		t.Fatalf("repair preflight = %#v", preflight)
-	}
-	if strings.Contains(first.String(), repo) || strings.Contains(first.String(), "\nactor=") || strings.Contains(first.String(), "\nreason=") {
-		t.Fatalf("repair preflight leaked path or completed authorization: %s", first.String())
-	}
-	if headAfter, err := os.ReadFile(filepath.Join(store.Dir, "HEAD")); err != nil || !bytes.Equal(headBefore, headAfter) {
-		t.Fatalf("repair preflight changed HEAD: %q, %v", headAfter, err)
-	}
-
-	actor, reason := "maintainer@example.com", "quarantine the approved historical alias"
-	authorization := classifiedRepairAuthorization(preflight.Assessment, actor, reason)
-	executeArgs := []string{
-		"repair", "--cwd", repo,
-		"--class", string(preflight.ProviderInputs.Class), "--lineage", preflight.ProviderInputs.LineageID,
-		"--expected-revision", preflight.ProviderInputs.ExpectedRevision, "--cause", string(preflight.ProviderInputs.Cause),
-		"--disposition", string(preflight.ProviderInputs.Disposition), "--repository-binding", preflight.ProviderInputs.RepositoryBinding,
-		"--actor", actor, "--reason", reason, "--maintainer-authorization", authorization,
-	}
-	var executed bytes.Buffer
-	if err := RunReview(executeArgs, &executed); err != nil {
-		t.Fatal(err)
-	}
-	var result ReviewRepairResult
-	decoder = json.NewDecoder(bytes.NewReader(executed.Bytes()))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&result); err != nil {
-		t.Fatal(err)
-	}
-	if err := result.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if result.Mode != ReviewRepairModeExecute || result.Execution == nil || result.Execution.Status != "committed" ||
-		result.Execution.LineageID != lineage || result.Execution.Revision != head || strings.Contains(executed.String(), repo) ||
-		strings.Contains(executed.String(), authorization) {
-		t.Fatalf("repair execution = %#v\n%s", result, executed.String())
-	}
-	if _, err := os.Stat(store.Dir); !os.IsNotExist(err) {
-		t.Fatalf("repair execution left source: %v", err)
-	}
-
-	var replay bytes.Buffer
-	if err := RunReview(executeArgs, &replay); err != nil {
-		t.Fatal(err)
-	}
-	var replayed ReviewRepairResult
-	if err := json.Unmarshal(replay.Bytes(), &replayed); err != nil || replayed.Execution == nil ||
-		replayed.Execution.LineageID != lineage || replayed.Execution.Revision != head {
-		t.Fatalf("repair replay = %#v, %v", replayed, err)
-	}
-}
-
-func TestReviewRepairPreflightSelectorStillClassifiesCompleteInventory(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	appendClassifiedRepairCLIFixture(t, repo, "selected-alias")
-	appendClassifiedRepairCLIFixture(t, repo, "other-alias")
-	var output bytes.Buffer
-	if err := RunReview([]string{"repair", "--preflight", "--cwd", repo, "--lineage", "selected-alias"}, &output); err != nil {
-		t.Fatal(err)
-	}
-	var result ReviewRepairResult
-	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&result); err != nil {
-		t.Fatal(err)
-	}
-	if err := result.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if result.Assessment.Status != reviewtransaction.AuthorityRepairAmbiguous || result.Assessment.Candidate != nil || result.ProviderInputs != nil {
-		t.Fatalf("lineage selector narrowed classified repair inventory: %#v", result)
-	}
-}
-
-func TestNegotiatedReviewRepairFailureNeverPublishesAuthorizationOrPaths(t *testing.T) {
-	reviewEnabledHome(t)
-	repo, _, _ := classifiedRepairCLIFixture(t, "repair-private-failure")
-	assessment, err := reviewtransaction.AssessAuthorityRepair(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	preflight := newReviewRepairPreflightResult(assessment)
-	secret := "authorization token for /private/authority/path"
-	args := []string{
-		"repair", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-		"--class", string(preflight.ProviderInputs.Class), "--lineage", preflight.ProviderInputs.LineageID,
-		"--expected-revision", preflight.ProviderInputs.ExpectedRevision, "--cause", string(preflight.ProviderInputs.Cause),
-		"--disposition", string(preflight.ProviderInputs.Disposition), "--repository-binding", preflight.ProviderInputs.RepositoryBinding,
-		"--actor", "maintainer@example.com", "--reason", "approved repair", "--maintainer-authorization", secret,
-	}
-	var output bytes.Buffer
-	err = RunReview(args, &output)
-	if err == nil {
-		t.Fatalf("inexact negotiated repair succeeded: %s", output.String())
-	}
-	failure := decodeReviewIntegrationFailure(t, output.Bytes())
-	if failure.Operation != "review.repair" || failure.Code != "invalid_request" || failure.MutationOutcome != ReviewMutationNotStarted {
-		t.Fatalf("negotiated repair failure = %#v", failure)
-	}
-	if strings.Contains(output.String(), secret) || strings.Contains(output.String(), repo) || strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), repo) {
-		t.Fatalf("negotiated repair failure leaked private input: %v\n%s", err, output.String())
-	}
-}
-
 func TestReviewRepairHelpRecommendsGenericClassifiedFlow(t *testing.T) {
 	var help bytes.Buffer
 	if err := RunReview([]string{"repair", "--help"}, &help); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--preflight", "provider-owned", reviewtransaction.AuthorityRepairAuthorizationSchema} {
+	for _, want := range []string{"--preflight", "provider-owned", "leaf authority disposition plan"} {
 		if !strings.Contains(help.String(), want) {
 			t.Fatalf("generic repair help missing %q: %s", want, help.String())
 		}
 	}
-	// repair-legacy-alias retired in Wave 7 S5a (WU14): the compatibility CLI
-	// verb is gone, so its own help text must no longer advertise it as an
-	// available continuation. The provider it wrapped (repairHistoricalLegacyAlias)
-	// stays live underneath the classified flow this help text describes --
-	// only the compatibility CLI surface and its exported wrapper retired.
+	// repair-legacy-alias is retired, so the help text must not advertise it as
+	// an available continuation.
 	if strings.Contains(help.String(), "repair-legacy-alias") {
 		t.Fatalf("generic repair help still advertises the retired repair-legacy-alias verb: %s", help.String())
 	}
@@ -467,7 +129,7 @@ func TestReviewRepairPreflightBlocksHistoricalPlanForAdditionalAuthorityDiagnost
 				t.Fatal(err)
 			}
 			if preflight.DispositionProviderInputs != nil || len(preflight.DispositionSelectors) != 0 ||
-				preflight.ProviderInputs != nil || len(preflight.RequiredInputs) != 0 || preflight.Execution != nil || preflight.DispositionExecution != nil {
+				preflight.ProviderInputs != nil || len(preflight.RequiredInputs) != 0 || preflight.DispositionExecution != nil {
 				t.Fatalf("additional %s diagnostic published a repair plan or mutation: %#v", test.problem, preflight)
 			}
 			if after, err := os.ReadFile(historicalPath); err != nil || !bytes.Equal(after, fixture) {
@@ -891,9 +553,9 @@ func TestReviewRepairContractAndPreflightFixtureAreStrict(t *testing.T) {
 	if err := decoder.Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if err := result.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	// The frozen fixture still documents the eligible legacy-alias shape the
+	// schema allows. The native assessment no longer produces or accepts it, so
+	// only the strict decode is asserted here, not result.Validate().
 	var raw map[string]any
 	if err := json.Unmarshal(fixture, &raw); err != nil {
 		t.Fatal(err)
@@ -990,29 +652,6 @@ func TestReviewRepairSchemasRejectShortContractArrays(t *testing.T) {
 	if err := assessmentSchema.Validate(shortOperations); err == nil {
 		t.Fatal("authority repair schema accepted only one supported operation")
 	}
-	failureSchema := compile("failure.schema.json")
-	progress := reviewtransaction.ClassifiedAuthorityRepairExecution{
-		Status: reviewtransaction.CompactReclaimCommitted, LineageID: "repair-schema-progress",
-		RequestDigest: "sha256:" + strings.Repeat("d", 64), RecordIdentity: "sha256:" + strings.Repeat("e", 64),
-	}
-	failure := newReviewIntegrationFailure("review.repair", []string{"--lineage", progress.LineageID}, &reviewtransaction.ClassifiedAuthorityRepairProgressError{
-		Progress: progress, Cause: context.DeadlineExceeded,
-	})
-	payload, err := json.Marshal(failure)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var failureDocument map[string]any
-	if err := json.Unmarshal(payload, &failureDocument); err != nil {
-		t.Fatal(err)
-	}
-	if err := failureSchema.Validate(failureDocument); err != nil {
-		t.Fatalf("valid repair progress failure rejected: %v", err)
-	}
-	delete(failureDocument, "progress_identity")
-	if err := failureSchema.Validate(failureDocument); err == nil {
-		t.Fatal("failure schema accepted repair request digest without progress identity")
-	}
 }
 
 func cloneReviewJSONDocument(t *testing.T, document map[string]any) map[string]any {
@@ -1036,8 +675,6 @@ func TestWindowsRuntimeIncludesRepairAndMaintenanceLockRegressions(t *testing.T)
 	for _, name := range []string{
 		"TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline",
 		"TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance",
-		"TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays",
-		"TestRepairClassifiedAuthorityResumesEachDurablePhase",
 	} {
 		if !bytes.Contains(payload, []byte(name)) {
 			t.Fatalf("Windows PR runtime allowlist is missing %s", name)
@@ -1143,5 +780,29 @@ func TestReviewRepairResultRejectsAMisplacedContinuation(t *testing.T) {
 	unsupported.Continuation = reviewRepairTruncatedContinuation
 	if err := unsupported.Validate(); err == nil {
 		t.Fatal("a completed classification validated while claiming it was truncated")
+	}
+}
+
+// Legacy v1 alias repair is deleted: the only classified repair class is gone,
+// so execution with classified provider inputs refuses without touching the
+// store and names the disposition route that remains.
+func TestReviewRepairClassifiedExecutionIsRefusedWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	legacy := addPristineLegacyAuthority(t, repo, "repair-v1-bystander")
+	before := readLegacyAuthorityTree(t, filepath.Dir(legacy.Dir))
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"repair", "--cwd", repo, "--class", "legacy_v1_historical_alias", "--lineage", "repair-v1-bystander",
+		"--expected-revision", "sha256:" + strings.Repeat("a", 64), "--cause", "unsupported_historical_v1_operation_alias",
+		"--disposition", "quarantine-approved-historical-alias", "--repository-binding", "sha256:" + strings.Repeat("b", 64),
+		"--actor", "maintainer@example.com", "--reason", "retire", "--maintainer-authorization", "unused",
+	}, &output)
+	if err == nil || !strings.Contains(err.Error(), "executes only a leaf authority disposition plan") ||
+		!strings.Contains(err.Error(), "gentle-ai review repair --preflight") {
+		t.Fatalf("classified repair execution error = %v", err)
+	}
+	if after := readLegacyAuthorityTree(t, filepath.Dir(legacy.Dir)); !reflect.DeepEqual(after, before) {
+		t.Fatal("refused repair execution modified the v1 store")
 	}
 }

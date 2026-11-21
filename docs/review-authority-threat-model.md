@@ -61,19 +61,11 @@ Synthetic Git trees used by persisted snapshots remain subject to repository obj
 
 Legacy v1 authority is no longer supported: status, inspection, abandon, lineage-name occupancy and import collision checks do not read `review-transactions/v1`, and nothing deletes or rewrites what is already there. A clone that still carries a v1 directory keeps working as if it were absent; `gentle-ai review store-reset` is the human tool that removes it.
 
-## Historical Alias Quarantine
+## Retired Legacy v1 Repair
 
-Use `gentle-ai review repair --preflight` for the public path. It scans the complete compact-v2 and legacy-v1 authority inventory without mutation and exposes an executable candidate only when exactly one lineage fails solely because of an approved historical `review/validate-fix` or `review/complete-fix` alias. The assessment is bounded, sorted, path-free, and byte-stable. Unknown or mixed corruption, multiple candidates, v1/v2 collision, invalidated authority, active maintenance ownership, concurrent change, or truncated proof returns a stop with no candidate.
+Legacy v1 authority is unsupported, so its repair and quarantine providers are deleted: the classified `legacy_v1_historical_alias` repair class, `review repair-legacy-alias`, `review quarantine-legacy` and `review quarantine-legacy-fix-scope`. `gentle-ai review repair --preflight` assesses compact-v2 authority only and never offers a classified candidate; `review repair` executes only a leaf authority disposition plan.
 
-The preflight returns provider-owned class `legacy_v1_historical_alias`, lineage, exact current revision, cause `unsupported_historical_v1_operation_alias`, disposition `quarantine-approved-historical-alias`, opaque repository binding, and authorization schema. The maintainer supplies actor, reason, and an exact LF-only nine-line `gentle-ai.review-repair-authorization/v1` binding in this order: schema, `repository`, `class`, `lineage`, `revision`, `cause`, `disposition`, `actor`, `reason`. Public status and repair results never echo that completed authorization, private paths, or quarantine records.
-
-Execution reruns the same full assessment, acquires the common maintenance lock before the lineage lock, and requires the provider inputs and exact current revision to match. It moves the complete immutable lineage into audited quarantine and reads the record back. A concurrent change fails exact CAS; an exact committed retry returns the same path-free execution proof without rewriting quarantine.
-
-Execution uses the same public verb with the provider-owned inputs echoed exactly from the preflight: `gentle-ai review repair --class legacy_v1_historical_alias --lineage <lineage> --expected-revision <revision> --cause unsupported_historical_v1_operation_alias --disposition quarantine-approved-historical-alias --repository-binding <binding> --actor <actor> --reason <reason> --maintainer-authorization <authorization>`. The former `review repair-legacy-alias` verb is retired and the CLI refuses it as an unknown review command. The cause-specific inner operation it named still ships behind this classified path: it accepts only the same approved historical aliases, replays every other event normally, and requires the exact current revision, cause, and disposition from the preflight.
-
-From that validated request the execution derives the inner exact LF-only eight-line binding with schema `gentle-ai.review-legacy-alias-repair-authorization/v1`, followed by `repository`, `lineage`, `revision`, `diagnostic`, `disposition`, `actor`, and `reason`; the maintainer supplies only the nine-line `gentle-ai.review-repair-authorization/v1` binding above, never the inner one. The operation refuses unknown aliases, semantic corruption, mixed v1/v2 lineage identity, malformed authorization, stale revisions, and active or shared-maintenance-lock contention.
-
-On success it moves the complete immutable lineage into `review-transactions/quarantine/`, writes a prepared then committed audit record with the re-derived chain identity and alias-event revisions, and reads the inventory back. It does not delete or rewrite authority. The status becomes complete/authoritative only if the remaining inventory is independently clean; unrelated invalid, incomplete, compact-v2, or graph authority continues to fail closed.
+A quarantine record those providers already committed (`legacy_alias_repair`, `malformed_legacy_freeze`, `legacy_fix_scope_quarantine`) is closed history. It stays decodable and byte-preserved as opaque JSON beside the other reclaim records; nothing re-derives, replays or interprets its proof, and no command acts on it.
 
 ## Rejected Validator Terminal Disposition
 
@@ -84,16 +76,6 @@ A canonical rejected targeted-validator verdict is valid authority, not corrupti
 3. Execution rederives eligibility under the maintenance lock, validates authorization and revisions, and retains byte-identical rejected authority with an audit proof. Exact replay converges on that proof.
 
 The class is `rejected_targeted_validator_terminal`. Disposition releases only the active governing claim: it does not approve the candidate, replace the historical verdict, restore a correction attempt, disable RDD, or automatically launch another review. It is not delivery permission. Missing canonical evidence, stale or forged bindings, non-rejected terminals, incomplete inspection, and retained recovery dependencies fail closed. Unrelated historical and content-mismatch repair behavior is unchanged.
-
-## Historical Complete-Fix Scope Quarantine
-
-The former `review quarantine-legacy-fix-scope` verb and its provider are retired; the CLI refuses the verb as an unknown review command, and no live command performs this quarantine. The operation existed for immutable legacy-v1 `ordinary_4r` history whose sole semantic anomaly was a historical `review/complete-fix` expanding correction paths beyond frozen genesis scope, and it was a quarantine, never validation, rewrite, migration, or repair.
-
-It accepted exactly two literal anomaly sets, `complete_fix_scope_expansion` or `complete_fix_scope_expansion,validate_fix_alias`, with the combined set additionally binding the exact alias event revision and literal `review/validate-fix` operation, and its only accepted disposition was `quarantine-historical-complete-fix-scope-expansion`.
-
-What remains live is the committed proof shape: a historical quarantine record written by the retired provider still decodes as the optional `legacy_fix_scope_quarantine` proof on the shared reclaim-record schema, carrying the lineage, chain identity, frozen genesis and expanded correction paths, fix-delta hash, diagnostic, disposition, and anomaly set. Deleting that shape would silently drop audited proof fields from records still on disk, so it is retained as a forensic-safety surface.
-
-A legacy-v1 lineage that would have needed this quarantine today has no repair path; it continues to fail closed as invalid legacy authority, and its committed audit record, where one exists, remains readable without any maintenance operation.
 
 ## Recovery And Rollback
 
