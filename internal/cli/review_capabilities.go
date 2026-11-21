@@ -133,13 +133,15 @@ type ReviewCapabilitiesTargetSelector struct {
 }
 
 type ReviewCapabilitiesCompatibility struct {
-	MinimumProtocolMajor int                            `json:"minimum_protocol_major"`
-	MaximumProtocolMajor int                            `json:"maximum_protocol_major"`
-	AdditiveMinorPolicy  string                         `json:"additive_minor_policy"`
-	UnknownMandatory     string                         `json:"unknown_mandatory"`
-	UnknownOptional      string                         `json:"unknown_optional"`
-	Modes                []string                       `json:"modes"`
-	LegacyWindow         ReviewCapabilitiesLegacyWindow `json:"legacy_window"`
+	MinimumProtocolMajor int      `json:"minimum_protocol_major"`
+	MaximumProtocolMajor int      `json:"maximum_protocol_major"`
+	AdditiveMinorPolicy  string   `json:"additive_minor_policy"`
+	UnknownMandatory     string   `json:"unknown_mandatory"`
+	UnknownOptional      string   `json:"unknown_optional"`
+	Modes                []string `json:"modes"`
+	// LegacyWindow is published only by the frozen v1 contract; v2 does not
+	// announce legacy v1 authority.
+	LegacyWindow *ReviewCapabilitiesLegacyWindow `json:"legacy_window,omitempty"`
 }
 
 type ReviewCapabilitiesLegacyWindow struct {
@@ -294,7 +296,7 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 			MinimumProtocolMajor: 1, MaximumProtocolMajor: 1,
 			AdditiveMinorPolicy: "optional-fields-only", UnknownMandatory: "reject", UnknownOptional: "ignore",
 			Modes: []string{"compact-v2", "legacy-v1"},
-			LegacyWindow: ReviewCapabilitiesLegacyWindow{
+			LegacyWindow: &ReviewCapabilitiesLegacyWindow{
 				Mode: "legacy-v1", State: "active", ReadOnly: true, DeprecationStarted: true,
 				Removal: "not-scheduled", MinimumCompatibilityReleases: 1,
 			},
@@ -343,6 +345,17 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 		result.Bootstrap.Command = reviewNextTransitionRefreshCommandV21
 		result.Compatibility.MinimumProtocolMajor, result.Compatibility.MaximumProtocolMajor = 2, 2
 		result.Compatibility.AdditiveMinorPolicy = "optional-fields-only"
+		// Legacy v1 authority is unsupported: v2 announces no legacy mode,
+		// window or read-only feature.
+		result.Compatibility.Modes = []string{"compact-v2"}
+		result.Compatibility.LegacyWindow = nil
+		mandatory := make([]ReviewCapabilityFeature, 0, len(result.Features.Mandatory))
+		for _, feature := range result.Features.Mandatory {
+			if feature.Name != "legacy_v1_target_scoped_read_only" {
+				mandatory = append(mandatory, feature)
+			}
+		}
+		result.Features.Mandatory = mandatory
 	}
 	return result
 }

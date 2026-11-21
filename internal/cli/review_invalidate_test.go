@@ -25,24 +25,6 @@ func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *t
 		run                func(t *testing.T, repo, lineage, revision string, chain reviewtransaction.ValidatedChain) error
 	}{
 		{
-			name:          "invalidate",
-			wantOperation: "review/invalidate",
-			run: func(t *testing.T, repo, lineage, revision string, _ reviewtransaction.ValidatedChain) error {
-				return RunReview([]string{"invalidate", "--cwd", repo, "--lineage", lineage, "--expected-revision", revision, "--reason", "operator abandoned"}, &bytes.Buffer{})
-			},
-		},
-		{
-			name:          "review step",
-			wantOperation: "review/freeze-findings",
-			run: func(t *testing.T, repo, lineage, _ string, _ reviewtransaction.ValidatedChain) error {
-				input := filepath.Join(t.TempDir(), "input.json")
-				if err := os.WriteFile(input, []byte("{}\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				return RunReviewStep([]string{"--cwd", repo, "--lineage", lineage, "--operation", "freeze-findings", "--input", input}, &bytes.Buffer{})
-			},
-		},
-		{
 			name:          "direct store append",
 			wantOperation: "review/complete-final-verification",
 			run: func(t *testing.T, repo, lineage, revision string, chain reviewtransaction.ValidatedChain) error {
@@ -75,68 +57,6 @@ func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *t
 				if after := readLegacyAuthorityTree(t, store.Dir); !reflect.DeepEqual(after, before) {
 					t.Fatalf("attempt %d changed legacy authority bytes", attempt+1)
 				}
-			}
-		})
-	}
-}
-
-func TestReviewInvalidateDeniesLegacyWithTypedReadOnlyErrorWithoutMutation(t *testing.T) {
-	reviewEnabledHome(t)
-	repo := initReviewCLIRepo(t)
-	store := addPristineLegacyAuthority(t, repo, "legacy-invalidate-read-only")
-	chain, err := store.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	headPath := filepath.Join(store.Dir, "HEAD")
-	eventPath := filepath.Join(store.Dir, "events", chain.HeadRevision[len("sha256:"):]+".json")
-	beforeHead, _ := os.ReadFile(headPath)
-	beforeEvent, _ := os.ReadFile(eventPath)
-
-	for attempt := 0; attempt < 2; attempt++ {
-		var output bytes.Buffer
-		err := RunReview([]string{
-			"invalidate", "--cwd", repo, "--lineage", "legacy-invalidate-read-only",
-			"--expected-revision", chain.HeadRevision, "--reason", "operator abandoned",
-		}, &output)
-		var typed *reviewtransaction.LegacyReadOnlyError
-		if !errors.Is(err, reviewtransaction.ErrLegacyReadOnly) || !errors.As(err, &typed) || typed.Code() != reviewtransaction.LegacyReadOnlyErrorCode || typed.Operation != "review/invalidate" || typed.LineageID != "legacy-invalidate-read-only" {
-			t.Fatalf("legacy invalidate error = %#v", err)
-		}
-		if output.Len() != 0 {
-			t.Fatalf("legacy invalidate emitted success output: %s", output.String())
-		}
-		afterHead, _ := os.ReadFile(headPath)
-		afterEvent, _ := os.ReadFile(eventPath)
-		if !bytes.Equal(afterHead, beforeHead) || !bytes.Equal(afterEvent, beforeEvent) {
-			t.Fatal("legacy invalidate changed authority bytes")
-		}
-	}
-}
-
-func TestReviewInvalidateFailsClosedForCompetingAuthorities(t *testing.T) {
-	for _, corrupt := range []bool{true, false} {
-		t.Run(map[bool]string{true: "corrupt compact", false: "dual valid"}[corrupt], func(t *testing.T) {
-			repo := initReviewCLIRepo(t)
-			started := startFacadeReview(t, repo)
-			compact, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-			record, _ := compact.Load()
-			legacy := addPristineLegacyAuthority(t, repo, started.LineageID)
-			legacyChain, _ := legacy.LoadChain()
-			if corrupt && os.WriteFile(compact.StatePath(), []byte("corrupt"), 0o644) != nil {
-				t.Fatal("corrupt compact authority")
-			}
-			expected := record.Revision
-			if corrupt {
-				expected = legacyChain.HeadRevision
-			}
-			err := RunReview([]string{"invalidate", "--cwd", repo, "--lineage", started.LineageID, "--expected-revision", expected, "--reason", "operator abandoned"}, &bytes.Buffer{})
-			if err == nil {
-				t.Fatal("competing authority was mutated")
-			}
-			chain, loadErr := legacy.LoadChain()
-			if loadErr != nil || chain.HeadRevision == "" || (!corrupt && record.Revision != compactRevision(t, compact)) {
-				t.Fatalf("authority changed: %v", loadErr)
 			}
 		})
 	}

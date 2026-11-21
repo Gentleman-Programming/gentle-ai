@@ -501,10 +501,6 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			if !reviewContractCorrectionBudgetValid(result.Frozen.OriginalChangedLines, result.Frozen.CorrectionBudget) {
 				return errors.New("current-target frozen budget is invalid")
 			}
-		case reviewtransaction.AuthorityVersionLegacy:
-			if result.Frozen != nil || result.AuthorityTargetIdentity != "" {
-				return errors.New("legacy current-target status cannot contain compact frozen inputs")
-			}
 		default:
 			return errors.New("current-target authority version is unsupported")
 		}

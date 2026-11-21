@@ -797,7 +797,7 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 }
 
 func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory; initialize local Git only for a genuinely unversioned workspace.")
+	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 authority from the shared Git common directory; initialize local Git only for a genuinely unversioned workspace.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
@@ -2322,12 +2322,6 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 	}
 	record, loadErr := compact.Load()
 	if loadErr == nil {
-		legacy, legacyErr := reviewtransaction.AuthoritativeStore(context.Background(), root, *lineage)
-		if legacyErr == nil {
-			if _, legacyLoadErr := legacy.LoadChain(); legacyLoadErr == nil {
-				return errors.New("review authority is ambiguous across compact v2 and legacy v1 stores")
-			}
-		}
 		approvedInvalidation := record.State.State == reviewtransaction.StateApproved ||
 			record.State.State == reviewtransaction.StateInvalidated && record.State.InvalidationEvidence != nil
 		if approvedInvalidation {
@@ -2362,25 +2356,7 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 		}
 		return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: state.LineageID, State: state.State, StoreRevision: revision})
 	}
-	if !errors.Is(loadErr, os.ErrNotExist) {
-		return fmt.Errorf("load explicit compact review lineage: %w", loadErr)
-	}
-	if strings.TrimSpace(*reason) == "" {
-		return errors.New("legacy review invalidation requires --reason")
-	}
-	legacy, err := reviewtransaction.AuthoritativeStore(context.Background(), root, *lineage)
-	if err != nil {
-		return err
-	}
-	chain, err := legacy.LoadChain()
-	if err != nil {
-		return fmt.Errorf("load explicit review lineage: %w", err)
-	}
-	revision, err := legacy.InvalidatePristine(*expected, *reason, chain.Records[len(chain.Records)-1].Transaction.Snapshot)
-	if err != nil {
-		return err
-	}
-	return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: *lineage, State: reviewtransaction.StateInvalidated, StoreRevision: revision})
+	return fmt.Errorf("load explicit compact review lineage: %w", loadErr)
 }
 
 func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) error {

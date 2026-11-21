@@ -140,12 +140,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 				return cli.RunReviewMode(args[2:], stdout)
 			}
 			return cli.RunReview(args[1:], stdout)
-		case "review-start":
-			return cli.RunReviewStart(args[1:], stdout)
 		case "review-resume":
 			return cli.RunReviewResume(args[1:], stdout)
-		case "review-step":
-			return cli.RunReviewStep(args[1:], stdout)
 		case "review-bundle-export":
 			return cli.RunReviewBundleExport(args[1:], stdout)
 		case "review-bundle-import":

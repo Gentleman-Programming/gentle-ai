@@ -88,19 +88,18 @@ type CompactReclaimRecord struct {
 	IncompleteAbandonment *CompactIncompleteAbandonmentProof `json:"incomplete_abandonment,omitempty"`
 	// Abandonment carries the single v2 authorization proof.
 	Abandonment *CompactAbandonmentProof `json:"abandonment,omitempty"`
-	// MalformedLegacyFreeze carries the natively re-derived semantic replay
-	// failure for a shipped legacy-v1 findings-freeze event.
-	MalformedLegacyFreeze *LegacyMalformedFreezeProof `json:"malformed_legacy_freeze,omitempty"`
-	// LegacyAliasRepair carries the natively re-derived proof for the narrow
-	// historical v1 operation-alias quarantine.
-	LegacyAliasRepair *LegacyAliasRepairProof `json:"legacy_alias_repair,omitempty"`
+	// MalformedLegacyFreeze, LegacyAliasRepair and LegacyFixScopeQuarantine
+	// are the proofs of quarantines the retired legacy-v1 repair providers
+	// committed. Legacy v1 is unsupported, so a record carrying one is closed
+	// history: it stays decodable and listable, byte-preserved as opaque JSON,
+	// and nothing re-derives or interprets its proof.
+	MalformedLegacyFreeze json.RawMessage `json:"malformed_legacy_freeze,omitempty"`
+	LegacyAliasRepair     json.RawMessage `json:"legacy_alias_repair,omitempty"`
 	// ClassifiedAuthorityRepair binds a generic review.repair quarantine to the
 	// exact provider assessment and authorization-free request digest. Records
 	// created by the compatibility command intentionally omit this proof.
 	ClassifiedAuthorityRepair *ClassifiedAuthorityRepairAudit `json:"classified_authority_repair,omitempty"`
-	// LegacyFixScopeQuarantine carries the proof for the narrowly authorized
-	// complete-fix scope-expansion quarantine.
-	LegacyFixScopeQuarantine *LegacyFixScopeQuarantineProof `json:"legacy_fix_scope_quarantine,omitempty"`
+	LegacyFixScopeQuarantine  json.RawMessage                 `json:"legacy_fix_scope_quarantine,omitempty"`
 	// AuthorityDisposition binds a leaf disposition-plan quarantine
 	// (authority_disposition_execute.go) to the exact digest-bound
 	// AuthorityDispositionPlan it executed. It is set only for quarantines

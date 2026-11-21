@@ -134,6 +134,8 @@ Without the flags, START keeps the tier default and the persisted authority is u
 
 Callers detect both START inputs, and their STATUS preflight, from `gentle-ai review capabilities` instead of probing START or STATUS. Both negotiated advertisements (`capabilities/v1.5` and `capabilities/v2.6`) list four optional features:
 
+Legacy v1 authority is unsupported, so `capabilities/v2.6` does not announce it: `compatibility.modes` is `["compact-v2"]`, there is no `compatibility.legacy_window`, and `legacy_v1_target_scoped_read_only` is not a mandatory feature. The published `capabilities-v2.6.schema.json` was corrected in place for this (no version bump). The frozen `capabilities/v1.5` advertisement still carries the legacy mode and window its published schema requires.
+
 | Feature | Input | Requires |
 | --- | --- | --- |
 | `start_request_context` | START `--request-context <file>` | `compact_v2_authority` |

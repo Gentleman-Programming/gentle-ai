@@ -150,45 +150,37 @@ func TestAbandonRequiresTheMaintainerAuthorizationBinding(t *testing.T) {
 	}
 }
 
-// TestAbandonBindingNamesLegacyV1AndUnverifiableEntries: the binding carries a
-// line for a same-lineage legacy-v1 entry and for an unreadable record, so the
-// human approves what the discarded work could not be shown to be.
-func TestAbandonBindingNamesLegacyV1AndUnverifiableEntries(t *testing.T) {
+// TestAbandonBindingNamesUnverifiableEntries: the binding carries a line for an
+// unreadable record, so the human approves what the discarded work could not
+// be shown to be.
+func TestAbandonBindingNamesUnverifiableEntries(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\nbinding change\n")
 	_, store := pristineReviewingFixture(t, repo, "abandon-bind-v1")
 	truncateCompactStateFile(t, store)
-	base, _, err := reviewAuthorityRoot(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	v1Dir := filepath.Join(base, "v1", "abandon-bind-v1")
-	if err := os.MkdirAll(v1Dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	exact := handBinding("abandon-bind-v1", compactAbandonUnavailable, compactAbandonUnavailable, "discarded_work=unverifiable", "legacy_v1_entry=abandon-bind-v1")
+	exact := handBinding("abandon-bind-v1", compactAbandonUnavailable, compactAbandonUnavailable, "discarded_work=unverifiable")
 	request := CompactAbandonRequest{
 		LineageID: "abandon-bind-v1", ExpectedRevision: compactAbandonUnavailable,
 		Reason: CompactAbandonReasonOperatorDisposition, Actor: abandonAuthorizationActor,
 	}
 	if _, err := AbandonCompactStore(context.Background(), repo, request); err == nil || !strings.Contains(err.Error(), exact) {
-		t.Fatalf("refusal does not print the binding naming the v1 and unverifiable entries: %v", err)
+		t.Fatalf("refusal does not print the binding naming the unverifiable entry: %v", err)
 	}
 	if abandonEntryAbsent(t, repo, "abandon-bind-v1") || abandonQuarantineCount(t, repo) != 0 {
 		t.Fatal("refused abandonment changed the store")
 	}
 	request.MaintainerAuthorization = exact
 	committed, err := AbandonCompactStore(context.Background(), repo, request)
-	if err != nil || len(committed.Cascaded) != 1 {
+	if err != nil || len(committed.Cascaded) != 0 {
 		t.Fatalf("authorized abandonment = %#v, %v", committed, err)
 	}
-	if _, statErr := os.Stat(v1Dir); !os.IsNotExist(statErr) || !abandonEntryAbsent(t, repo, "abandon-bind-v1") {
-		t.Fatal("entries survived the authorized abandonment")
+	if !abandonEntryAbsent(t, repo, "abandon-bind-v1") {
+		t.Fatal("entry survived the authorized abandonment")
 	}
 }
 
 // TestAbandonBindingStaysEightLinesWhenNothingElseMoves pins the format
-// gentle-shell renders: a readable lineage with no successors and no v1 entry
+// gentle-shell renders: a readable lineage with no successors
 // is authorized by exactly the eight frozen lines.
 func TestAbandonBindingStaysEightLinesWhenNothingElseMoves(t *testing.T) {
 	repo := initSnapshotRepo(t)
