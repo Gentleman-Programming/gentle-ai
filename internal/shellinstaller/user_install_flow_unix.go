@@ -1356,7 +1356,10 @@ func userLaunchCommand(ctx context.Context, root string, manifest userManifest, 
 	cmd := exec.CommandContext(ctx, filepath.Join(root, "runtime/node/bin/node"), append([]string{cli}, args...)...)
 	// Read-only stock Git probes must not refresh the caller's index. Explicit
 	// Git writes still take their mandatory locks.
-	cmd.Env = append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0")
+	// The launched program is Gentle Shell: gentle-pi publishes its desktop feed only when
+	// the program identity says so (Gentleman-Programming/gentle-shell#3419). The service env
+	// below is replaced here, so the entry belongs to this list.
+	cmd.Env = append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0", "PI_PROGRAM_STATUS_APP=gentle-shell")
 	// Shared memory: only the outer entry's Engram decision, never caller env;
 	// a Separate launch without one runs with memory disabled.
 	cmd.Env = append(cmd.Env, userEngramSeparateLaunch(manifest.Mode, userEngramContextEnv(ctx))...)
