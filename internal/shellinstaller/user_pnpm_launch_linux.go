@@ -53,6 +53,11 @@ func userLaunchPNPM(ctx context.Context, root, role string, args []string, stdin
 	// default stays under private HOME. Never inherit caller runtime injection.
 	cmd.Env = append(cmd.Env, userEngramSeparateLaunch(manifest.Mode, nil)...)
 	cmd.Env = append(cmd.Env, "PNPM_HOME="+manifest.Prefix, "XDG_DATA_HOME="+root+"/data", "XDG_CACHE_HOME="+root+"/data/cache", "GIT_OPTIONAL_LOCKS=0", "GOMAXPROCS=1", "UV_THREADPOOL_SIZE=1", "NODE_OPTIONS=--v8-pool-size=1")
+	// Only the Shell role is Gentle Shell; the pi role reaches this function too and must not
+	// claim the identity that gates gentle-pi's desktop feed.
+	if role == "gentle-shell" {
+		cmd.Env = append(cmd.Env, userProgramIdentityEnv()...)
+	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	return userLaunchGroup(cmd, stdin, func(exitErr error) error {
 		if _, err := userReadManifest(context.Background(), root); err != nil {
