@@ -58,3 +58,28 @@ func reviewCommandNamedBy(t *testing.T, message string) []string {
 	}
 	return argv
 }
+
+// TestReviewAbandonRefusesRetiredFlagsByName: the flags the gated abandon took
+// are refused with the new form on stderr's error, nothing on stdout, and the
+// store untouched; they are never silently accepted.
+func TestReviewAbandonRefusesRetiredFlagsByName(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, lineage, _, _, _ := partiallyCapturedReview(t)
+	for _, flag := range []string{"--expected-revision", "--maintainer-authorization"} {
+		for _, form := range [][]string{{flag, "y"}, {flag + "=y"}} {
+			args := append([]string{"abandon", "--cwd", repo, "--lineage", lineage}, form...)
+			var stdout bytes.Buffer
+			err := RunReview(args, &stdout)
+			if err == nil || !strings.Contains(err.Error(), "review abandon --cwd") || !strings.Contains(err.Error(), flag) {
+				t.Fatalf("%v: error = %v", form, err)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("%v: refusal wrote to stdout: %q", form, stdout.String())
+			}
+		}
+	}
+	var abandoned bytes.Buffer
+	if err := RunReview([]string{"abandon", "--cwd", repo, "--lineage", lineage}, &abandoned); err != nil {
+		t.Fatalf("lineage was changed by the refused calls: %v", err)
+	}
+}

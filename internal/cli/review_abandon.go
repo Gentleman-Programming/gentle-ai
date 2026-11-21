@@ -58,7 +58,41 @@ func reviewAbandonDefaultActor() string {
 	return "operator"
 }
 
+// reviewAbandonRetiredFlags are the inputs the gated abandon accepted before
+// abandonment dropped its authorization binding. They are refused by name
+// rather than ignored, so a stale caller learns the new form instead of
+// believing a binding it supplied was honored.
+var reviewAbandonRetiredFlags = []string{"expected-revision", "maintainer-authorization"}
+
+func reviewAbandonRetiredFlagRefusal(args []string) error {
+	retired := []string{}
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		name := strings.TrimLeft(arg, "-")
+		if name == arg {
+			continue
+		}
+		name, _, _ = strings.Cut(name, "=")
+		for _, flag := range reviewAbandonRetiredFlags {
+			if name == flag {
+				retired = append(retired, "--"+flag)
+			}
+		}
+	}
+	if len(retired) == 0 {
+		return nil
+	}
+	return fmt.Errorf("review abandon no longer takes %s or an authorization binding; nothing was changed. Run: gentle-ai review abandon --cwd <repo> --lineage <id>", strings.Join(retired, " or "))
+}
+
 func RunReviewAbandon(args []string, stdout io.Writer) error {
+	if !reviewHelpRequested(args) {
+		if err := reviewAbandonRetiredFlagRefusal(args); err != nil {
+			return err
+		}
+	}
 	flags := newReviewFlagSet("review abandon", stdout, "Declare one review lineage lost and move it to the audited quarantine. Accepts every state: terminal (approved, escalated, invalidated), unreadable or missing review-state.json, and a legacy-v1 entry. Recovery successors of the lineage are abandoned with it, deepest first, so no orphan recovery edge remains; ancestors and unrelated lineages are never touched. Nothing is deleted and no authorization binding is required. The v2 store lock is taken without waiting: a live holder fails the command with the lock-busy error and nothing moves. An exact replay of a committed abandonment converges idempotently. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
 	cwd := flags.String("cwd", ".", "repository path")
 	lineage := flags.String("lineage", "", "review lineage to abandon")

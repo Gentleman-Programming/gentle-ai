@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pathquote"
 )
 
 const ReviewAuthorityStatusSchema = "gentle-ai.review-authority-status/v1"
@@ -321,7 +323,7 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 	if version == AuthorityVersionCompact {
 		if _, statErr := os.Stat(filepath.Join(path, compactStateFileName)); os.IsNotExist(statErr) && !compactStoreHoldsAuthority(items) {
 			entry.Status = AuthorityStatusIncomplete
-			entry.Problems = []string{"compact store entry has no review-state.json and no authoritative artifacts; declare it lost and quarantine it with gentle-ai review abandon --lineage " + lineage}
+			entry.Problems = []string{"compact store entry has no review-state.json and no authoritative artifacts; declare it lost and quarantine it with gentle-ai review abandon --cwd " + pathquote.Quote(repo) + " --lineage " + lineage}
 			return entry, locks, nil
 		}
 		store := CompactStore{Dir: path, lineageID: lineage, repo: repo}

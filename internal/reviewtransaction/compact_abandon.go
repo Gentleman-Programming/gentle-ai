@@ -450,7 +450,9 @@ func compactAbandonResult(lineage, base string, records []CompactReclaimRecord) 
 		}
 	}
 	if primary < 0 {
-		return CompactAbandonResult{CompactReclaimRecord: records[len(records)-1], Cascaded: records[:len(records)-1]}
+		primary := records[len(records)-1]
+		primary.LineageID = lineage
+		return CompactAbandonResult{CompactReclaimRecord: primary, Cascaded: records[:len(records)-1]}
 	}
 	result := CompactAbandonResult{CompactReclaimRecord: records[primary]}
 	for index, record := range records {
