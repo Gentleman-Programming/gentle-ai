@@ -46,8 +46,8 @@ var ErrPiCodeGraphAdapterHealthUnavailable = errors.New("Pi MCP adapter health i
 // piCodeGraphProbeIncompleteError marks a capability probe whose transport
 // closed before any capability verdict was reached (#2146). It deliberately
 // does not satisfy errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable): that
-// sentinel means "capability verified, adapter health unverifiable", and its
-// pending action says exactly that. A probe that never answered verified
+// sentinel means "capability verified, adapter health unverifiable", and that
+// outcome is non-fatal and silent. A probe that never answered verified
 // nothing, so it carries its own pending reason instead of borrowing that
 // claim.
 type piCodeGraphProbeIncompleteError struct {
@@ -56,8 +56,6 @@ type piCodeGraphProbeIncompleteError struct {
 
 func (err *piCodeGraphProbeIncompleteError) Error() string { return err.cause.Error() }
 func (err *piCodeGraphProbeIncompleteError) Unwrap() error { return err.cause }
-
-const piCodeGraphPendingAction = "Pi CodeGraph integration remains pending: CodeGraph configuration was installed and preserved, and direct MCP capability was verified. Pi adapter activation health cannot be machine-verified on the detected Pi version."
 
 // piCodeGraphProbeIncompleteAction is the pending reason for a probe that
 // closed before answering. It must not claim capability verification.
@@ -83,9 +81,13 @@ type PiCodeGraphChild struct {
 }
 
 type PiCodeGraphOptions struct {
-	HomeDir           string
-	WorkspaceDir      string
-	Selected          bool
+	HomeDir      string
+	WorkspaceDir string
+	Selected     bool
+	// AgentDir explicitly selects the Pi agent directory to reconcile. Empty
+	// resolves the current environment's agent directory (PI_CODING_AGENT_DIR
+	// or the Pi default).
+	AgentDir          string
 	EffectiveMCPProbe PiCodeGraphEffectiveMCPProbe
 }
 
@@ -121,15 +123,16 @@ type PiCodeGraphMCPProbeResult struct {
 }
 
 // PreservePiCodeGraphPending converts an exclusively pending verification
-// failure into the manual action that describes its reason, so the pipeline
-// completes with the configuration preserved. Unavailable adapter health and an
-// incomplete capability probe each carry their own action text.
+// failure into a manual action so the pipeline completes with the
+// configuration preserved. An incomplete capability probe carries its own
+// action text; unavailable adapter health is pending but silent by owner
+// decision, so it surfaces no action.
 func PreservePiCodeGraphPending(result PiCodeGraphResult, err error) (PiCodeGraphResult, error) {
 	action, pending := piCodeGraphPendingManualAction(err)
 	if !pending {
 		return result, err
 	}
-	if !slices.Contains(result.ManualActions, action) {
+	if action != "" && !slices.Contains(result.ManualActions, action) {
 		result.ManualActions = append(result.ManualActions, action)
 	}
 	return result, nil
@@ -147,7 +150,8 @@ func piCodeGraphPendingManualAction(err error) (string, bool) {
 		return piCodeGraphProbeIncompleteAction, true
 	}
 	if err == ErrPiCodeGraphAdapterHealthUnavailable {
-		return piCodeGraphPendingAction, true
+		// Owner decision: adapter-health pending stays non-fatal and silent.
+		return "", true
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		children := joined.Unwrap()
@@ -195,9 +199,12 @@ type piCodeGraphOwnedFile struct {
 // gentle-pi package paths; package children are copied into a Pi overlay.
 func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult, err error) {
 	if !options.Selected {
-		return UninstallPiCodeGraph(options.HomeDir)
+		return UninstallAllPiCodeGraph(options.HomeDir)
 	}
 	paths := piagent.CodeGraphPaths(options.HomeDir)
+	if options.AgentDir != "" {
+		paths = piagent.CodeGraphPathsForAgent(options.HomeDir, options.AgentDir)
+	}
 	manifest, err := readPiCodeGraphManifest(paths.Manifest)
 	if err != nil {
 		return result, err
@@ -221,7 +228,7 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 	if err = releaseStalePiChildren(paths.AgentDir, manifest.Children, journal, changed); err != nil {
 		return result, err
 	}
-	children, err := piagent.DiscoverCodeGraphChildren(options.HomeDir, options.WorkspaceDir)
+	children, err := piagent.DiscoverCodeGraphChildrenIn(paths, options.WorkspaceDir)
 	if err != nil {
 		return result, err
 	}
@@ -288,7 +295,7 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 		}
 		result.Children = append(result.Children, child)
 	}
-	effectiveMCPPath, effectiveErr := piagent.EffectiveCodeGraphMCPPath(options.HomeDir, options.WorkspaceDir)
+	effectiveMCPPath, effectiveErr := piagent.EffectiveCodeGraphMCPPathIn(paths, options.HomeDir, options.WorkspaceDir)
 	if effectiveErr != nil {
 		return result, effectiveErr
 	}
@@ -347,20 +354,50 @@ func reconcilePiMCP(path string, journal *piJournal, changed map[string]struct{}
 		servers = map[string]any{}
 		root["mcpServers"] = servers
 	}
-	desired := map[string]any{"command": "codegraph", "args": []any{"serve", "--mcp"}}
-	if entry, found := servers["codegraph"]; found && !equivalentPiMCP(entry) {
-		return existing, fmt.Errorf("misconfigured Pi CodeGraph MCP entry at %q; Gentle AI will not overwrite it", path)
+	desired := map[string]any{"command": "codegraph", "args": []any{"serve", "--mcp"}, "exposure": "direct"}
+	upgrading := false
+	if entry, found := servers["codegraph"]; found {
+		if !equivalentPiMCP(entry) {
+			return existing, fmt.Errorf("misconfigured Pi CodeGraph MCP entry at %q; Gentle AI will not overwrite it", path)
+		}
+		// Add-only: keep any exposure value the entry already carries.
+		server := entry.(map[string]any)
+		if _, hasExposure := server["exposure"]; hasExposure {
+			return existing, nil
+		}
+		server["exposure"] = "direct"
+		upgrading = true
+	} else {
+		servers["codegraph"] = desired
 	}
-	if entry, found := servers["codegraph"]; found && equivalentPiMCP(entry) {
-		return existing, nil
-	}
-	servers["codegraph"] = desired
 	encoded, _ := json.MarshalIndent(root, "", "  ")
 	if err := journal.write(path, append(encoded, '\n')); err != nil {
 		return existing, err
 	}
 	changed[path] = struct{}{}
 	owned := journal.ownedFile(path, string(append(encoded, '\n')), false, false)
+	if upgrading && existing != nil {
+		if hashPiBytes(data) != existing.AfterHash {
+			// The file drifted after the install that recorded ownership
+			// (user edits on top of an older revision without exposure):
+			// keep the recorded ownership unchanged so a later uninstall
+			// reports the drift and preserves the file instead of silently
+			// restoring bytes the user no longer has.
+			return existing, nil
+		}
+		// An in-place exposure upgrade must not replace the before-image
+		// the original install recorded: uninstall has to restore the
+		// original user file, not this codegraph-bearing intermediate,
+		// so carry the original snapshot forward.
+		if existing.Before == nil {
+			owned.Before = nil
+		} else {
+			before := *existing.Before
+			owned.Before = &before
+		}
+		owned.Mode = existing.Mode
+		owned.Adopted = existing.Adopted
+	}
 	return &owned, nil
 }
 
@@ -807,10 +844,15 @@ func ValidatePiCodeGraphRoot(root, homeDir string) error {
 }
 
 // RefreshPiCodeGraphIfConfigured repairs selected Pi integration after sync.
+// A missing manifest still reconciles when the Pi MCP config already carries a
+// canonical codegraph entry: sync adopts that entry (writing the manifest)
+// instead of silently skipping repairs for entries installed without one.
 func RefreshPiCodeGraphIfConfigured(homeDir, workspaceDir string) (PiCodeGraphResult, bool, error) {
 	paths := piagent.CodeGraphPaths(homeDir)
 	if _, err := os.Stat(paths.Manifest); os.IsNotExist(err) {
-		return PiCodeGraphResult{}, false, nil
+		if !hasAdoptablePiCodeGraphEntry(paths.MCPConfig) {
+			return PiCodeGraphResult{}, false, nil
+		}
 	} else if err != nil {
 		return PiCodeGraphResult{}, false, err
 	}
@@ -818,10 +860,160 @@ func RefreshPiCodeGraphIfConfigured(homeDir, workspaceDir string) (PiCodeGraphRe
 	return result, true, err
 }
 
+// hasAdoptablePiCodeGraphEntry reports whether the Pi MCP config exists and
+// holds a canonical codegraph server entry that reconciliation may adopt.
+func hasAdoptablePiCodeGraphEntry(mcpPath string) bool {
+	data, err := os.ReadFile(mcpPath)
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	root := map[string]any{}
+	if json.Unmarshal(data, &root) != nil {
+		return false
+	}
+	servers, _ := root["mcpServers"].(map[string]any)
+	return equivalentPiMCP(servers["codegraph"])
+}
+
+// RefreshAllPiCodeGraphIfConfigured repairs the selected Pi integration in
+// every managed Pi agent directory after sync: the current environment's
+// agent directory first, then every foreign agent directory recorded by a
+// pi-codegraph*.json manifest in the state dir. A foreign directory is
+// reconciled only when its recorded mcpPath exists on disk and still contains
+// a canonical codegraph entry; otherwise it is skipped silently so sync never
+// creates or resurrects files in a directory Gentle AI is not managing.
+func RefreshAllPiCodeGraphIfConfigured(homeDir, workspaceDir string) (PiCodeGraphResult, bool, error) {
+	result, configured, err := RefreshPiCodeGraphIfConfigured(homeDir, workspaceDir)
+	if err != nil {
+		return result, configured, err
+	}
+	err = forEachForeignPiCodeGraphAgentDir(homeDir, true, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
+		foreign, foreignErr := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: homeDir, WorkspaceDir: workspaceDir, Selected: true, AgentDir: agentDir})
+		if foreignErr != nil {
+			return foreignErr
+		}
+		configured = true
+		result.Changed = result.Changed || foreign.Changed
+		result.Files = append(result.Files, foreign.Files...)
+		result.Children = append(result.Children, foreign.Children...)
+		result.ManualActions = append(result.ManualActions, foreign.ManualActions...)
+		return nil
+	})
+	if err != nil {
+		return result, configured, err
+	}
+	slices.Sort(result.Files)
+	result.Files = slices.Compact(result.Files)
+	return result, configured, nil
+}
+
+// forEachForeignPiCodeGraphAgentDir invokes visit for every foreign agent
+// directory registered by a pi-codegraph*.json manifest in the state dir.
+// The recorded agent directory must resolve under homeDir, and — unless
+// requireLiveEntry is false, as for uninstall, where the manifest itself is
+// the ownership record — its mcpPath must still hold a canonical codegraph
+// entry. It stops at the first error visit reports.
+func forEachForeignPiCodeGraphAgentDir(homeDir string, requireLiveEntry bool, visit func(record piCodeGraphManifest, manifestPath, agentDir string) error) error {
+	current := piagent.CodeGraphPaths(homeDir)
+	manifests, err := filepath.Glob(filepath.Join(filepath.Dir(current.Manifest), "pi-codegraph*.json"))
+	if err != nil {
+		return err
+	}
+	for _, manifestPath := range manifests {
+		record, readErr := readPiCodeGraphManifest(manifestPath)
+		if readErr != nil || record.MCPPath == "" {
+			continue
+		}
+		if filepath.Clean(record.MCPPath) == filepath.Clean(current.MCPConfig) {
+			continue
+		}
+		agentDir := filepath.Dir(record.MCPPath)
+		if filepath.Clean(piagent.CodeGraphPathsForAgent(homeDir, agentDir).Manifest) != filepath.Clean(manifestPath) {
+			continue
+		}
+		// The manifest file is the only untrusted input here: without this
+		// check a hostile or corrupted manifest could aim backup snapshots,
+		// refresh writes, or uninstall restores at paths outside the home
+		// directory Gentle AI manages.
+		if !piCodeGraphPathWithinRoots(agentDir, []string{homeDir}) {
+			continue
+		}
+		if requireLiveEntry && !hasAdoptablePiCodeGraphEntry(record.MCPPath) {
+			continue
+		}
+		if err := visit(record, manifestPath, agentDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ForeignPiCodeGraphBackupPaths returns the CodeGraph-managed files in every
+// foreign agent directory registered by a pi-codegraph*.json manifest: the
+// manifest itself, its recorded MCP config, and its recorded child overlays.
+// The sync refresh step may rewrite any of them, so rollback snapshots must
+// include them all. The current agent directory is intentionally excluded;
+// callers already snapshot it through PiCodeGraphPaths.
+func ForeignPiCodeGraphBackupPaths(homeDir string) []string {
+	var collected []string
+	err := forEachForeignPiCodeGraphAgentDir(homeDir, true, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
+		collected = append(collected, manifestPath, record.MCPPath)
+		for child := range record.Children {
+			if piCodeGraphPathWithinRoots(child, []string{agentDir}) {
+				collected = append(collected, child)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil
+	}
+	slices.Sort(collected)
+	return slices.Compact(collected)
+}
+
 // UninstallPiCodeGraph removes only manifest-owned entries. Drifted child files
 // are preserved and surfaced for manual review.
-func UninstallPiCodeGraph(homeDir string) (result PiCodeGraphResult, err error) {
-	paths := piagent.CodeGraphPaths(homeDir)
+func UninstallPiCodeGraph(homeDir string) (PiCodeGraphResult, error) {
+	return uninstallPiCodeGraphAt(piagent.CodeGraphPaths(homeDir))
+}
+
+func uninstallPiCodeGraphForAgent(homeDir, agentDir string) (PiCodeGraphResult, error) {
+	return uninstallPiCodeGraphAt(piagent.CodeGraphPathsForAgent(homeDir, agentDir))
+}
+
+// UninstallAllPiCodeGraph removes the CodeGraph integration from the current
+// agent directory and every foreign agent directory registered by a
+// pi-codegraph*.json manifest, restoring each directory from its own
+// before-images, so deselection never leaves a foreign directory installed.
+func UninstallAllPiCodeGraph(homeDir string) (PiCodeGraphResult, error) {
+	result, err := UninstallPiCodeGraph(homeDir)
+	if err != nil {
+		return result, err
+	}
+	err = forEachForeignPiCodeGraphAgentDir(homeDir, false, func(record piCodeGraphManifest, manifestPath, agentDir string) error {
+		foreign, foreignErr := uninstallPiCodeGraphForAgent(homeDir, agentDir)
+		if foreignErr != nil {
+			return foreignErr
+		}
+		result.Changed = result.Changed || foreign.Changed
+		result.Files = append(result.Files, foreign.Files...)
+		result.Children = append(result.Children, foreign.Children...)
+		result.ManualActions = append(result.ManualActions, foreign.ManualActions...)
+		return nil
+	})
+	if err != nil {
+		return result, err
+	}
+	slices.Sort(result.Files)
+	result.Files = slices.Compact(result.Files)
+	return result, nil
+}
+
+// uninstallPiCodeGraphAt removes only manifest-owned entries for a single
+// agent directory. Drifted child files are preserved and surfaced for manual
+// review.
+func uninstallPiCodeGraphAt(paths piagent.CodeGraphPathSet) (result PiCodeGraphResult, err error) {
 	data, err := os.ReadFile(paths.Manifest)
 	if os.IsNotExist(err) {
 		return PiCodeGraphResult{}, nil

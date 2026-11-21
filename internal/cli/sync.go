@@ -899,6 +899,9 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 			paths[path] = struct{}{}
 		}
+		for _, path := range communitytool.ForeignPiCodeGraphBackupPaths(homeDir) {
+			paths[path] = struct{}{}
+		}
 	}
 	for _, path := range antigravityRulesBackupPaths(homeDir, workspaceDir, scope, selection.Agents) {
 		paths[path] = struct{}{}
@@ -1332,7 +1335,7 @@ func anyAgentReceivesManagedOpenCodePlugins(agentIDs []model.AgentID) bool {
 	return false
 }
 
-var refreshPiCodeGraphIfConfigured = communitytool.RefreshPiCodeGraphIfConfigured
+var refreshPiCodeGraphIfConfigured = communitytool.RefreshAllPiCodeGraphIfConfigured
 
 func (s piCodeGraphSyncStep) ID() string { return s.id }
 func (s piCodeGraphSyncStep) Run() error {
@@ -1343,9 +1346,10 @@ func (s piCodeGraphSyncStep) Run() error {
 	if configured && result.Changed && s.changedFiles != nil {
 		*s.changedFiles = append(*s.changedFiles, result.Files...)
 	}
-	// A pending probe leaves the configuration preserved and non-fatal, so this
-	// action is the only thing that tells the user why nothing was verified and
-	// what to retry. Dropping it turns a non-fatal outcome into a silent one.
+	// A pending probe leaves the configuration preserved and non-fatal; its
+	// manual action, when it carries one, is the only thing that tells the user
+	// why nothing was verified and what to retry. Adapter-health pending is
+	// silent by owner decision, so it surfaces no action here.
 	if configured && s.manualActions != nil {
 		*s.manualActions = append(*s.manualActions, result.ManualActions...)
 	}
