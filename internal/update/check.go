@@ -213,7 +213,8 @@ func applyBetaMainHeadStatus(ctx context.Context, result UpdateResult, localVers
 	}
 
 	localSHA := localBuildCommit(localVersion)
-	if tag := plainReleaseTag(localVersion); tag != "" {
+	tag := plainReleaseTag(localVersion)
+	if tag != "" {
 		// Resolve the tag to its commit, not to an annotated tag object or a
 		// same-named branch. The validated main target remains usable as a
 		// manual fallback when we cannot establish the installed commit.
@@ -232,11 +233,15 @@ func applyBetaMainHeadStatus(ctx context.Context, result UpdateResult, localVers
 		return result
 	}
 
-	// Ordering guard: a prefix mismatch alone does not mean the local build is
-	// behind main. When the local pseudo-version timestamp is newer than the
-	// fetched commit's date, offering an "update" advertises a downgrade
-	// (issue #2319 offer half). Unknown dates fail open and keep the offer.
-	if localTime, ok := pseudoVersionTime(localVersion); ok {
+	if tag != "" {
+		if reason := betaReleaseBlockReason(ctx, result.Tool, strings.ToLower(localSHA), result.BetaCommit); reason != "" {
+			result.Status = VersionUnknown
+			result.UpdateHint = reason
+			return result
+		}
+	} else if localTime, ok := pseudoVersionTime(localVersion); ok {
+		// Preserve the pseudo-version ordering guard (issue #2319); unknown
+		// dates fail open here, not for resolved release tags.
 		remoteTime := commit.Commit.Committer.Date
 		if !remoteTime.IsZero() && localTime.After(remoteTime) {
 			result.Status = UpToDate
@@ -247,6 +252,25 @@ func applyBetaMainHeadStatus(ctx context.Context, result UpdateResult, localVers
 	result.Status = UpdateAvailable
 	result.ReleaseURL = fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", result.Tool.Owner, result.Tool.Repo, shortCommit(localSHA), shortRemote)
 	return result
+}
+
+// betaReleaseBlockReason requires evidence of strict advancement before offering
+// a release-to-main update. An unresolved tag is handled before this comparison.
+func betaReleaseBlockReason(ctx context.Context, tool ToolInfo, localSHA, mainSHA string) string {
+	comparison, err := compareCommits(ctx, tool.Owner, tool.Repo, localSHA, mainSHA)
+	if err == nil {
+		switch comparison.Status {
+		case "ahead":
+			if comparison.AheadBy > 0 && comparison.BehindBy != nil && *comparison.BehindBy == 0 {
+				return ""
+			}
+		case "behind":
+			return "Beta main is behind the installed release; keep the installed binary."
+		case "diverged":
+			return "Beta main has diverged from the installed release; keep the installed binary."
+		}
+	}
+	return "Could not verify that beta main advances the installed release; keep the installed binary."
 }
 
 // pseudoVersionTime extracts the UTC timestamp a Go pseudo-version embeds

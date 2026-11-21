@@ -299,7 +299,7 @@ gentle-ai update
 gentle-ai upgrade
 ```
 
-A failed check for one tool does not block results or upgrades for the other managed tools. Both commands show failed checks as `[!!]` and keep the partial-check warning visible; `upgrade` only attempts tools with a confirmed available update. When `update` shows an unknown version as `[??]`, the summary says the update state could not be determined instead of claiming everything is up to date.
+A failed check for one tool does not block results or upgrades for the other managed tools. Both commands show failed checks as `[!!]` and keep the partial-check warning visible; `upgrade` only attempts tools with a confirmed available update. When `update` shows an unknown version as `[??]`, the summary says the update state could not be determined instead of claiming everything is up to date. On beta, an unresolved installed release tag shows the same pinned manual install command in `update` and `upgrade`. If `main` is behind the resolved release, has diverged, or cannot be verified to advance it, neither command recommends replacing the installed binary.
 
 Partial checks return exit code `0` when the remaining work succeeds. If every tool check fails, or an attempted upgrade fails, the command returns a non-zero exit code. `upgrade --dry-run` follows the same check policy without executing upgrades.
 

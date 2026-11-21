@@ -619,7 +619,7 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	// VersionUnknown tools: surface them as skipped so the user gets a clear hint
 	// instead of a silent omission from the upgrade report.
 	for _, r := range versionUnknowns {
-		hint := update.BetaReleaseRecoveryCommand(r)
+		hint := update.BetaReleaseUnknownHint(r)
 		if hint == "" {
 			hint = fmt.Sprintf("installed binary was found but its version could not be determined — check `%s` and reinstall if it is a stale source/dev build", detectCommandHint(r.Tool))
 		}

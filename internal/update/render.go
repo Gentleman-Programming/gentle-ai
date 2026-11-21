@@ -42,6 +42,9 @@ func RenderCLI(results []UpdateResult) string {
 			}
 			checksFailed++
 		} else if r.Status == VersionUnknown {
+			if hint := BetaReleaseUnknownHint(r); hint != "" {
+				fmt.Fprintf(&b, "  %s", hint)
+			}
 			unknownVersions++
 		}
 

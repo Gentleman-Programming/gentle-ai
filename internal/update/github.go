@@ -116,6 +116,31 @@ func fetchCommit(ctx context.Context, owner, repo, ref string) (githubCommit, er
 	return commit, nil
 }
 
+type githubCommitComparison struct {
+	Status   string `json:"status"`
+	AheadBy  int    `json:"ahead_by"`
+	BehindBy *int   `json:"behind_by"`
+}
+
+// compareCommits compares already resolved commit SHAs, not moving refs.
+func compareCommits(ctx context.Context, owner, repo, base, head string) (githubCommitComparison, error) {
+	// The comparison metadata covers the range even when the commit list is paginated.
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/compare/%s...%s?per_page=1", owner, repo, base, head)
+	resp, err := doGitHubRequest(ctx, endpoint)
+	if err != nil {
+		return githubCommitComparison{}, err
+	}
+	defer resp.Body.Close()
+	if err := checkGitHubResponse(resp, owner, repo); err != nil {
+		return githubCommitComparison{}, err
+	}
+	var comparison githubCommitComparison
+	if err := json.NewDecoder(resp.Body).Decode(&comparison); err != nil {
+		return githubCommitComparison{}, fmt.Errorf("decode github commit comparison: %w", err)
+	}
+	return comparison, nil
+}
+
 // fetchBetaModulePath reads the module directive at the same immutable commit
 // reported by the main-head check. Raw content needs no GitHub credentials.
 func fetchBetaModulePath(ctx context.Context, owner, repo, sha string) (string, error) {

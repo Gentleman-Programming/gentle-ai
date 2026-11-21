@@ -43,14 +43,13 @@ func ValidatedBetaSourceInstallCommand(r UpdateResult) (string, error) {
 	return BetaSourceInstallCommand(r.BetaModulePath, r.BetaCommit), nil
 }
 
-// BetaReleaseRecoveryCommand returns the pinned manual install command when a
-// plain release build could not be compared with a verified beta main target.
-func BetaReleaseRecoveryCommand(r UpdateResult) string {
-	if r.Status != VersionUnknown || plainReleaseTag(r.InstalledVersion) == "" {
+// BetaReleaseUnknownHint returns the checker's pinned manual install command or
+// ancestry diagnostic. Other unknown versions keep their existing guidance.
+func BetaReleaseUnknownHint(r UpdateResult) string {
+	if r.Status != VersionUnknown || r.BetaCommit == "" || plainReleaseTag(r.InstalledVersion) == "" {
 		return ""
 	}
-	command, _ := ValidatedBetaSourceInstallCommand(r)
-	return command
+	return r.UpdateHint
 }
 
 // updateHint returns a platform-specific instruction string for updating the given tool.
