@@ -815,9 +815,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	recoveryReason := flags.String("recovery-reason", "", "authorized recovery reason")
 	recoveryActor := flags.String("recovery-actor", "", "authorized recovery actor")
 	recoveryAuthorization := flags.String("recovery-authorization", "", "exact authorized recovery binding")
-	repairActor := flags.String("repair-actor", "", "authorized classified repair actor")
-	repairReason := flags.String("repair-reason", "", "authorized classified repair reason")
-	repairAuthorization := flags.String("repair-authorization", "", "exact classified repair authorization binding")
+	repairActor := flags.String("repair-actor", "", "authorized leaf authority disposition actor")
+	repairReason := flags.String("repair-reason", "", "authorized leaf authority disposition reason")
+	repairAuthorization := flags.String("repair-authorization", "", "exact leaf authority disposition authorization binding")
 	untrackedScope := reviewSingleValueFlag{}
 	intendedUntracked := reviewRepeatedPathFlag{}
 	expectedUntrackedInventory := reviewSingleValueFlag{}
@@ -1341,18 +1341,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			result.Repair = repair
 			// Wave 6 (rdd-closure-disposition-execution / "Reachable Through
-			// the Negotiated Transition Route"): only when the classified
-			// vocabulary above has nothing to offer, mirroring `review repair
+			// the Negotiated Transition Route"): mirrors `review repair
 			// --preflight`'s own read-only prediction (review_repair.go) —
 			// actor/reason stay empty so nothing maintainer-specific is ever
 			// derived here, and a derivation refusal is never propagated (no
 			// eligible edge this round is not a status-assembly error).
-			if repair.Status != reviewtransaction.AuthorityRepairEligible || repair.Candidate == nil {
-				if plan, planErr := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", ""); planErr == nil && reviewtransaction.AdmitAuthorityDispositionClosure(plan) == nil {
-					result.Disposition = &ReviewRepairDispositionProviderInputs{
-						PlanDigest: plan.PlanDigest, AuthorityInventoryRevision: plan.AuthorityInventoryRevision,
-						SeedLineageID: plan.SeedSet[0], SeedExpectedRevision: plan.ExpectedRevisions[plan.SeedSet[0]],
-					}
+			if plan, planErr := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", ""); planErr == nil && reviewtransaction.AdmitAuthorityDispositionClosure(plan) == nil {
+				result.Disposition = &ReviewRepairDispositionProviderInputs{
+					PlanDigest: plan.PlanDigest, AuthorityInventoryRevision: plan.AuthorityInventoryRevision,
+					SeedLineageID: plan.SeedSet[0], SeedExpectedRevision: plan.ExpectedRevisions[plan.SeedSet[0]],
 				}
 			}
 		}

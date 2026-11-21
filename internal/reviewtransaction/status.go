@@ -34,7 +34,6 @@ const (
 	AuthorityStatusReset       AuthorityStatus = "reset-in-progress"
 	AuthorityStatusSuperseded  AuthorityStatus = "superseded"
 	AuthorityStatusRecovered   AuthorityStatus = "recovered"
-	AuthorityStatusCollision   AuthorityStatus = "same-lineage-mixed-collision"
 )
 
 type AuthorityVersion string
