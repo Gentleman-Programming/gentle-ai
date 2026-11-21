@@ -35,6 +35,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 func TestUninstallOpenCodeFamilyManagedAgents(t *testing.T) {
@@ -2733,6 +2734,10 @@ func TestPartialUninstallLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
 			home := t.TempDir()
 			settingsPath := filepath.Join(home, tt.settings)
 			promptPath := filepath.Join(home, tt.prompt)
+			if tt.agent == model.AgentHermes {
+				settingsPath = filepath.Join(system.HermesConfigDir(home), "config.yaml")
+				promptPath = filepath.Join(system.HermesConfigDir(home), "SOUL.md")
+			}
 			writeBatchFile(t, settingsPath, tt.content)
 			if err := os.Chmod(settingsPath, 0o600); err != nil {
 				t.Fatal(err)

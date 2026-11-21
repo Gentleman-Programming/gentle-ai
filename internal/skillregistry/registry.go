@@ -77,7 +77,7 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".qwen", "skills"),
 		filepath.Join(home, ".kiro", "skills"),
 		filepath.Join(home, ".openclaw", "skills"),
-		filepath.Join(home, ".hermes", "skills"),
+		filepath.Join(system.HermesConfigDir(home), "skills"),
 		filepath.Join(home, ".trae", "skills"),
 	}
 }
