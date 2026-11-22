@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
 )
 
 // orchestrator-owns-correction-exhaustion (S1–S4) shipped-policy checks through

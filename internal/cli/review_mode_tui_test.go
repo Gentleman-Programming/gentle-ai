@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 func TestReviewModeTUIWrappersResolveAndChangeOnlyGlobalMode(t *testing.T) {

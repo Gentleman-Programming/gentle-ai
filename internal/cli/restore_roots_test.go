@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
 )
 
 // redirectedAppDataCLIHome isolates the restore home and redirects %APPDATA%

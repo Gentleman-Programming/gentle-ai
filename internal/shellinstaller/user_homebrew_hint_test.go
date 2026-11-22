@@ -14,7 +14,7 @@ func TestUserHomebrewHintNamesPrivateRemediationForHomebrewAncestors(t *testing.
 		if hint == "" {
 			t.Fatalf("userHomebrewHint(%q) is empty, want a remediation", path)
 		}
-		for _, want := range []string{"Homebrew", "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest", "user-owned 0755 directory", "do not change Homebrew permissions"} {
+		for _, want := range []string{"Homebrew", "go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0", "user-owned 0755 directory", "do not change Homebrew permissions"} {
 			if !strings.Contains(hint, want) {
 				t.Fatalf("userHomebrewHint(%q) = %q, want it to contain %q", path, hint, want)
 			}
