@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
+	assets "github.com/gentleman-programming/gentle-ai/v5/scripts"
 )
 
 // Windows component version pins. The recorded manifest pins let the update

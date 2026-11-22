@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	piagent "github.com/gentleman-programming/gentle-ai/v5/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 func TestPiGlobalPersonaConfigPathRules(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 const WindowsDistributionHoldMessage = "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced."
@@ -90,7 +90,7 @@ func gentleAIHint(profile system.PlatformProfile) string {
 	case "darwin":
 		return "gentle-ai upgrade (downloads pre-built binary)"
 	case "windows":
-		return WindowsDistributionHoldMessage + " Install/update from source with Go 1.25.10+: " + GentleAISourceInstallCommand("")
+		return WindowsDistributionHoldMessage + " Source installation requires an exact stable release tag; rerun the update check."
 	default:
 		return ""
 	}

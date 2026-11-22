@@ -1,4 +1,4 @@
-module github.com/gentleman-programming/gentle-ai/v4
+module github.com/gentleman-programming/gentle-ai/v5
 
 go 1.25.10
 

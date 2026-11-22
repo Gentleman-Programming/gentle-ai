@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
 )
 
 func TestShapeVerifierOwnership(t *testing.T) {

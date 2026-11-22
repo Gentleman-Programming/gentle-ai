@@ -1,6 +1,6 @@
 package agentguidance
 
-import "github.com/gentleman-programming/gentle-ai/v4/internal/model"
+import "github.com/gentleman-programming/gentle-ai/v5/internal/model"
 
 // Test-only seams. Production callers always pass the review contract source
 // explicitly through RoutingOptions.ReviewContract / RenderOrchestratorWithSource;

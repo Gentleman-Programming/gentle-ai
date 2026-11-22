@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
+	assets "github.com/gentleman-programming/gentle-ai/v5/scripts"
 )
 
 // StageNativeInstallerCarrier materializes the selected local original source in
