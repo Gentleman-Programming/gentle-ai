@@ -48,7 +48,7 @@ The public key is not secret, but its provenance is security-critical. A key fet
 The workflow validates the complete repository-variable value, exports a separate canonical value, and permits GoReleaser to inject only that validated output through this exact linker variable:
 
 ```text
-github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade.releaseMinisignPublicKeys
+github.com/gentleman-programming/gentle-ai/v5/internal/update/upgrade.releaseMinisignPublicKeys
 ```
 
 Source/test builds retain `UNSET`; their binary downloader refuses network replacement. On Linux/macOS, `gentle-ai upgrade` routes these source builds through `go install` when Go is on `PATH` and a Go import path is declared, pinned to the exact target release with the normal Go checksum database settings. Without those prerequisites, it prints a manual source-install command before creating backups or changing files. Run `gentle-ai sync` after a manual binary update. There is no grace version or unsigned binary fallback; empty/malformed configured keys and failed signatures never trigger a Go fallback.
@@ -91,7 +91,7 @@ Because there is no signed Windows asset to download, Windows never downloads an
 unsigned executable and never executes a remote update script. Instead:
 
 - With Go 1.25.10+ on `PATH`, the built-in upgrader runs
-  `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@vX.Y.Z`,
+  `go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.x.y`,
   pinned to the exact release tag. This is verified — just against a different
   trust anchor: the module is checked against the Go checksum database
   (`sum.golang.org`) rather than our minisign release signature. The upgrader

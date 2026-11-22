@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 var updateChannelEnv = os.Getenv
@@ -135,6 +135,17 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 		return applyBetaMainHeadStatus(ctx, result, localVersion, mainCommit)
 	}
 
+	if profile.OS == "windows" && isGentleAIRepo(tool) && homebrewOwnership == HomebrewNone {
+		// A newly migrated source binary may be ahead of the published module major.
+		// Use the exact validated tag so the hint cannot resolve an unreleased @latest.
+		tag := release.TagName
+		if tag == "" || tag != plainReleaseTag(tag) || parseMajorVersion(tag) < 0 {
+			result.Status = CheckFailed
+			result.Err = fmt.Errorf("stable release tag is missing or invalid; rerun the update check")
+			return result
+		}
+		result.UpdateHint = WindowsDistributionHoldMessage + " Install/update from source with Go 1.25.10+: " + GentleAISourceInstallCommand(tag)
+	}
 	result.LatestVersion = normalizeVersion(release.TagName)
 	result.ReleaseURL = release.HTMLURL
 

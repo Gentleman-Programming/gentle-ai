@@ -13,7 +13,7 @@ var userHomebrewPrefixes = []string{"/opt/homebrew", "/usr/local/Cellar", "/usr/
 
 const userHomebrewRemediation = "; gentle-ai was started from Homebrew's shared prefix, whose group-writable directories it does not trust as a supervisor ancestor. " +
 	"Keep Homebrew as it is (do not change Homebrew permissions) and run gentle-ai from a private directory instead: " +
-	"either `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest` into your own GOBIN, " +
+	"either `go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0` into your own GOBIN, " +
 	"or copy the gentle-ai binary into a user-owned 0755 directory (for example ~/.local/bin) and run it from there"
 
 // userHomebrewHint returns the remediation appended to a supervisor ancestor

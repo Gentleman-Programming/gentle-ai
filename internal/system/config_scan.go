@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/copilotconfig"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/copilotconfig"
 )
 
 // ConfigState records the filesystem presence of an agent's global config directory.

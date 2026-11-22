@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
+	assets "github.com/gentleman-programming/gentle-ai/v5/scripts"
 )
 
 // The provision helper's identity loop must refuse an acquired package.json

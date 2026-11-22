@@ -155,9 +155,10 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 
 	script := string(content)
 	for _, want := range []string{
-		"Add-GoEnvPattern -Name \"GONOSUMDB\" -Pattern \"github.com/gentleman-programming/gentle-ai/v4\"",
-		"Add-GoEnvPattern -Name \"GOPRIVATE\" -Pattern \"github.com/gentleman-programming/gentle-ai/v4\"",
-		"Add-GoEnvPattern -Name \"GONOPROXY\" -Pattern \"github.com/gentleman-programming/gentle-ai/v4\"",
+		`$goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/v5/cmd/$BINARY_NAME@$version"`,
+		"Add-GoEnvPattern -Name \"GONOSUMDB\" -Pattern \"github.com/gentleman-programming/gentle-ai/v5\"",
+		"Add-GoEnvPattern -Name \"GOPRIVATE\" -Pattern \"github.com/gentleman-programming/gentle-ai/v5\"",
+		"Add-GoEnvPattern -Name \"GONOPROXY\" -Pattern \"github.com/gentleman-programming/gentle-ai/v5\"",
 		"& go install $goPackage",
 	} {
 		if !strings.Contains(script, want) {
@@ -166,9 +167,9 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 	}
 
 	for _, clobber := range []string{
-		"$env:GONOSUMDB = \"github.com/gentleman-programming/gentle-ai/v4\"",
-		"$env:GOPRIVATE = \"github.com/gentleman-programming/gentle-ai/v4\"",
-		"$env:GONOPROXY = \"github.com/gentleman-programming/gentle-ai/v4\"",
+		"$env:GONOSUMDB = \"github.com/gentleman-programming/gentle-ai/v5\"",
+		"$env:GOPRIVATE = \"github.com/gentleman-programming/gentle-ai/v5\"",
+		"$env:GONOPROXY = \"github.com/gentleman-programming/gentle-ai/v5\"",
 	} {
 		if strings.Contains(script, clobber) {
 			t.Fatalf("scripts/install.ps1 clobbers existing user env with %q; beta proxy bypass must preserve existing patterns", clobber)
@@ -216,8 +217,8 @@ func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 		t.Fatalf("go.mod module line %q does not carry a major version suffix", moduleLine)
 	}
 	major := majorMatch[1]
-	if major != "v4" {
-		t.Errorf("current module major = %s, want v4", major)
+	if major != "v5" {
+		t.Errorf("current module major = %s, want v5", major)
 	}
 
 	cases := []struct {

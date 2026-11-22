@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 func TestUpdateCatalogOmitsExternalOpenCodePlugins(t *testing.T) {
@@ -1250,6 +1250,76 @@ func TestCheckFiltered_FetchErrorPreservesCheckFailedForMissingTool(t *testing.T
 	}
 }
 
+func TestCheckFilteredWindowsGentleAIRequiresExactStableSourceTag(t *testing.T) {
+	t.Setenv("GENTLE_AI_CHANNEL", "stable")
+	originalMajor := runningGoMajor
+	t.Cleanup(func() { runningGoMajor = originalMajor })
+	runningGoMajor = func() int { return 5 }
+
+	for _, tc := range []struct {
+		name, tag, wantLatest, wantCommand string
+		httpStatus                         int
+	}{
+		{
+			name: "before v5 publication", tag: "v4.6.0", wantLatest: "4.6.0",
+			wantCommand: "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.6.0",
+		},
+		{
+			name: "after v5 publication", tag: "v5.0.0", wantLatest: "5.0.0",
+			wantCommand: "go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0",
+		},
+		{name: "missing tag"},
+		{name: "prerelease is not a stable tag", tag: "v5.0.0-rc.1"},
+		{name: "noncanonical tag", tag: "5.0.0"},
+		{name: "invalid major", tag: "v999999999999999999999.0.0"},
+		{name: "release is unavailable", httpStatus: http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/repos/Gentleman-Programming/gentle-ai/releases/latest" {
+					t.Errorf("unexpected release request: %s", r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				if tc.httpStatus != 0 {
+					w.WriteHeader(tc.httpStatus)
+					return
+				}
+				json.NewEncoder(w).Encode(githubRelease{TagName: tc.tag})
+			}))
+			t.Cleanup(server.Close)
+			originalClient := httpClient
+			t.Cleanup(func() { httpClient = originalClient })
+			httpClient = server.Client()
+			httpClient.Transport = &testTransport{server: server}
+
+			profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
+			const installed = "4.5.0"
+			results := CheckFiltered(context.Background(), installed, profile, []string{"gentle-ai"})
+			if len(results) != 1 {
+				t.Fatalf("CheckFiltered returned %d results, want one", len(results))
+			}
+			result := results[0]
+			rendered := RenderCLI(results)
+			if tc.wantCommand != "" {
+				assertResult(t, result, "gentle-ai", UpdateAvailable, installed, tc.wantLatest)
+				wantHint := WindowsDistributionHoldMessage + " Install/update from source with Go 1.25.10+: " + tc.wantCommand
+				if result.Err != nil || result.UpdateHint != wantHint || !strings.Contains(rendered, wantHint) || strings.Contains(rendered, "@latest") {
+					t.Fatalf("stable target %q: hint=%q error=%v output=%q; want %q", tc.tag, result.UpdateHint, result.Err, rendered, wantHint)
+				}
+				return
+			}
+			assertResult(t, result, "gentle-ai", CheckFailed, installed, "")
+			if result.Err == nil || !strings.Contains(rendered, "check failed") || strings.Contains(result.UpdateHint+rendered, "go install") {
+				t.Fatalf("invalid stable target %q must not suggest a source install: hint=%q error=%v output=%q", tc.tag, result.UpdateHint, result.Err, rendered)
+			}
+			if tc.httpStatus == 0 && result.Err.Error() != "stable release tag is missing or invalid; rerun the update check" {
+				t.Fatalf("invalid stable tag error = %q", result.Err)
+			}
+		})
+	}
+}
+
 // --- TestUpdateHint ---
 
 func TestUpdateHint(t *testing.T) {
@@ -1286,7 +1356,7 @@ func TestUpdateHint(t *testing.T) {
 			name:    "gentle-ai windows",
 			tool:    ToolInfo{Name: "gentle-ai"},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
-			want:    "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced. Install/update from source with Go 1.25.10+: go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest",
+			want:    "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced. Source installation requires an exact stable release tag; rerun the update check.",
 		},
 		{
 			name:          "engram macOS brew-owned",

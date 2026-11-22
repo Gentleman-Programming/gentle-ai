@@ -10,12 +10,12 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kiro"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/trae"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/windsurf"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/kiro"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/trae"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/windsurf"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/gga"
 )
 
 // UserHomeDirFn is the function used to resolve the user's home directory.
