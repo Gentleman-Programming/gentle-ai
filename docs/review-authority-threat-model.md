@@ -69,11 +69,24 @@ A quarantine record those providers already committed (`legacy_alias_repair`, `m
 
 ## Rejected Validator Terminal Disposition
 
-A canonical rejected targeted-validator verdict is valid authority, not corruption. An unchanged candidate still stops, and ordinary abandonment and recovery restrictions remain in force. For an isolated terminal with a consumed correction and no recovery dependencies, `gentle-ai review repair --preflight` offers an exact successor-only selector, not permission to mutate.
+A canonical rejected targeted-validator verdict is valid authority, not corruption. An unchanged candidate still stops, and ordinary abandonment and recovery restrictions remain in force. An isolated terminal with a consumed correction and no recovery dependencies can be released only by an explicit maintainer decision.
 
-1. Select the exact entry by repeating preflight with its returned `--successor-lineage` and `--successor-revision`.
-2. Review the disposition plan and supply actor, reason, and its exact digest/inventory-bound `gentle-ai.review-disposition-authorization/v1` binding through the existing repair execution inputs.
-3. Execution rederives eligibility under the maintenance lock, validates authorization and revisions, and retains byte-identical rejected authority with an audit proof. Exact replay converges on that proof.
+1. Run `gentle-ai review repair --preflight --contract gentle-ai.review-integration/v2 --cwd <repo>`. In `disposition_selectors`, find the exact successor-only entry for the rejected lineage. Repeat preflight with `--successor-lineage <successor_lineage_id> --successor-revision <successor_expected_revision>` from that entry.
+2. For this eligible exact selection, `disposition_provider_inputs` gives `repository_binding`, `plan_digest`, and `authority_inventory_revision`. If `repository_binding` is absent, this recipe does not apply. Do not use `assessment.authorization_schema`: it describes legacy classified repair, not leaf disposition.
+3. If you authorize release, choose a single-line actor and reason. Build the following eight lines separated by LF, with no trailing newline. Replace the first three placeholders with the selected preflight values and the last two with your actor and reason, trimming any surrounding whitespace from actor and reason.
+
+   ```text
+   gentle-ai.review-disposition-authorization/v1
+   schema=gentle-ai.review-authority-disposition-plan/v1
+   repository=<repository_binding>
+   class=rejected_targeted_validator_terminal
+   plan_digest=<plan_digest>
+   inventory_revision=<authority_inventory_revision>
+   actor=<actor>
+   reason=<reason>
+   ```
+
+4. Repeat the exact selected command without `--preflight`. Add `--plan-digest <plan_digest> --inventory-revision <authority_inventory_revision> --actor <actor> --reason <reason> --authorization <binding>`. Pass the full binding as one argument. Execution rederives eligibility under the maintenance lock, validates authorization and revisions, and retains byte-identical rejected authority with an audit proof. Exact replay converges on that proof.
 
 The class is `rejected_targeted_validator_terminal`. Disposition releases only the active governing claim: it does not approve the candidate, replace the historical verdict, restore a correction attempt, disable RDD, or automatically launch another review. It is not delivery permission. Missing canonical evidence, stale or forged bindings, non-rejected terminals, incomplete inspection, and retained recovery dependencies fail closed. Unrelated historical and content-mismatch repair behavior is unchanged.
 

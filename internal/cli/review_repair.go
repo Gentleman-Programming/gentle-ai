@@ -51,6 +51,8 @@ type ReviewRepairDispositionProviderInputs struct {
 	AuthorityInventoryRevision string `json:"authority_inventory_revision"`
 	SeedLineageID              string `json:"seed_lineage_id,omitempty"`
 	SeedExpectedRevision       string `json:"seed_expected_revision,omitempty"`
+	// Published only by v2 repair preflight for an exact rejected-validator selector.
+	RepositoryBinding string `json:"repository_binding,omitempty"`
 }
 
 // ReviewRepairDispositionExecution is the safe, path-free projection of a
@@ -140,6 +142,12 @@ func (result ReviewRepairResult) Validate() error {
 				// refusal:by-design human-authority: this result is built by runReviewRepair itself from a freshly-derived plan digest and inventory revision; reaching this means a product defect a maintainer must fix, not a value any operator command supplies
 				return errors.New("review repair preflight disposition provider inputs are incomplete")
 			}
+			if binding := inputs.RepositoryBinding; binding != "" && (!nativeGitContract ||
+				result.Assessment.Status != reviewtransaction.AuthorityRepairUnsupported ||
+				!validReviewCapabilitySHA256(binding) || binding != strings.ToLower(binding) ||
+				inputs.SeedLineageID != "" || inputs.SeedExpectedRevision != "") {
+				return errors.New("review repair preflight disposition repository binding is invalid")
+			}
 		}
 		if selectors := result.DispositionSelectors; len(selectors) > 0 {
 			if result.Assessment.Status != reviewtransaction.AuthorityRepairUnsupported || result.ProviderInputs != nil || result.DispositionProviderInputs != nil || len(result.RequiredInputs) != 0 {
@@ -226,7 +234,25 @@ func (err *reviewRepairOperationError) Error() string {
 func (err *reviewRepairOperationError) Unwrap() error { return err.cause }
 
 func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only a leaf authority disposition plan. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. When content-mismatched leaves, historical entries, or isolated canonical rejected-validator terminals require selection, --preflight enumerates exact selectors; re-run it with one selector before executing its plan. Rejected-validator disposition preserves the verdict and consumed correction; it releases active authority without approval or an automatic review restart.")
+	flags := newReviewFlagSet("review repair", stdout, `Assess the review authority inventory and execute only an admitted leaf authority disposition plan. Preflight is read-only and never supplies maintainer authorization. For content-mismatched leaves or historical entries, repeat preflight with one exact selector when offered.
+
+To release an isolated canonical rejected-validator terminal:
+1. Run gentle-ai review repair --preflight --contract `+ReviewIntegrationContractV2+` --cwd <repo>.
+2. Repeat with --successor-lineage <successor_lineage_id> and --successor-revision <successor_expected_revision> from the selected successor-only disposition_selectors entry. Copy the three values from disposition_provider_inputs, not assessment.authorization_schema (legacy classified repair). If repository_binding is absent, this recipe does not apply.
+3. If you authorize release, re-run the same exact selection without --preflight. Pass --plan-digest and --inventory-revision from those inputs, plus --actor, --reason, and the binding as a single --authorization argument. Use the same single-line actor and reason in the binding, with surrounding whitespace trimmed.
+
+--authorization is exactly eight LF-separated lines with no trailing newline:
+
+`+reviewtransaction.AuthorityDispositionAuthorizationSchema+`
+schema=`+reviewtransaction.AuthorityDispositionPlanSchema+`
+repository=<repository_binding>
+class=`+reviewtransaction.RejectedValidatorDispositionClass+`
+plan_digest=<plan_digest>
+inventory_revision=<authority_inventory_revision>
+actor=<actor>
+reason=<reason>
+
+This releases active authority without approving the candidate, changing the rejected verdict, restoring the consumed correction, or starting another review. It does not authorize delivery.`)
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", ReviewIntegrationContractV1, "review integration contract")
 	preflight := flags.Bool("preflight", false, "perform deterministic read-only classification without authority mutation")
@@ -313,17 +339,22 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 				// SeedLineageID/SeedExpectedRevision stay unset here
 				// (omitempty): `review repair --preflight` must never leak the
 				// lineage identity (TestReviewRepairPreflightSurfacesAuthorityDispositionPlanForEligibleLeaf's
-				// own byte-level assertion) — only PlanDigest and
-				// AuthorityInventoryRevision are published, the pre-existing
-				// Slice S3 contract. The negotiated `review status
+				// own byte-level assertion). Older flows publish only the
+				// plan digest and inventory revision. The negotiated `review status
 				// --next-transition` route below (review_facade.go) is a
 				// different publication surface with a different contract: an
 				// execute{review.repair} transition needs a concrete
 				// lineage_id/revision binding the way every other
 				// "review.repair" execute transition already carries one.
-				result.DispositionProviderInputs = &ReviewRepairDispositionProviderInputs{
+				inputs := &ReviewRepairDispositionProviderInputs{
 					PlanDigest: plan.PlanDigest, AuthorityInventoryRevision: plan.AuthorityInventoryRevision,
 				}
+				if *contract == ReviewIntegrationContractV2 && selectorPresent &&
+					assessment.Status == reviewtransaction.AuthorityRepairUnsupported &&
+					plan.AnomalyClass == reviewtransaction.RejectedValidatorDispositionClass {
+					inputs.RepositoryBinding = plan.RepositoryBinding
+				}
+				result.DispositionProviderInputs = inputs
 			}
 		} else if selectorPresent {
 			return reviewPreflightError(planErr)
