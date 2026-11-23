@@ -64,22 +64,21 @@ type userWindowsRmProcessInfo struct {
 }
 
 // userWindowsBusyError builds the final busy error. Holder enumeration only
-// appends to the existing message: when it fails the message is unchanged, and
-// when it finds nothing the message adds the working-directory case Restart
-// Manager cannot see.
+// appends to the existing message: when it fails the message is unchanged.
+// Otherwise it names the holders it found and always adds the
+// working-directory case Restart Manager cannot see, because a named holder
+// does not rule out a second process whose working directory is inside root.
 func userWindowsBusyError(root string, cause error) error {
 	message := fmt.Sprintf("a file under %s is still in use by another program (for example an antivirus scan or an open editor or terminal); close it and retry", root)
-	holders, err := userWindowsLockHolders(root)
-	switch {
-	case err != nil:
-	case len(holders) == 0:
-		message += fmt.Sprintf("; a program may also be running with its working directory inside %s (for example a terminal or a WSL session)", root)
-	default:
-		names := make([]string, 0, len(holders))
-		for _, holder := range holders {
-			names = append(names, fmt.Sprintf("%s (PID %d)", holder.Name, holder.PID))
+	if holders, err := userWindowsLockHolders(root); err == nil {
+		if len(holders) > 0 {
+			names := make([]string, 0, len(holders))
+			for _, holder := range holders {
+				names = append(names, fmt.Sprintf("%s (PID %d)", holder.Name, holder.PID))
+			}
+			message += fmt.Sprintf("; processes holding files under %s: %s", root, strings.Join(names, ", "))
 		}
-		message += fmt.Sprintf("; processes holding files under %s: %s", root, strings.Join(names, ", "))
+		message += fmt.Sprintf("; a program may also be running with its working directory inside %s (for example a terminal or a WSL session)", root)
 	}
 	return fmt.Errorf("%w; %s", cause, message)
 }

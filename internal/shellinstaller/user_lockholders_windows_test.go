@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,8 +54,10 @@ func TestUserWindowsRetryBusyNamesLockHolders(t *testing.T) {
 			t.Fatalf("busy error %q does not contain %q", message, want)
 		}
 	}
-	if strings.Contains(message, "working directory") {
-		t.Fatalf("busy error with named holders must not fall back to the working-directory hint: %q", message)
+	// Restart Manager cannot see working-directory handles, so a named holder
+	// does not rule out a second, invisible one: the hint is kept.
+	if !strings.Contains(message, fmt.Sprintf("a program may also be running with its working directory inside %s", root)) {
+		t.Fatalf("busy error with named holders must keep the working-directory hint: %q", message)
 	}
 	if *calls != 1 {
 		t.Fatalf("holder enumeration ran %d times, want exactly once on the final failure", *calls)
@@ -175,4 +178,81 @@ func TestUserWindowsRestartManagerReportsOwnProcess(t *testing.T) {
 		}
 	}
 	t.Fatalf("restart manager did not report the own process %d holding %s: %+v", pid, path, holders)
+}
+
+// A real second process holding a file under the root is named in the error of
+// a real rename, and the diagnostics never stop it.
+func TestUserWindowsRenameBusyNamesRealHolderProcess(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "install")
+	held := filepath.Join(root, "home", ".engram", "held.log")
+	if err := os.MkdirAll(filepath.Dir(held), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(held, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ready := held + ".ready"
+	child := exec.Command("powershell.exe", "-NoProfile", "-Command",
+		"$f=[IO.File]::Open('"+held+"','Open','ReadWrite','None'); New-Item -ItemType File '"+ready+"' | Out-Null; Start-Sleep 60")
+	if err := child.Start(); err != nil {
+		t.Skipf("powershell.exe unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("holder process never opened the file")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	previousSleep := userWindowsBusySleep
+	userWindowsBusySleep = func(time.Duration) {}
+	t.Cleanup(func() { userWindowsBusySleep = previousSleep })
+
+	err := userWindowsRenameBusy(root, root, root+".replaced")
+	if err == nil {
+		t.Fatal("rename of a root with a held file unexpectedly succeeded")
+	}
+	if !userWindowsBusyCause(err) {
+		t.Fatalf("busy error lost its Windows cause: %v", err)
+	}
+	message := err.Error()
+	if want := fmt.Sprintf("(PID %d)", child.Process.Pid); !strings.Contains(message, want) || !strings.Contains(strings.ToLower(message), "powershell.exe") {
+		t.Fatalf("busy error %q does not name powershell.exe %s", message, want)
+	}
+	process, openErr := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(child.Process.Pid))
+	if openErr != nil {
+		t.Fatalf("holder process is gone after diagnostics: %v", openErr)
+	}
+	defer windows.CloseHandle(process)
+	if event, _ := windows.WaitForSingleObject(process, 0); event != uint32(windows.WAIT_TIMEOUT) {
+		t.Fatalf("diagnostics must never stop the holder process (wait result %d)", event)
+	}
+}
+
+// Junctions inside the root are not followed when listing candidate files.
+func TestUserWindowsLockHolderCandidatesDoNotFollowJunctions(t *testing.T) {
+	base := t.TempDir()
+	root, outside := filepath.Join(base, "root"), filepath.Join(base, "outside")
+	for _, dir := range []string{root, outside} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, file := range []string{filepath.Join(root, "plain"), filepath.Join(outside, "x")} {
+		if err := os.WriteFile(file, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	junction := filepath.Join(root, "j")
+	if out, err := exec.Command("cmd.exe", "/c", "mklink", "/J", junction, outside).CombinedOutput(); err != nil {
+		t.Skipf("mklink /J unavailable: %v %s", err, out)
+	}
+	files := userWindowsLockHolderCandidates(root, 100, 100)
+	if len(files) != 1 || files[0] != filepath.Join(root, "plain") {
+		t.Fatalf("candidates = %v, want only %s (junction %s must not be followed)", files, filepath.Join(root, "plain"), junction)
+	}
 }
