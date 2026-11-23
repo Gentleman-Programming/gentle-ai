@@ -4,7 +4,6 @@ package shellinstaller
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"time"
 
@@ -17,7 +16,9 @@ import (
 // the installation. Renames and removals of owned paths therefore retry a
 // sharing, lock or access violation with a short bounded backoff (about 2.6 s
 // in total) and, when the path stays busy, wrap the Windows error with an
-// actionable message that still unwraps to it.
+// actionable message that still unwraps to it and names the processes that
+// Restart Manager reports as holding files under the root (see
+// user_lockholders_windows.go).
 var (
 	userWindowsBusyDelays = []time.Duration{100 * time.Millisecond, 250 * time.Millisecond, 500 * time.Millisecond, 750 * time.Millisecond, 1000 * time.Millisecond}
 	userWindowsBusySleep  = time.Sleep
@@ -45,7 +46,7 @@ func userWindowsRetryBusy(root string, operation func() error) error {
 	if err == nil || !userWindowsBusyCause(err) {
 		return err
 	}
-	return fmt.Errorf("%w; a file under %s is still in use by another program (for example an antivirus scan or an open editor or terminal); close it and retry", err, root)
+	return userWindowsBusyError(root, err)
 }
 
 func userWindowsRenameBusy(root, from, to string) error {
