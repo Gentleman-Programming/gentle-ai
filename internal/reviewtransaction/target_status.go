@@ -329,23 +329,32 @@ func committedRangeBaseAgainst(ctx context.Context, repo, head, ref string) (str
 	return base, count, nil
 }
 
-// otherRemoteDefaultRefs lists refs/remotes/<remote>/<defaultName> for every
-// configured remote but origin, in one Git call; Git faults yield none.
+// otherRemoteDefaultRefs lists the existing refs/remotes/<remote>/<defaultName>
+// for every configured remote but origin. Two Git calls whatever the number of
+// remote refs: for-each-ref is asked only for those exact names. Git faults
+// yield none.
 func otherRemoteDefaultRefs(ctx context.Context, repo, defaultName string) []string {
-	output, err := runGit(ctx, repo, nil, nil, "for-each-ref", "--format=%(refname)", "refs/remotes/")
-	if err != nil {
-		return nil
-	}
 	remotes, err := runGit(ctx, repo, nil, nil, "remote")
 	if err != nil {
 		return nil
 	}
+	args := []string{"for-each-ref", "--format=%(refname)"}
 	wanted := map[string]bool{}
 	for _, remote := range strings.Fields(string(remotes)) {
 		if remote != "origin" {
-			wanted["refs/remotes/"+remote+"/"+defaultName] = true
+			ref := "refs/remotes/" + remote + "/" + defaultName
+			args = append(args, ref)
+			wanted[ref] = true
 		}
 	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	output, err := runGit(ctx, repo, nil, nil, args...)
+	if err != nil {
+		return nil
+	}
+	// for-each-ref also matches a pattern as a prefix (refs/remotes/<r>/main/x).
 	var refs []string
 	for _, ref := range strings.Fields(string(output)) {
 		if wanted[ref] {
