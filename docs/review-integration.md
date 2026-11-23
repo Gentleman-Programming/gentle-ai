@@ -74,6 +74,8 @@ Git ownership refusals retain `git_repository_untrusted`; authority from a newer
 
 Selectorless STATUS evaluates only the current worktree candidate and renders one exact START invocation. It does **not** discover ambient authority, resume another worktree, recover history, or select a stale lineage. The parent runs only the returned `next_transition` and its ordered tokens.
 
+On a clean worktree with committed work, STATUS derives the committed range it offers (`--base-ref <commit> --committed-only`). The base is the merge-base with the branch's upstream when HEAD is ahead of it; otherwise the merge-base with `origin`'s default branch, narrowed to a nearer unambiguous fork point with the same-named branch on another remote (`refs/remotes/<remote>/<default>`), so a fork whose `origin` default branch lags behind its `upstream` doesn't offer the whole lag. When `origin`'s default branch gives no single base or an empty range (or there is no `origin/HEAD`), STATUS falls back to the `base_ref` collect whatever other remotes hold.
+
 #### START options through STATUS (`start_options_preflight`)
 
 A parent that runs only provider-issued tokens passes the START options to the negotiated STATUS instead of appending them to the START it receives. `review status --contract <contract> --next-transition` accepts `--request-context <file>`, `--escalate-item <1-6>`, `--escalate-reason <text>`, `--lenses <r,...>`, and `--lenses-reason <text>`:

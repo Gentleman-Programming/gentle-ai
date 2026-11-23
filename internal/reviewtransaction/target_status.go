@@ -261,6 +261,17 @@ func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([
 // nonempty range; every other outcome -- no origin/HEAD, a criss-cross
 // history, an empty range, or any Git fault -- is returned as an error so the
 // caller keeps the truthful fallback.
+//
+// Other remotes can only narrow that answer (issue #5910): a fork's origin
+// default branch can lag hundreds of commits behind the upstream the branch
+// was actually cut from. Once origin's default branch gives a valid range, the
+// branch with the same name on every other remote (refs/remotes/<remote>/
+// <name>, never that remote's HEAD, which may name any branch) is a candidate
+// too, and the nearest unambiguous fork point wins; a tie keeps origin. Any
+// origin outcome that falls back stays a fallback, so another remote never
+// turns a collect into a START, and only same-named default branches count,
+// so a remote branch holding an earlier push of this work can't shrink the
+// range.
 func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error) {
 	defer StartStatusPhase(ctx, StatusPhaseImplicitBaseRangeDerivation)()
 	if base, ok := resolveCommittedRangeBaseFromUpstream(ctx, repo); ok {
@@ -278,27 +289,70 @@ func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, ref)
+	base, count, err := committedRangeBaseAgainst(ctx, repo, head, ref)
 	if err != nil {
 		return "", err
+	}
+	for _, other := range otherRemoteDefaultRefs(ctx, repo, strings.TrimPrefix(ref, "refs/remotes/origin/")) {
+		// guard:population selectorless-base-narrowing too-loose: only the branch named like origin's default on another configured remote, with a single merge-base and a non-empty range strictly nearer than origin's valid one, may narrow the derived review range; a remote HEAD on any other branch, ties, and every origin fallback leave it unchanged
+		if otherBase, otherCount, err := committedRangeBaseAgainst(ctx, repo, head, other); err == nil && otherCount < count {
+			base, count = otherBase, otherCount
+		}
+	}
+	return base, nil
+}
+
+// committedRangeBaseAgainst returns the single merge-base of head and ref and
+// the number of commits between them, refusing a criss-cross history or an
+// empty range.
+func committedRangeBaseAgainst(ctx context.Context, repo, head, ref string) (string, int, error) {
+	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, ref)
+	if err != nil {
+		return "", 0, err
 	}
 	merges := strings.Fields(string(bases))
 	if len(merges) != 1 {
-		return "", fmt.Errorf("remote default branch history has %d merge bases", len(merges)) // refusal:by-design world-action: a criss-cross history has no single base to derive, so the caller falls back to collecting a base_ref
+		return "", 0, fmt.Errorf("remote default branch history has %d merge bases", len(merges)) // refusal:by-design world-action: a criss-cross history has no single base to derive, so the caller falls back to collecting a base_ref
 	}
 	base := merges[0]
 	if base == head {
-		return "", fmt.Errorf("HEAD is the remote default branch merge-base") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
+		return "", 0, fmt.Errorf("HEAD is the remote default branch merge-base") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
 	}
 	countOutput, err := runGit(ctx, repo, nil, nil, "rev-list", "--count", base+".."+head)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(string(countOutput)))
 	if err != nil || count <= 0 {
-		return "", fmt.Errorf("committed range between the merge-base and HEAD is empty") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
+		return "", 0, fmt.Errorf("committed range between the merge-base and HEAD is empty") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
 	}
-	return base, nil
+	return base, count, nil
+}
+
+// otherRemoteDefaultRefs lists refs/remotes/<remote>/<defaultName> for every
+// configured remote but origin, in one Git call; Git faults yield none.
+func otherRemoteDefaultRefs(ctx context.Context, repo, defaultName string) []string {
+	output, err := runGit(ctx, repo, nil, nil, "for-each-ref", "--format=%(refname)", "refs/remotes/")
+	if err != nil {
+		return nil
+	}
+	remotes, err := runGit(ctx, repo, nil, nil, "remote")
+	if err != nil {
+		return nil
+	}
+	wanted := map[string]bool{}
+	for _, remote := range strings.Fields(string(remotes)) {
+		if remote != "origin" {
+			wanted["refs/remotes/"+remote+"/"+defaultName] = true
+		}
+	}
+	var refs []string
+	for _, ref := range strings.Fields(string(output)) {
+		if wanted[ref] {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
 }
 
 func resolveCommittedRangeBaseFromUpstream(ctx context.Context, repo string) (string, bool) {

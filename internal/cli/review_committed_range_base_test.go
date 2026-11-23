@@ -79,13 +79,12 @@ func TestNextTransitionCommittedRangeBasePrefersBranchUpstream(t *testing.T) {
 // the branch is level with its own upstream (a fully pushed feature branch),
 // the upstream range is empty, so derivation keeps the remote default branch
 // and still offers the executable committed-range START instead of the
-// unroutable empty_candidate_base_ref_required collect. The known limitation
-// for a default branch that is not the integration branch is tracked by
-// #4628 and addressed by making over-budget candidates actionable, not by
-// dropping the derivation here.
+// unroutable empty_candidate_base_ref_required collect. With origin as the
+// only remote, that base is the merge-base with origin's default branch.
 func TestNextTransitionCommittedRangeBaseRetainsDefaultBranchForLevelUpstream(t *testing.T) {
 	reviewEnabledHome(t)
 	repo, _ := buildTrunkIntegrationSplitRepo(t)
+	defaultTip := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "refs/remotes/origin/HEAD"))
 	runReviewCLIGit(t, repo, "checkout", "-qb", "feature")
 	if err := os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("the change under review\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -103,8 +102,78 @@ func TestNextTransitionCommittedRangeBaseRetainsDefaultBranchForLevelUpstream(t 
 	}
 	if arguments, err := reviewTransitionArgumentMap(status.NextTransition.Execute.Arguments, status.NextTransition.Execute.Operation); err != nil {
 		t.Fatal(err)
-	} else if arguments["base-ref"] == "" {
-		t.Fatalf("derived START carries no base-ref: %#v", status.NextTransition.Execute.Arguments)
+	} else if arguments["base-ref"] != defaultTip {
+		t.Fatalf("derived START base-ref = %q, want the merge-base with origin's default branch %q", arguments["base-ref"], defaultTip)
+	}
+}
+
+// buildLevelForkFeature cuts a fully pushed feature branch (level with its own
+// upstream origin/feature) from the integration tip of
+// buildTrunkIntegrationSplitRepo and records a second remote, `upstream`,
+// whose default branch points at upstreamTip, the way `git remote add
+// upstream` plus `git fetch upstream main` leave a fork: no
+// refs/remotes/upstream/HEAD, only refs/remotes/upstream/<default>.
+func buildLevelForkFeature(t *testing.T, upstreamTip func(repo, develop string) string) (repo, develop, upstream string) {
+	t.Helper()
+	repo, develop = buildTrunkIntegrationSplitRepo(t)
+	defaultBranch := strings.TrimPrefix(strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD")), "refs/remotes/origin/")
+	upstream = upstreamTip(repo, develop)
+	runReviewCLIGit(t, repo, "remote", "add", "upstream", "https://example.invalid/upstream.git")
+	runReviewCLIGit(t, repo, "update-ref", "refs/remotes/upstream/"+defaultBranch, upstream)
+	runReviewCLIGit(t, repo, "checkout", "-qb", "feature", "develop")
+	if err := os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("the change under review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "feature.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "feature work")
+	feature := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "refs/heads/feature"))
+	runReviewCLIGit(t, repo, "update-ref", "refs/remotes/origin/feature", feature)
+	runReviewCLIGit(t, repo, "config", "branch.feature.remote", "origin")
+	runReviewCLIGit(t, repo, "config", "branch.feature.merge", "refs/heads/feature")
+	return repo, develop, upstream
+}
+
+func derivedStartBaseRef(t *testing.T, repo string) string {
+	t.Helper()
+	status := derivedRangeTerminalStatus(t, repo)
+	if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("no derived committed-range START: %#v", status.NextTransition)
+	}
+	arguments, err := reviewTransitionArgumentMap(status.NextTransition.Execute.Arguments, status.NextTransition.Execute.Operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return arguments["base-ref"]
+}
+
+// TestNextTransitionCommittedRangeBasePrefersNearestRemoteDefaultForLevelFork
+// reproduces #5910: a fork whose origin default branch lags far behind, a
+// feature branch cut from the real upstream and fully pushed to the fork. The
+// derived START must name the fork point with the upstream remote's default
+// branch; the stale origin default spans every upstream commit since the fork
+// was last synced and dies with lens_context_budget_exceeded.
+func TestNextTransitionCommittedRangeBasePrefersNearestRemoteDefaultForLevelFork(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, develop, _ := buildLevelForkFeature(t, func(_, develop string) string { return develop })
+	if base := derivedStartBaseRef(t, repo); base != develop {
+		t.Fatalf("derived START base-ref = %q, want the fork point with upstream's default branch %q; the stale origin default spans unrelated upstream work (issue #5910)", base, develop)
+	}
+}
+
+// TestNextTransitionCommittedRangeBaseKeepsOriginWhenOtherRemoteIsFarther is
+// the negative control: another remote whose default branch is farther from
+// HEAD than origin's never widens the derived range.
+func TestNextTransitionCommittedRangeBaseKeepsOriginWhenOtherRemoteIsFarther(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, _, _ := buildLevelForkFeature(t, func(repo, _ string) string {
+		return strings.TrimSpace(runReviewCLIGit(t, repo, "rev-list", "--max-parents=0", "HEAD"))
+	})
+	// Move origin's default branch up to the integration tip, nearer than upstream's root.
+	defaultRef := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD"))
+	develop := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "refs/heads/develop"))
+	runReviewCLIGit(t, repo, "update-ref", defaultRef, develop)
+	if base := derivedStartBaseRef(t, repo); base != develop {
+		t.Fatalf("derived START base-ref = %q, want origin's nearer default-branch fork point %q", base, develop)
 	}
 }
 
@@ -152,5 +221,89 @@ func TestNextTransitionCommittedRangeBaseCrissCrossUpstreamKeepsDefaultBranch(t 
 	status := derivedRangeTerminalStatus(t, repo)
 	if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
 		t.Fatalf("criss-cross upstream lost the derived committed-range START (must keep the default-branch derivation): %#v", status.NextTransition)
+	}
+}
+
+func commitProbeFile(t *testing.T, repo, name string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, name), []byte(name+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", name)
+	runReviewCLIGit(t, repo, "commit", "-qm", name)
+	return strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+}
+
+func requireCollectNotStart(t *testing.T, repo string) {
+	t.Helper()
+	status := derivedRangeTerminalStatus(t, repo)
+	if status.NextTransition != nil && status.NextTransition.Execute != nil && status.NextTransition.Execute.Operation == "review.start" {
+		t.Fatalf("origin's fallback was overridden by another remote: %#v", status.NextTransition.Execute.Arguments)
+	}
+}
+
+// TestNextTransitionCommittedRangeBaseLevelDefaultBranchIgnoresStaleOtherRemote:
+// an empty origin range keeps the collect even when a stale upstream ref
+// exists; other remotes only narrow a valid origin range, never replace its
+// fallback.
+func TestNextTransitionCommittedRangeBaseLevelDefaultBranchIgnoresStaleOtherRemote(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	defaultBranch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	root := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	commitProbeFile(t, repo, "synced-one.md")
+	tip := commitProbeFile(t, repo, "synced-two.md")
+	runReviewCLIGit(t, repo, "update-ref", "refs/remotes/origin/"+defaultBranch, tip)
+	runReviewCLIGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/"+defaultBranch)
+	runReviewCLIGit(t, repo, "config", "branch."+defaultBranch+".remote", "origin")
+	runReviewCLIGit(t, repo, "config", "branch."+defaultBranch+".merge", "refs/heads/"+defaultBranch)
+	runReviewCLIGit(t, repo, "remote", "add", "upstream", "https://example.invalid/upstream.git")
+	runReviewCLIGit(t, repo, "update-ref", "refs/remotes/upstream/"+defaultBranch, root)
+	requireCollectNotStart(t, repo)
+}
+
+// TestNextTransitionCommittedRangeBaseNoOriginHeadIgnoresOtherRemote: without
+// origin/HEAD the collect stays, even when another remote has a HEAD.
+func TestNextTransitionCommittedRangeBaseNoOriginHeadIgnoresOtherRemote(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	root := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	commitProbeFile(t, repo, "work.md")
+	runReviewCLIGit(t, repo, "remote", "add", "upstream", "https://example.invalid/upstream.git")
+	runReviewCLIGit(t, repo, "update-ref", "refs/remotes/upstream/main", root)
+	runReviewCLIGit(t, repo, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/main")
+	requireCollectNotStart(t, repo)
+}
+
+// TestNextTransitionCommittedRangeBaseCrissCrossOriginIgnoresOtherRemote: an
+// origin criss-cross keeps the collect, even when another remote's default
+// branch would give an unambiguous range.
+func TestNextTransitionCommittedRangeBaseCrissCrossOriginIgnoresOtherRemote(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := crissCrossReviewRepo(t)
+	root := strings.Fields(runReviewCLIGit(t, repo, "rev-list", "--max-parents=0", "HEAD"))[0]
+	runReviewCLIGit(t, repo, "remote", "add", "upstream", "https://example.invalid/upstream.git")
+	runReviewCLIGit(t, repo, "update-ref", "refs/remotes/upstream/main", root)
+	requireCollectNotStart(t, repo)
+}
+
+// TestNextTransitionCommittedRangeBaseIgnoresRemoteHeadOnNonDefaultBranch: a
+// remote whose HEAD names an earlier push of this feature never shrinks the
+// range; only branches named like origin's default count.
+func TestNextTransitionCommittedRangeBaseIgnoresRemoteHeadOnNonDefaultBranch(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, _ := buildTrunkIntegrationSplitRepo(t)
+	runReviewCLIGit(t, repo, "checkout", "-qb", "feature", "develop")
+	first := commitProbeFile(t, repo, "f1.md")
+	second := commitProbeFile(t, repo, "f2.md")
+	runReviewCLIGit(t, repo, "update-ref", "refs/remotes/origin/feature", second)
+	runReviewCLIGit(t, repo, "config", "branch.feature.remote", "origin")
+	runReviewCLIGit(t, repo, "config", "branch.feature.merge", "refs/heads/feature")
+	runReviewCLIGit(t, repo, "remote", "add", "mirror", "https://example.invalid/mirror.git")
+	runReviewCLIGit(t, repo, "update-ref", "refs/remotes/mirror/feature", first)
+	runReviewCLIGit(t, repo, "symbolic-ref", "refs/remotes/mirror/HEAD", "refs/remotes/mirror/feature")
+	originBase := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "refs/remotes/origin/HEAD"))
+	if base := derivedStartBaseRef(t, repo); base != originBase {
+		t.Fatalf("derived START base-ref = %q, want origin's default fork point %q; a mirror HEAD on a feature branch shrank the range", base, originBase)
 	}
 }
