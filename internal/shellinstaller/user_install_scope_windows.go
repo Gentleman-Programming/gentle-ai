@@ -176,3 +176,20 @@ func userWindowsReuseCodeGraphTree(ctx context.Context, from, to string) error {
 	}
 	return os.RemoveAll(filepath.Join(to, "bin"))
 }
+
+// userWindowsGoReusable reports whether a component update reuses the
+// recorded pinned Go runtime tree. That tree exists only when the installation
+// unpacked the pinned go.zip: an installation that reused a system Go records
+// only runtime/system-go.json beside an empty runtime/go, so reusing it would
+// drop the marker and leave no toolchain (#5959). Such an update re-runs
+// system Go detection, falling back to the pinned artifact.
+func userWindowsGoReusable(destination string, installed *userWindowsManifest, scope userInstallScope) bool {
+	pin, err := userWindowsGoPinSHA()
+	if err != nil || installed == nil || !scope.reused[UserComponentNode] || installed.GoSHA != pin {
+		return false
+	}
+	if _, err := os.Lstat(filepath.Join(destination, filepath.FromSlash(userWindowsSystemGoMarker))); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	return true
+}
