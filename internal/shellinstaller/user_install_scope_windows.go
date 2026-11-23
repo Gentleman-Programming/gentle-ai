@@ -4,6 +4,7 @@ package shellinstaller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -107,6 +108,12 @@ func userWindowsReuseComponents(ctx context.Context, stage, backup string, insta
 				return fmt.Errorf("SDK %s reuse: %w", name, err)
 			}
 		}
+		// The provisioning binding is written once by the SDK install and
+		// re-read by every provision verify; a reused SDK keeps its binding
+		// (#6236).
+		if err := userWindowsCopyFile(filepath.Join(backup, "config", "gentle-shell.json"), filepath.Join(stage, "config", "gentle-shell.json")); err != nil {
+			return fmt.Errorf("SDK provisioning binding reuse: %w", err)
+		}
 		if installed.MainArchiveSHA != "" {
 			if _, statErr := os.Lstat(filepath.Join(backup, "stock-gentle-pi")); statErr == nil {
 				if err := userWindowsReuseTree(ctx, filepath.Join(backup, "stock-gentle-pi"), filepath.Join(stage, "stock-gentle-pi")); err != nil {
@@ -121,6 +128,32 @@ func userWindowsReuseComponents(ctx context.Context, stage, backup string, insta
 			if err := userWindowsCopyFile(filepath.Join(backup, "runtime", "archives", "main.zip"), filepath.Join(stage, "runtime", "archives", "main.zip")); err != nil {
 				return fmt.Errorf("SDK Main archive reuse: %w", err)
 			}
+		}
+	}
+	return userWindowsReuseRetainedArchives(backup, stage, scope, goReuse)
+}
+
+// userWindowsReuseRetainedArchives carries the retained archive of every
+// reused pinned artifact (#6236). Acquisition skips exactly these artifacts,
+// yet verification re-reads each one from runtime/archives to compare it with
+// the reused runtime or helper, so the retired copy is the only source. The
+// index rules mirror the acquisition loop: 0 Node, 1 Go, 2+ SDK helpers.
+func userWindowsReuseRetainedArchives(backup, stage string, scope userInstallScope, goReuse bool) error {
+	for index, artifact := range userWindowsArtifacts {
+		reused := (index == 0 && scope.reused[UserComponentNode]) || (index == 1 && goReuse) || (index >= 2 && scope.reused[UserComponentSDK])
+		if !reused {
+			continue
+		}
+		from := filepath.Join(backup, "runtime", "archives", artifact.Archive)
+		if index == 1 {
+			// A tree without the retained go.zip keeps its existing Go reuse
+			// outcome (#5959); only a present archive is carried.
+			if _, err := os.Lstat(from); errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+		}
+		if err := userWindowsCopyFile(from, filepath.Join(stage, "runtime", "archives", artifact.Archive)); err != nil {
+			return fmt.Errorf("retained %s reuse: %w", artifact.Archive, err)
 		}
 	}
 	return nil
