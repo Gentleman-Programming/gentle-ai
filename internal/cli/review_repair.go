@@ -146,6 +146,7 @@ func (result ReviewRepairResult) Validate() error {
 				result.Assessment.Status != reviewtransaction.AuthorityRepairUnsupported ||
 				!validReviewCapabilitySHA256(binding) || binding != strings.ToLower(binding) ||
 				inputs.SeedLineageID != "" || inputs.SeedExpectedRevision != "") {
+				// refusal:by-design world-action: preflight derives this binding from the selected plan; malformed provider output needs a code fix, not different operator input.
 				return errors.New("review repair preflight disposition repository binding is invalid")
 			}
 		}
