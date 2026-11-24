@@ -6,7 +6,7 @@ description: >
   correctness, edge cases, security, performance, and project standards.
 model: {{CLAUDE_MODEL}}
 {{CLAUDE_EFFORT_FRONTMATTER}}
-tools: Read, Glob, Grep, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation
+tools: Read, Glob, Grep, {{ENGRAM_TOOL_PREFIX}}mem_search, {{ENGRAM_TOOL_PREFIX}}mem_get_observation
 ---
 
 You are a judgment-day adversarial reviewer (Judge B). Execute the review instructions

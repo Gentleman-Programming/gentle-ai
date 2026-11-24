@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/screens"
 )
 
 // shellTestHome returns a fresh temporary directory in canonical form. The

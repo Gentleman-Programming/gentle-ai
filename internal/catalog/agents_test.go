@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 func TestAllAgentsIncludesPi(t *testing.T) {
@@ -49,8 +49,8 @@ func TestAllAgentsIncludesAntigravity(t *testing.T) {
 			t.Fatalf("Antigravity Tier = %q, want %q", agent.Tier, model.TierFull)
 		}
 
-		if agent.ConfigPath != "~/.gemini/antigravity-cli" {
-			t.Fatalf("Antigravity ConfigPath = %q, want ~/.gemini/antigravity-cli", agent.ConfigPath)
+		if agent.ConfigPath != "~/.gemini/config" {
+			t.Fatalf("Antigravity ConfigPath = %q, want ~/.gemini/config", agent.ConfigPath)
 		}
 
 		return

@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 type Adapter struct {
@@ -151,7 +151,14 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 }
 
 func (a *Adapter) kiroConfigDir(homeDir string) string {
-	switch runtime.GOOS {
+	return UserDir(homeDir, runtime.GOOS)
+}
+
+// UserDir returns the Kiro User config directory for goos. goos is injected so
+// backup.WithConfigRoots can admit %APPDATA%\kiro\User as a restore root when
+// %APPDATA% is redirected outside the profile (issue #6029).
+func UserDir(homeDir, goos string) string {
+	switch goos {
 	case "darwin":
 		// macOS: ~/Library/Application Support/Kiro/User/
 		return filepath.Join(homeDir, "Library", "Application Support", "Kiro", "User")

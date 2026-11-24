@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
 )
 
 // RestoreFunc is the function signature for restoring a backup from its manifest.

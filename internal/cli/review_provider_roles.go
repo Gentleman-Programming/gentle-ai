@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 var errReviewProviderRefuterNotRequired = errors.New("provider refuter request has no severe candidate-caused findings; continue through the remaining capture route") // refusal:by-design operator-knowledge: the native closure branch consumes this sentinel and derives the remaining capture transition; no caller-selected command exists

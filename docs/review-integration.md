@@ -55,7 +55,7 @@ The provider-issued `repository_context` stays opaque (#3797). Its format depend
 | `rctx2_` + sha256 hex | Claude Code, Codex, Pi, manual, and every START/STATUS envelope | A digest over repository identity, lineage, target, and revision, verified against the caller's repository (`--cwd`). |
 | `rctx3_` + unpadded base64url | OpenCode collect inputs and provider tasks only (#5136, #4516) | Seals B's canonical root and identity digest with AES-256-GCM under a private per-user key, `~/.gentle-ai/review-context.key` (32 bytes, mode `0600`, created on first use). Go opens the repository at the sealed root only, re-derives the digest, and requires live authority. Host cwd, worktree registries, and submodule lists never take part. |
 
-The OpenCode relay resolves `rctx3` only; given `rctx2`, it refuses and names the OpenCode STATUS that reissues the Task. Other commands dispatch by prefix, so an OpenCode host can run `capture-result`, `capture-unachievable`, or `lens-context` with its collect input from any cwd. A tampered handle, another user's handle, a moved or replaced root, or stale authority refuses without mutation. An unsafe key file refuses with its repair.
+The OpenCode relay resolves `rctx3` only; given `rctx2`, it refuses and names the OpenCode STATUS that reissues the Task. Other commands dispatch by prefix, so an OpenCode host can run `capture-result`, `capture-unachievable`, or `lens-context` with its collect input from any cwd. The targeted validator's corrected `inspect-candidate` also accepts either prefix. The direct corrected-inspection resolver requires the open correction authority instead of rebuilding the live correction, so it stays bound to the frozen request after later workspace edits. The provider-issued binding entrypoint that `gentle-ai review inspect-candidate` uses still rebuilds the request from the live tree, so it can refuse after workspace drift. A tampered handle, another user's handle, a moved or replaced root, or stale authority refuses without mutation. An unsafe key file refuses with its repair.
 
 ### Opaque repository-context refusals
 
@@ -134,6 +134,8 @@ Without the flags, START keeps the tier default and the persisted authority is u
 
 Callers detect both START inputs, and their STATUS preflight, from `gentle-ai review capabilities` instead of probing START or STATUS. Both negotiated advertisements (`capabilities/v1.5` and `capabilities/v2.6`) list four optional features:
 
+Legacy v1 authority is unsupported, so `capabilities/v2.6` does not announce it: `compatibility.modes` is `["compact-v2"]`, there is no `compatibility.legacy_window`, and `legacy_v1_target_scoped_read_only` is not a mandatory feature. The published `capabilities-v2.6.schema.json` was corrected in place for this (no version bump). The frozen `capabilities/v1.5` advertisement still carries the legacy mode and window its published schema requires.
+
 | Feature | Input | Requires |
 | --- | --- | --- |
 | `start_request_context` | START `--request-context <file>` | `compact_v2_authority` |
@@ -154,6 +156,22 @@ A reviewing START carries `next_transition.execute(review.status)` — the provi
 | `stop` | Run no lifecycle operation. Do not infer a recovery from prose. |
 
 A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
+
+#### Untracked selection in bound STATUS
+
+When no runtime agent is resolved, STATUS v9 offers manual selection without a `submission`. Omitting `--agent` alone does not guarantee this: a bound review can supply its frozen runtime.
+With `--agent=pi`, older Pi can decode the historical submission when the
+bound-selection opt-in is absent or unrecognized. That submission carries the
+target selector but omits `--lineage`; it does not let older Pi recover the
+bound review through selection.
+
+For an explicitly selected authority, the exact environment setting
+`GENTLE_AI_BOUND_SELECTION_CONTRACT=gentle-ai.review-bound-selection/v1` lets
+STATUS with a named runtime emit a submission that preserves `--lineage`.
+A compatible Pi refuses to replay an unbound submission for a bound review;
+it must not infer a lineage or retry with unbound tokens. For manual selection,
+rerun STATUS with the same lineage and target selector, adding `--untracked-scope`,
+`--expected-untracked-inventory`, and `--intended-untracked` for each selected path.
 
 #### Native recovery for an explicitly selected lineage
 
@@ -242,6 +260,31 @@ The role submission descriptor is a negotiated status contract change, so the ne
 
 Native Go alone selects lenses, classifies candidate causality, performs refutation, derives repository evidence, and permits at most one bounded correction. A validator that cannot inspect its immutable trees has no verdict; report that block rather than submitting a failed validation.
 
+A committed-range correction re-entered with the exact selector the final capture returned (`--base-ref <frozen tree> --committed-only`), or with the commit START was pinned to, keeps its frozen empty intended-untracked exclusion. Unrelated untracked files do not reopen that decision or require a new `--untracked-scope` declaration. A different base tree names a different target and never inherits the frozen decision.
+
+After a targeted validator rejects that correction, bound STATUS with the same committed-only range and unchanged rejected candidate still reports `native_stop_required`, even if unrelated untracked files now exist. This does not authorize recovery. A changed committed candidate or a fresh lineage does not inherit the exclusion.
+
+### Non-blocking findings of a stopped review (`--non-blocking-findings`)
+
+If the authority revision changes during this read, STATUS refuses rather than mixing revisions. Rerun the same `gentle-ai review status` command with unchanged arguments; the refusal grants no new authority.
+
+When a review stops in `correction_required` or `escalated`, the correction request carries only the findings to correct. A client that also wants the findings the provider admitted as non-blocking opts in by adding `--non-blocking-findings` to a contracted `review status --contract gentle-ai.review-integration/v2` call. Add it also to the `status_continuation` that only a `correction_required` closure returns; an `escalated` closure returns none, so query STATUS with the flag directly. That STATUS then carries `non_blocking_findings`:
+
+```json
+"non_blocking_findings": {
+  "statement": "Every finding listed here is non-blocking: ...",
+  "findings": [
+    {"id": "R3-W01", "lens": "reliability", "location": "internal/auth/session.go:4", "severity": "WARNING", "disposition": "informational", "claim": "the token check could be easier to read"}
+  ]
+}
+```
+
+- It appears only for a current compact authority in `correction_required` or `escalated`; `findings` is `[]` when every finding blocks. Any other state omits the key, even with the opt-in.
+- It lists a finding only when its admitted outcome names a disposition: `informational` (WARNING or SUGGESTION), `follow_up` (a severe finding proved pre-existing or base-only), or `refuted`. A finding to correct, a corroborated or inconclusive severe finding, and an unrecognized outcome are never listed, so an escalation's unresolved findings never appear here.
+- `claim` is the reviewer's admitted text, unbounded like the correction request's `claim`. Display it; never route on it.
+- Without the opt-in, STATUS output is unchanged. The last-event closure is unchanged for every client: `advisory_findings` and `reviewer_results` stay approved-only.
+- The flag requires `--contract gentle-ai.review-integration/v2`; without it, or with v1, STATUS refuses. A provider older than this change refuses the unknown flag, so a client can fall back to plain STATUS.
+
 Medium and high-risk START may return the typed `gentle-ai.review-integration.consent/v3` envelope. Relay the complete choice envelope losslessly, preserve machine tokens and invocations exactly, and run only the invocation selected by the human. Global RDD mode permits review; it never grants per-candidate consent. A decline is not the kill switch.
 
 ## Read-only risk assessment (`gentle-ai review assess`)
@@ -312,6 +355,8 @@ The v1 contract and historical artifacts remain published compatibility surfaces
 
 A `stop` carries one reason code and no executable transition. The table below is the complete continuation inventory for the atomic target-root lifecycle. `Terminal` means no in-lineage continuation exists; it never authorizes delivery. For every clone-scoped exit, gates remain unmanaged and ordinary repository policy decides delivery.
 
+When a last-event closure reports `targeted_validator_rejected`, its human-readable `action` prints a read-only v2 repair preflight. With RDD enabled, bound v2 STATUS for that same unchanged terminal lineage also prints it in the stop forecast's `description`, not in `next_transition`. Before consulting repair help, match a returned successor-only selector to the closure's `lineage_id` and `store_revision`, or to STATUS's `authority.lineage_id` and `authority.revision`. No exact match means this handoff does not apply. Preflight does not release authority; any release requires separate, explicit maintainer authorization. Changed-target STATUS keeps its existing target-scoped rules.
+
 | Reason code | Continuation |
 | --- | --- |
 | `captured_artifacts_unverifiable` | Terminal — a captured reviewer artifact failed local verification. Ask a maintainer to inspect the B authority, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
@@ -319,12 +364,13 @@ A `stop` carries one reason code and no executable transition. The table below i
 | `corrected_candidate_unavailable` | Change the correction candidate in B, then re-query `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition` with the captured lineage and target. For a committed-only review, commit the bounded correction (or amend its commit); uncommitted tracked changes do not change that candidate, and unrelated tracked worktree edits are ignored. The accepted correction forecast is one-shot: do not capture it again. Do not reuse the pre-correction target. |
 | `empty_base_diff_bootstrap_required` | Terminal — the committed base has no reviewable paths. Use the separately authorized empty-root bootstrap for a new target, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `lens_context_budget_exceeded` | Terminal — immutable reviewer context cannot be truncated. Reduce the B candidate scope and start a new transaction, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
-| `correction_context_budget_exceeded` | Release this review authority: the corrected candidate's evidence plus its recorded findings cannot fit the runtime context budget, so no targeted validation can ever be assembled and `gentle-ai review invalidate` refuses once lens results are admitted. Run `gentle-ai review abandon --cwd <repo> --lineage <id> --expected-revision <revision> --reason operator_disposition --actor <actor> --maintainer-authorization <binding>` (run `gentle-ai review abandon` with no flags to print the binding template). The STATUS stop carries that release as `next_transition.continuation` with `operation: "abandon"` whenever the authority is eligible, and omits it entirely when it is not, rather than naming a command the live operation would refuse. Then review the change as smaller candidates, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `correction_context_budget_exceeded` | Contract v2 / STATUS v9 can carry the release continuation; frozen v1 retains the stop without it. Release this review authority: the corrected candidate's evidence plus its recorded findings cannot fit the runtime context budget, so no targeted validation can ever be assembled and `gentle-ai review invalidate` refuses once lens results are admitted. Run `gentle-ai review abandon --cwd <repo> --lineage <id> --expected-revision <revision> --reason operator_disposition --actor <actor> --maintainer-authorization <binding>` (run `gentle-ai review abandon` with no flags to print the binding template). The STATUS stop carries that release as `next_transition.continuation` with `operation: "abandon"` whenever the authority is eligible, and omits it entirely when it is not, rather than naming a command the live operation would refuse. Then review the change as smaller candidates, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `managed_assets_outdated` | Run the exact sync command named in the stop's `continuation` field (anchored to the executable that reported the stale assets, so it cannot resolve to a different `gentle-ai` on `PATH`, and bound to the runtime agent STATUS was asked for), then re-query the exact repository-bound STATUS command; the same candidate is offered again once the recorded digest converges. Authority-mutating verbs (`capture-result` and the other captures, `repair`) refuse with the same typed, not-started `managed_assets_outdated` failure; their continuation carries no `--agent` because those verbs are not bound to a runtime agent, so it syncs every agent. The failure `cause` names the recorded digest and the one this binary embeds. The plain CLI verbs with no negotiated failure envelope (`review-bundle-import`, `review abandon`) keep the same refusal text and append `; continue with: <sync command>` with the same executable-anchored command. Under the v1 failure contract the code is published without `continuation`, which only the v2 schema defines. The quoted Windows form is cmd.exe command syntax; PowerShell requires the call operator (`& "..." sync ...`). |
+| `correction_request_unavailable` | The release continuation is available in contract v2 / STATUS v9; frozen v1 retains the stop without it. Valid authority cannot build a correction request (invalid frozen budget or non-actionable finding). If eligible, the stop's `continuation` names the manual release command; obtain its binding template and explicit maintainer authorization, never invent authorization or abandon automatically. Release neither corrects nor approves the lineage; its forecast remains terminal. Without a continuation, stop and report the defect with the lineage. |
 | `corrupted_or_unverifiable_authority` | Terminal — the authority is unreadable or unsupported. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `manual_intervention_required` | Terminal — the authority state is outside the negotiated lifecycle. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `missing_authority_binding` | Terminal — a current target had no authority binding. File a bounded defect with the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
-| `native_stop_required` | Terminal — the lineage is escalated but has no native continuation. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `native_stop_required` | Terminal — there is no in-lineage continuation. For an isolated canonical rejected-validator terminal, a maintainer can follow the [exact `review repair` disposition procedure](review-authority-threat-model.md#rejected-validator-terminal-disposition). Otherwise ask a maintainer to inspect the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. Disposition does not approve the candidate or authorize delivery. |
 | `recovery_scope_unchanged` | Change B so its target identity differs, then retry the exact returned `gentle-ai review recover` invocation. |
 | `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and start a fresh target; otherwise run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `unachievable_lens_slot` | A host reported a selected reviewer slot unachievable under current conditions. If that was transient, re-run `gentle-ai review capture-unachievable` with the same binding and `--withdraw=true` so B re-offers the same slot. If it is not transient, reduce the B candidate scope and start a new `gentle-ai review start`, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
@@ -351,3 +397,9 @@ The published v1 directory contains 23 strict JSON Schemas and 24 deterministic 
 - [ ] `approved` acknowledgement was retained and run only from the provider-owned START, STATUS, or terminal-closure transition.
 - [ ] Commit, push, PR, release, and archive followed ordinary repository policy.
 - [ ] Each delivery action has explicit authorization.
+
+## Frozen v1 STATUS compatibility
+
+Ordinary target STATUS selects compact authority, not legacy receipt authority. For contract v1, `receipt: {"status":"not_applicable"}` is only the required compatibility marker: it provides no receipt identity or approval. Contract v2 does not gain this marker.
+
+The v1 response omits v2-only inventory, frozen-manifest digest, disposition, and generated-path metadata. Full evidence and routing are computed and validated before the final disposition/manifest serialization projection; stored authority is not rewritten. The frozen v1 and historical v7/v8 schemas remain unchanged.

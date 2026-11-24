@@ -14,16 +14,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/telemetry"
 )
 
 // themeSettingsFixture puts the effective JSONC in the project and a distinct

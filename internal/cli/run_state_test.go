@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 func TestMergeExplicitAgentInstallStatePreservesExistingAssignmentsWhenFreshStateIsEmpty(t *testing.T) {
@@ -29,6 +29,7 @@ func TestMergeExplicitAgentInstallStatePreservesExistingAssignmentsWhenFreshStat
 		KiroModelAssignments: map[string]string{
 			"sdd-design": "auto",
 		},
+		AntigravityModelAssignments: map[string]string{"jd-judge-b": "flash"},
 		CodexModelAssignments: map[string]string{
 			"sdd-apply": "low",
 		},
@@ -58,6 +59,9 @@ func TestMergeExplicitAgentInstallStatePreservesExistingAssignmentsWhenFreshStat
 	}
 	if merged.KiroModelAssignments["sdd-design"] != "auto" {
 		t.Fatalf("KiroModelAssignments not preserved: %#v", merged.KiroModelAssignments)
+	}
+	if merged.AntigravityModelAssignments["jd-judge-b"] != "flash" {
+		t.Fatalf("AntigravityModelAssignments not preserved: %#v", merged.AntigravityModelAssignments)
 	}
 	if merged.CodexModelAssignments["sdd-apply"] != "low" {
 		t.Fatalf("CodexModelAssignments not preserved: %#v", merged.CodexModelAssignments)

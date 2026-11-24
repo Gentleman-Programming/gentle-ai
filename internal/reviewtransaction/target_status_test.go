@@ -345,7 +345,7 @@ func TestAssessTargetStatusIgnoresUnrelatedValidLegacyHistory(t *testing.T) {
 	}
 }
 
-func TestAssessTargetStatusKeepsExplicitCompactLineageCurrentWithInvalidLegacyInventory(t *testing.T) {
+func TestAssessTargetStatusKeepsExplicitCompactLineageCurrentWithInvalidLegacyV1Store(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
 	head := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
@@ -398,12 +398,10 @@ func TestAssessTargetStatusKeepsExplicitCompactLineageCurrentWithInvalidLegacyIn
 	if err != nil {
 		t.Fatal(err)
 	}
-	invalidLegacyEvidence := false
 	for _, entry := range report.Entries {
-		invalidLegacyEvidence = invalidLegacyEvidence || entry.LineageID == legacyLineage && entry.Status == AuthorityStatusInvalid && len(entry.Problems) > 0
-	}
-	if !invalidLegacyEvidence {
-		t.Fatalf("invalid legacy inventory diagnostics = %#v", report)
+		if entry.LineageID == legacyLineage {
+			t.Fatalf("v1 lineage is part of the inventory: %#v", report)
+		}
 	}
 	if after := authorityBytes(t, authorityRoot); !reflect.DeepEqual(before, after) {
 		t.Fatal("target status or inventory mutated authority")

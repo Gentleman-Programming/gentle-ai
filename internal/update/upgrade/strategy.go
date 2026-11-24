@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update"
 )
 
 // engramDownloadFn is the function used to download the engram binary on the stable channel.
@@ -82,6 +82,8 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	switch method {
 	case update.InstallBrew:
 		return false, brewUpgrade(ctx, r, ownership)
+	case update.InstallScoop:
+		return false, scoopUpgrade(ctx)
 	case update.InstallGoInstall:
 		return false, goInstallUpgrade(ctx, r, profile, firstString(preflightDestination))
 	case update.InstallBinary:

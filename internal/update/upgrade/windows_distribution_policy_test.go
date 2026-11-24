@@ -6,14 +6,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update"
 )
 
 func TestGentleAIWindowsUpgradeFailsClosedToSourceInstall(t *testing.T) {
 	originalExec := execCommand
 	t.Cleanup(func() { execCommand = originalExec })
 	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "scoop" && len(args) == 2 && args[0] == "config" && args[1] == "root_path" {
+			return scoopTestCommand("'root_path' is not set", 0)
+		}
 		t.Fatalf("Windows omission policy executed %s %v", name, args)
 		return nil
 	}

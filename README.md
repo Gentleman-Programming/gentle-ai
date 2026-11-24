@@ -18,6 +18,12 @@
 </p>
 
 <p>
+<a href="https://trendshift.io/repositories/24855?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-24855" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/24855" alt="Gentleman-Programming%2Fgentle-ai | Trendshift" width="250" height="55"/></a>
+<a href="https://trendshift.io/repositories/24855?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-24855" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/24855/weekly?language=Go" alt="Gentleman-Programming%2Fgentle-ai | Trendshift" width="250" height="55"/></a>
+<a href="https://trendshift.io/repositories/24855?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-24855" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/24855/monthly?language=Go" alt="Gentleman-Programming%2Fgentle-ai | Trendshift" width="250" height="55"/></a>
+</p>
+
+<p>
 <a href="https://gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
 <a href="docs/quickstart.md"><strong>Quickstart</strong></a> &bull;
 <a href="docs/intended-usage.md"><strong>Docs</strong></a> &bull;
@@ -107,6 +113,25 @@ https://github.com/user-attachments/assets/6d2bc422-a4dd-4ecf-a04b-fcd3bea7fea9
 <strong><a href="docs/agents.md#conductor">Conductor</a></strong>
 
 <sub>17 integrations · native configuration · <a href="docs/agents.md">compare capabilities →</a></sub>
+
+</div>
+
+<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
+
+## Support the project
+
+<div align="center">
+
+<a href="https://github.com/sponsors/Gentleman-Programming"><img width="100%" src="docs/assets/brand/sponsor-banner.svg" alt="Free forever, independent by choice. No investors, no paywalls: Gentle AI, Engram and Gentle Shell are funded by the people who use them. Sponsor on GitHub, monthly or one-time."></a>
+
+<p>
+We deliberately don't depend on investors: no outside agenda deciding the roadmap and no features locked behind paywalls.<br/>
+Donations through <a href="https://github.com/sponsors/Gentleman-Programming"><strong>GitHub Sponsors</strong></a> go straight into maintenance, new features and keeping everything free and ours.
+</p>
+
+<p>Can't donate? A ⭐, a bug report or a pull request helps too.</p>
+
+<sub>Sponsorship never buys rankings, default selections or endorsements; see <a href="TRADEMARKS.md">TRADEMARKS.md</a>.</sub>
 
 </div>
 
@@ -257,9 +282,11 @@ brew install gentleman-programming/tap/gentle-ai
 # macOS / Linux (curl)
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 
-# Windows (PowerShell) — source install of the latest release, needs Go 1.25.10+
-go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.1.1
+# Windows (PowerShell) — source install of v5.0.0, needs Go 1.25.10+
+go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0
 ```
+
+Until v5.0.0 is published, use `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.6.0`.
 
 When the install directory is not on your `PATH` yet, `install.sh` adds one marked line (`# gentle-ai installer`) to the startup file your shell reads: `~/.zshrc` for zsh, `~/.bashrc` for bash on Linux, for bash on macOS the first existing of `~/.bash_profile`, `~/.bash_login`, or `~/.profile` (else `~/.bash_profile`), a `conf.d` file for fish, and `~/.profile` otherwise. `install.ps1` adds the directory to your user `Path`. Open a new terminal afterwards, or run the command the installer prints under `Current terminal:` to use `gentle-ai` in the current one. If the startup file is a symlink or cannot be edited, nothing is written and the installer prints the line to add yourself.
 

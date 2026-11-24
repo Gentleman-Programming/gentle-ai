@@ -6,8 +6,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // TestRoutingPathsMatchesEveryPathInjectRoutingWrites is the anti-drift guard.

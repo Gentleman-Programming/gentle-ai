@@ -6,12 +6,17 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
+// ReviewAbandonResult is the JSON `review abandon` prints. Record is the
+// requested lineage's own quarantine. Cascaded is present only when the
+// abandonment moved more entries (recovery successors, deepest first); the authorization binding names exactly those,
+// so a caller that could not have authorized them never receives the field.
 type ReviewAbandonResult struct {
-	Operation string                                 `json:"operation"`
-	Record    reviewtransaction.CompactReclaimRecord `json:"record"`
+	Operation string                                   `json:"operation"`
+	Record    reviewtransaction.CompactReclaimRecord   `json:"record"`
+	Cascaded  []reviewtransaction.CompactReclaimRecord `json:"cascaded,omitempty"`
 }
 
 // reviewAbandonInputsRefusal names, for every value the gate demands, the one
@@ -45,6 +50,8 @@ snapshot_identity = entries[].snapshot_identity
 discarded_work = entries[].discarded_work; use captured_lens_results comma-joined with "," in listed order
 --reason = %q or %q
 You choose --actor; the binding uses it with surrounding whitespace trimmed.
+For an entry whose record cannot be read (unreadable or missing review-state.json) revision and snapshot_identity are "unavailable".
+If abandoning the lineage also moves recovery successors, or its discarded work cannot be verified, the binding gains extra lines after actor= (discarded_work=unverifiable, one cascade=<lineage>@<revision> ... line per successor); a refusal for a wrong binding prints the exact one, so the human reads and approves exactly what moves.
 --maintainer-authorization is exactly these final eight lines, joined by LF, with no trailing newline:
 %s`, cwd, reviewtransaction.CompactAbandonReasonOperatorDisposition, reviewtransaction.CompactAbandonReasonRetiredSchema,
 		strings.NewReplacer("captured_lens_results=", "captured_lens_results=<entries[].discarded_work.captured_lens_results comma-joined with \",\" in listed order>", "findings_present=false", "findings_present=<entries[].discarded_work.findings_present>", "evidence_records_present=false", "evidence_records_present=<entries[].discarded_work.evidence_records_present>").Replace(
@@ -52,13 +59,13 @@ You choose --actor; the binding uses it with surrounding whitespace trimmed.
 }
 
 func RunReviewAbandon(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review abandon", stdout, "Quarantine one non-terminal compact-v2 review lineage with a persisted v2 audit record bound to its discarded-work summary. Eligibility is proven from persisted bytes and store topology, never the live worktree, so stale lineages remain abandonable. Terminal and superseded lineages are refused; an exact replay of a committed abandonment converges idempotently. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
+	flags := newReviewFlagSet("review abandon", stdout, "Declare one review lineage lost and move it to the audited quarantine, bound to the maintainer's exact authorization of what moves. Accepts every state: terminal (approved, escalated, invalidated) and unreadable or missing review-state.json. Recovery successors of the lineage are abandoned with it, deepest first, so no orphan recovery edge remains; ancestors and unrelated lineages are never touched. Nothing is deleted. The authorization binding names the lineage and every successor that moves with it. The v2 store lock is taken without waiting: a live holder fails the command with the lock-busy error and nothing moves. An exact replay of a committed abandonment converges idempotently. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
 	cwd := flags.String("cwd", ".", "repository path")
-	lineage := flags.String("lineage", "", "non-terminal compact store lineage to abandon")
+	lineage := flags.String("lineage", "", "compact store lineage to abandon")
 	expected := flags.String("expected-revision", "", "exact current authority revision")
 	reason := flags.String("reason", "", "abandonment reason: operator_disposition or retired_schema")
 	actor := flags.String("actor", "", "abandonment actor")
-	authorization := flags.String("maintainer-authorization", "", "exact eight-line LF-only v2 binding; run review abandon with no flags to print the template and where every value is read")
+	authorization := flags.String("maintainer-authorization", "", "exact LF-only v2 binding (eight lines, plus one line per extra entry that moves); run review abandon with no flags to print the template and where every value is read")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -77,17 +84,17 @@ func RunReviewAbandon(args []string, stdout io.Writer) error {
 	if err != nil {
 		return withPlainReviewContinuation(fmt.Errorf("resolve review repository root: %w", err))
 	}
-	record, err := reviewtransaction.AbandonPristineCompactStore(context.Background(), root, reviewtransaction.CompactAbandonRequest{
+	result, err := reviewtransaction.AbandonCompactStore(context.Background(), root, reviewtransaction.CompactAbandonRequest{
 		LineageID: *lineage, ExpectedRevision: *expected,
 		Reason: *reason, Actor: *actor, MaintainerAuthorization: *authorization,
 	})
 	if err != nil {
 		// A partial abandonment persisted the prepared audit record and may have
 		// moved the entry; surface the quarantine location for reconciliation.
-		if record.QuarantinePath != "" {
-			_ = encodeReviewJSON(stdout, ReviewAbandonResult{Operation: "review/abandon", Record: record})
+		if output := (ReviewAbandonResult{Operation: "review/abandon", Record: result.CompactReclaimRecord, Cascaded: result.Cascaded}); result.QuarantinePath != "" || len(result.Cascaded) != 0 {
+			_ = encodeReviewJSON(stdout, output)
 		}
 		return err
 	}
-	return encodeReviewJSON(stdout, ReviewAbandonResult{Operation: "review/abandon", Record: record})
+	return encodeReviewJSON(stdout, ReviewAbandonResult{Operation: "review/abandon", Record: result.CompactReclaimRecord, Cascaded: result.Cascaded})
 }

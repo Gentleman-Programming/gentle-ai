@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/testsupport/windowsrunner"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/testsupport/windowsrunner"
 )
 
 // The elevated GitHub Windows runner creates objects owned by

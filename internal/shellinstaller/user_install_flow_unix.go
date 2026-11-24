@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
+	assets "github.com/gentleman-programming/gentle-ai/v5/scripts"
 )
 
 // The POSIX installation flow shared by Linux and darwin. Each platform keeps
@@ -242,6 +242,11 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil || req.Confirmation != confirmation {
 		return result, privateError("refused", errors.Join(err, errors.New("physical selection confirmation differs")))
 	}
+	release, err := userAcquireOperationLock(req.Destination)
+	if err != nil {
+		return result, err
+	}
+	defer userReleaseOperationLock(release, &err)
 	if _, statErr := os.Lstat(req.Destination); statErr == nil && userReconfigureTarget() != req.Destination {
 		manifest, err := userReadManifest(ctx, req.Destination)
 		if err != nil {
@@ -429,11 +434,12 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		userShellDetail(ctx, 3, 5, "Reusing the installed global runtime")
 	}
 	pkg := filepath.Join(prefix, "lib/node_modules/gentle-pi")
-	// The supplier files are authenticated against the reviewed list entry for
-	// the gentle-pi version this stage carries. A rebuilt Stable SDK carries
-	// the newest listed release, authenticated against the staged selected
-	// list. A rebuilt Main preview SDK keeps the frozen lock's stock base,
-	// authenticated against the embedded entry like every pre-list install
+	// The supplier files are advisory data since #5994: the generated lock's
+	// registry SRI anchors the tree, so a listed entry's digests only inform.
+	// A rebuilt Stable SDK resolves npm `latest` and compares its supplier
+	// digests against the staged selected list when listed, warning instead of
+	// refusing. A rebuilt Main preview SDK keeps the frozen lock's stock base,
+	// compared against the embedded entry like every pre-list install
 	// (S23/M4). A reused SDK carries its recorded version — or the frozen
 	// lock's version for a manifest predating the field (S23/M3) — and runs no
 	// supplier, so an entry is required only when one exists: the selected
@@ -464,15 +470,30 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 	} else {
-		version = list.newestReviewedRelease()
-		if installerSHA, resolverSHA, err = userStableSupplierPins(list, version); err != nil {
+		// The channel is the contract (#5994): the generated lock resolved npm
+		// `latest` and the resolved version is the install. The reviewed table
+		// only advises: compare the supplier digests when the installed
+		// version is listed on the staged selected list, warn otherwise.
+		if version, err = userStageGentlePiVersion(root); err != nil {
 			return result, err
+		}
+		if entry, found := list.Releases[version]; found {
+			installerSHA, resolverSHA = entry.Installer, entry.Binary
+		} else {
+			authenticate = false
+			userShellDetail(ctx, 3, 5, fmt.Sprintf("gentle-pi@%s is outside the reviewed supplier table; supplier file digests unchecked", version))
 		}
 	}
 	if authenticate {
 		for _, source := range []struct{ name, pin string }{{"scripts/gentle-ai-installer.mjs", installerSHA}, {"runtime/gentle-ai-binary.mjs", resolverSHA}} {
-			if _, err = userSourceFile(ctx, filepath.Join(pkg, source.name), -1, source.pin); err != nil {
-				return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, err)
+			// Advisory: the physical readback still refuses (transport), but a
+			// digest that differs from the reviewed entry only warns.
+			stamp, stampErr := userSourceFile(ctx, filepath.Join(pkg, source.name), -1, "")
+			if stampErr != nil {
+				return result, fmt.Errorf("authenticate native supplier %q: %w", source.name, stampErr)
+			}
+			if digest := stamp[len(stamp)-64:]; digest != source.pin {
+				userShellDetail(ctx, 3, 5, fmt.Sprintf("Supplier advisory: gentle-pi@%s file %s differs from its reviewed entry", version, source.name))
 			}
 		}
 	}
@@ -508,7 +529,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		userShellDetail(ctx, 4, 5, "Retaining the installed SDK channel")
 		mainSDK = existing.MainSDK
 	} else if mainSDK, err = userInstallMainSDK(ctx, root, req.Destination, prefix, agent, req.Experience); err != nil {
-		return result, fmt.Errorf("Main SDK + stock provider: %w", err)
+		return result, userMainSDKFailure("Main SDK + stock provider", err)
 	}
 	if _, statErr := os.Lstat(req.Destination); req.Mode == "agent" && errors.Is(statErr, os.ErrNotExist) {
 		// A fresh agent install sets Pi's own fd/rg aside inside the stage;
@@ -635,10 +656,10 @@ func userPublishManifest(ctx context.Context, root, prefix, agent string, manife
 		}
 	}
 	freshPrefix, identityErr := userIdentity(prefix)
-	if identityErr != nil || freshPrefix != manifest.PrefixIdentity {
+	if identityErr != nil || !userIdentityMatches(manifest.PrefixIdentity, freshPrefix) {
 		return result, privateError("preimage", identityErr)
 	}
-	if freshAgent, identityErr := userSelectedAgentIdentity(manifest.Mode, agent); identityErr != nil || freshAgent != manifest.AgentIdentity {
+	if freshAgent, identityErr := userSelectedAgentIdentity(manifest.Mode, agent); identityErr != nil || !userIdentityMatches(manifest.AgentIdentity, freshAgent) {
 		return result, privateError("preimage", identityErr)
 	}
 	if err = privateDestination(manifest.Destination); err != nil || ctx.Err() != nil {
@@ -812,7 +833,7 @@ func userBootstrap(ctx context.Context, root, workspace string) error {
 	}
 	defer client.CloseIdleConnections()
 	archive := filepath.Join(workspace, "node.tgz")
-	if err := privateColdFetch(ctx, client, archive, privateColdSize, privateColdSHA); err != nil {
+	if err := userBootstrapFetch(ctx, client, archive); err != nil {
 		return err
 	}
 	if err := userWriteBootstrapHelpers(root); err != nil {
@@ -827,6 +848,24 @@ func userBootstrap(ctx context.Context, root, workspace string) error {
 		return fmt.Errorf("Node bootstrap: %w; bounded output: %s", err, output)
 	}
 	return userBootstrapPublish(ctx, output, filepath.Join(root, "runtime/node"))
+}
+
+// userBootstrapFetch retries the pinned Node download on transient failures.
+// privateColdFetch creates the archive exclusively, so a retry first removes
+// the partial archive its own failed attempt left; a pre-existing archive is
+// never removed and still refuses the fetch.
+func userBootstrapFetch(ctx context.Context, client *http.Client, archive string) error {
+	_, statErr := os.Lstat(archive)
+	preexisting := !errors.Is(statErr, os.ErrNotExist)
+	attempts := 0
+	return userDownloadRetry(ctx, func(ctx context.Context) error {
+		if attempts++; attempts > 1 && !preexisting {
+			if err := os.Remove(archive); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return privateError("acquisition", err)
+			}
+		}
+		return privateColdFetch(ctx, client, archive, privateColdSize, privateColdSHA)
+	})
 }
 
 // Selected Shared tools are never replaced. AGENT/bin must be absent or an
@@ -865,38 +904,18 @@ func userToolsAcquire(ctx context.Context, root string) error {
 	if err := privateNativeDirectory(archives); err != nil {
 		return err
 	}
-	client, err := privateColdClient()
+	client, err := userToolsClient()
 	if err != nil {
 		return err
 	}
-	transport := client.Transport.(*http.Transport)
-	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
-	transport.TLSClientConfig.ServerName = "" // Verify each actual HTTPS host.
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) > 4 || req.URL.Scheme != "https" || req.URL.User != nil || req.URL.Fragment != "" || req.URL.Host != "release-assets.githubusercontent.com" {
-			return privateError("acquisition", nil)
-		}
-		return nil
-	}
 	defer client.CloseIdleConnections()
+	ctx, cancel := context.WithTimeout(ctx, userDownloadCeiling)
+	defer cancel()
 	for _, source := range userToolSources {
 		url := "https://github.com/" + source.repo + "/releases/download/" + source.tag + "/" + source.stem + ".tar.gz"
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		data, err := userToolFetch(ctx, client, url, source)
 		if err != nil {
 			return err
-		}
-		response, err := client.Do(req)
-		if err != nil {
-			return privateError("acquisition", err)
-		}
-		encoding := response.Header.Values("Content-Encoding")
-		if response.StatusCode != 200 || response.ContentLength != source.size || response.Uncompressed || response.TLS == nil || len(response.TLS.VerifiedChains) == 0 || len(encoding) > 1 || (len(encoding) == 1 && encoding[0] != "" && encoding[0] != "identity") {
-			return privateError("acquisition", errors.Join(response.Body.Close(), errors.New("helper response refused")))
-		}
-		data, readErr := io.ReadAll(io.LimitReader(response.Body, source.size+1))
-		err = errors.Join(readErr, response.Body.Close(), ctx.Err())
-		if err != nil || int64(len(data)) != source.size || fmt.Sprintf("%x", sha256.Sum256(data)) != source.pin {
-			return privateError("acquisition", err)
 		}
 		if err := userToolWrite(filepath.Join(archives, source.name+".tgz"), data, 0600); err != nil {
 			return err
@@ -906,6 +925,65 @@ func userToolsAcquire(ctx context.Context, root string) error {
 		}
 	}
 	return nil
+}
+
+// userToolRedirect admits at most four HTTPS redirect hops without userinfo,
+// fragment or explicit port to a GitHub release-asset host under
+// githubusercontent.com. The pinned SHA/size, not the host, authenticate the
+// bytes.
+func userToolRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > 4 || req.URL.Scheme != "https" || req.URL.User != nil || req.URL.Fragment != "" || req.URL.Port() != "" || !userDownloadGitHubAssetHost(req.URL.Hostname()) {
+		return privateError("acquisition", nil)
+	}
+	return nil
+}
+
+// userToolsClient keeps the cold client's connect/TLS/response-header bounds
+// but replaces its whole-request timeout with a body inactivity timeout; the
+// caller bounds the whole acquisition with userDownloadCeiling.
+func userToolsClient() (*http.Client, error) {
+	client, err := privateColdClient()
+	if err != nil {
+		return nil, err
+	}
+	transport := client.Transport.(*http.Transport)
+	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	transport.TLSClientConfig.ServerName = "" // Verify each actual HTTPS host.
+	client.Transport = userDownloadIdle(transport, userDownloadIdleTimeout)
+	client.Timeout = 0
+	client.CheckRedirect = userToolRedirect
+	return client, nil
+}
+
+// userToolFetch downloads one pinned tool archive, retrying only transient
+// failures. A size or SHA-256 mismatch is final.
+func userToolFetch(ctx context.Context, client *http.Client, url string, source userToolSource) ([]byte, error) {
+	var data []byte
+	err := userDownloadRetry(ctx, func(ctx context.Context) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		response, err := client.Do(req)
+		if err != nil {
+			return privateError("acquisition", err)
+		}
+		if err := userDownloadStatus(response.StatusCode); err != nil {
+			return privateError("acquisition", errors.Join(err, response.Body.Close()))
+		}
+		encoding := response.Header.Values("Content-Encoding")
+		if response.ContentLength != source.size || response.Uncompressed || response.TLS == nil || len(response.TLS.VerifiedChains) == 0 || len(encoding) > 1 || (len(encoding) == 1 && encoding[0] != "" && encoding[0] != "identity") {
+			return privateError("acquisition", errors.Join(response.Body.Close(), errors.New("helper response refused")))
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, source.size+1))
+		err = errors.Join(readErr, response.Body.Close(), ctx.Err())
+		if err != nil || int64(len(body)) != source.size || fmt.Sprintf("%x", sha256.Sum256(body)) != source.pin {
+			return privateError("acquisition", err)
+		}
+		data = body
+		return nil
+	})
+	return data, err
 }
 
 func userToolBinary(ctx context.Context, archives string, source userToolSource) ([]byte, error) {
@@ -1199,10 +1277,10 @@ func userReadRecordedManifest(ctx context.Context, root string, reuse *userInsta
 			return manifest, err
 		}
 	}
-	if actual, err := userIdentity(manifest.Prefix); err != nil || actual != manifest.PrefixIdentity {
+	if actual, err := userIdentity(manifest.Prefix); err != nil || !userIdentityMatches(manifest.PrefixIdentity, actual) {
 		return manifest, privateError("preimage", err)
 	}
-	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || actual != manifest.AgentIdentity {
+	if actual, err := userSelectedAgentIdentity(manifest.Mode, manifest.Agent); err != nil || !userIdentityMatches(manifest.AgentIdentity, actual) {
 		return manifest, privateError("preimage", err)
 	}
 	if reuse == nil {
@@ -1300,6 +1378,129 @@ func userRootRiskBannerUID(stderr io.Writer, uid int) {
 	_, _ = fmt.Fprintln(stderr, "WARNING: running as root; the private installation sandbox (capability drop, NoNewPrivileges, delegated unit limits) is disabled for this root-risk installation")
 }
 
+// userLaunchSealRead reads a small installer-owned JSON file for the launch
+// drift probe. The probe only decides which refusal to emit, so it uses a
+// relaxed custody check — regular file, caller-owned, bounded size — without
+// darwin's extended-metadata custody (BSD flags, ACL, quarantine). A probe
+// misread can only skip the self-update guidance and defer to the strict
+// verify, which keeps the full custody and remains the authority. This keeps
+// the inconclusive-fallback behavior identical on Linux and darwin.
+func userLaunchSealRead(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("seal %q is not a regular file", path)
+	}
+	stat, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uint32(os.Getuid()) {
+		return nil, fmt.Errorf("seal %q is not owned by the caller", path)
+	}
+	if before.Size() > 1<<20 {
+		return nil, fmt.Errorf("seal %q exceeds the read bound", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(before, after) || after.Size() != before.Size() || int64(len(data)) != before.Size() {
+		return nil, errors.New("seal changed during read")
+	}
+	return data, nil
+}
+
+// userLaunchInstalledPiVersion returns the installed pi-coding-agent version
+// recorded by its own package.json, or ok=false when the read is inconclusive.
+func userLaunchInstalledPiVersion(ctx context.Context, prefix string) (version string, ok bool) {
+	data, err := userLaunchSealRead(ctx, filepath.Join(prefix, "lib/node_modules/@earendil-works/pi-coding-agent/package.json"))
+	if err != nil {
+		return "", false
+	}
+	var metadata struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(data, &metadata) != nil || metadata.Name != "@earendil-works/pi-coding-agent" || metadata.Version == "" {
+		return "", false
+	}
+	return metadata.Version, true
+}
+
+// userLaunchRecordedPiVersion returns the pi-coding-agent version sealed in the
+// installation's global graph, or ok=false when the seal is absent or malformed.
+func userLaunchRecordedPiVersion(ctx context.Context, root string) (version string, ok bool) {
+	data, err := userLaunchSealRead(ctx, filepath.Join(root, "state/global-graph.json"))
+	if err != nil {
+		return "", false
+	}
+	var observed []struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(data, &observed) != nil {
+		return "", false
+	}
+	for _, entry := range observed {
+		if entry.Name == "@earendil-works/pi-coding-agent" && entry.Version != "" {
+			return entry.Version, true
+		}
+	}
+	return "", false
+}
+
+// userLaunchGlobalDrift reports the installed and recorded pi-coding-agent
+// versions and whether the installed version is strictly newer — the residue
+// of a genuine Pi self-update. The installer's intentional prior-cohort
+// transition moves to an OLDER version and is never reported as drift: it
+// falls through to the strict verify, which already compares the prior cohort
+// against state/prior-global-graph.json. Malformed or inconclusive reads also
+// defer to verify (fail-closed).
+func userLaunchGlobalDrift(ctx context.Context, root, prefix string) (installed, recorded string, drifted bool) {
+	installed, ok := userLaunchInstalledPiVersion(ctx, prefix)
+	if !ok {
+		return "", "", false
+	}
+	recorded, ok = userLaunchRecordedPiVersion(ctx, root)
+	if !ok {
+		return "", "", false
+	}
+	if !userReviewedListSemver(installed) || !userReviewedListSemver(recorded) {
+		return installed, recorded, false
+	}
+	return installed, recorded, userReviewedListVersionLess(recorded, installed)
+}
+
+// userLaunchSelfUpdateError describes the detected self-update and points to
+// the in-place TUI reconfigure that re-acquires and re-seals the graph. It
+// never advises deleting the target or installing into a different one.
+func userLaunchSelfUpdateError(root, installed, recorded string) error {
+	return fmt.Errorf("Gentle Shell refused launch: Pi was self-updated in place (installed @earendil-works/pi-coding-agent %s, recorded graph seal %s), so the authenticated global graph no longer matches.\nRepair in place: run `gentle-ai shell install` (no flags) and choose to reconfigure this existing installation at %q, which re-acquires and re-seals the graph with the new Pi version. Do not delete the target or install into a different one.", installed, recorded, root)
+}
+
+// userLaunchVerify lets tests substitute the stock verifier; production runs
+// userVerifyInstalledGlobal.
+var userLaunchVerify = userVerifyInstalledGlobal
+
+// userLaunchPrepare runs the pre-exec verification for a stock launch. A Pi
+// self-update is refused with actionable in-place repair guidance instead of
+// being silently re-provisioned (issue #5812); non-drift verification keeps its
+// existing repair error. Main SDK installs verify through userReadManifest and
+// never reach this path.
+func userLaunchPrepare(ctx context.Context, root string, manifest userManifest) error {
+	if installed, recorded, drifted := userLaunchGlobalDrift(ctx, root, manifest.Prefix); drifted {
+		return userLaunchSelfUpdateError(root, installed, recorded)
+	}
+	if err := userLaunchVerify(ctx, root, manifest); err != nil {
+		return userGraphRepairError(root, manifest.Mode, err)
+	}
+	return nil
+}
+
 func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader, stdout, stderr io.Writer) (err error) {
 	userRootRiskBanner(stderr)
 	ctx = userEngramLaunchScope(ctx, root, args)
@@ -1316,10 +1517,12 @@ func userLaunch(ctx context.Context, root string, args []string, stdin io.Reader
 	// stat/read operations ran since; re-running the provisioner here doubled
 	// every launch's verification cost while leaving the unverified window at
 	// least as wide as the one it closed. Stock-only installs keep their single
-	// pre-exec verification, which only this call performs.
+	// pre-exec verification, which only this call performs. A Pi self-update
+	// that rewrote the authenticated prefix is refused here with in-place repair
+	// guidance (issue #5812), never repaired inside verify.
 	if manifest.MainSDK == nil {
-		if err := userVerifyInstalledGlobal(ctx, root, manifest); err != nil {
-			return userGraphRepairError(root, manifest.Mode, err)
+		if err := userLaunchPrepare(ctx, root, manifest); err != nil {
+			return err
 		}
 	}
 	// S23/M1: a tree without a staged reviewed list keeps its supplier files

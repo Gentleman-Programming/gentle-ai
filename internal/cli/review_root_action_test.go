@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // The root `action` of a negotiated STATUS envelope must agree with its

@@ -78,7 +78,7 @@ func userWindowsJob() (windows.Handle, error) {
 
 // No CREATE_NO_WINDOW: the eventual interactive entry inherits its console.
 // This primitive supplies process custody, not path ownership, artifact trust,
-// a Windows 11 qualification, or a complete installer/terminal contract.
+// a Windows 10/11 qualification, or a complete installer/terminal contract.
 func userWindowsStart(command *exec.Cmd) (func() error, error) {
 	job, err := userWindowsJob()
 	if err != nil {

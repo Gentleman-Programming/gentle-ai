@@ -15,9 +15,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // These fixtures pin the public native-agent ownership behavior so the ledger
@@ -118,7 +118,7 @@ func TestOwnershipReuseRejectsLedgerWithoutMutation(t *testing.T) {
 	valid := sha("x")
 	// JSON type errors keep the baseline 9e metadata: the native struct name,
 	// the root type and its package, and the decoder offsets.
-	root := `reviewassets.ownershipLedger "github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"`
+	root := `reviewassets.ownershipLedger "github.com/gentleman-programming/gentle-ai/v5/internal/components/reviewassets"`
 	for _, tc := range []struct {
 		name, body, want, typeErr string
 		setup                     func(t *testing.T, ledger string)

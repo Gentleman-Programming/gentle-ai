@@ -3,12 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // pristineInvalidatedCLIFixture persists one pristine invalidated docs-only
@@ -66,7 +67,11 @@ func abandonCLIBinding(t *testing.T, repo, revision, snapshotIdentity string) st
 		"maintainer@example.com", reviewtransaction.CompactAbandonReasonOperatorDisposition)
 }
 
-func TestReviewAbandonRefusesTerminalInvalidatedLineage(t *testing.T) {
+// TestReviewAbandonQuarantinesTerminalInvalidatedLineageOnlyWithBinding: a
+// terminal lineage is abandonable, but only with the exact binding; a wrong one
+// refuses and leaves the store untouched, and the success JSON keeps exactly
+// the keys gentle-shell decodes.
+func TestReviewAbandonQuarantinesTerminalInvalidatedLineageOnlyWithBinding(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	revision, snapshotIdentity := pristineInvalidatedCLIFixture(t, repo)
@@ -76,13 +81,29 @@ func TestReviewAbandonRefusesTerminalInvalidatedLineage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = RunReview(abandonCLIArgs(repo, revision, abandonCLIBinding(t, repo, revision, snapshotIdentity)), &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), `holds terminal "invalidated" authority`) {
-		t.Fatalf("review abandon terminal invalidated = %v", err)
+	var refused bytes.Buffer
+	err = RunReview(abandonCLIArgs(repo, revision, abandonCLIBinding(t, repo, snapshotIdentity, revision)), &refused)
+	if err == nil || !strings.Contains(err.Error(), "exact maintainer authorization binding") || refused.Len() != 0 {
+		t.Fatalf("review abandon with a wrong binding = %v, stdout %q", err, refused.String())
 	}
 	current, err := os.ReadFile(statePath)
 	if err != nil || !bytes.Equal(current, payload) {
-		t.Fatalf("terminal invalidated abandon mutated authority: %v", err)
+		t.Fatalf("refused abandon mutated authority: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	if err := RunReview(abandonCLIArgs(repo, revision, abandonCLIBinding(t, repo, revision, snapshotIdentity)), &stdout); err != nil {
+		t.Fatalf("review abandon terminal invalidated with the exact binding: %v", err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 2 || decoded["operation"] == nil || decoded["record"] == nil {
+		t.Fatalf("abandon JSON keys = %s, want exactly operation and record", stdout.String())
+	}
+	if _, statErr := os.Stat(statePath); !os.IsNotExist(statErr) {
+		t.Fatalf("abandoned entry still present: %v", statErr)
 	}
 }
 
@@ -118,7 +139,32 @@ func TestReviewHelpListsAbandon(t *testing.T) {
 	if err := RunReview([]string{"abandon", "--help"}, &output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "non-terminal") {
-		t.Fatalf("review abandon help does not describe non-terminal lineages: %s", output.String())
+	if !strings.Contains(output.String(), "Accepts every state") || !strings.Contains(output.String(), "authorization binding") {
+		t.Fatalf("review abandon help does not describe the widened coverage and the binding: %s", output.String())
+	}
+}
+
+// A simple abandonment keeps the same record keys as before the widened
+// coverage, so older readers decode it (gentle-ai#6207).
+func TestReviewAbandonSimpleLineageRecordMatchesBaselineKeys(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	revision, snapshotIdentity := pristineInvalidatedCLIFixture(t, repo)
+	var stdout bytes.Buffer
+	if err := RunReview(abandonCLIArgs(repo, revision, abandonCLIBinding(t, repo, revision, snapshotIdentity)), &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Record struct{ Abandonment map[string]json.RawMessage }
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for key := range decoded.Record.Abandonment {
+		switch key {
+		case "schema", "lineage_id", "revision", "snapshot_identity", "discarded_work":
+		default:
+			t.Fatalf("simple-lineage abandonment record gained key %q: %s", key, stdout.String())
+		}
 	}
 }

@@ -8,15 +8,16 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/qwen"
-	runtimeopencode "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/telemetry"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/qwen"
+	runtimeopencode "github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/testenv"
 )
 
 // telemetryTestSpawnRecorder is the RecordingSpawner installed as
@@ -80,6 +81,11 @@ func TestMain(m *testing.M) {
 	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
 		return runtimeopencode.CommandOutput{Stdout: []byte("1.18.30")}, nil
 	}
+	// The Codex GPT-5.6 runtime check shells out to `codex --version` on its
+	// own exec boundary, past every LookPathOverride. Pin a supported version
+	// so a missing, broken, or older host codex never decides these tests;
+	// tests that exercise the requirement set their own probe.
+	_ = codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil)
 	// Subprocess stand-in (#4434 regression): re-executed with the CLI
 	// arguments of an emitted continuation command, this test binary must
 	// run the real CLI dispatch (flag parsing, agent selection, sync

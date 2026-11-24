@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/doctor"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/storage"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/storage"
 )
 
 type CheckStatus = doctor.Status
@@ -681,8 +681,17 @@ func danglingAncestor(homeDir, path string) (string, error) {
 	return "", nil
 }
 
+// configDirsProvider is implemented by adapters whose configuration may live
+// in one of several known roots, such as Antigravity before and after its
+// shared ~/.gemini/config root.
+type configDirsProvider interface {
+	ConfigDirs(homeDir string) []string
+}
+
 // agentConfigDir uses the same adapter paths as installation and sync. An
-// empty path means a known detection-only agent, not an unrecognized ID.
+// empty path means a known detection-only agent, not an unrecognized ID. For
+// adapters with several known roots, the first one present wins so a host
+// that predates the preferred root is not reported as missing.
 func agentConfigDir(homeDir, agentID string) (string, error) {
 	adapter, err := agents.NewAdapter(model.AgentID(agentID))
 	if err != nil {
@@ -690,6 +699,13 @@ func agentConfigDir(homeDir, agentID string) (string, error) {
 	}
 	if !adapter.SupportsSkills() && !adapter.SupportsSystemPrompt() && !adapter.SupportsMCP() {
 		return "", nil
+	}
+	if provider, ok := adapter.(configDirsProvider); ok {
+		for _, dir := range provider.ConfigDirs(homeDir) {
+			if _, err := os.Lstat(dir); err == nil {
+				return dir, nil
+			}
+		}
 	}
 	return adapter.GlobalConfigDir(homeDir), nil
 }

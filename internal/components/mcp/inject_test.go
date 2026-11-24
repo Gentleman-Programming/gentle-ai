@@ -13,18 +13,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/versions"
 )
 
 func TestContext7SelectedSettingsRefuseNestedCommentsAndLockedMode(t *testing.T) {
@@ -1412,6 +1413,56 @@ func TestInjectAntigravityPreservesLegacyContext7LocalConfig(t *testing.T) {
 	assertContext7FileUnchanged(t, configPath, legacy)
 }
 
+// #5657: on agy's migrated layout the variant mcp_config.json is a symlink
+// into the shared ~/.gemini/config root. Re-installs must write the shared
+// file directly instead of refusing to read the symlink.
+func TestInjectAntigravityMigratedLayoutReinstallsThroughSharedConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+	home := t.TempDir()
+	sharedDir := filepath.Join(home, ".gemini", "config")
+	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	for _, dir := range []string{sharedDir, cliDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sharedDir, ".migrated"), nil, 0o644); err != nil {
+		t.Fatalf("WriteFile(.migrated) error = %v", err)
+	}
+	sharedPath := filepath.Join(sharedDir, "mcp_config.json")
+	if err := os.WriteFile(sharedPath, []byte(`{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", sharedPath, err)
+	}
+	linkPath := filepath.Join(cliDir, "mcp_config.json")
+	if err := os.Symlink(sharedPath, linkPath); err != nil {
+		t.Fatalf("Symlink(%q) error = %v", linkPath, err)
+	}
+
+	for _, run := range []string{"install", "re-install"} {
+		result, err := Inject(home, home, antigravityAdapter())
+		if err != nil {
+			t.Fatalf("Inject(antigravity) %s error = %v", run, err)
+		}
+		if len(result.Files) != 1 || result.Files[0] != sharedPath {
+			t.Fatalf("Inject(antigravity) %s files = %v, want [%q]", run, result.Files, sharedPath)
+		}
+	}
+
+	assertAntigravityContext7Schema(t, sharedPath)
+	shared, err := os.ReadFile(sharedPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", sharedPath, err)
+	}
+	if !strings.Contains(string(shared), `"codegraph"`) {
+		t.Fatalf("shared MCP config lost the unrelated codegraph server:\n%s", shared)
+	}
+	if info, err := os.Lstat(linkPath); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("variant MCP config %q must remain a symlink into the shared root; lstat err = %v", linkPath, err)
+	}
+}
+
 func TestInjectKimiWritesContext7ToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
 
@@ -1507,7 +1558,7 @@ func TestInjectHermesContext7IntoYAML(t *testing.T) {
 		t.Fatal("Inject(hermes) changed = false")
 	}
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(system.HermesConfigDir(home), "config.yaml")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("ReadFile(config.yaml) error = %v", err)
@@ -1549,7 +1600,7 @@ func TestInjectHermesContext7Idempotent(t *testing.T) {
 		t.Fatal("Inject(hermes) second changed = true (not idempotent)")
 	}
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(system.HermesConfigDir(home), "config.yaml")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("ReadFile(config.yaml) error = %v", err)
@@ -1585,7 +1636,7 @@ func TestInjectHermesStrategyMergeIntoYAMLDispatches(t *testing.T) {
 // must survive the MCP upsert.
 func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
 	home := t.TempDir()
-	hermesDir := filepath.Join(home, ".hermes")
+	hermesDir := system.HermesConfigDir(home)
 	if err := os.MkdirAll(hermesDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}

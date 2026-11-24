@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
 )
 
 // LockPath returns the canonical install-state lock path for homeDir.

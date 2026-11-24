@@ -25,11 +25,18 @@ func ResolveCorrectedCandidateInspection(ctx context.Context, repo string, repos
 	}
 	var binding ReviewRepositoryContextBinding
 	var err error
-	if strings.HasPrefix(repositoryContextHandle, reviewRepositoryContextV2HandlePrefix) {
-		repo, binding, err = resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx, repo, repositoryContextHandle, ReviewRepositoryContextBinding{
-			LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
-		})
-	} else {
+	requested := ReviewRepositoryContextBinding{
+		LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
+	}
+	// guard:population corrected-inspection-handle-format too-tight: STATUS issues rctx2 digests to most runtimes and sealed rctx3 handles to OpenCode, so both are admitted under their own authentication; any other shape reaches only the read-only archived rctx1 decoder.
+	switch {
+	case strings.HasPrefix(repositoryContextHandle, reviewRepositoryContextV2HandlePrefix):
+		repo, binding, err = resolveReviewRepositoryContextV2TokenForCorrectedInspection(ctx, repo, repositoryContextHandle, requested)
+	case strings.HasPrefix(repositoryContextHandle, reviewRepositoryContextV3HandlePrefix):
+		// OpenCode STATUS issues only the sealed rctx3 handle; it names its own
+		// root, so the caller repository is not consulted.
+		repo, binding, err = resolveSealedReviewRepositoryContextForCorrectedInspection(ctx, repositoryContextHandle, requested)
+	default:
 		repo, binding, err = resolveOpaqueReviewRepositoryContext(ctx, repositoryContextHandle)
 	}
 	if err != nil {

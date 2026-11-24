@@ -1,6 +1,6 @@
 package cli
 
-import "github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+import "github.com/gentleman-programming/gentle-ai/v5/internal/statecoord"
 
 func withInstallStateLock(homeDir string, operation func() error) error {
 	return statecoord.WithLock(homeDir, operation)

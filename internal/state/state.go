@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 const stateDir = ".gentle-ai"
@@ -73,6 +73,10 @@ type InstallState struct {
 	// Values like "opus", "sonnet", and "haiku" remain valid for state files
 	// written before Kiro had its own picker options.
 	KiroModelAssignments map[string]string `json:"kiro_model_assignments,omitempty"`
+
+	// AntigravityModelAssignments maps Antigravity native agent roles to an agy
+	// model tier (inherit|flash_lite|flash|pro). Absent = every role inherits.
+	AntigravityModelAssignments map[string]string `json:"antigravity_model_assignments,omitempty"`
 
 	// CodexModelAssignments maps SDD phase names to a Codex reasoning_effort value
 	// (low|medium|high|xhigh). Persisted so that `gentle-ai sync` preserves the
@@ -308,6 +312,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		ClaudeModelAssignments:      existing.ClaudeModelAssignments,
 		ClaudePhaseAssignments:      existing.ClaudePhaseAssignments,
 		KiroModelAssignments:        existing.KiroModelAssignments,
+		AntigravityModelAssignments: existing.AntigravityModelAssignments,
 		CodexModelAssignments:       existing.CodexModelAssignments,
 		CodexOrchestratorAssignment: existing.CodexOrchestratorAssignment,
 		CodexServiceTier:            existing.CodexServiceTier,

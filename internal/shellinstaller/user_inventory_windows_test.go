@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -91,6 +92,70 @@ func TestUserWindowsInventoryLaunchAcceptsMutableState(t *testing.T) {
 	}
 }
 
+// Runtime state is not an installed artefact: caches and sessions written
+// after publication may exceed the artefact byte bounds. Every per-entry
+// guard still applies and only a fresh pre-publication stage keeps every one
+// of its bytes bounded.
+func TestUserWindowsInventoryLaunchByteBoundsExemptRuntimeState(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "home/go/pkg/mod/cache/download/github.com/giant/@v/v9.9.9.zip"), (2<<30)+(1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "tmp/npm-audit.jsonl"), 40<<20); err != nil {
+		t.Fatal(err)
+	}
+	// A user-installed Pi extension may place a 300 MiB native binary in the
+	// agent's own npm package tree (see the reported 284 MiB claude.exe).
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "agent/npm/node_modules/@tower/claw/claude.exe"), 300<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryLaunch); err != nil {
+		t.Fatalf("grown runtime state refused at launch: %v", err)
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryInstalled); err == nil {
+		t.Fatal("pre-publication inventory admitted unbounded runtime bytes")
+	}
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "prefix/node_modules/giant-pi/blob"), 33<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryLaunch); err == nil {
+		t.Fatal("oversized artefact byte admitted inside prefix")
+	}
+}
+
+// An installation failure must not strand the worker's stage: its owned tools
+// may have primed caches beyond the artefact bounds before the stage was
+// abandoned.
+func TestUserWindowsInventoryCleanupRemovesGrownRuntimeState(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "runtime/cache/_cacache/content-v2/big"), 33<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "home/alias-blob"), (2<<30)+(1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryCleanup); err != nil {
+		t.Fatalf("grown stage runtime state made the stage unremovable: %v", err)
+	}
+}
+
+// The aggregate artefact bound survives the runtime-state exemption: only
+// installed artefact bytes count towards the 2 GiB total.
+func TestUserWindowsInventoryLaunchKeepsAggregateArtefactBound(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	for i := 0; i < 70; i++ {
+		if err := os.Truncate(userWindowsInventoryFile(t, root, "prefix/node_modules/blob"+strconv.Itoa(i)), 31<<20); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryLaunch); err == nil {
+		t.Fatal("aggregate artefact bytes admitted beyond the 2 GiB bound")
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryCleanup); err == nil {
+		t.Fatal("cleanup aggregate artefact bytes admitted beyond the bound")
+	}
+}
+
 func TestUserWindowsInventoryLaunchKeepsArtefactGuards(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
@@ -123,6 +188,13 @@ func TestUserWindowsInventoryLaunchKeepsArtefactGuards(t *testing.T) {
 			userWindowsInventoryFile(t, root, "prefix/node_modules/a&b/index.js")
 		}},
 		// Descendants of mutable state keep every per-entry guard.
+		{"nested junction in agent npm tree", func(t *testing.T, root string) {
+			parent := filepath.Join(root, filepath.FromSlash("agent/npm/node_modules/@tower/claw"))
+			if err := os.MkdirAll(parent, 0700); err != nil {
+				t.Fatal(err)
+			}
+			userWindowsJunction(t, filepath.Join(parent, "pkg"), t.TempDir())
+		}},
 		{"nested junction in module cache", func(t *testing.T, root string) {
 			parent := filepath.Join(root, filepath.FromSlash("home/go/pkg/mod/github.com/!burnt!sushi"))
 			if err := os.MkdirAll(parent, 0700); err != nil {
@@ -153,11 +225,6 @@ func TestUserWindowsInventoryLaunchKeepsArtefactGuards(t *testing.T) {
 			userWindowsInventoryFile(t, root, "agent/sessions/--C--x--/keep")
 			if err := os.Link(foreign, filepath.Join(root, "agent/sessions/--C--x--/linked.jsonl")); err != nil {
 				t.Skipf("cross-directory hard link unavailable: %v", err)
-			}
-		}},
-		{"oversized nested cache file", func(t *testing.T, root string) {
-			if err := os.Truncate(userWindowsInventoryFile(t, root, "runtime/cache/_cacache/content-v2/big"), 33<<20); err != nil {
-				t.Fatal(err)
 			}
 		}},
 	} {
@@ -200,5 +267,91 @@ func TestUserWindowsLaunchArtefactBytesStayVerified(t *testing.T) {
 	}
 	if err := userWindowsVerifyArchive(ctx, root, artifact, destination, "node.exe"); err == nil {
 		t.Fatal("tampered installed executable admitted")
+	}
+}
+
+// An update stage carries the retired operator state (#6245): sessions and the
+// agent's own npm tree may exceed the artefact byte bounds and use data names,
+// exactly as at launch. Every other stage byte stays an installer artefact.
+func TestUserWindowsInventoryCarriedAdmitsOperatorStateOnly(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "agent/npm/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe"), 300<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "agent/sessions/--C--R&D-proj!x--/2026-11-21_session.jsonl"), 56<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryInstalled); err == nil {
+		t.Fatal("fresh pre-publication inventory admitted operator state")
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryCarried); err != nil {
+		t.Fatalf("carried operator state refused before publication: %v", err)
+	}
+	for _, artefact := range []string{"home/giant.bin", "runtime/cache/giant.bin", "prefix/node_modules/giant-pi/blob"} {
+		blob := userWindowsInventoryFile(t, root, artefact)
+		if err := os.Truncate(blob, 33<<20); err != nil {
+			t.Fatal(err)
+		}
+		if err := userWindowsInventory(root, userWindowsInventoryCarried); err == nil {
+			t.Fatalf("oversized stage artefact %s admitted by carried inventory", artefact)
+		}
+		if err := os.Remove(blob); err != nil {
+			t.Fatal(err)
+		}
+	}
+	userWindowsInventoryFile(t, root, "home/100%^done/file")
+	if err := userWindowsInventory(root, userWindowsInventoryCarried); err == nil {
+		t.Fatal("selection-unsafe name outside carried operator state admitted")
+	}
+}
+
+func TestUserWindowsPublicationInventorySelectsCarriedOnlyForUpdates(t *testing.T) {
+	if got := userWindowsPublicationInventory(nil); got != userWindowsInventoryInstalled {
+		t.Fatalf("fresh stage inventory = %v, want installed", got)
+	}
+	if got := userWindowsPublicationInventory(&userWindowsManifest{}); got != userWindowsInventoryCarried {
+		t.Fatalf("update stage inventory = %v, want carried", got)
+	}
+}
+
+// Carried mode relaxes data names alone, independently of any byte bound.
+func TestUserWindowsInventoryCarriedAdmitsSessionDataNames(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	userWindowsInventoryFile(t, root, "agent/sessions/--C--100%^done--/session.jsonl")
+	if err := userWindowsInventory(root, userWindowsInventoryInstalled); err == nil {
+		t.Fatal("fresh pre-publication inventory admitted a session data name")
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryCarried); err != nil {
+		t.Fatalf("carried session data name refused: %v", err)
+	}
+}
+
+// The other runtime-state roots are fresh installer output in an update stage.
+func TestUserWindowsInventoryCarriedKeepsOtherStateRootsStrict(t *testing.T) {
+	for _, entry := range []struct {
+		label, name string
+		size        int64
+	}{{"state_data_name", "state/100%^done/f", 0}, {"tmp_data_name", "tmp/a!b/f", 0}, {"state_oversized", "state/giant.bin", 33 << 20}, {"tmp_oversized", "tmp/giant.bin", 33 << 20}} {
+		// The label keeps metacharacters out of the t.TempDir() fixture root.
+		t.Run(entry.label, func(t *testing.T) {
+			root := userWindowsInventoryFixture(t)
+			if err := os.Truncate(userWindowsInventoryFile(t, root, entry.name), entry.size); err != nil {
+				t.Fatal(err)
+			}
+			if err := userWindowsInventory(root, userWindowsInventoryCarried); err == nil {
+				t.Fatalf("carried inventory admitted %s outside operator state", entry.name)
+			}
+		})
+	}
+}
+
+// Relaxed size and names never relax the per-entry ownership guards.
+func TestUserWindowsInventoryCarriedKeepsSessionGuards(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	session := filepath.Join(root, "agent", "sessions", "--C--proj--")
+	userWindowsForeignACE(t, session)
+	userWindowsInventoryFile(t, root, "agent/sessions/--C--proj--/session.jsonl")
+	if err := userWindowsInventory(root, userWindowsInventoryCarried); err == nil {
+		t.Fatal("carried inventory admitted a session directory writable by another account")
 	}
 }

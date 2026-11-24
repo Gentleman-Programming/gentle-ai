@@ -17,10 +17,10 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 	"gopkg.in/yaml.v3"
 )
 
@@ -394,6 +394,10 @@ func ReadPersistedStdioCommands(homeDir string, installedAgentIDs []string) ([]S
 		if adapter.Agent() == model.AgentClaudeCode {
 			// Claude Code reads user-scope MCP entries from ~/.claude.json.
 			paths = []string{claude.UserConfigPath(homeDir)}
+		}
+		if adapter.Agent() == model.AgentAntigravity {
+			// Antigravity Engram registration is plugin-owned (#797, #5607).
+			paths = append(paths, filepath.Join(AntigravityPluginDir(homeDir), "mcp_config.json"))
 		}
 
 		for _, path := range paths {

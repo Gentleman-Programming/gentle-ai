@@ -4,8 +4,8 @@ import (
 	"errors"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/screens"
 )
 
 // shellPlatformTargetNote is the Windows installer refusal for every target

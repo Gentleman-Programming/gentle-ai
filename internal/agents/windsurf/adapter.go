@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 type statResult struct {
@@ -96,11 +96,17 @@ func (a *Adapter) SettingsPath(homeDir string) string {
 	return filepath.Join(a.windsurfUserDir(homeDir), "settings.json")
 }
 
-// windsurfUserDir returns the platform-specific Windsurf User config directory.
-// Windsurf follows the same platform conventions as VS Code, substituting
-// the application name "Windsurf" for "Code".
 func (a *Adapter) windsurfUserDir(homeDir string) string {
-	switch runtime.GOOS {
+	return UserDir(homeDir, runtime.GOOS)
+}
+
+// UserDir returns the platform-specific Windsurf User config directory for
+// goos. Windsurf follows the same platform conventions as VS Code, substituting
+// the application name "Windsurf" for "Code". goos is injected so
+// backup.WithConfigRoots can admit %APPDATA%\Windsurf\User as a restore root
+// when %APPDATA% is redirected outside the profile (issue #6029).
+func UserDir(homeDir, goos string) string {
+	switch goos {
 	case "darwin":
 		return filepath.Join(homeDir, "Library", "Application Support", "Windsurf", "User")
 	case "windows":

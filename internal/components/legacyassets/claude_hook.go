@@ -7,8 +7,8 @@ import (
 	"os"
 	"reflect"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // ClaudeSDDPreflightHookCommand is the command v2.8.0 to v3.7.0 registered as
