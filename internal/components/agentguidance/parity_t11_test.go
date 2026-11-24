@@ -115,7 +115,7 @@ func TestSmallGenericStopListIsScopedToTheAffectedWork(t *testing.T) {
 	}
 	for _, want := range []string{
 		// The canon names the exhausted limit beside the other stops.
-		"An open human decision, missing consent, a denial, an exhausted limit, or an explicit stop halts only the work it names; independent authorized work continues.",
+		"An open human decision, missing consent, a denial, an exhausted limit, an explicit stop, or a failure with no permitted route left halts only the work it names; independent authorized work continues.",
 		// PRESERVE: the guards beside it.
 		"Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule.",
 		"Report a concrete blocker and the exact decision needed rather than requesting a generic \"continue\".",

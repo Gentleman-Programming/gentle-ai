@@ -2500,6 +2500,25 @@ func installOpenCodeFamilyParityAgents(settingsPath string, agent model.AgentID)
 	specs := opencodeagents.Parity(agent)
 	agentsOverlay := make(map[string]any, len(specs))
 	for _, spec := range specs {
+		if spec.Name == "gentle-ai-worker" {
+			// Use the merge's view of the config. For malformed input, leave
+			// recovery or refusal to the existing JSON/JSONC merge policy.
+			root, _ := filemerge.UnmarshalJSONObject(raw)
+			agents, _ := root["agent"].(map[string]any)
+			if existing, present := agents[spec.Name]; present {
+				entry, ok := existing.(map[string]any)
+				if !ok {
+					continue
+				}
+				owned, err := opencodeagents.Shape(spec.Name, entry)
+				if err != nil {
+					return false, err
+				}
+				if !owned {
+					continue
+				}
+			}
+		}
 		entry, err := opencodeagents.Entry(spec)
 		if err != nil {
 			return false, err
