@@ -246,6 +246,8 @@ Native Go alone selects lenses, classifies candidate causality, performs refutat
 
 A committed-range correction re-entered with the exact selector the final capture returned (`--base-ref <frozen tree> --committed-only`), or with the commit START was pinned to, keeps its frozen empty intended-untracked exclusion. Unrelated untracked files do not reopen that decision or require a new `--untracked-scope` declaration. A different base tree names a different target and never inherits the frozen decision.
 
+After a targeted validator rejects that correction, bound STATUS with the same committed-only range and unchanged rejected candidate still reports `native_stop_required`, even if unrelated untracked files now exist. This does not authorize recovery. A changed committed candidate or a fresh lineage does not inherit the exclusion.
+
 ### Non-blocking findings of a stopped review (`--non-blocking-findings`)
 
 If the authority revision changes during this read, STATUS refuses rather than mixing revisions. Rerun the same `gentle-ai review status` command with unchanged arguments; the refusal grants no new authority.

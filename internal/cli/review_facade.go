@@ -976,6 +976,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// frozen exclusion instead of demanding a fresh live declaration
 		// (#6058).
 		var frozenCommittedCorrectionTarget *reviewtransaction.Snapshot
+		var frozenCommittedEscalation *reviewtransaction.CompactRecord
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 				return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review status --projection staged`"))
@@ -1029,6 +1030,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							return reviewPreflightError(inventoryErr)
 						}
 						resumeCorrectionUntracked = reviewUntrackedInventoryContainsSelection(inventory, declaredUntracked)
+					} else if record.State.State == reviewtransaction.StateEscalated && *committedOnly &&
+						record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff && len(declaredUntracked) == 0 {
+						// Wait for native STATUS to confirm that this selector still
+						// reaches the rejected candidate's terminal stop.
+						frozenCommittedEscalation = &record
 					}
 					if pendingApproval || resumeCorrectionUntracked {
 						intendedScope = reviewIntendedUntrackedScope{
@@ -1263,14 +1269,24 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// authority's immutable decision: an unrelated untracked file must not
 		// replace it with a fresh live declaration. A different base tree stays
 		// a different target and never inherits this decision.
-		// guard:population committed-correction-frozen-exclusion too-loose: only a current, stop-routed correction_required base-diff whose assessed live base tree and projection equal the frozen target and whose frozen intended-untracked selection is empty reuses that exclusion; a different base tree or projection, a declared selection, another lineage, state, or action still takes its own declaration path
-		if frozenCommittedCorrectionTarget != nil && !intendedScope.Declared &&
+		var frozenCommittedTarget *reviewtransaction.Snapshot
+		if native.State == reviewtransaction.StateCorrectionRequired {
+			frozenCommittedTarget = frozenCommittedCorrectionTarget
+		} else if frozenCommittedEscalation != nil && intendedScope.NeedsSelection &&
+			native.State == reviewtransaction.StateEscalated && native.Revision == frozenCommittedEscalation.Revision &&
+			native.Escalation != nil && native.Escalation.Cause == "targeted_validator_rejected" &&
+			liveSnapshot.CandidateTree == frozenCommittedEscalation.State.CurrentSnapshot.CandidateTree {
+			// The rejected snapshot is the fix diff: its tree identifies the
+			// rejected candidate, but only the initial snapshot names the range.
+			frozenCommittedTarget = &frozenCommittedEscalation.State.InitialSnapshot
+		}
+		// guard:population committed-correction-frozen-exclusion too-loose: only a current, stop-routed base-diff of the bound lineage with the same frozen base, projection, and empty selection can reuse the correction's exclusion. After validator rejection this additionally requires the same authority revision and rejected candidate tree; a changed candidate's recovery still follows the ordinary selection rules.
+		if frozenCommittedTarget != nil && !intendedScope.Declared &&
 			native.Applicability == reviewtransaction.TargetApplicabilityCurrent &&
-			native.LineageID == requestedLineage && native.State == reviewtransaction.StateCorrectionRequired &&
-			native.Action == reviewtransaction.TargetStatusActionStop &&
+			native.LineageID == requestedLineage && native.Action == reviewtransaction.TargetStatusActionStop &&
 			native.Projection.Kind == reviewtransaction.TargetBaseDiff &&
-			native.Projection.BaseTree == frozenCommittedCorrectionTarget.BaseTree &&
-			native.Projection.Projection == frozenCommittedCorrectionTarget.Projection &&
+			native.Projection.BaseTree == frozenCommittedTarget.BaseTree &&
+			native.Projection.Projection == frozenCommittedTarget.Projection &&
 			len(native.Projection.IntendedUntracked) == 0 {
 			intendedScope.Declared = true
 			intendedScope.NeedsSelection = false
