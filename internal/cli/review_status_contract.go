@@ -990,6 +990,18 @@ func (result ReviewTargetStatusResult) validateIntendedUntrackedSelectionTransit
 		input.Arguments[5].Name != "expected_untracked_inventory" || input.Arguments[5].Value == "" {
 		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
 	}
+	if input.Submission != nil {
+		if result.Schema == ReviewIntegrationStatusSchemaV9 && input.Submission.OperationToken != "status" {
+			return errors.New("selected STATUS submission differs from its operation") // refusal:by-design world-action: selection can only re-enter read-only STATUS
+		}
+		lineage, selector, _ := reviewIntendedUntrackedSubmissionSelectors(input.Submission.ArgumentTokens)
+		if lineage != "" && (result.Schema != ReviewIntegrationStatusSchemaV9 || result.Authority == nil || lineage != result.Authority.LineageID) {
+			return errors.New("selected STATUS submission differs from its authority lineage") // refusal:by-design world-action: only STATUS can bind the lineage selector
+		}
+		if result.Schema == ReviewIntegrationStatusSchemaV9 && !reflect.DeepEqual(selector, reviewIntendedUntrackedSelectorTokens(result.Projection.Kind, result.Projection.BaseTree)) {
+			return errors.New("selected STATUS submission differs from its target selector") // refusal:by-design world-action: only STATUS can bind the target selector
+		}
+	}
 	return nil
 }
 
@@ -1452,29 +1464,42 @@ func (submission ReviewTransitionSubmission) Validate() error {
 
 func (submission ReviewTransitionSubmission) validateIntendedUntrackedSelection() error {
 	value, tokens := submission.Value, submission.ArgumentTokens
-	agent, hasAgent, selectorValid := "", false, false
-	if len(tokens) == 5 || len(tokens) == 6 {
-		agent, hasAgent = strings.CutPrefix(tokens[2], "--agent=")
-		// The selector replays the STATUS target: workspace current-changes,
-		// or an exact base tree with its committed-only or overlay scope.
-		selector := tokens[3 : len(tokens)-1]
-		baseTree, hasBase := "", false
-		if len(selector) == 2 {
-			baseTree, hasBase = strings.CutPrefix(selector[0], "--base-ref=")
-		}
-		selectorValid = len(selector) == 1 && selector[0] == "--projection=workspace" ||
-			hasBase && reviewTargetEvidenceTreePattern.MatchString(baseTree) && (selector[1] == "--committed-only=true" || selector[1] == "--workspace-overlay=true")
-	}
+	_, _, selectorValid := reviewIntendedUntrackedSubmissionSelectors(tokens)
 	if value == nil || len(submission.Values) != 0 || value.Slot != "intended_untracked_selection" || value.Domain != "schema_bound_json" || value.Schema != reviewIntendedUntrackedSelectionSchema || value.SubstitutionLocation != len(tokens)-1 || len(value.AllowedValues) != 0 || value.Minimum != 0 || value.Maximum != 0 ||
-		!selectorValid || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !hasAgent || tokens[len(tokens)-1] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
+		!selectorValid || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !strings.HasPrefix(tokens[2], "--agent=") || tokens[len(tokens)-1] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
 		// refusal:by-design world-action: the provider-generated intended-untracked submission descriptor requires a provider code fix.
 		return errors.New("intended-untracked submission descriptor is invalid")
 	}
-	if _, err := reviewRuntimeWithImmutableTransport(agent); err != nil {
+	if _, err := reviewRuntimeWithImmutableTransport(strings.TrimPrefix(tokens[2], "--agent=")); err != nil {
 		// refusal:by-design world-action: the provider-generated intended-untracked submission runtime requires a provider code fix.
 		return errors.New("intended-untracked submission runtime is unsupported")
 	}
 	return nil
+}
+
+// Selected STATUS replays an optional explicit lineage, followed by exactly
+// the frozen target selector. Neither is part of the substitutable JSON value.
+func reviewIntendedUntrackedSubmissionSelectors(tokens []string) (lineage string, selector []string, valid bool) {
+	if len(tokens) < 5 || len(tokens) > 7 {
+		return "", nil, false
+	}
+	selector = tokens[3 : len(tokens)-1]
+	if value, found := strings.CutPrefix(selector[0], "--lineage="); found {
+		if !validReviewIntegrationLineage(value) {
+			return "", nil, false
+		}
+		lineage, selector = value, selector[1:]
+	}
+	switch len(selector) {
+	case 1:
+		return lineage, selector, selector[0] == "--projection=workspace"
+	case 2:
+		baseTree, hasBase := strings.CutPrefix(selector[0], "--base-ref=")
+		return lineage, selector, hasBase && reviewTargetEvidenceTreePattern.MatchString(baseTree) &&
+			(selector[1] == "--committed-only=true" || selector[1] == "--workspace-overlay=true")
+	default:
+		return "", nil, false
+	}
 }
 
 // validateCaptureResult is the pi host-relay reviewer-result submission: the

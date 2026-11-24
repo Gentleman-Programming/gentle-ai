@@ -821,7 +821,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	untrackedScope := reviewSingleValueFlag{}
 	intendedUntracked := reviewRepeatedPathFlag{}
 	expectedUntrackedInventory := reviewSingleValueFlag{}
-	intendedUntrackedSelection := flags.String("intended-untracked-selection", "", "provider-bound intended-untracked selection JSON")
+	intendedUntrackedSelection := flags.String("intended-untracked-selection", "", "provider-bound intended-untracked selection JSON; replay the submission's target and lineage selectors unchanged")
 	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
 	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
 	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
@@ -1654,7 +1654,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// per-request bump is needed here anymore.
 		if intendedScope.NeedsSelection &&
 			(result.NextTransition == nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled") {
-			transition := reviewIntendedUntrackedCollection(result, intendedScope, runtime)
+			transition := reviewIntendedUntrackedCollection(result, intendedScope, runtime, requestedLineage)
 			result.NextTransition = &transition
 		}
 		// v1 envelopes keep their pinned schema; only v2 projects the root action.
