@@ -832,11 +832,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-ready")
 	if channel == "main" {
-		metadata, _ := json.Marshal(mainArtifact)
-		if err := userWindowsWrite(filepath.Join(stage, "main.json"), metadata); err != nil {
-			return result, err
-		}
-		if err := userWindowsWrite(filepath.Join(stage, "runtime/archives/main.zip"), mainData); err != nil {
+		if err := userWindowsStageMainMetadata(stage, scope.reused[UserComponentSDK], mainArtifact, mainData); err != nil {
 			return result, err
 		}
 	}
@@ -1070,3 +1066,21 @@ func userWindowsLocalAppData() (string, error) {
 // probe (#5713): Windows supervises the runtime through its own cooperative
 // worker, so there is no transient-unit precondition to prove here.
 func RunUserLaunchProbe(context.Context, string) error { return nil }
+
+// userWindowsStageMainMetadata stages the acquired Main snapshot descriptor
+// and archive. A component update that reuses the SDK already carried both
+// from the retired installation and never acquired a snapshot, so it keeps
+// the reused pair (#6239).
+func userWindowsStageMainMetadata(stage string, reusedSDK bool, artifact userWindowsArtifact, data []byte) error {
+	if reusedSDK {
+		return nil
+	}
+	metadata, err := json.Marshal(artifact)
+	if err != nil {
+		return err
+	}
+	if err := userWindowsWrite(filepath.Join(stage, "main.json"), metadata); err != nil {
+		return err
+	}
+	return userWindowsWrite(filepath.Join(stage, "runtime/archives/main.zip"), data)
+}
