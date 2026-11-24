@@ -157,6 +157,22 @@ A reviewing START carries `next_transition.execute(review.status)` — the provi
 
 A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
 
+#### Untracked selection in bound STATUS
+
+When no runtime agent is resolved, STATUS v9 offers manual selection without a `submission`. Omitting `--agent` alone does not guarantee this: a bound review can supply its frozen runtime.
+With `--agent=pi`, older Pi can decode the historical submission when the
+bound-selection opt-in is absent or unrecognized. That submission carries the
+target selector but omits `--lineage`; it does not let older Pi recover the
+bound review through selection.
+
+For an explicitly selected authority, the exact environment setting
+`GENTLE_AI_BOUND_SELECTION_CONTRACT=gentle-ai.review-bound-selection/v1` lets
+STATUS with a named runtime emit a submission that preserves `--lineage`.
+A compatible Pi refuses to replay an unbound submission for a bound review;
+it must not infer a lineage or retry with unbound tokens. For manual selection,
+rerun STATUS with the same lineage and target selector, adding `--untracked-scope`,
+`--expected-untracked-inventory`, and `--intended-untracked` for each selected path.
+
 #### Native recovery for an explicitly selected lineage
 
 When native STATUS selects legal, representable recovery, its returned

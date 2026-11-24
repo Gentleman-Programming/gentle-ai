@@ -140,7 +140,7 @@
       {"$ref": "#/$defs/intended_untracked_selection_required"}
     ]},
     "intended_untracked_selection_required": {
-      "description": "Issue #6156: the typed untracked-declaration collect, published for current-changes (workspace) and base-ref selectors alike.",
+      "description": "Typed untracked-declaration collect. STATUS without a runtime agent uses the manual form with no submission. Named runtimes without the exact bound-selection opt-in still receive the historical unbound submission, even when STATUS has a bound lineage. For manual selection, rerun the same bound STATUS with --untracked-scope and --expected-untracked-inventory, plus --intended-untracked for each selected path.",
       "type": "object", "additionalProperties": false, "required": ["kind", "reason_code", "collect"],
       "properties": {
         "kind": {"const": "collect"}, "reason_code": {"const": "intended_untracked_selection_required"},
@@ -167,12 +167,17 @@
       }
     },
     "intended_untracked_submission": {
-      "description": "Selected-STATUS re-entry: workspace form (substitution at 4) or base-ref selector pair form (substitution at 5).",
+      "description": "STATUS v9 accepts the union of negotiated forms. The historical unbound tuples (workspace or base-ref, substitution at index 4 or 5) preserve decoding compatibility, not bound replay. Only STATUS run with the exact process environment GENTLE_AI_BOUND_SELECTION_CONTRACT=gentle-ai.review-bound-selection/v1 can emit a bound tuple. It carries the explicitly requested --lineage at index 3, matching authority.lineage_id, and substitutes at index 5 or 6. Accept the bound tuple only if that STATUS call opted in and the lineage matches. Replay in the same repository, replacing only the final JSON value; do not infer lineage or retry a bound selection with unbound tokens. The answer needs no environment opt-in.",
       "oneOf": [
         {"$ref": "#/$defs/intended_untracked_submission_form", "properties": {"argument_tokens": {"minItems": 5, "maxItems": 5, "prefixItems": [{}, {}, {}, {"const": "--projection=workspace"}, {"const": "--intended-untracked-selection={{value}}"}]}, "value": {"properties": {"substitution_location": {"const": 4}}}}},
-        {"$ref": "#/$defs/intended_untracked_submission_form", "properties": {"argument_tokens": {"minItems": 6, "maxItems": 6, "prefixItems": [{}, {}, {}, {"pattern": "^--base-ref=\\S+$"}, {"enum": ["--committed-only=true", "--workspace-overlay=true"]}, {"const": "--intended-untracked-selection={{value}}"}]}, "value": {"properties": {"substitution_location": {"const": 5}}}}}
+        {"$ref": "#/$defs/intended_untracked_submission_form", "properties": {"argument_tokens": {"minItems": 6, "maxItems": 6, "prefixItems": [{}, {}, {}, {"$ref": "#/$defs/intended_untracked_base_ref_token"}, {"$ref": "#/$defs/intended_untracked_base_scope_token"}, {"const": "--intended-untracked-selection={{value}}"}]}, "value": {"properties": {"substitution_location": {"const": 5}}}}},
+        {"$ref": "#/$defs/intended_untracked_submission_form", "properties": {"argument_tokens": {"minItems": 6, "maxItems": 6, "prefixItems": [{}, {}, {}, {"$ref": "#/$defs/intended_untracked_lineage_token"}, {"const": "--projection=workspace"}, {"const": "--intended-untracked-selection={{value}}"}]}, "value": {"properties": {"substitution_location": {"const": 5}}}}},
+        {"$ref": "#/$defs/intended_untracked_submission_form", "properties": {"argument_tokens": {"minItems": 7, "maxItems": 7, "prefixItems": [{}, {}, {}, {"$ref": "#/$defs/intended_untracked_lineage_token"}, {"$ref": "#/$defs/intended_untracked_base_ref_token"}, {"$ref": "#/$defs/intended_untracked_base_scope_token"}, {"const": "--intended-untracked-selection={{value}}"}]}, "value": {"properties": {"substitution_location": {"const": 6}}}}}
       ]
     },
+    "intended_untracked_base_ref_token": {"pattern": "^--base-ref=[0-9a-f]{40}(?:[0-9a-f]{24})?$"},
+    "intended_untracked_base_scope_token": {"enum": ["--committed-only=true", "--workspace-overlay=true"]},
+    "intended_untracked_lineage_token": {"pattern": "^--lineage=[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 138},
     "intended_untracked_submission_form": {
       "type": "object", "additionalProperties": false, "required": ["operation_token", "argument_tokens", "value"],
       "properties": {

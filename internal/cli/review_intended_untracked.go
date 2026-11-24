@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
@@ -13,6 +14,8 @@ import (
 )
 
 const reviewIntendedUntrackedSelectionSchema = "gentle-ai.review-intended-untracked-selection/v1"
+const reviewBoundSelectionContractEnv = "GENTLE_AI_BOUND_SELECTION_CONTRACT"
+const reviewBoundSelectionContract = "gentle-ai.review-bound-selection/v1"
 
 // reviewIntendedUntrackedInventoryCommand is the runnable form of the STATUS
 // that publishes the canonical untracked inventory. `--next-transition` is
@@ -139,11 +142,18 @@ func intendedUntrackedSelectionRequired(scope reviewIntendedUntrackedScope, inve
 	return fmt.Errorf("untracked files require an explicit declaration; run `%s` to obtain the canonical inventory, then rerun `%s` with --untracked-scope=exclude --expected-untracked-inventory=%s or --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s", inventoryCommand, selectionCommand, scope.Digest, scope.Digest)
 }
 
-func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope reviewIntendedUntrackedScope, agent model.AgentID) ReviewNextTransition {
+func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope reviewIntendedUntrackedScope, agent model.AgentID, requestedLineage string) ReviewNextTransition {
 	paths, _ := json.Marshal(scope.Inventory)
 	input := ReviewTransitionInput{Name: "intended_untracked_selection", Schema: reviewIntendedUntrackedSelectionSchema, CaptureOperation: "external.select_intended_untracked", Arguments: append(reviewTargetArguments(status), ReviewTransitionArgument{Name: "eligible_paths_json", Value: string(paths)}, ReviewTransitionArgument{Name: "expected_untracked_inventory", Value: scope.Digest})}
+	// Keep the legacy descriptor for named runtimes; older Pi needs it to
+	// decode STATUS, but it cannot replay a bound selection with that tuple.
 	if agent != "" {
-		tokens := append([]string{"--contract=" + ReviewIntegrationContractV2, "--next-transition=true", "--agent=" + string(agent)}, reviewIntendedUntrackedSelectorTokens(status.Projection.Kind, status.Projection.BaseTree)...)
+		tokens := []string{"--contract=" + ReviewIntegrationContractV2, "--next-transition=true", "--agent=" + string(agent)}
+		bound := status.Schema == ReviewIntegrationStatusSchemaV9 && requestedLineage != "" && status.Authority != nil && requestedLineage == status.Authority.LineageID
+		if bound && os.Getenv(reviewBoundSelectionContractEnv) == reviewBoundSelectionContract {
+			tokens = append(tokens, "--lineage="+requestedLineage)
+		}
+		tokens = append(tokens, reviewIntendedUntrackedSelectorTokens(status.Projection.Kind, status.Projection.BaseTree)...)
 		tokens = append(tokens, "--intended-untracked-selection="+reviewSubmissionValuePlaceholder)
 		input.Submission = &ReviewTransitionSubmission{OperationToken: "status", ArgumentTokens: tokens, Value: &ReviewTransitionSubmissionValue{Slot: "intended_untracked_selection", Domain: "schema_bound_json", Schema: reviewIntendedUntrackedSelectionSchema, SubstitutionLocation: len(tokens) - 1}}
 	}

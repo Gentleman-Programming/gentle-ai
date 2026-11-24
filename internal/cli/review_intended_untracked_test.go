@@ -251,6 +251,7 @@ func TestIntendedUntrackedSelectionSubmissionRejectsForeignSelector(t *testing.T
 	// The descriptor names the pi runtime, which is eligible only through the
 	// host relay contract; pin it so the test does not depend on the caller's env.
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	schema := compileWholeNativeStatusSchema(t, "status-v9.schema.json#/$defs/intended_untracked_submission")
 	tree := strings.Repeat("a", 40)
 	for _, tt := range []struct {
 		name     string
@@ -260,6 +261,16 @@ func TestIntendedUntrackedSelectionSubmissionRejectsForeignSelector(t *testing.T
 		{name: "workspace", selector: []string{"--projection=workspace"}, valid: true},
 		{name: "committed-only base diff", selector: []string{"--base-ref=" + tree, "--committed-only=true"}, valid: true},
 		{name: "workspace overlay", selector: []string{"--base-ref=" + tree, "--workspace-overlay=true"}, valid: true},
+		{name: "bound workspace", selector: []string{"--lineage=bound", "--projection=workspace"}, valid: true},
+		{name: "bound committed range", selector: []string{"--lineage=bound", "--base-ref=" + tree, "--committed-only=true"}, valid: true},
+		{name: "bound workspace overlay", selector: []string{"--lineage=bound", "--base-ref=" + tree, "--workspace-overlay=true"}, valid: true},
+		{name: "empty lineage", selector: []string{"--lineage=", "--projection=workspace"}},
+		{name: "invalid lineage", selector: []string{"--lineage=not--canonical", "--projection=workspace"}},
+		{name: "lineage too long", selector: []string{"--lineage=" + strings.Repeat("a", 129), "--projection=workspace"}},
+		{name: "duplicate lineage", selector: []string{"--lineage=bound", "--lineage=foreign", "--projection=workspace"}},
+		{name: "misplaced lineage", selector: []string{"--projection=workspace", "--lineage=bound"}},
+		{name: "foreign cwd", selector: []string{"--lineage=bound", "--cwd=/foreign", "--projection=workspace"}},
+		{name: "extra token", selector: []string{"--lineage=bound", "--base-ref=" + tree, "--committed-only=true", "--recovery-successor=foreign"}},
 		{name: "staged projection", selector: []string{"--projection=staged"}},
 		{name: "symbolic base ref", selector: []string{"--base-ref=HEAD", "--committed-only=true"}},
 		{name: "base ref without scope", selector: []string{"--base-ref=" + tree, "--projection=workspace"}},
@@ -271,7 +282,16 @@ func TestIntendedUntrackedSelectionSubmissionRejectsForeignSelector(t *testing.T
 			tokens = append(tokens, "--intended-untracked-selection="+reviewSubmissionValuePlaceholder)
 			submission := ReviewTransitionSubmission{OperationToken: "status", ArgumentTokens: tokens, Value: &ReviewTransitionSubmissionValue{Slot: "intended_untracked_selection", Domain: "schema_bound_json", Schema: reviewIntendedUntrackedSelectionSchema, SubstitutionLocation: len(tokens) - 1}}
 			if err := submission.Validate(); (err == nil) != tt.valid {
-				t.Fatalf("Validate(%v) = %v, want valid=%v", tokens, err, tt.valid)
+				t.Errorf("Validate(%v) = %v, want valid=%v", tokens, err, tt.valid)
+			}
+			raw, err := json.Marshal(submission)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document any
+			decodeStrictReviewJSON(t, raw, &document)
+			if err := schema.Validate(document); (err == nil) != tt.valid {
+				t.Errorf("published schema for %v = %v, want valid=%v", tokens, err, tt.valid)
 			}
 		})
 	}
