@@ -467,11 +467,14 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 	if userWindowsSHA(image) != manifest.SupervisorSHA {
 		changed[UserComponentSupervisor] = true
 	}
-	node, err := userWindowsRead(filepath.Join(install.Target, "runtime", "node", "node.exe"), 256<<20)
+	// The Node pin is the digest of node.zip, not of the unpacked node.exe.
+	// Launch verification binds runtime/node/node.exe to the retained
+	// archive, so the retained archive is the comparable installed identity.
+	nodeArchive, err := userWindowsRead(filepath.Join(install.Target, "runtime", "archives", userWindowsArtifacts[0].Archive), userWindowsArtifacts[0].Bound)
 	if err != nil {
 		return update, err
 	}
-	if userWindowsSHA(node) != userWindowsArtifacts[0].SHA {
+	if userWindowsSHA(nodeArchive) != userWindowsArtifacts[0].SHA {
 		changed[UserComponentNode] = true
 	}
 	// Component pins: a legacy manifest without the pins refreshes the
