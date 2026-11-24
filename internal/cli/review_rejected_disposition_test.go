@@ -370,7 +370,7 @@ func rejectedValidatorPrintedPreflight(t *testing.T, text string, backtickPath b
 	delimiter := rendered[:len(rendered)-len(body)]
 	command, guidance, closed := strings.Cut(body, delimiter+". ")
 	if !found || !closed || delimiter == "" || strings.Contains(command, delimiter) ||
-		(!backtickPath && len(delimiter) != 1) || (backtickPath && len(delimiter) <= 4) {
+		(!strings.Contains(command, "`") && len(delimiter) != 1) || (backtickPath && len(delimiter) <= 4) {
 		t.Fatalf("preflight has an ambiguous CommonMark delimiter: %q", rendered)
 	}
 	return command, guidance
