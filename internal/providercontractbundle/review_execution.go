@@ -3,8 +3,8 @@ package providercontractbundle
 import (
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // reviewExecutionContractFor uses the non-SDD owner for the bundled runtime.

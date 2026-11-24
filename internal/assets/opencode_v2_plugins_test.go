@@ -89,13 +89,37 @@ func TestOpenCodeV2CatalogAndRegistry(t *testing.T) {
 	runV2Plugin(t, "model-variants", `
 const fs=await import('node:fs/promises');const path=await import('node:path');const os=await import('node:os');const crypto=await import('node:crypto');
 const root=await fs.mkdtemp(path.join(os.tmpdir(),'catalog-v2-'));process.env.HOME=root;process.env.USERPROFILE=root;
-let signal,wake;const queue=[];let revision=0;let subscribed=false;
+let signal,wake;const queue=[];let revision=0;let subscribed=false;let refreshSettled=false;
+const barrier={type:'test.barrier'};
 const location={directory:'/project',workspaceID:'one'};
-const ctx={location,model:{async list(){if(!subscribed)throw Error("snapshot before subscription");return {location:{directory:location.directory},data:[{providerID:'openai',id:'model',variants:[{id:revision?'high':'low'}]}]}}},event:{subscribe(opts){signal=opts.signal;signal.addEventListener('abort',()=>wake?.());return {[Symbol.asyncIterator]:async function*(){subscribed=true;while(!signal.aborted){if(!queue.length)await new Promise(r=>wake=r);while(queue.length)yield queue.shift()}}}}}};
+const ctx={location,model:{async list(){if(!subscribed)throw Error("snapshot before subscription");return {location:{directory:location.directory},data:[{providerID:'openai',id:'model',variants:[{id:revision?'high':'low'}]}]}}},event:{subscribe(opts){
+  signal=opts.signal;signal.addEventListener('abort',()=>wake?.());
+  return {[Symbol.asyncIterator]:async function*(){
+    subscribed=true;
+    while(!signal.aborted){
+      if(!queue.length)await new Promise(r=>wake=r);
+      while(queue.length){
+        const event=queue.shift();
+        yield event;
+        // The plugin prefetches one event. Resuming after the barrier (not
+        // yielding it) means the previous update has finished processing.
+        if(event===barrier)refreshSettled=true;
+      }
+    }
+  }};
+}}};
 const cleanup=await plugin.setup(ctx);const waitFor=async(check,what)=>{const deadline=Date.now()+5000;for(;;){try{const value=await check();if(value)return value;}catch{}if(Date.now()>deadline)throw Error(what+' (timed out after 5000ms)');await new Promise(r=>setTimeout(r,10));}};
 const dir=path.join(root,'.gentle-ai','cache','opencode-v2');// Filter to published entries only: the plugin stages a .tmp file beside the destination before renaming it.
-const published=async()=>(await fs.readdir(dir)).filter(n=>n.endsWith('.json'));const read=async()=>JSON.parse(await fs.readFile(path.join(dir,await waitFor(async()=>(await published())[0],'cache entry')),'utf8'));
-await waitFor(async()=>(await read()).openai.model[0]==='low','catalog');revision=1;queue.push({type:'model.updated',location});wake?.();await waitFor(async()=>(await read()).openai.model[0]==='high','refresh');
+const published=async()=>(await fs.readdir(dir)).filter(n=>n.endsWith('.json'));
+const entry=await waitFor(async()=>(await published())[0],'cache entry');
+const readVariant=async()=>JSON.parse(await fs.readFile(path.join(dir,entry),'utf8')).openai.model[0];
+if(await readVariant()!=='low')throw Error('initial catalog did not publish low');
+revision=1;
+queue.push({type:'model.updated',location},barrier);wake?.();
+// Poll the stream, not the destination file: an open reader can prevent
+// the atomic replacement on Windows. Still assert the published bytes.
+await waitFor(()=>refreshSettled,'refresh completion');
+if(await readVariant()!=='high')throw Error('refreshed catalog did not publish high');
 if(await fs.stat(path.join(root,'.gentle-ai','cache','model-variants.json')).then(()=>true,()=>false))throw Error('legacy cache overwritten');await cleanup();if(!signal.aborted)throw Error('catalog disposal');
 const second=await plugin.setup({location:{...location,workspaceID:'two'},model:ctx.model,event:{subscribe(opts){return {[Symbol.asyncIterator]:async function*(){await new Promise(r=>opts.signal.addEventListener('abort',r))}}}}});await waitFor(async()=>(await published()).length>=2,'second cache');
 if((await published()).length!==2)throw Error('workspace caches collide');await second();await fs.rm(root,{recursive:true});

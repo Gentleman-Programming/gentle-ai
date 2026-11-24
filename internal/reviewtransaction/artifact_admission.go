@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 	"unicode"
@@ -230,7 +231,7 @@ func safeAdmissionLocation(code, value, reason string) string {
 		}
 		return value
 	}
-	if code == "evidence_path_out_of_scope" || code == "proof_path_out_of_scope" {
+	if code == "proof_path_out_of_scope" {
 		// The offending citation names an unknown repository path, so the token
 		// itself must still parse as a clean path:line shape before it may be
 		// echoed; malformed tokens (absolute paths, traversal, punctuation) stay
@@ -512,6 +513,14 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	resolveBasename := candidateBasenameResolver(request.FrozenContext.ChangedPathManifest)
 	seenFindingIDs := make(map[string]struct{}, len(canonical.Findings))
 	wantCandidateCausalIDs := make([]string, 0)
+	// Evidence is free-form prose, not a citation: it is never adjudicated
+	// against the frozen changed-path manifest (#5624). A reviewer quoting the
+	// value under review -- "binds to 127.0.0.1:8000", "reverse_proxy
+	// api.example.test:8000" -- is describing the candidate, and the path:line
+	// grammar cannot tell a host:port from a file:line without refusing the
+	// sentence that names what the candidate actually does. The fields that do
+	// carry path semantics (finding.location and proof_refs) are still
+	// adjudicated below, because those claim the reviewer read a file.
 	for _, evidence := range canonical.Evidence {
 		// Issue #4256: whether inspection was completed is decided primarily,
 		// above, by the typed request.Inspection.Status field -- by the time
@@ -537,15 +546,6 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 					"declare inspection.status: \"unavailable\" with a non-empty inspection.reason instead of describing the failure only in evidence: "+
 					artifactRecaptureContinuation)
 		}
-		outside, offender, lookupErr := referenceOutsideRepository(evidence, repository.contains, resolveBasename)
-		if lookupErr != nil {
-			return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
-		}
-		if outside {
-			detail := findingAdmissionDiagnostic("evidence_path_out_of_scope", "", offender, "unknown_or_malformed_repository_path")
-			return failFinding(ArtifactAdmissionOutOfScope, "reviewer evidence references a path outside the frozen repository",
-				detail, outOfScopeCitationCause(detail.Location))
-		}
 	}
 	for _, finding := range canonical.Findings {
 		if _, duplicate := seenFindingIDs[finding.ID]; duplicate {
@@ -564,8 +564,8 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		}
 		if stringIndex(wantPaths, location.Path) < 0 {
 			// The same citation shape reaches a finding's own location, and
-			// resolving it in evidence and proofs but not here would refuse the
-			// exact artifact the rest of this admission just accepted.
+			// resolving it in proofs but not here would refuse the exact
+			// artifact the rest of this admission just accepted.
 			resolved, unique, resolveErr := resolveBasename(location.Path)
 			if resolveErr != nil {
 				return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
@@ -926,7 +926,9 @@ func (lookup *frozenRepositoryPathLookup) contains(logicalPath string) (bool, er
 
 // referenceOutsideRepository recognizes canonical path:positive-line tokens
 // and requires each one to exist in the immutable base/candidate repository
-// universe. Bare root names need a dot; extensionless root paths remain
+// universe. It adjudicates the fields that claim the reviewer read a file
+// (finding.location and proof_refs); free-form evidence prose never reaches it
+// (#5624). Bare root names need a dot; extensionless root paths remain
 // available through quoting. This keeps status:500 and digest/timestamp labels
 // out of the path grammar while rejecting malformed or unknown path claims.
 // The offender return names the first malformed or unknown token verbatim so
@@ -978,7 +980,39 @@ func outOfScopeCitationCause(safeToken string) error {
 	return fmt.Errorf("reviewer citation %q names an unknown or malformed repository path", safeToken) // refusal:by-design world-action: the reviewer's free text cited a path the frozen repository does not contain; only a re-run lens with corrected citations can continue
 }
 
+// isHostPortLiteral returns true if the token is a host:port literal like 127.0.0.1:8000.
+// These are common in config files and should not be treated as repository path citations.
+func isHostPortLiteral(token artifactReferenceToken) bool {
+	value := token.value
+	if !token.quoted {
+		value = strings.TrimLeft(value, "([{<")
+		value = strings.TrimRight(value, ")]}>.,;!?")
+	}
+	// Check for IPv4:port pattern (e.g., 127.0.0.1:8000)
+	separator := strings.LastIndexByte(value, ':')
+	if separator <= 0 || separator == len(value)-1 {
+		return false
+	}
+	host := value[:separator]
+	port := value[separator+1:]
+	// Port must be all digits
+	for i := range port {
+		if port[i] < '0' || port[i] > '9' {
+			return false
+		}
+	}
+	// Host must be a valid IP address (IPv4 or IPv6)
+	if net.ParseIP(host) == nil {
+		return false
+	}
+	return true
+}
+
 func artifactRepositoryPathReference(token artifactReferenceToken) (string, bool) {
+	// Skip host:port literals - they are not repository paths
+	if isHostPortLiteral(token) {
+		return "", false
+	}
 	value := token.value
 	if !token.quoted {
 		value = strings.TrimLeft(value, "([{<")

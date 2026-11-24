@@ -254,7 +254,7 @@ func TestPristineAbandonmentIgnoresUnreadableForeignLineage(t *testing.T) {
 		t.Fatalf("pristine lineage lost abandon eligibility because of an unreadable foreign record: %#v", eligibility)
 	}
 
-	committed, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record))
+	committed, err := abandonAuthorized(t, context.Background(), repo, abandonFixtureRequest(record))
 	if err != nil {
 		t.Fatalf("abandon with an unreadable foreign record = %v", err)
 	}

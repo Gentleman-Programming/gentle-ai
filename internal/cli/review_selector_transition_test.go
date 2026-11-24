@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 func TestStatusRecoverTransitionExecutesExactBaseDiffSelectors(t *testing.T) {
@@ -376,8 +376,21 @@ func testAccountingOnlyRecoveryShape(t *testing.T, tc accountingRecoveryScenario
 		}
 		recoverArgs, conflictFlag = append(recoverArgs, "--focus", ""), "--focus"
 	}
+	var recoveryInventory string
 	if tc.conflictFocus || tc.conflictPolicy || tc.emptyFocus {
-		recoverArgs = append(recoverArgs, "--projection", "workspace", "--untracked-scope", "exclude", "--expected-untracked-inventory", probe.EligibleUntrackedInventory)
+		// Explicit selection uses the v2 inventory contract. Keep the v1
+		// transition probe above, but do not rely on fields its schema forbids.
+		var inventoryOutput bytes.Buffer
+		if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--projection", "workspace"}, &inventoryOutput); err != nil {
+			t.Fatal(err)
+		}
+		var inventoryStatus ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, inventoryOutput.Bytes(), &inventoryStatus)
+		recoveryInventory = inventoryStatus.EligibleUntrackedInventory
+		if recoveryInventory == "" {
+			t.Fatal("v2 STATUS must provide the explicit-selection inventory")
+		}
+		recoverArgs = append(recoverArgs, "--projection", "workspace", "--untracked-scope", "exclude", "--expected-untracked-inventory", recoveryInventory)
 	}
 	if tc.wrongAuthorization || tc.emptyAuthorization {
 		arguments := setSelectorTransitionArgument(append([]ReviewTransitionArgument(nil), status.NextTransition.Execute.Arguments...), "maintainer-authorization", "")
@@ -440,7 +453,7 @@ func testAccountingOnlyRecoveryShape(t *testing.T, tc accountingRecoveryScenario
 		if !tc.emptyFocus {
 			want = append(want, "--cwd", repo)
 		}
-		want = append(want, "--expected-untracked-inventory="+probe.EligibleUntrackedInventory,
+		want = append(want, "--expected-untracked-inventory="+recoveryInventory,
 			"--projection=workspace", "--untracked-scope=exclude")
 		if !reflect.DeepEqual(recoverArgs, want) {
 			t.Fatalf("conflict continuation lost bindings/selectors or retained overrides: %v, want %v", recoverArgs, want)
@@ -996,7 +1009,6 @@ func recoveryAuthorizationFromStatus(t *testing.T, status ReviewTargetStatusResu
 func TestNativeRecoveryIgnoresUnrelatedAuthorityDamage(t *testing.T) {
 	reviewEnabledHome(t)
 	for _, tc := range []struct{ name, version, file string }{
-		{"ambiguous-legacy-lock", "v1", "LOCK"},
 		{"malformed-compact-record", "v2", "review-state.json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1017,19 +1029,12 @@ func TestNativeRecoveryIgnoresUnrelatedAuthorityDamage(t *testing.T) {
 			if err := os.WriteFile(foreignPath, []byte("not-json\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if tc.version == "v1" {
-				report, err := reviewtransaction.InventoryAuthority(t.Context(), repo)
-				if err != nil || report.Complete {
-					t.Fatalf("fixture must make the global inventory incomplete: %v, complete=%t", err, report.Complete)
-				}
-			} else {
-				foreign, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, "unrelated-damaged")
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := foreign.LoadContext(t.Context()); err == nil || reviewtransaction.IsCompactAuthorityOperationalFailure(err) {
-					t.Fatalf("fixture must be quarantinable content damage: %v", err)
-				}
+			foreign, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, "unrelated-damaged")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := foreign.LoadContext(t.Context()); err == nil || reviewtransaction.IsCompactAuthorityOperationalFailure(err) {
+				t.Fatalf("fixture must be quarantinable content damage: %v", err)
 			}
 			status := selectorTransitionStatus(t, repo, "--lineage", predecessor.State.LineageID)
 			if status.Action != reviewtransaction.TargetStatusActionRecover || status.NextTransition.Execute == nil || len(status.NextTransition.Execute.Arguments) != 4 {

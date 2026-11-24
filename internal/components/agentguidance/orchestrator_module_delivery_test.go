@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // #5256 U2a covers the default-off Claude global module option of the routing
@@ -223,7 +223,7 @@ func TestClaudeModuleDeliveryLeavesDefaultAndOtherAgentsMonolithic(t *testing.T)
 
 func TestOrchestratorCoreTransactionReportsRetiredModule(t *testing.T) {
 	f := newCoreTransactionFixture(t)
-	result, err := commitOrchestratorCore(f.configDir, f.merge, f.bundle.modules)
+	result, err := commitOrchestratorCoreAt(f.configDir, f.corePath, f.merge, f.bundle.modules)
 	if err != nil || !slices.Contains(result.Files, f.unusedPath) {
 		t.Fatalf("commit = %+v, %v; want the retired %s reported", result, err, f.unusedPath)
 	}

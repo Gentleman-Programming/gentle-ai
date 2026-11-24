@@ -85,8 +85,14 @@ func userAcquireCodeGraphArchives(ctx context.Context) ([][]byte, error) {
 	transport := client.Transport.(*http.Transport)
 	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
 	transport.TLSClientConfig.ServerName = "registry.npmjs.org"
+	// Connect/TLS/header bounds stay; the whole-request timeout becomes a
+	// body inactivity timeout under one overall ceiling.
+	client.Transport = userDownloadIdle(transport, userDownloadIdleTimeout)
+	client.Timeout = 0
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	defer client.CloseIdleConnections()
+	ctx, cancel := context.WithTimeout(ctx, userDownloadCeiling)
+	defer cancel()
 	archives := make([][]byte, 0, len(userCodeGraphSources))
 	for _, source := range userCodeGraphSources {
 		endpoint := "https://registry.npmjs.org/@colbymchenry/" + source.name + "/-/" + source.name + "-1.4.1.tgz"
@@ -94,21 +100,32 @@ func userAcquireCodeGraphArchives(ctx context.Context) ([][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		var data []byte
+		err = userDownloadRetry(ctx, func(ctx context.Context) error {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+			if err != nil {
+				return err
+			}
+			response, err := client.Do(req)
+			if err != nil {
+				return privateError("acquisition", err)
+			}
+			if err := userDownloadStatus(response.StatusCode); err != nil {
+				return privateError("acquisition", errors.Join(err, response.Body.Close()))
+			}
+			encoding := response.Header.Values("Content-Encoding")
+			if !gentleShellStableResponseMatches(response, origin, origin.Path) || response.Uncompressed || len(encoding) > 1 || (len(encoding) == 1 && encoding[0] != "" && encoding[0] != "identity") {
+				return privateError("acquisition", errors.Join(response.Body.Close(), ctx.Err(), errors.New("CodeGraph source response refused")))
+			}
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, source.size+1))
+			if err := errors.Join(readErr, response.Body.Close(), ctx.Err()); err != nil {
+				return privateError("acquisition", err)
+			}
+			data = body
+			return nil
+		})
 		if err != nil {
 			return nil, err
-		}
-		response, err := client.Do(req)
-		if err != nil {
-			return nil, privateError("acquisition", err)
-		}
-		encoding := response.Header.Values("Content-Encoding")
-		if !gentleShellStableResponseMatches(response, origin, origin.Path) || response.StatusCode != http.StatusOK || response.Uncompressed || len(encoding) > 1 || (len(encoding) == 1 && encoding[0] != "" && encoding[0] != "identity") {
-			return nil, privateError("acquisition", errors.Join(response.Body.Close(), ctx.Err(), errors.New("CodeGraph source response refused")))
-		}
-		data, readErr := io.ReadAll(io.LimitReader(response.Body, source.size+1))
-		if err := errors.Join(readErr, response.Body.Close(), ctx.Err()); err != nil {
-			return nil, privateError("acquisition", err)
 		}
 		hash := sha512.Sum512(data)
 		if int64(len(data)) != source.size || "sha512-"+base64.StdEncoding.EncodeToString(hash[:]) != source.sri {

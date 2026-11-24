@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
 )
 
 // A component-scoped update binds the scope into the inspected confirmation,

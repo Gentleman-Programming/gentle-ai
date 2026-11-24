@@ -16,8 +16,14 @@ name: Windows Full Suite
 # so it gates again.
 #
 # Everything below is otherwise identical to the ci.yml job it replaces.
+#
+# Pull requests run it too (non-required), so Windows-only failures show up
+# before merge instead of turning main red after it (#6022).
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -30,10 +36,16 @@ on:
 permissions:
   contents: read
 
+# Same shape as ci.yml: a newer push to a PR cancels its stale run, while push
+# and schedule runs are keyed by run_id so they are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Coverage is identical to running the suite in one job -- every package runs
-  # on every push and schedule -- but wall-clock is set by the slowest shard
-  # rather than the sum.
+  # on every pull request, push and schedule -- but wall-clock is set by the
+  # slowest shard rather than the sum.
   #
   # Sharding, not test selection: the shards are content-independent, so a
   # change is never the reason a package does or does not run. Selecting tests

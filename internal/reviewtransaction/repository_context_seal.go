@@ -162,6 +162,26 @@ func ResolveOpenCodeReviewRepositoryContextBinding(ctx context.Context, handle s
 // root fails the lease, a root naming another repository fails the digest, and
 // a repository replaced in place holds no live authority for the binding.
 func resolveSealedReviewRepositoryContext(ctx context.Context, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
+	return resolveSealedReviewRepositoryContextWith(ctx, handle, binding, func(root string, record CompactRecord) error {
+		return validateReviewRepositoryContextRecord(ctx, root, binding, record)
+	})
+}
+
+// resolveSealedReviewRepositoryContextForCorrectedInspection authenticates an
+// rctx3 handle exactly like resolveSealedReviewRepositoryContext but checks
+// only the open correction authority, as the rctx2 corrected-inspection
+// resolver does: the provider-owned targeted request then proves the
+// correction tree, so inspection stays immutable after later workspace drift.
+func resolveSealedReviewRepositoryContextForCorrectedInspection(ctx context.Context, handle string, binding ReviewRepositoryContextBinding) (string, ReviewRepositoryContextBinding, error) {
+	return resolveSealedReviewRepositoryContextWith(ctx, handle, binding, func(_ string, record CompactRecord) error {
+		if !correctedInspectionAuthorityOpen(binding, record) {
+			return errInvalidReviewRepositoryContextV3
+		}
+		return nil
+	})
+}
+
+func resolveSealedReviewRepositoryContextWith(ctx context.Context, handle string, binding ReviewRepositoryContextBinding, validateRecord func(root string, record CompactRecord) error) (string, ReviewRepositoryContextBinding, error) {
 	if ctx == nil || ctx.Err() != nil || validateReviewRepositoryContextBinding(binding) != nil || !validReviewRepositoryContextV3Handle(handle) {
 		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV3
 	}
@@ -196,7 +216,7 @@ func resolveSealedReviewRepositoryContext(ctx context.Context, handle string, bi
 	if err != nil {
 		return "", ReviewRepositoryContextBinding{}, invalidReviewRepositoryContextV3Resolution(err)
 	}
-	if err := validateReviewRepositoryContextRecord(ctx, identity.RepositoryRoot, binding, record); err != nil {
+	if err := validateRecord(identity.RepositoryRoot, record); err != nil {
 		return "", ReviewRepositoryContextBinding{}, errInvalidReviewRepositoryContextV3
 	}
 	if err := lease.Validate(ctx); err != nil {

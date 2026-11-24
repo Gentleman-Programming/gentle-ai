@@ -1,10 +1,11 @@
 package agentguidance
 
 import (
+	"os"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // gentleShellParityHeadings lists every orchestrator section each non-Pi
@@ -14,7 +15,9 @@ import (
 // `assets/orchestrator-skills.md` at 89b8de3b5). When Gentle Shell adds a
 // runtime-agnostic section, port it into
 // `internal/assets/skills/_shared/odd-orchestrator-sections.md` and add its
-// heading here deliberately.
+// heading here deliberately. harness-continuity S8 retired the Key Learnings
+// closing block on both sides; TestRenderedOrchestratorsCarryNoKeyLearningsRitual
+// pins its absence.
 //
 // The list carries ODD and orchestration sections only: receipt-driven
 // development applies to a subset of runtimes, so RDD sections (Provider Defect
@@ -41,7 +44,6 @@ var gentleShellParityHeadings = []string{
 	"Work Routing Ladder",
 	"Canonical Lightweight Workflows",
 	"Allowed edit surfaces",
-	"Key Learnings closing block",
 	"Delivery strategy",
 	// assets/orchestrator-skills.md
 	"Intent-Driven Skill Discovery",
@@ -114,6 +116,68 @@ func TestInstalledApprovalContinuity(t *testing.T) {
 						t.Errorf("%s guidance missing %q", phase, want)
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestInstalledNativeCheckingPointsAtDeliveredClose is the precondition of the
+// harness-continuity S3 deduplication: the Native Checking Contract points at
+// the ODD Close instead of restating continuity and missing proof, which is
+// only sound because that Close is written into the same installed guidance as
+// the orchestrator on every runtime and carrier, global modules included. No
+// carrier may still stop for unavailable required proof. Shipped-policy text,
+// not model-compliance proof.
+func TestInstalledNativeCheckingPointsAtDeliveredClose(t *testing.T) {
+	type carrier struct {
+		name    string
+		agent   model.AgentID
+		options RoutingOptions
+	}
+	var carriers []carrier
+	for _, agent := range orchestratorRuntimes(t) {
+		carriers = append(carriers, carrier{string(agent), agent, RoutingOptions{}})
+	}
+	carriers = append(carriers,
+		carrier{"small-generic", model.AgentVSCodeCopilot, RoutingOptions{OrchestratorCapability: "small"}},
+		carrier{"claude-global-modules", model.AgentClaudeCode, RoutingOptions{ClaudeGlobalModules: true}},
+		carrier{"codex-global-modules", model.AgentCodex, RoutingOptions{CodexGlobalModules: true}},
+	)
+
+	for _, carrier := range carriers {
+		t.Run(carrier.name, func(t *testing.T) {
+			result, err := InjectRoutingWithOptions(t.TempDir(), carrier.agent, carrier.options)
+			if err != nil {
+				t.Fatalf("InjectRoutingWithOptions(%q) error = %v", carrier.agent, err)
+			}
+			var delivered strings.Builder
+			for _, path := range result.Files {
+				if _, err := os.Stat(path); err != nil {
+					continue
+				}
+				if strings.HasSuffix(path, ".json") && !strings.HasSuffix(path, "opencode.json") {
+					delivered.WriteString(readFile(t, path))
+				} else {
+					delivered.WriteString(deliveredGuidance(t, path))
+				}
+				delivered.WriteString("\n")
+			}
+			guidance := delivered.String()
+
+			if strings.Contains(guidance, "unavailable required proof") {
+				t.Error("installed guidance still stops for unavailable required proof")
+			}
+			for _, want := range []string{"## Implementation Routing", continueAuthorizedWorkRule, trackedTaskRule, missingProofRule, noSelfRepromptRule} {
+				if !strings.Contains(guidance, want) {
+					t.Errorf("installed guidance is missing the ODD Close rule %q", want)
+				}
+			}
+			if !strings.Contains(guidance, "#### Native Checking Contract") {
+				// The small generic variant carries no checking section to point.
+				return
+			}
+			if !strings.Contains(guidance, "Continuity and missing proof follow the ODD Close (step 7).") {
+				t.Error("installed Native Checking Contract does not point at the ODD Close")
 			}
 		})
 	}
@@ -208,11 +272,16 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 		t.Run(string(agent), func(t *testing.T) {
 			t.Parallel()
 
-			result, err := InjectRoutingWithOptions(t.TempDir(), agent, RoutingOptions{})
+			home := t.TempDir()
+			result, err := InjectRoutingWithOptions(home, agent, RoutingOptions{})
 			if err != nil {
 				t.Fatalf("InjectRouting(%q) error = %v", agent, err)
 			}
 			prompt := deliveredGuidance(t, result.Files[0])
+			if !strings.Contains(prompt, "_shared/verify-method.md") {
+				t.Fatal("missing installed method pointer")
+			}
+			prompt += "\n" + installedVerifierMethod(t, home, agent)
 
 			required := []string{
 				// S1 writer by reason.
@@ -234,15 +303,18 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 				"verify per unit only when that unit names a high-risk item",
 				"**Correction bounds**: verifier blockers get one correction batch that fixes every reported blocker, then one recheck limited to those blockers",
 				"A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one.",
-				"A writer's self-review follows the same bound, then reports `partial`.",
+				// harness-continuity S6: what stays open ends the unit partial.
+				"Blockers still open after that leave the unit `status: partial`, naming any genuine human decision; independent authorized work continues.",
 				// S6 test discipline reaches every handoff.
 				"the applicable test-first policy and runner from `## Implementation Routing`",
 				// S7 verify handoff.
 				"**Verify handoff**: give the verifier the whole feature document (every `S#`, never one task), the baseline commit, and the probe command forms",
-				"a fresh scratch copy created with `mktemp -d` under the system temp dir, never inside the workspace, and leaves no new file in the workspace",
-				"the data hash is unchanged after a rejected command, and prior commands' output is identical to the baseline",
-				"silently ignoring an explicit option with success, or changing existing output nobody asked to change, is always a blocker",
-				"The writer commits the probes as regression tests.",
+				"`mktemp -d` under the system temp directory, never inside the workspace",
+				"Check that stored data stays byte-identical after every rejected or failing command",
+				"Silently ignoring an option or value the user passed explicitly, with a success exit, is always a blocker",
+				"An unrequested change to the output, error text, or line numbering of a command that existed at the baseline is change-caused and a blocker",
+				"Check that commands that existed before the change produce the same output as at the baseline commit",
+				"The writer adds the probes as regression tests; the parent commits them when authorized.",
 			}
 			if model.SupportsReceiptDrivenDevelopment(agent) {
 				// Native RDD review allows exactly one correction attempt
@@ -253,7 +325,9 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 					t.Errorf("installed orchestrator for %q grants native RDD review a second correction", agent)
 				}
 			} else {
-				required = append(required, "One verified change permits at most one scoped correction, and a second only when the recheck shows the same blocker still failing")
+				// The checking contract points at the gate's bound instead of
+				// restating it; the bound itself is pinned above.
+				required = append(required, "Functional proof and independent verification both project as **Checking**; corrections follow the gate's **Correction bounds**, with no loop-until-clean behavior.")
 			}
 			for _, want := range required {
 				if !strings.Contains(prompt, want) {
@@ -288,11 +362,16 @@ func TestInstalledOrchestratorDelegatesForReason(t *testing.T) {
 func TestInstalledSmallGenericOrchestratorCarriesVerificationDiscipline(t *testing.T) {
 	t.Parallel()
 
-	result, err := InjectRoutingWithOptions(t.TempDir(), model.AgentVSCodeCopilot, RoutingOptions{OrchestratorCapability: "small"})
+	home := t.TempDir()
+	result, err := InjectRoutingWithOptions(home, model.AgentVSCodeCopilot, RoutingOptions{OrchestratorCapability: "small"})
 	if err != nil {
 		t.Fatalf("InjectRouting(small) error = %v", err)
 	}
 	prompt := deliveredGuidance(t, result.Files[0])
+	if !strings.Contains(prompt, "_shared/verify-method.md") {
+		t.Fatal("missing installed method pointer")
+	}
+	prompt += "\n" + installedVerifierMethod(t, home, model.AgentVSCodeCopilot)
 	if !strings.Contains(prompt, "Orchestrator Instructions (Small Model)") {
 		t.Fatal("small capability did not select the small-model variant")
 	}
@@ -306,7 +385,7 @@ func TestInstalledSmallGenericOrchestratorCarriesVerificationDiscipline(t *testi
 		"**Verify handoff**",
 		"mktemp -d",
 		"never inside the workspace",
-		"silently ignoring an explicit option",
+		"Silently ignoring an option or value the user passed explicitly",
 		// S8 timing and bounds; pain-point-iteration S9 C1 dropped "the same
 		// model" because the writer's model no longer decides verification.
 		"**Verification timing**: when several deliveries of one feature were written inline, run one independent verifier at the feature's end",

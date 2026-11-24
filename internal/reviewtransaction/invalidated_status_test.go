@@ -36,40 +36,4 @@ func TestInventoryAuthorityKeepsValidInvalidatedAuthoritiesCompleteAndAuthoritat
 		report.Entries[0].State != StateInvalidated || len(report.Entries[0].Problems) != 0 {
 		t.Fatalf("standalone invalidated compact entry = %#v", report.Entries)
 	}
-
-	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	transaction, err := NewTransaction(Start{LineageID: "invalidated-legacy-standalone", Mode: ModeOrdinary4R, Generation: 1, Snapshot: snapshot, PolicyHash: hash("a")})
-	if err != nil || transaction.StartReview() != nil {
-		t.Fatalf("create legacy review: %v", err)
-	}
-	legacy, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	genesis, err := legacy.Append("", Record{Operation: "review/start", Transaction: *transaction})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := transaction.Invalidate("candidate no longer applies"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := legacy.Append(genesis, Record{Operation: "review/invalidate", Transaction: *transaction}); err != nil {
-		t.Fatal(err)
-	}
-
-	report, err = InventoryAuthority(context.Background(), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !report.Complete || !report.Authoritative || report.Status != AuthorityStatusActive || len(report.Entries) != 2 {
-		t.Fatalf("two-authority invalidated report = %#v", report)
-	}
-	for _, entry := range report.Entries {
-		if entry.Status != AuthorityStatusInvalidated || entry.State != StateInvalidated || len(entry.Problems) != 0 {
-			t.Fatalf("invalidated entry = %#v", entry)
-		}
-	}
 }

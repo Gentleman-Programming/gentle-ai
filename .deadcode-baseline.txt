@@ -207,6 +207,7 @@ internal/reviewtransaction/verification_contract.go	verificationSVGIsPassive
 internal/reviewtransaction/verification_convergence.go	ResnapshotVerificationSubject
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Error
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
+internal/shellinstaller/user_kernel_qualification.go	windowsKernelQualificationError
 internal/state/manifest.go	AppendJournal
 internal/state/manifest.go	ComputeBundleDigest
 internal/state/manifest.go	JournalPath

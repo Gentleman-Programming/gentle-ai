@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/styles"
 )
 
 // CodexModelPreset represents a named effort-tier preset for Codex per-phase

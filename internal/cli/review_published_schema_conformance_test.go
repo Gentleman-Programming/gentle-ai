@@ -9,12 +9,13 @@ import (
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 func compileWholePublishedReviewSchema(t *testing.T, version, name string) *jsonschema.Schema {
 	t.Helper()
 	compiler := jsonschema.NewCompiler()
+	compiler.UseRegexpEngine(reviewSchemaRegexpEngine)
 	versions := []string{"v1"}
 	if version != "v1" {
 		versions = append(versions, version)

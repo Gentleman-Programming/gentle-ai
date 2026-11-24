@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/styles"
 )
 
 // RenderShellPlan lists the installation steps the host worker will complete in

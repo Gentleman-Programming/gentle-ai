@@ -23,6 +23,7 @@ type journeySource struct {
 func journeySources() []journeySource {
 	sources := []journeySource{
 		{"journeys.go", coreJourneys()},
+		{"journeys_correction_unavailable.go", correctionUnavailableJourneys()},
 		{"journeys_edge.go", edgeJourneys()},
 		{"journeys_review_recovery.go", reviewRecoveryJourneys()},
 		{"journeys_issue_3065.go", issue3065Journeys()},

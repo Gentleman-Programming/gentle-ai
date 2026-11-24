@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
-	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/cursor"
+	piagent "github.com/gentleman-programming/gentle-ai/v5/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 type InjectionResult struct {
@@ -924,7 +924,16 @@ func preserveManagedSections(existing, newPersona string, persona model.PersonaI
 		return "", false
 	}
 
+	// The new persona is written as the leading body, so a marked persona
+	// section in the preserved tail is a second copy. Releases that appended
+	// Antigravity sections to the shared ~/.gemini/GEMINI.md left one (#5608).
 	managedSuffix := existing[idx:]
+	if strings.Contains(managedSuffix, "<!-- /gentle-ai:persona -->") {
+		managedSuffix = strings.TrimLeft(filemerge.InjectMarkdownSection(managedSuffix, "persona", ""), "\n")
+		if managedSuffix == "" {
+			return newPersona, true
+		}
+	}
 	updated := newPersona
 	if !strings.HasSuffix(updated, "\n") {
 		updated += "\n"

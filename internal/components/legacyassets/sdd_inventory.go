@@ -3,8 +3,8 @@ package legacyassets
 import (
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // SDDInventory is what releases installed for one runtime under one config

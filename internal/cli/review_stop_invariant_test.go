@@ -94,6 +94,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      false,
 		Justification: "caller-continuable: the stop's own `continuation` field names the exact `gentle-ai sync` command that reconciles the recorded managed-asset digest; re-querying STATUS afterward offers the same candidate's START again — a concrete, flag-driven continuation (#3299, #4170), not a maintainer-only action",
 	},
+	"correction_request_unavailable": {
+		Terminal:      false,
+		Justification: "conditionally caller-continuable: eligible authority offers manual abandonment requiring maintainer authorization; otherwise it remains stopped. Release does not repair or approve the frozen lineage, whose forecast remains terminal (#6086)",
+	},
 	"corrupted_or_unverifiable_authority": {
 		Terminal:      true,
 		Justification: "review repair --preflight already classified this authority unsupported/ambiguous/conflicting/truncated; requires a maintainer to inspect the review authority store directly",

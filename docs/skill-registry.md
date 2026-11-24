@@ -5,7 +5,7 @@
 
 ← [Back to README](../README.md)
 
-The skill registry is a project-local index that lets every supported agent find the same skills without rewriting them. It stores skill names, full descriptions, scopes, and exact `SKILL.md` paths.
+The shared skill registry is a project-local **disk** index of skill names, descriptions, scopes, and exact `SKILL.md` paths. Pi also offers its current session's runtime-resolved skills in an effective view; session-only entries are intentionally absent from the shared file.
 
 ## When To Use It
 
@@ -17,7 +17,8 @@ Use `gentle-ai skill-registry refresh` after you add, remove, rename, or move sk
 User task
    │
    ▼
-Orchestrator reads .atl/skill-registry.md
+Orchestrator uses current effective view
+(Pi: session view; others: disk index)
    │
    ▼
 Matches task + file context against full skill descriptions
@@ -43,18 +44,15 @@ gentle-ai skill-registry refresh
    ├─ Scan global agent skill roots second
    │     ~/.config/opencode/skills/, ~/.claude/skills/, ...
    │
-   ├─ Deduplicate by skill name
-   │     project skill wins over global skill
+   ├─ Parse direct skills, then one category level per root
+   │     project wins; within scope the first candidate wins
    │
-   ├─ Parse frontmatter
-   │     name + full description + path + scope
-   │
-   └─ Write .atl/skill-registry.md + cache
+   └─ Compare rendered index bytes, then repair the cache hint
 ```
 
 ## Registry Contract
 
-The registry is an **index**, not a generated summary.
+The registry is an **index**, not a generated summary. Direct readers and `list` see disk skills only; Pi delegators select from the current effective session view instead. A selected subagent still reads the exact skill file.
 
 | Field | Meaning |
 | --- | --- |
@@ -125,7 +123,7 @@ Compact rules were cheaper per delegation but could distort skills. The index-fi
 
 ## Excluded Skills
 
-The registry never indexes `_shared`, `skill-registry`, or any `sdd-*` skill.
+The registry never indexes `_shared`, `skill-registry`, or any `sdd-*` skill or category.
 The first two are internal plumbing; the `sdd-*` prefix stays reserved
 because it belonged to the retired SDD workflow. This exclusion is intentional and
 silent, so a user skill whose name collides with these prefixes is dropped
@@ -135,12 +133,18 @@ without a warning.
 
 `skill-registry list` resolves the same deduplicated skill set as `refresh`, but
 prints it instead of writing `.atl/skill-registry.md`, the cache, or
-`.gitignore`. Handy for debugging what a delegator would see.
+`.gitignore`. It does not include Pi session-only skills.
 
 ```bash
 gentle-ai skill-registry list          # name<TAB>scope<TAB>path
 gentle-ai skill-registry list --json   # machine-readable, includes descriptions
 ```
+
+## Refresh and compatibility
+
+Every refresh rescans disk and compares the exact rendered bytes, including with `--force`. An unchanged index is not rewritten, including after edits to unindexed skill body text. The adjacent schema-1 SHA-256 cache is a non-authoritative hint: missing, stale, or legacy cache bytes are repaired independently, and a matching cache never validates a stale registry. Registry and cache are individually atomic, not an atomic pair; a later refresh repairs an interrupted or interleaved publication.
+
+Upgraded Pi and Gentle AI converge for the same normalized project, home, `CODEX_HOME`, filesystem snapshot, and OS. Different homes/overrides and mixed old/new binaries are outside that guarantee. Upgrade both writers before relying on convergence. The CLI keeps its project-root guard and its `--quiet`, `--no-gitignore`, `--force`, and `--cwd` options.
 
 ## Quick Check
 

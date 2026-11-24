@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // uninstallSDDAgents are the runtimes the uninstall retirement tests remove.
@@ -147,7 +147,10 @@ func TestUninstallRetiresOwnedSDDInventoryForEveryRuntime(t *testing.T) {
 		}
 	}
 
-	if err := (backup.RestoreService{}).Restore(result.Manifest); err != nil {
+	// The snapshot spans the home root and the workspace this run was given, so
+	// the restore must authorize the same roots the uninstall knew. The guard is
+	// unchanged: anything outside those roots is still refused.
+	if err := (backup.RestoreService{Roots: result.RestoreRoots}).Restore(result.Manifest); err != nil {
 		t.Fatalf("restore uninstall snapshot: %v", err)
 	}
 	for _, group := range []map[string][]byte{owned, kept, rewritten} {

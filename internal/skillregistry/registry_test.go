@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/trae"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/trae"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 func TestRegenerateWritesRegistryAndCacheThenHitsCache(t *testing.T) {
@@ -31,7 +32,7 @@ description: React patterns
 	if err != nil {
 		t.Fatalf("Regenerate() error = %v", err)
 	}
-	if !first.Regenerated || first.SkillCount != 1 || first.Reason != "fingerprint-changed" {
+	if !first.Regenerated || first.SkillCount != 1 || first.Reason != "content-changed" {
 		t.Fatalf("first result = %#v", first)
 	}
 	registry, err := os.ReadFile(filepath.Join(cwd, RegistryRelPath))
@@ -54,7 +55,7 @@ description: React patterns
 	if err != nil {
 		t.Fatalf("second Regenerate() error = %v", err)
 	}
-	if second.Regenerated || second.Reason != "cache-hit" {
+	if second.Regenerated || second.Reason != "unchanged" {
 		t.Fatalf("second result = %#v", second)
 	}
 }
@@ -75,7 +76,7 @@ func TestRegenerateContentOnlyMetadataPreservingChangeInvalidatesCache(t *testin
 	if err != nil {
 		t.Fatalf("first Regenerate() error = %v", err)
 	}
-	if !first.Regenerated || first.Reason != "fingerprint-changed" {
+	if !first.Regenerated || first.Reason != "content-changed" {
 		t.Fatalf("first result = %#v", first)
 	}
 
@@ -95,7 +96,7 @@ func TestRegenerateContentOnlyMetadataPreservingChangeInvalidatesCache(t *testin
 	if err != nil {
 		t.Fatalf("changed Regenerate() error = %v", err)
 	}
-	if !changed.Regenerated || changed.Reason != "fingerprint-changed" {
+	if !changed.Regenerated || changed.Reason != "content-changed" {
 		t.Fatalf("changed result = %#v", changed)
 	}
 	if registry := readFile(t, filepath.Join(cwd, RegistryRelPath)); !strings.Contains(registry, "| `react` | other | project |") {
@@ -106,31 +107,12 @@ func TestRegenerateContentOnlyMetadataPreservingChangeInvalidatesCache(t *testin
 	if err != nil {
 		t.Fatalf("unchanged Regenerate() error = %v", err)
 	}
-	if unchanged.Regenerated || unchanged.Reason != "cache-hit" {
+	if unchanged.Regenerated || unchanged.Reason != "unchanged" {
 		t.Fatalf("unchanged result = %#v", unchanged)
 	}
 }
 
-func TestFingerprintChangesForFileSetAndIsOrderIndependent(t *testing.T) {
-	dir := t.TempDir()
-	firstPath := filepath.Join(dir, "first", "SKILL.md")
-	secondPath := filepath.Join(dir, "second", "SKILL.md")
-	writeSkill(t, firstPath, "first")
-	writeSkill(t, secondPath, "second")
-
-	forward := Fingerprint([]string{firstPath, secondPath})
-	if reverse := Fingerprint([]string{secondPath, firstPath}); reverse != forward {
-		t.Fatalf("Fingerprint() depends on input order: forward=%s reverse=%s", forward, reverse)
-	}
-	if err := os.Remove(secondPath); err != nil {
-		t.Fatalf("remove skill: %v", err)
-	}
-	if withoutSecond := Fingerprint([]string{firstPath}); withoutSecond == forward {
-		t.Fatal("Fingerprint() did not change after deleting a skill")
-	}
-}
-
-func TestRegenerateForceBypassesCacheAndProjectSkillWins(t *testing.T) {
+func TestRegenerateForcePreservesEqualBytesAndProjectSkillWins(t *testing.T) {
 	cwd := t.TempDir()
 	home := t.TempDir()
 	writeSkill(t, filepath.Join(home, ".claude", "skills", "dup", "SKILL.md"), `---
@@ -163,7 +145,7 @@ description: project copy
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !forced.Regenerated || forced.Reason != "forced" {
+	if forced.Regenerated || forced.Reason != "unchanged" || forced.SkillCount != 1 {
 		t.Fatalf("forced result = %#v", forced)
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
@@ -278,7 +260,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 			want: []expectedSkill{
 				{scope: "user", path: ".gemini/antigravity-cli/skills/cli-only/SKILL.md", name: "cli-only", description: "CLI only"},
 			},
-			activeVariant: ".gemini/antigravity-cli/skills",
+			activeVariant: ".gemini/config/skills",
 		},
 		{
 			name: "Desktop only",
@@ -288,7 +270,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 			want: []expectedSkill{
 				{scope: "user", path: ".gemini/antigravity-desktop/skills/desktop-only/SKILL.md", name: "desktop-only", description: "Desktop only"},
 			},
-			activeVariant: ".gemini/antigravity-desktop/skills",
+			activeVariant: ".gemini/config/skills",
 		},
 		{
 			name: "both variants preserve compatibility roots and precedence",
@@ -310,7 +292,21 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 				{scope: "project", path: "skills/project-wins/SKILL.md", name: "project-wins", description: "Project copy"},
 				{scope: "user", path: ".gemini/skills/shared-only/SKILL.md", name: "shared-only", description: "Shared only"},
 			},
-			activeVariant: ".gemini/antigravity-desktop/skills",
+			activeVariant: ".gemini/config/skills",
+		},
+		{
+			name: "shared config root is discovered and wins over variant copies",
+			skills: []fixtureSkill{
+				{scope: "user", path: ".gemini/config/skills/shared-config/SKILL.md", name: "shared-config", description: "Shared config"},
+				{scope: "user", path: ".gemini/config/skills/duplicate/SKILL.md", name: "duplicate", description: "Shared config duplicate"},
+				{scope: "user", path: ".gemini/antigravity-desktop/skills/duplicate/SKILL.md", name: "duplicate", description: "Desktop duplicate"},
+				{scope: "user", path: ".gemini/antigravity-cli/skills/duplicate/SKILL.md", name: "duplicate", description: "CLI duplicate"},
+			},
+			want: []expectedSkill{
+				{scope: "user", path: ".gemini/config/skills/duplicate/SKILL.md", name: "duplicate", description: "Shared config duplicate"},
+				{scope: "user", path: ".gemini/config/skills/shared-config/SKILL.md", name: "shared-config", description: "Shared config"},
+			},
+			activeVariant: ".gemini/config/skills",
 		},
 		{
 			name: "missing variant directories preserve shared and legacy roots",
@@ -322,7 +318,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 				{scope: "user", path: ".gemini/antigravity/skills/legacy-only/SKILL.md", name: "legacy-only", description: "Legacy only"},
 				{scope: "user", path: ".gemini/skills/shared-only/SKILL.md", name: "shared-only", description: "Shared only"},
 			},
-			activeVariant: ".gemini/antigravity-cli/skills",
+			activeVariant: ".gemini/config/skills",
 		},
 	}
 
@@ -370,7 +366,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Regenerate() error = %v", err)
 				}
-				if !first.Regenerated || first.SkillCount != len(want) || first.Reason != "fingerprint-changed" {
+				if !first.Regenerated || first.SkillCount != len(want) || first.Reason != "content-changed" {
 					t.Fatalf("first result = %#v, want %d regenerated skills", first, len(want))
 				}
 				registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
@@ -380,7 +376,7 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 				if err != nil {
 					t.Fatalf("second Regenerate() error = %v", err)
 				}
-				if second.Regenerated || second.Reason != "cache-hit" {
+				if second.Regenerated || second.Reason != "unchanged" {
 					t.Fatalf("second result = %#v, want unchanged cache hit", second)
 				}
 				if got := readFile(t, filepath.Join(cwd, RegistryRelPath)); got != registry {
@@ -391,8 +387,8 @@ func TestAntigravitySkillDiscoveryMatchesActiveVariant(t *testing.T) {
 				if err != nil {
 					t.Fatalf("forced Regenerate() error = %v", err)
 				}
-				if !forced.Regenerated || forced.SkillCount != len(want) || forced.Reason != "forced" {
-					t.Fatalf("forced result = %#v, want %d regenerated skills", forced, len(want))
+				if forced.Regenerated || forced.SkillCount != len(want) || forced.Reason != "unchanged" {
+					t.Fatalf("forced result = %#v, want %d unchanged skills", forced, len(want))
 				}
 				if got := readFile(t, filepath.Join(cwd, RegistryRelPath)); got != registry {
 					t.Fatal("registry changed on deterministic forced regeneration")
@@ -450,7 +446,7 @@ func TestUserSkillDirsIncludesSupportedAgentSkillLocations(t *testing.T) {
 		filepath.Join(home, ".openclaw", "skills"),
 		filepath.Join(home, ".pi", "agent", "skills"),
 		filepath.Join(home, ".agents", "skills"),
-		filepath.Join(home, ".hermes", "skills"),
+		filepath.Join(system.HermesConfigDir(home), "skills"),
 		trae.NewAdapter().SkillsDir(home),
 	} {
 		if !containsPath(dirs, want) {

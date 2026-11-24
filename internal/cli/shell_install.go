@@ -15,8 +15,9 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
 )
 
 var (
@@ -37,7 +38,16 @@ func runShellDirectWorker(ctx context.Context, self string, args []string, stdou
 	cmd := exec.CommandContext(ctx, "/usr/bin/setpriv", entry...)
 	cmd.Env = append(os.Environ(), "GENTLE_AI_SHELL_STEPS=1")
 	cmd.Stdout, cmd.Stderr = stdout, stderr
+	shellStopGracefully(cmd)
 	return cmd.Run()
+}
+
+// shellStopGracefully makes a cancelled worker receive SIGTERM first, so its
+// own signal handling cancels the run and its rollback runs; it is killed only
+// if it has not exited within a short delay.
+func shellStopGracefully(cmd *exec.Cmd) {
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 10 * time.Second
 }
 
 // Platform contracts live in shell_install_platform_{windows,other}.go:
@@ -180,11 +190,17 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 			report(shellinstaller.UserInstallProgress{Index: 1, Total: 5, State: "done"})
 			report(shellinstaller.UserInstallProgress{Index: 2, Total: 5, State: "running"})
 		}
-		runErr := shellinstaller.RunUserEntry(ctx, self, args, nil, progress, progress)
+		if runtime.GOOS == "darwin" {
+			// The in-process installer has no output to parse: its own steps
+			// (publish included) reach the caller through the context.
+			ctx = shellinstaller.WithInstallProgress(ctx, report)
+		}
+		runErr := shellInstallEntry(ctx, self, args, nil, progress, progress)
 		if runErr != nil {
 			if output := strings.TrimSpace(workerLog.String()); output != "" {
-				return fmt.Errorf("%w; worker output: %s", runErr, output)
+				runErr = fmt.Errorf("%w; worker output: %s", runErr, output)
 			}
+			runErr = workerLog.flag(runErr)
 		}
 		return runErr
 	}
@@ -206,7 +222,7 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 		if output := strings.TrimSpace(workerLog.String()); output != "" {
 			waitErr = fmt.Errorf("%w; worker output: %s", waitErr, output)
 		}
-		return preserveShellFailure(waitErr)
+		return preserveShellFailure(workerLog.flag(waitErr))
 	}
 	return nil
 }
@@ -232,7 +248,7 @@ func (w *shellStepWriter) Write(p []byte) (int, error) {
 		w.buffer = w.buffer[index+1:]
 	}
 	if len(w.buffer) > shellStepLineLimit {
-		// An unterminated oversized line is never a marker; keep its tail only.
+		// An unterminated oversized line is never a step line; keep it in the log only.
 		_, _ = w.log.Write(w.buffer)
 		w.buffer = nil
 	}
@@ -262,16 +278,70 @@ type boundedWorkerLog struct {
 	mu    sync.Mutex
 	data  []byte
 	limit int
+	// line is the current unterminated line, capped, and mainSDK remembers
+	// that an "Error:" line named the Main SDK, so a long diagnostic that
+	// pushes the line's prefix out of data cannot hide the failure.
+	line    []byte
+	mainSDK bool
 }
+
+const workerLogLineLimit = 64 << 10
 
 func (w *boundedWorkerLog) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	rest := p
+	for len(rest) > 0 {
+		index := bytes.IndexByte(rest, '\n')
+		if index < 0 {
+			if room := workerLogLineLimit - len(w.line); room > 0 {
+				w.line = append(w.line, rest[:min(room, len(rest))]...)
+			}
+			break
+		}
+		if room := workerLogLineLimit - len(w.line); room > 0 {
+			w.line = append(w.line, rest[:min(room, index)]...)
+		}
+		w.observeLine()
+		w.line = w.line[:0]
+		rest = rest[index+1:]
+	}
 	w.data = append(w.data, p...)
 	if len(w.data) > w.limit {
 		w.data = append([]byte(nil), w.data[len(w.data)-w.limit:]...)
 	}
 	return len(p), nil
+}
+
+func (w *boundedWorkerLog) observeLine() {
+	if bytes.HasPrefix(w.line, []byte("Error:")) && bytes.Contains(w.line, []byte("Main SDK")) {
+		w.mainSDK = true
+	}
+}
+
+// mainSDKFailure reports whether the worker named a Main SDK failure on an
+// "Error:" line, including a last line without a newline.
+func (w *boundedWorkerLog) mainSDKFailure() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.line) > 0 {
+		w.observeLine()
+	}
+	return w.mainSDK
+}
+
+// mainSDKFlagged keeps err's message and chain and also matches
+// shellinstaller.ErrMainSDKInstall.
+type mainSDKFlagged struct{ err error }
+
+func (e mainSDKFlagged) Error() string   { return e.err.Error() }
+func (e mainSDKFlagged) Unwrap() []error { return []error{e.err, shellinstaller.ErrMainSDKInstall} }
+
+func (w *boundedWorkerLog) flag(err error) error {
+	if err != nil && w.mainSDKFailure() {
+		return mainSDKFlagged{err}
+	}
+	return err
 }
 
 func (w *boundedWorkerLog) String() string {

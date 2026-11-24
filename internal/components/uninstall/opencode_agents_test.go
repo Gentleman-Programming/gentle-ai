@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeagents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencodeagents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 func TestPersonaOnlyUninstallRemovesOnlyManagedGentleman(t *testing.T) {
@@ -383,5 +383,96 @@ func TestUninstallKeepsUnprovenOrchestratorQuestionAllow(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// releasedOpenCodeAgent renders one agent exactly as the v4.5.0 installer wrote
+// it, from the byte-pinned fixtures the opencodeagents package keeps (its
+// released_prompts_test.go pins their sha256).
+func releasedOpenCodeAgent(t *testing.T, spec opencodeagents.Spec) map[string]any {
+	t.Helper()
+	dir := filepath.Join("..", "opencodeagents", "testdata", "v4.5.0")
+	raw, err := os.ReadFile(filepath.Join(dir, spec.Name+".md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := string(raw)
+	if spec.Name == "gentle-ai-verify" {
+		method, err := os.ReadFile(filepath.Join(dir, "verify-method.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		prompt = strings.ReplaceAll(prompt, "{{GENTLE_AI_VERIFY_METHOD}}", string(method))
+	}
+	entry, err := opencodeagents.Entry(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry["prompt"] = prompt
+	return entry
+}
+
+// TestUninstallRemovesReleasedAgentsAndKeepsUserEdits: an upgrading user's
+// unmodified v4.5.0 agents are Gentle AI's, so uninstall removes them even with
+// a user-selected model; a user rule added to one makes it the user's, and
+// uninstall keeps it byte-identical.
+func TestUninstallRemovesReleasedAgentsAndKeepsUserEdits(t *testing.T) {
+	for _, edited := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unmodified", true: "worker with a user rule"}[edited], func(t *testing.T) {
+			agents := map[string]any{}
+			for _, spec := range opencodeagents.Parity(model.AgentOpenCode) {
+				if !strings.HasPrefix(spec.Name, "gentle-ai-") {
+					continue
+				}
+				agents[spec.Name] = releasedOpenCodeAgent(t, spec)
+			}
+			if len(agents) != 3 {
+				t.Fatalf("released agents = %d, want explore, worker, and verify", len(agents))
+			}
+			agents["gentle-ai-explore"].(map[string]any)["model"] = "user/model"
+			worker := agents["gentle-ai-worker"].(map[string]any)
+			if edited {
+				worker["prompt"] = worker["prompt"].(string) + "\nUser rule.\n"
+			}
+			raw, err := json.Marshal(map[string]any{"agent": agents})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var written map[string]any
+			if err := json.Unmarshal(raw, &written); err != nil {
+				t.Fatal(err)
+			}
+			wantWorker := written["agent"].(map[string]any)["gentle-ai-worker"]
+			path := filepath.Join(t.TempDir(), "opencode.json")
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := removeOpenCodeFamilyAgents(path, model.AgentOpenCode).apply(path); err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root map[string]any
+			if err := json.Unmarshal(body, &root); err != nil {
+				t.Fatal(err)
+			}
+			remaining, _ := root["agent"].(map[string]any)
+			for _, name := range []string{"gentle-ai-explore", "gentle-ai-verify"} {
+				if remaining[name] != nil {
+					t.Errorf("released %s was kept as a user edit", name)
+				}
+			}
+			if !edited {
+				if remaining["gentle-ai-worker"] != nil {
+					t.Error("released gentle-ai-worker was kept as a user edit")
+				}
+				return
+			}
+			if !reflect.DeepEqual(remaining["gentle-ai-worker"], wantWorker) {
+				t.Errorf("user-edited worker changed or was removed: %v", remaining["gentle-ai-worker"] != nil)
+			}
+		})
 	}
 }

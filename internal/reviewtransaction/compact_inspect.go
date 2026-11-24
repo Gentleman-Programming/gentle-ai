@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 )
 
 const (
@@ -56,15 +55,15 @@ type CompactRecoveryInspectionTotals struct {
 // and naming a dead command is worse than naming none (design decision 2,
 // rdd-legacy-retirement).
 const (
+	// CompactRecoveryEdgeExitAbandon is the one operation that admits an
+	// invalid recovery edge: `review abandon` accepts any lineage, whatever its
+	// state or readability, and cascades to its recovery successors so no
+	// orphan edge remains.
 	CompactRecoveryEdgeExitAbandon = "review abandon"
 	// CompactRecoveryEdgeExitRepair names the existing `review repair` verb
-	// (Wave 2 Slice S3, rdd-authority-disposition-plan) as the sanctioned exit
-	// for a closed content_mismatched_recovery_authorization leaf: derivation
-	// (deriveAuthorityDispositionPlanAtRepo) and leaf admission
-	// (admitClosureDisposition) both accept the edge, so the operation this names
-	// will actually run. Unlike CompactRecoveryEdgeExitAbandon, this is never
-	// gated on the successor's pristine state — quarantine byte-preserves the
-	// whole entry, so nothing captured is discarded.
+	// for a historical (outdated) entry's selector-scoped disposition. `review
+	// abandon` also covers those entries; `repair` is retained only until its
+	// own deletion slice.
 	CompactRecoveryEdgeExitRepair = "review repair"
 )
 
@@ -183,34 +182,16 @@ var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (Compact
 // read-only, takes no lock, and is the operator-facing companion to the
 // inspection rather than part of its binding identity.
 //
-// Before Wave 7 S3a, an edge reconciliation classified into an anomaly class
-// (edge.AnomalyClasses non-empty) took `review reconcile-authority`
-// unconditionally, ahead of every other check. That verb retired with no
-// replacement (its two classes, unchanged_target and
-// malformed_recovery_authorization, are disjoint from `review repair`'s own
-// closed content_mismatched_recovery_authorization class) — an
-// anomaly-classified edge now falls through to the SAME eligibility checks
-// every other invalid edge does: `review abandon` only when the abandonment
-// gate's own read-only prediction accepts the successor, `review repair`
-// only for the disjoint disposition-plan class, and otherwise Blocked. This
-// surface can never advertise a continuation that would then refuse. When
-// nothing answers, the exit says so and names the diagnostic instead of a
-// command that would not resolve the block.
+// Every invalid edge's successor exits through `review abandon`, which accepts
+// any lineage regardless of state or readability. The only other exits are the
+// retained `review repair` selectors for historical entries, which abandonment
+// also covers and which go away with repair's own deletion slice.
 func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report CompactRecoveryInspectionReport) ([]CompactRecoverySanctionedExit, error) {
 	exits := []CompactRecoverySanctionedExit{}
 	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// dispositionSeed names the one seed successor (if any) whose closed
-	// content-mismatch classification both derives an AuthorityDispositionPlan
-	// and admits through admitClosureDisposition (N=1 leaf or a Wave 6 N>=2
-	// closure). A derivation refusal (no eligible edge, more than one, or an
-	// incomplete inspection) is not propagated —
-	// it just means no edge advertises review repair this round, exactly like
-	// InspectCompactPristineAbandonment's per-edge eligibility below never
-	// aborts the whole exit computation.
-	//
 	// historicalExits (#2995) lists every historical (outdated) entry when the
 	// store's ONLY diagnostics are historical: each entry then has a reachable
 	// selector-scoped repair, so inspection surfaces one exit per entry —
@@ -226,30 +207,17 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	// advertise a continuation the very next command would refuse. Malformed,
 	// unreadable, missing, and unexpected entries never gain an exit.
 	historicalExits := historicalDispositionExitLineages(report)
-	dispositionSeed := ""
 	for _, lineage := range historicalExits {
 		exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: lineage, Operation: CompactRecoveryEdgeExitRepair})
 	}
-	// The derivation runs UNCONDITIONALLY, decoupled from historicalExits:
-	// with historical exits present it must not append a second repair exit
-	// for a historical-class plan (the per-entry exits above already cover
-	// every historical lineage), but a non-historical admitted plan still
-	// feeds dispositionSeed below. That branch is reachable: a store mixing
-	// forensic historical entries (the only diagnostics, so historicalExits
-	// is non-empty) with a loaded content-mismatch pair closes the selectorless
-	// derivation on the EDGE plan. When historicalExits is empty the behavior
-	// is exactly the historical snapshot-identity exit or the seed, unchanged.
-	// A derivation refusal is still not propagated —
-	// it just means no extra plan exists this round, exactly like
-	// InspectCompactPristineAbandonment's per-edge eligibility below never
-	// aborts the whole exit computation.
+	// The selectorless historical-snapshot-identity plan is advertised only
+	// when no per-entry historical exit already covers it. A derivation
+	// refusal is not propagated: it just means no extra plan exists this round.
 	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
 		if plan.AnomalyClass == compactHistoricalSnapshotIdentityClass {
 			if len(historicalExits) == 0 {
 				exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
 			}
-		} else {
-			dispositionSeed = plan.SeedSet[0]
 		}
 	}
 	for _, edge := range report.Edges {
@@ -264,43 +232,13 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 		if err != nil {
 			return nil, err
 		}
-		switch {
-		case eligibility.Eligible:
-			// A pristine successor already has a sanctioned exit today —
-			// review repair's disposition-plan quarantine is byte-preserving
-			// like abandon, so this ordering does not change what a pristine
-			// forged edge advertises (`otherwise existing Blocked prose
-			// stands unchanged`; abandon is not Blocked prose).
+		if eligibility.Eligible {
+			// Abandonment accepts every state, so an invalid edge's successor
+			// always has this exit; abandoning the successor's own
+			// predecessor would cascade through it instead.
 			exit.Operation = CompactRecoveryEdgeExitAbandon
-		case dispositionSeed != "" && edge.SuccessorLineageID == dispositionSeed:
-			// Only reached once abandon's own prediction refuses — a
-			// non-pristine (captured review or correction data) successor
-			// whose recovery edge closes on the content-mismatch class.
-			// This is #2014's "nothing applies" gap: neither reconcile nor
-			// abandon accepted the edge before Wave 2's disposition plan.
-			exit.Operation = CompactRecoveryEdgeExitRepair
-		case compactRecoveryReconciliationAnomalyClass(edge):
-			// Issue #2422: reconciliation's own two anomaly classes
-			// (unchanged_target, malformed_recovery_authorization) lost their
-			// only runnable exit when Wave 7 S3a retired `review
-			// reconcile-authority` with no replacement. A leaf successor in
-			// either class still gets `review abandon` above; this is reached
-			// only for an INTERIOR successor -- one another lineage already
-			// recovers from, so abandon's own read-only prediction refuses it
-			// -- where neither abandon nor repair (scoped to the disjoint
-			// content-mismatch class) ever applies. Naming the universal kill
-			// switch here does not repair the malformed recovery metadata; it
-			// is the one maintainer-authority path that actually unblocks a
-			// consumer today, so the stop is honest instead of terminal.
-			exit.Blocked = fmt.Sprintf(
-				"no repair or abandon operation admits this edge (anomaly classes: %s): its recovery metadata is malformed, but it has a successor of its own, so `review abandon` refuses it, and `review repair` covers only the disjoint content_mismatched_recovery_authorization class. "+
-					"This does not repair the edge, but a maintainer can stop it from blocking further review activity in this exact repository with `gentle-ai review mode disable --scope clone --cwd %s`. "+
-					"This report, with anomaly_classes and non_reconcilable_reason, is the artifact to escalate for an actual repair.",
-				strings.Join(edge.AnomalyClasses, ","), root)
-		default:
-			exit.Blocked = "no advertised operation admits this edge: `review abandon` does not accept the successor, and no other operation applies to this anomaly class. " +
-				"Nothing quarantines this shape today, so no command clears it and the entry stays exactly as persisted. " +
-				"This report, with non_reconcilable_reason (or anomaly_classes, for a class reconciliation used to admit before it retired), is the artifact to escalate"
+		} else {
+			exit.Blocked = "the successor entry no longer exists in the review authority store, so there is nothing for `review abandon` to quarantine; re-run the inspection for the current state"
 		}
 		exits = append(exits, exit)
 	}
@@ -348,22 +286,6 @@ func historicalLineageEdgeReferenced(report CompactRecoveryInspectionReport, lin
 	return slices.ContainsFunc(report.Edges, func(edge CompactRecoveryEdgeInspection) bool {
 		return edge.PredecessorLineageID == lineage || edge.SuccessorLineageID == lineage
 	})
-}
-
-// compactRecoveryReconciliationAnomalyClass reports whether edge carries
-// either of reconciliation's own two retired anomaly classes (unchanged_target,
-// malformed_recovery_authorization, compact_reconcile.go). It is deliberately
-// narrower than edge.AnomalyClasses being non-empty in general: the
-// content_mismatched_recovery_authorization class the disposition plan
-// already covers is a DIFFERENT (disjoint) classification that never sets
-// these two, so this check cannot accidentally shadow that exit.
-func compactRecoveryReconciliationAnomalyClass(edge CompactRecoveryEdgeInspection) bool {
-	for _, class := range edge.AnomalyClasses {
-		if class == compactRecoveryEdgeUnchangedTarget || class == compactRecoveryEdgeMalformedAuthorization {
-			return true
-		}
-	}
-	return false
 }
 
 // inspectCompactRecoveryRecordSet applies the canonical all-edge inspection to

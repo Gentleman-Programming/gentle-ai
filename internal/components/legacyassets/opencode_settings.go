@@ -11,7 +11,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
 )
 
 // The OpenCode family (OpenCode, Kilocode) received the retired SDD agents as
@@ -33,6 +34,8 @@ var (
 	profileName      = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	promptFileRef    = regexp.MustCompile(`^\{file:(.+)\}$`)
 	permissionEffect = map[string]bool{"allow": true, "ask": true, "deny": true}
+	// Tests replace this boundary rather than probing hostile references.
+	statPromptReference = os.Stat
 )
 
 // NormalizeOpenCodeSDDPrompt maps a released prompt and every render of it to
@@ -304,6 +307,17 @@ type OpenCodeSettingsResult struct {
 // remains: in the settings, or as a markdown agent in agentDirs or in the
 // agent directories beside the settings file (agent/, agents/, and their
 // .opencode/ project spelling), all of which the runtime loads.
+
+// isDanglingSDDPromptRef reports whether prompt is a {file:...} reference
+// pointing into the retired prompts/sdd/ directory.
+func isDanglingSDDPromptRef(prompt string) bool {
+	match := promptFileRef.FindStringSubmatch(prompt)
+	if match == nil {
+		return false
+	}
+	cleaned := path.Clean(strings.ReplaceAll(match[1], "\\", "/"))
+	return cleaned == "prompts/sdd/" || strings.HasPrefix(cleaned, "prompts/sdd/")
+}
 func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCodeSettingsResult, error) {
 	result := OpenCodeSettingsResult{Path: settingsPath}
 	info, err := os.Lstat(settingsPath)
@@ -327,6 +341,8 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 	}
 	updated := raw
 	remaining := map[string]bool{}
+	// Track preserved entries with dangling prompt refs for later cleanup
+	danglingPrompts := map[string]string{} // section.name -> prompt value
 	for _, section := range []string{"agent", "agents"} {
 		agents, _ := root[section].(map[string]any)
 		var owned []string
@@ -342,6 +358,11 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 			case retired:
 				result.Preserved = append(result.Preserved, section+"."+name)
 				remaining[name] = true
+				// If the preserved entry has a dangling SDD prompt reference,
+				// track it for removal after the first pass.
+				if promptVal, ok := entry["prompt"].(string); ok && isDanglingSDDPromptRef(promptVal) {
+				danglingPrompts[section+"."+name] = promptVal
+				}
 			default:
 				remaining[name] = true
 			}
@@ -389,6 +410,18 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 	if err != nil {
 		return result, fmt.Errorf("retire SDD task permissions in %s: %w", settingsPath, err)
 	}
+	// If any preserved entries had dangling SDD prompt references, remove them now
+	// using RemoveJSONCMembers which preserves comments.
+	if len(danglingPrompts) > 0 {
+		for key := range danglingPrompts {
+			section, name, _ := strings.Cut(key, ".")
+			updated, _, err = filemerge.RemoveJSONCMembers(updated, []string{section, name}, []string{"prompt"}, false)
+			if err != nil {
+				return result, fmt.Errorf("remove dangling prompt from %s.%s: %w", section, name, err)
+			}
+		}
+	}
+
 	if string(updated) == string(raw) {
 		return result, nil
 	}
@@ -465,16 +498,25 @@ type PromptRetireResult struct {
 	Dir            string
 	Removed        []string
 	Preserved      []string
+	Referenced     []string
 	UnsupportedDir bool
 }
 
 // RetireOpenCodeSDDPrompts removes the shared SDD prompt files in dir whose
 // normalized bytes some release rendered, then the directory once empty.
+// referencedPaths protects files still used by settings retirement preserved.
 // Symlinks, non-regular files, and edited files are preserved and reported.
 // A dir that is itself a symlink (or not a directory) is the user's: nothing
 // in or through it is touched, as with a symlinked plugins directory.
-func RetireOpenCodeSDDPrompts(dir string) (PromptRetireResult, error) {
+func RetireOpenCodeSDDPrompts(dir string, referencedPaths ...string) (PromptRetireResult, error) {
 	result := PromptRetireResult{Dir: dir}
+	// Check the complete set first: a later unsafe reference must not cause a
+	// probe or leave a partially retired prompt directory.
+	for _, ref := range referencedPaths {
+		if err := opencode.ValidateLocalFileReference(ref); err != nil {
+			return result, fmt.Errorf("invalid file reference %s: %w", ref, err)
+		}
+	}
 	info, err := os.Lstat(dir)
 	if os.IsNotExist(err) {
 		return result, nil
@@ -494,6 +536,14 @@ func RetireOpenCodeSDDPrompts(dir string) (PromptRetireResult, error) {
 		}
 		if err != nil {
 			return result, fmt.Errorf("inspect retired SDD prompt %s: %w", file, err)
+		}
+		referenced := slices.ContainsFunc(referencedPaths, func(ref string) bool {
+			other, err := statPromptReference(ref)
+			return err == nil && os.SameFile(info, other)
+		})
+		if referenced {
+			result.Referenced = append(result.Referenced, file)
+			continue
 		}
 		owned := false
 		if info.Mode().IsRegular() {
@@ -524,6 +574,9 @@ func (r PromptRetireResult) ManualActions() []string {
 	actions := make([]string, 0, len(r.Preserved)+1)
 	if r.UnsupportedDir {
 		actions = append(actions, fmt.Sprintf("%s is not a real directory (for example a symlink), so Gentle AI did not inspect or remove the retired SDD prompts in it. SDD was retired in v4.0.0 and no agent loads them anymore; if you no longer need them, move or delete them yourself.", r.Dir))
+	}
+	for _, file := range r.Referenced {
+		actions = append(actions, fmt.Sprintf("Retired SDD prompt %s was preserved because it is still referenced by a remaining settings entry. Keep it while that entry is in use; remove or update the entry before retiring this file.", file))
 	}
 	for _, file := range r.Preserved {
 		actions = append(actions, fmt.Sprintf("Retired SDD prompt %s was preserved: Gentle AI cannot prove it wrote this file (its content differs from every released version, or it is not a regular file), so it may contain your changes. SDD was retired in v4.0.0 and no agent loads it anymore; if you no longer need it, move or delete it.", file))

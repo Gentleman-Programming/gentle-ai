@@ -12,11 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 // sharedReferencePattern matches a `_shared/<file>.md` reference in installed
@@ -53,6 +53,10 @@ func installFullGentleman(t *testing.T, agent model.AgentID) string {
 // guidance, or skill text points to must exist in the runtime's skills
 // directory, and no retired SDD-only shared file may be installed.
 func TestInstallLeavesNoDanglingSharedReferences(t *testing.T) {
+	// Preserve the historical inventory and explicitly include the new ODD
+	// method and the provider-defect report workflow (harness-continuity S9).
+	wantShared := append(append([]string{}, v370SharedReferences...), "verify-method.md", "provider-defect-report.md")
+	sort.Strings(wantShared)
 	for _, agent := range skillRuntimes {
 		t.Run(string(agent), func(t *testing.T) {
 			home := installFullGentleman(t, agent)
@@ -107,8 +111,8 @@ func TestInstallLeavesNoDanglingSharedReferences(t *testing.T) {
 				installed = append(installed, name)
 			}
 			sort.Strings(installed)
-			if strings.Join(installed, ",") != strings.Join(v370SharedReferences, ",") {
-				t.Errorf("installed _shared = %v, want the v3.7.0 non-SDD set %v", installed, v370SharedReferences)
+			if strings.Join(installed, ",") != strings.Join(wantShared, ",") {
+				t.Errorf("installed _shared = %v, want the historical non-SDD set plus the ODD method and the provider-defect report %v", installed, wantShared)
 			}
 			ledger, err := os.ReadFile(filepath.Join(sharedDir, "review-ledger-contract.md"))
 			if err != nil {

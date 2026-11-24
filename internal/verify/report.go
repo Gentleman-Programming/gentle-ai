@@ -70,13 +70,14 @@ func VerificationIssuesMessageForCommand(command string) string {
 }
 
 type Report struct {
-	Checks    []CheckResult
-	Passed    int
-	Failed    int
-	Skipped   int
-	Warnings  int
-	Ready     bool
-	FinalNote string
+	Checks           []CheckResult
+	Passed           int
+	Failed           int
+	Skipped          int
+	Warnings         int
+	Ready            bool
+	RollbackRequired bool
+	FinalNote        string
 }
 
 func BuildReport(results []CheckResult) Report {
@@ -87,6 +88,9 @@ func BuildReport(results []CheckResult) Report {
 			report.Passed++
 		case CheckStatusFailed:
 			report.Failed++
+			if !result.NoRollback {
+				report.RollbackRequired = true
+			}
 		case CheckStatusSkipped:
 			report.Skipped++
 		case CheckStatusWarning:

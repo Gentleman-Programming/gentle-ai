@@ -44,7 +44,7 @@ On an installed Separate target, **Manage → SDK source → Apply preferences**
 | Target parent | Owned by you, mode `0700`, on one filesystem. Absolute paths using only ASCII letters, digits, `/`, `_`, `.` and `-`. |
 | Path spelling | `/tmp`, `/var` and `/etc` are resolved once to their `/private/...` spelling. Any other symbolic link in the path refuses. |
 | Extended metadata | Every checked entry refuses BSD flags (other than nodump, hidden, tracked and APFS compression) and ACLs with any allow entry. Deny-only ACLs and `com.apple.provenance` are accepted. `com.apple.quarantine` refuses on entries the installer creates; your Shared prefix and agent, their saved preimages and the running `gentle-ai` are yours, so a quarantine left by an approved download is accepted there. |
-| Supervisor binary | The running `gentle-ai`, after resolving links such as a Homebrew symlink, and every ancestor directory must be owned by you or root and not group/other writable. Only the root-owned sticky `/private/tmp` is excepted. |
+| Supervisor binary | The running `gentle-ai`, after resolving links such as a Homebrew symlink, and every ancestor directory must be owned by you or root and not group/other writable. Only the root-owned sticky `/private/tmp` is excepted. A Homebrew install refuses when it copies the supervisor, because `/opt/homebrew/Cellar` (or `/usr/local/Cellar`) is admin-group writable; the refusal names the fix and you should not change Homebrew permissions. Instead run `go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0` into your own `GOBIN`, or copy the `gentle-ai` binary into a user-owned `0755` directory such as `~/.local/bin` and run it from there. |
 | Durability | The installer's own Go writes and directory entries flush with `F_FULLFSYNC`; a filesystem without it (some network or FUSE mounts) refuses installation instead of risking unflushed data. The Node provisioning helper (prefix, settings and recovery copies) uses Node's `fsync`, which tries `F_FULLFSYNC` and falls back to a weaker barrier or plain `fsync` where the filesystem lacks it. |
 
 ## Modes on macOS
@@ -94,7 +94,7 @@ macOS has no cgroups or systemd user manager. Each installer command and the lau
 | Linux unit property | macOS equivalent |
 | --- | --- |
 | `KillMode=control-group` | Kill and reap the owned process group |
-| `TasksMax=64` | `RLIMIT_NPROC` = your current process count + 64 |
+| `TasksMax=512` | `RLIMIT_NPROC` = your current process count + 512 (capped at the inherited hard limit) |
 | `CPUQuota=100%` | `RLIMIT_CPU` = the command's deadline in seconds; none for a launched Pi session |
 | `UMask=0077` | `umask 077` |
 | `LimitNOFILE=1024:524288` | `RLIMIT_NOFILE` 1024 soft, 524288 hard (capped at the inherited hard limit) |
@@ -128,6 +128,8 @@ CodeGraph ON adds two npm archives of the same 1.4.1 release as Linux, each pinn
 | `@colbymchenry/codegraph-darwin-arm64-1.4.1.tgz` | 50996796 | `sha512-USSpExjuxZWN0OeNexZp2V5fCfOI4ZekqE79CJiBdGdPbqGTB+857ImIqzWGyF/rAyyED94Wc0Cd82t+uWD30w==` |
 
 Stock Pi and its npm graph come from the same frozen lock as Linux, with the darwin arm64 optional packages selected.
+
+The fd, ripgrep and CodeGraph archives have no whole-download deadline: a transfer fails only when it receives no data for 60 seconds, or after a 30-minute ceiling. Connection resets, timeouts, temporary DNS errors and HTTP 5xx or 429 responses are retried up to three attempts with backoff, for the Node archive too. Other HTTP errors and any size or SHA-256 mismatch fail at once. fd and ripgrep redirects are accepted to any HTTPS host under `githubusercontent.com`; the pins above remain the integrity check.
 
 ## Node bootstrap publication
 

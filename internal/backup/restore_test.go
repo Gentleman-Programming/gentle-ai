@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -847,5 +848,806 @@ func TestRestoreCompressedMixedEntries(t *testing.T) {
 	// 4. !Existed entry removed from disk.
 	if _, statErr := os.Lstat(createdBySync); !os.IsNotExist(statErr) {
 		t.Errorf("created_by_sync should have been removed by !Existed branch, but stat err = %v", statErr)
+	}
+}
+
+// useConfigRootsGOOS selects the platform WithConfigRoots derives config roots
+// for and restores the host value when the test ends.
+func useConfigRootsGOOS(t *testing.T, goos string) {
+	t.Helper()
+	original := ConfigRootsGOOS
+	ConfigRootsGOOS = goos
+	t.Cleanup(func() { ConfigRootsGOOS = original })
+}
+
+// TestWithConfigRootsWindows pins issue #6024: the gga config directory under a
+// redirected %APPDATA% is admitted only when a target lives inside it and no
+// admitted root covers it, lexically or canonically. The rest of %APPDATA% and
+// all of %LOCALAPPDATA% (which holds the temp directory) are never admitted.
+func TestWithConfigRootsWindows(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	appData := filepath.Join(outside, "Roaming")
+	localAppData := filepath.Join(outside, "Local")
+	homeAppData := filepath.Join(home, "AppData", "Roaming")
+	if err := os.MkdirAll(homeAppData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appDataLink := filepath.Join(outside, "roaming-link")
+	symlinkErr := os.Symlink(homeAppData, appDataLink)
+	// A profile AppData spelled inside the home but linked outside it.
+	escapedAppData := filepath.Join(outside, "escaped-roaming")
+	if err := os.MkdirAll(escapedAppData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	homeLinkedAppData := filepath.Join(home, "Linked", "Roaming")
+	if err := os.MkdirAll(filepath.Dir(homeLinkedAppData), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if symlinkErr == nil {
+		symlinkErr = os.Symlink(escapedAppData, homeLinkedAppData)
+	}
+
+	tests := []struct {
+		name         string
+		roots        []string
+		appData      string
+		localAppData string
+		targets      []string
+		want         []string
+		needsSymlink bool
+	}{
+		{
+			name:    "redirected APPDATA with a target",
+			roots:   []string{home},
+			appData: appData, localAppData: localAppData,
+			targets: []string{filepath.Join(home, ".claude", "CLAUDE.md"), filepath.Join(appData, "gga", "AGENTS.md")},
+			want:    []string{home, filepath.Join(appData, "gga")},
+		},
+		{
+			name:    "elsewhere in a redirected APPDATA",
+			roots:   []string{home},
+			appData: appData, localAppData: localAppData,
+			targets: []string{filepath.Join(appData, "Other", "settings.json")},
+			want:    []string{home},
+		},
+		{
+			name:    "temp directory under a redirected LOCALAPPDATA",
+			roots:   []string{home},
+			appData: appData, localAppData: localAppData,
+			targets: []string{filepath.Join(localAppData, "Temp", "outside.json"), filepath.Join(localAppData, "gentle-ai", "state.json")},
+			want:    []string{home},
+		},
+		{
+			name:    "redirected roots without a target there",
+			roots:   []string{home},
+			appData: appData, localAppData: localAppData,
+			targets: []string{filepath.Join(home, ".claude", "CLAUDE.md"), filepath.Join(outside, "Other", "file")},
+			want:    []string{home},
+		},
+		{
+			name:    "APPDATA inside the home",
+			roots:   []string{home},
+			appData: homeAppData, localAppData: filepath.Join(home, "AppData", "Local"),
+			targets: []string{filepath.Join(homeAppData, "gga", "AGENTS.md")},
+			want:    []string{home},
+		},
+		{
+			name:    "unset APPDATA falls back into the profile",
+			roots:   []string{home},
+			targets: []string{filepath.Join(home, "AppData", "Roaming", "gga", "AGENTS.md")},
+			want:    []string{home},
+		},
+		{
+			name:    "relative APPDATA is ignored",
+			roots:   []string{home},
+			appData: filepath.Join("relative", "Roaming"),
+			targets: []string{filepath.Join("relative", "Roaming", "gga", "AGENTS.md")},
+			want:    []string{home},
+		},
+		{
+			name:    "APPDATA under an admitted workspace",
+			roots:   []string{home, workspace},
+			appData: filepath.Join(workspace, "Roaming"),
+			targets: []string{filepath.Join(workspace, "Roaming", "gga", "AGENTS.md")},
+			want:    []string{home, workspace},
+		},
+		{
+			name:         "APPDATA symlinked into the home",
+			roots:        []string{home},
+			appData:      appDataLink,
+			targets:      []string{filepath.Join(appDataLink, "gga", "AGENTS.md")},
+			want:         []string{home},
+			needsSymlink: true,
+		},
+		{
+			name:         "APPDATA under the home symlinked outside",
+			roots:        []string{home},
+			appData:      homeLinkedAppData,
+			targets:      []string{filepath.Join(homeLinkedAppData, "gga", "AGENTS.md")},
+			want:         []string{home},
+			needsSymlink: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.needsSymlink && symlinkErr != nil {
+				t.Skipf("directory symlinks unavailable: %v", symlinkErr)
+			}
+			useConfigRootsGOOS(t, "windows")
+			t.Setenv("APPDATA", tt.appData)
+			t.Setenv("LOCALAPPDATA", tt.localAppData)
+			got := WithConfigRoots(slices.Clone(tt.roots), home, tt.targets)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("WithConfigRoots() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWithConfigRootsNonWindowsUnchanged proves the admitted root set equals
+// the base set off Windows, even with a stray %APPDATA% outside the home that
+// a target reaches: the config roots there resolve under the home.
+func TestWithConfigRootsNonWindowsUnchanged(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin", "freebsd", ""} {
+		t.Run(goos, func(t *testing.T) {
+			useConfigRootsGOOS(t, goos)
+			home := t.TempDir()
+			workspace := t.TempDir()
+			appData := filepath.Join(t.TempDir(), "Roaming")
+			t.Setenv("APPDATA", appData)
+			t.Setenv("LOCALAPPDATA", appData)
+			targets := []string{filepath.Join(appData, "gga", "AGENTS.md"), filepath.Join(home, ".config", "gga", "AGENTS.md")}
+			for _, base := range [][]string{{home}, {home, workspace}} {
+				if got := WithConfigRoots(slices.Clone(base), home, targets); !slices.Equal(got, base) {
+					t.Fatalf("WithConfigRoots(%v) = %v, want the base roots unchanged", base, got)
+				}
+			}
+		})
+	}
+}
+
+// TestWithConfigRootsNonWindowsConfigSymlinkedOutside: a dotfile manager's
+// ~/.config symlinked outside the home adds no root, so the ancestor-symlink
+// guard still refuses targets beneath it exactly as before.
+func TestWithConfigRootsNonWindowsConfigSymlinkedOutside(t *testing.T) {
+	useConfigRootsGOOS(t, "darwin")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	dotfiles := filepath.Join(base, "dotfiles", "config")
+	for _, dir := range []string{home, dotfiles} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(dotfiles, filepath.Join(home, ".config")); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	target := filepath.Join(home, ".config", "opencode", "opencode.json")
+	got := WithConfigRoots([]string{home}, home, []string{target})
+	if !slices.Equal(got, []string{home}) {
+		t.Fatalf("WithConfigRoots() = %v, want only the home root", got)
+	}
+	if isPathUnderRoots(target, got) {
+		t.Fatalf("target %q through the ~/.config symlink is accepted under %v", target, got)
+	}
+}
+
+// TestWithConfigRootsTargetsCannotWidenRoots: targets only select among the
+// product directories; a target beside, above, or outside %APPDATA%\gga never
+// adds a root.
+func TestWithConfigRootsTargetsCannotWidenRoots(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	appData := filepath.Join(base, "redirected", "Roaming")
+	t.Setenv("APPDATA", appData)
+	t.Setenv("LOCALAPPDATA", "")
+	for name, target := range map[string]string{
+		"parent of APPDATA":      filepath.Join(base, "redirected", "file"),
+		"sibling sharing prefix": appData + "X" + string(filepath.Separator) + "file",
+		"APPDATA itself":         appData,
+		"gga directory itself":   filepath.Join(appData, "gga"),
+		"elsewhere in APPDATA":   filepath.Join(appData, "Other", "file"),
+		"dot-dot escape":         appData + string(filepath.Separator) + ".." + string(filepath.Separator) + "evil",
+		"relative":               filepath.Join("Roaming", "file"),
+		"empty":                  "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := WithConfigRoots([]string{home}, home, []string{target}); !slices.Equal(got, []string{home}) {
+				t.Fatalf("WithConfigRoots(%q) = %v, want only the home root", target, got)
+			}
+		})
+	}
+}
+
+// TestWithConfigRootsKeepsSymlinkEscapeRefused: a link inside an admitted
+// %APPDATA%\gga that points elsewhere neither selects the root nor passes the
+// per-entry guard once a legitimate target admitted it.
+func TestWithConfigRootsKeepsSymlinkEscapeRefused(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	elsewhere := filepath.Join(base, "elsewhere")
+	appData := filepath.Join(base, "redirected", "Roaming")
+	ggaDir := filepath.Join(appData, "gga")
+	for _, dir := range []string{home, elsewhere, ggaDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(ggaDir, "escape")); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	t.Setenv("APPDATA", appData)
+	t.Setenv("LOCALAPPDATA", "")
+	escape := filepath.Join(ggaDir, "escape", "file")
+	if got := WithConfigRoots([]string{home}, home, []string{escape}); !slices.Equal(got, []string{home}) {
+		t.Fatalf("WithConfigRoots(escape only) = %v, want only the home root", got)
+	}
+	got := WithConfigRoots([]string{home}, home, []string{escape, filepath.Join(ggaDir, "config")})
+	if !slices.Equal(got, []string{home, ggaDir}) {
+		t.Fatalf("WithConfigRoots(escape + gga) = %v, want [%s %s]", got, home, ggaDir)
+	}
+	if isPathUnderRoots(escape, got) {
+		t.Fatalf("symlink escape %q accepted under %v", escape, got)
+	}
+}
+
+// writeConfigRootsFile writes content to path, creating its parents.
+func writeConfigRootsFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// restoreThroughConfigRoots snapshots targets as "original", changes them to
+// "changed", and restores with the roots WithConfigRoots derives for them. It
+// returns each target's final content and the restore error.
+func restoreThroughConfigRoots(t *testing.T, home string, targets ...string) ([]string, error) {
+	t.Helper()
+	for _, target := range targets {
+		writeConfigRootsFile(t, target, "original")
+	}
+	manifest, err := NewSnapshotter().Create(filepath.Join(t.TempDir(), "snapshot"), targets)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, target := range targets {
+		writeConfigRootsFile(t, target, "changed")
+	}
+	restoreErr := RestoreService{Roots: WithConfigRoots([]string{home}, home, targets)}.Restore(manifest)
+	contents := make([]string, 0, len(targets))
+	for _, target := range targets {
+		data, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents = append(contents, string(data))
+	}
+	return contents, restoreErr
+}
+
+// useRealUserHome makes home the current user's home for os.UserHomeDir on
+// every host, so the VS Code and Trae resolvers honor %APPDATA% for it.
+func useRealUserHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
+// TestRestoreThroughConfigRootsAdmitsOnlyProductConfigDirectories: with
+// %APPDATA% and %LOCALAPPDATA% redirected outside the home, only entries
+// strictly inside %APPDATA%\gga and the kiro, Windsurf, VS Code and Trae User
+// folders restore; every other neighbouring path is refused and left untouched.
+// Refused siblings differ from the product folders case-insensitively too, so
+// the cases hold on Windows, where path comparison ignores case.
+func TestRestoreThroughConfigRootsAdmitsOnlyProductConfigDirectories(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	useRealUserHome(t, home)
+	appData := filepath.Join(base, "redirected", "Roaming")
+	localAppData := filepath.Join(base, "redirected", "Local")
+	t.Setenv("APPDATA", appData)
+	t.Setenv("LOCALAPPDATA", localAppData)
+
+	tests := []struct {
+		name     string
+		target   string
+		restored bool
+	}{
+		{name: "gga config", target: filepath.Join(appData, "gga", "config"), restored: true},
+		{name: "nested under gga", target: filepath.Join(appData, "gga", "sub", "AGENTS.md"), restored: true},
+		{name: "sibling sharing the gga prefix", target: filepath.Join(appData, "gga-evil", "file")},
+		{name: "gga prefix without separator", target: filepath.Join(appData, "ggax")},
+		{name: "VS Code User folder", target: filepath.Join(appData, "Code", "User", "settings.json"), restored: true},
+		{name: "Kiro User folder", target: filepath.Join(appData, "kiro", "User", "settings.json"), restored: true},
+		{name: "Windsurf User folder", target: filepath.Join(appData, "Windsurf", "User", "settings.json"), restored: true},
+		{name: "Trae User folder", target: filepath.Join(appData, "Trae", "User", "mcp.json"), restored: true},
+		{name: "VS Code sibling sharing the User prefix", target: filepath.Join(appData, "Code", "UserX", "settings.json")},
+		{name: "VS Code folder outside User", target: filepath.Join(appData, "Code", "other", "settings.json")},
+		{name: "Kiro folder outside User", target: filepath.Join(appData, "Kiro", "Other", "settings.json")},
+		{name: "Windsurf cache", target: filepath.Join(appData, "Windsurf", "Cache", "data")},
+		{name: "Trae folder root", target: filepath.Join(appData, "Trae", "settings.json")},
+		{name: "User folder under LOCALAPPDATA", target: filepath.Join(localAppData, "Code", "User", "settings.json")},
+		{name: "temp under LOCALAPPDATA", target: filepath.Join(localAppData, "Temp", "outside.json")},
+		{name: "gga under LOCALAPPDATA", target: filepath.Join(localAppData, "gga", "config")},
+		{name: "file at the APPDATA root", target: filepath.Join(appData, "file.json")},
+		{name: "other directory starting with GGA", target: filepath.Join(appData, "GGA2", "config")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contents, err := restoreThroughConfigRoots(t, home, tt.target)
+			if tt.restored && (err != nil || contents[0] != "original") {
+				t.Fatalf("restore = %q, %v; want the original content restored", contents[0], err)
+			}
+			if !tt.restored && (err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") || contents[0] != "changed") {
+				t.Fatalf("restore = %q, %v; want an invalid OriginalPath refusal leaving the file untouched", contents[0], err)
+			}
+		})
+	}
+
+	t.Run("dot-dot out of gga", func(t *testing.T) {
+		sep := string(filepath.Separator)
+		escape := appData + sep + "gga" + sep + ".." + sep + "file"
+		if got := WithConfigRoots([]string{home}, home, []string{escape}); !slices.Equal(got, []string{home}) {
+			t.Fatalf("WithConfigRoots(%q) = %v, want only the home root", escape, got)
+		}
+		legit := filepath.Join(appData, "gga", "config")
+		writeConfigRootsFile(t, legit, "config")
+		roots := WithConfigRoots([]string{home}, home, []string{escape, legit})
+		if isPathUnderRoots(escape, roots) {
+			t.Fatalf("dot-dot escape %q accepted under %v", escape, roots)
+		}
+	})
+}
+
+// TestWithConfigRootsAppDataValues pins unusual %APPDATA% values: whatever the
+// variable holds, only <APPDATA>\gga is a candidate, and only a target strictly
+// inside it admits it.
+func TestWithConfigRootsAppDataValues(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	t.Setenv("LOCALAPPDATA", "")
+	home := filepath.Join(t.TempDir(), "user", "home")
+	parent := filepath.Dir(home)
+	sep := string(filepath.Separator)
+	// The filesystem root of the home's volume: "/" on Unix, `C:\` on Windows.
+	fsRoot := filepath.VolumeName(home) + sep
+	elsewhere := filepath.Join(fsRoot, "redirected", "Roaming")
+
+	tests := []struct {
+		name    string
+		appData string
+		targets []string
+		want    []string
+	}{
+		{name: "filesystem root with a gga target", appData: fsRoot, targets: []string{filepath.Join(fsRoot, "gga", "config")}, want: []string{home, filepath.Join(fsRoot, "gga")}},
+		{name: "filesystem root with targets elsewhere", appData: fsRoot, targets: []string{filepath.Join(fsRoot, "etc", "file"), filepath.Join(fsRoot, "tmp", "file")}, want: []string{home}},
+		{name: "filesystem root with gga itself", appData: fsRoot, targets: []string{filepath.Join(fsRoot, "gga")}, want: []string{home}},
+		{name: "parent of the home with a gga target", appData: parent, targets: []string{filepath.Join(parent, "gga", "config")}, want: []string{home, filepath.Join(parent, "gga")}},
+		{name: "parent of the home with a sibling target", appData: parent, targets: []string{filepath.Join(parent, "other", "config")}, want: []string{home}},
+		{name: "trailing separators", appData: elsewhere + sep + sep, targets: []string{filepath.Join(elsewhere, "gga", "config")}, want: []string{home, filepath.Join(elsewhere, "gga")}},
+		{name: "dot-dot segments", appData: elsewhere + sep + ".." + sep + "R2", targets: []string{filepath.Join(fsRoot, "redirected", "R2", "gga", "config"), filepath.Join(elsewhere, "gga", "config")}, want: []string{home, filepath.Join(fsRoot, "redirected", "R2", "gga")}},
+		{name: "APPDATA is the home", appData: home, targets: []string{filepath.Join(home, "gga", "config")}, want: []string{home}},
+		{name: "no targets", appData: elsewhere, want: []string{home}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("APPDATA", tt.appData)
+			if got := WithConfigRoots([]string{home}, home, tt.targets); !slices.Equal(got, tt.want) {
+				t.Fatalf("WithConfigRoots(%v) = %v, want %v", tt.targets, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("filesystem root admits nothing beside gga", func(t *testing.T) {
+		t.Setenv("APPDATA", fsRoot)
+		outside := filepath.Join(fsRoot, "etc", "passwd")
+		roots := WithConfigRoots([]string{home}, home, []string{filepath.Join(fsRoot, "gga", "config"), outside})
+		for _, path := range []string{outside, filepath.Join(fsRoot, "ggax", "file")} {
+			if isPathUnderRoots(path, roots) {
+				t.Fatalf("%q accepted under %v", path, roots)
+			}
+		}
+	})
+}
+
+// TestWithConfigRootsSymlinkedGGADirectory: links around %APPDATA%\gga never let
+// a restore write outside the directory the resolver names.
+func TestWithConfigRootsSymlinkedGGADirectory(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	t.Setenv("LOCALAPPDATA", "")
+
+	t.Run("link nested in a linked gga", func(t *testing.T) {
+		base := t.TempDir()
+		home := filepath.Join(base, "home")
+		appData := filepath.Join(base, "redirected", "Roaming")
+		realGGA := filepath.Join(base, "real-gga")
+		elsewhere := filepath.Join(base, "elsewhere")
+		for _, dir := range []string{home, appData, realGGA, elsewhere} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(realGGA, filepath.Join(appData, "gga")); err != nil {
+			t.Skipf("directory symlinks unavailable: %v", err)
+		}
+		if err := os.Symlink(elsewhere, filepath.Join(realGGA, "sub")); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("APPDATA", appData)
+		escape := filepath.Join(appData, "gga", "sub", "file")
+		roots := WithConfigRoots([]string{home}, home, []string{filepath.Join(appData, "gga", "config"), escape})
+		if isPathUnderRoots(escape, roots) {
+			t.Fatalf("nested link escape %q accepted under %v", escape, roots)
+		}
+	})
+
+	t.Run("APPDATA under the home linked outside", func(t *testing.T) {
+		base := t.TempDir()
+		home := filepath.Join(base, "home")
+		escaped := filepath.Join(base, "escaped")
+		for _, dir := range []string{filepath.Join(home, "AppData"), escaped} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		appData := filepath.Join(home, "AppData", "Roaming")
+		if err := os.Symlink(escaped, appData); err != nil {
+			t.Skipf("directory symlinks unavailable: %v", err)
+		}
+		t.Setenv("APPDATA", appData)
+		contents, err := restoreThroughConfigRoots(t, home, filepath.Join(appData, "gga", "config"))
+		if err == nil || contents[0] != "changed" {
+			t.Fatalf("restore = %q, %v; want a refusal leaving the file untouched", contents[0], err)
+		}
+	})
+
+	t.Run("gga under the home linked outside", func(t *testing.T) {
+		base := t.TempDir()
+		home := filepath.Join(base, "home")
+		appData := filepath.Join(home, "AppData", "Roaming")
+		escaped := filepath.Join(base, "escaped")
+		for _, dir := range []string{appData, escaped} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(escaped, filepath.Join(appData, "gga")); err != nil {
+			t.Skipf("directory symlinks unavailable: %v", err)
+		}
+		t.Setenv("APPDATA", appData)
+		contents, err := restoreThroughConfigRoots(t, home, filepath.Join(appData, "gga", "config"))
+		if err == nil || contents[0] != "changed" {
+			t.Fatalf("restore = %q, %v; want a refusal leaving the file untouched", contents[0], err)
+		}
+	})
+
+	t.Run("target spelled through an outside link into gga", func(t *testing.T) {
+		base := t.TempDir()
+		home := filepath.Join(base, "home")
+		appData := filepath.Join(base, "redirected", "Roaming")
+		for _, dir := range []string{home, filepath.Join(appData, "gga")} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		link := filepath.Join(base, "link")
+		if err := os.Symlink(filepath.Join(appData, "gga"), link); err != nil {
+			t.Skipf("directory symlinks unavailable: %v", err)
+		}
+		t.Setenv("APPDATA", appData)
+		contents, err := restoreThroughConfigRoots(t, home, filepath.Join(link, "config"))
+		if err == nil || contents[0] != "changed" {
+			t.Fatalf("restore = %q, %v; want a refusal leaving the file untouched", contents[0], err)
+		}
+	})
+}
+
+// TestWithConfigRootsAdapterUserDirs pins issue #6029: each adapter's User
+// folder under a redirected %APPDATA% is admitted exactly, from the adapter's
+// own resolver, only when a target lies strictly inside it. VS Code and Trae
+// honor %APPDATA% only for the real user home, so for any other home their
+// folder resolves inside it and adds no root.
+func TestWithConfigRootsAdapterUserDirs(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	otherHome := filepath.Join(base, "other-home")
+	appData := filepath.Join(base, "redirected", "Roaming")
+	t.Setenv("APPDATA", appData)
+	t.Setenv("LOCALAPPDATA", filepath.Join(base, "redirected", "Local"))
+	useRealUserHome(t, home)
+	userDir := func(app string) string { return filepath.Join(appData, app, "User") }
+
+	tests := []struct {
+		name    string
+		home    string
+		targets []string
+		want    []string
+	}{
+		{name: "kiro", home: home, targets: []string{filepath.Join(userDir("kiro"), "settings.json")}, want: []string{home, userDir("kiro")}},
+		{name: "Windsurf", home: home, targets: []string{filepath.Join(userDir("Windsurf"), "settings.json")}, want: []string{home, userDir("Windsurf")}},
+		{name: "VS Code", home: home, targets: []string{filepath.Join(userDir("Code"), "prompts", "gentle-ai.instructions.md")}, want: []string{home, userDir("Code")}},
+		{name: "Trae", home: home, targets: []string{filepath.Join(userDir("Trae"), "user_rules.md")}, want: []string{home, userDir("Trae")}},
+		{
+			name: "every product folder",
+			home: home,
+			targets: []string{
+				filepath.Join(userDir("Trae"), "mcp.json"),
+				filepath.Join(userDir("Code"), "mcp.json"),
+				filepath.Join(userDir("Windsurf"), "settings.json"),
+				filepath.Join(userDir("kiro"), "settings.json"),
+				filepath.Join(appData, "gga", "config"),
+			},
+			want: []string{home, filepath.Join(appData, "gga"), userDir("kiro"), userDir("Windsurf"), userDir("Code"), userDir("Trae")},
+		},
+		{
+			name:    "VS Code and Trae for another home",
+			home:    otherHome,
+			targets: []string{filepath.Join(userDir("Code"), "settings.json"), filepath.Join(userDir("Trae"), "mcp.json")},
+			want:    []string{otherHome},
+		},
+		{
+			name: "siblings of the User folders",
+			home: home,
+			targets: []string{
+				filepath.Join(appData, "Code", "UserX", "settings.json"),
+				filepath.Join(appData, "Code", "other", "settings.json"),
+				filepath.Join(appData, "Kiro", "Other", "settings.json"),
+				filepath.Join(appData, "Windsurf", "Cache", "data"),
+				filepath.Join(appData, "Trae", "settings.json"),
+				userDir("Code"),
+			},
+			want: []string{home},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := WithConfigRoots([]string{tt.home}, tt.home, tt.targets); !slices.Equal(got, tt.want) {
+				t.Fatalf("WithConfigRoots() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// adapterUserDirApps names each adapter's folder under %APPDATA% holding its
+// User directory, spelled as the adapter resolvers spell it.
+var adapterUserDirApps = []string{"kiro", "Windsurf", "Code", "Trae"}
+
+// TestRestoreThroughConfigRootsRefusesAdapterUserDirNeighbours: next to the
+// admitted User folders, every neighbouring path is refused and left untouched,
+// alone or recorded beside a legitimate VS Code target, and the roots stay the
+// home plus exactly the product directories the legitimate targets select. The
+// User folders exist, so the ".." spellings reach the restore guard.
+func TestRestoreThroughConfigRootsRefusesAdapterUserDirNeighbours(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	appData := filepath.Join(base, "redirected", "Roaming")
+	localAppData := filepath.Join(base, "redirected", "Local")
+	for _, dir := range []string{home, filepath.Join(localAppData, "Temp")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, app := range adapterUserDirApps {
+		if err := os.MkdirAll(filepath.Join(appData, app, "User"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	useRealUserHome(t, home)
+	t.Setenv("APPDATA", appData)
+	t.Setenv("LOCALAPPDATA", localAppData)
+	sep := string(filepath.Separator)
+	legit := filepath.Join(appData, "Code", "User", "settings.json")
+
+	neighbours := map[string]string{
+		"VS Code sibling sharing the User prefix": filepath.Join(appData, "Code", "UserX", "settings.json"),
+		"VS Code folder outside User":             filepath.Join(appData, "Code", "other", "settings.json"),
+		"VS Code sibling with a User- prefix":     filepath.Join(appData, "Code", "User-evil", "settings.json"),
+		"file beside the VS Code User folder":     filepath.Join(appData, "Code", "settings.json"),
+		"kiro folder outside User":                filepath.Join(appData, "kiro", "Other", "settings.json"),
+		"Windsurf cache":                          filepath.Join(appData, "Windsurf", "Cache", "data"),
+		"Trae folder root":                        filepath.Join(appData, "Trae", "settings.json"),
+		"Trae Users sibling":                      filepath.Join(appData, "Trae", "Users", "file"),
+		"VS Code User under LOCALAPPDATA":         filepath.Join(localAppData, "Code", "User", "settings.json"),
+		"kiro User under LOCALAPPDATA":            filepath.Join(localAppData, "kiro", "User", "settings.json"),
+		"temp under LOCALAPPDATA":                 filepath.Join(localAppData, "Temp", "file.json"),
+		"file at the APPDATA root":                filepath.Join(appData, "file.json"),
+		"other editor User folder":                filepath.Join(appData, "Cursor", "User", "settings.json"),
+		"dot-dot out of the VS Code User folder":  appData + sep + "Code" + sep + "User" + sep + ".." + sep + "file.json",
+		"dot-dot from kiro User into the temp":    appData + sep + "kiro" + sep + "User" + sep + ".." + sep + ".." + sep + ".." + sep + "Local" + sep + "Temp" + sep + "file",
+	}
+	refusal := func(t *testing.T, contents []string, err error, index int) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") || contents[index] != "changed" {
+			t.Fatalf("restore = %q, %v; want an invalid OriginalPath refusal leaving the neighbour untouched", contents, err)
+		}
+	}
+	for name, neighbour := range neighbours {
+		t.Run(name, func(t *testing.T) {
+			if got := WithConfigRoots([]string{home}, home, []string{neighbour}); !slices.Equal(got, []string{home}) {
+				t.Fatalf("WithConfigRoots(%q) = %v, want only the home root", neighbour, got)
+			}
+			contents, err := restoreThroughConfigRoots(t, home, neighbour)
+			refusal(t, contents, err, 0)
+		})
+		t.Run(name+" beside a legitimate target", func(t *testing.T) {
+			roots := WithConfigRoots([]string{home}, home, []string{legit, neighbour})
+			if want := []string{home, filepath.Join(appData, "Code", "User")}; !slices.Equal(roots, want) {
+				t.Fatalf("WithConfigRoots() = %v, want %v", roots, want)
+			}
+			if isPathUnderRoots(neighbour, roots) {
+				t.Fatalf("neighbour %q accepted under %v", neighbour, roots)
+			}
+			contents, err := restoreThroughConfigRoots(t, home, legit, neighbour)
+			refusal(t, contents, err, 1)
+		})
+	}
+
+	t.Run("User folder itself", func(t *testing.T) {
+		for _, app := range adapterUserDirApps {
+			dir := filepath.Join(appData, app, "User")
+			if got := WithConfigRoots([]string{home}, home, []string{dir}); !slices.Equal(got, []string{home}) {
+				t.Fatalf("WithConfigRoots(%q) = %v, want only the home root", dir, got)
+			}
+		}
+	})
+
+	t.Run("every product directory and neighbour", func(t *testing.T) {
+		targets := []string{filepath.Join(appData, "gga", "config")}
+		want := []string{home, filepath.Join(appData, "gga")}
+		for _, app := range adapterUserDirApps {
+			targets = append(targets, filepath.Join(appData, app, "User", "settings.json"))
+			want = append(want, filepath.Join(appData, app, "User"))
+		}
+		for _, neighbour := range neighbours {
+			targets = append(targets, neighbour)
+		}
+		if got := WithConfigRoots([]string{home}, home, targets); !slices.Equal(got, want) {
+			t.Fatalf("WithConfigRoots() = %v, want %v", got, want)
+		}
+	})
+}
+
+// TestWithConfigRootsKiroWindsurfFollowAppDataForAnyHome pins pre-existing
+// adapter behavior: unlike VS Code and Trae, the kiro and Windsurf resolvers
+// honor %APPDATA% for any home, so their User folder is admitted for a home
+// that is not the real user home too. Changing that is an adapter decision.
+func TestWithConfigRootsKiroWindsurfFollowAppDataForAnyHome(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	base := t.TempDir()
+	other := filepath.Join(base, "other")
+	appData := filepath.Join(base, "redirected", "Roaming")
+	useRealUserHome(t, filepath.Join(base, "real"))
+	t.Setenv("APPDATA", appData)
+	t.Setenv("LOCALAPPDATA", "")
+	for _, app := range []string{"kiro", "Windsurf"} {
+		userDir := filepath.Join(appData, app, "User")
+		got := WithConfigRoots([]string{other}, other, []string{filepath.Join(userDir, "settings.json")})
+		if want := []string{other, userDir}; !slices.Equal(got, want) {
+			t.Fatalf("WithConfigRoots(%s) = %v, want %v", app, got, want)
+		}
+	}
+}
+
+// TestWithConfigRootsSymlinkedAdapterUserDirs extends the gga symlink cases to
+// each adapter User folder: a link nested inside an admitted folder never
+// passes the guard, a folder under the home linked outside stays refused, and
+// a redirected %APPDATA% linked into the home adds no root.
+func TestWithConfigRootsSymlinkedAdapterUserDirs(t *testing.T) {
+	useConfigRootsGOOS(t, "windows")
+	t.Setenv("LOCALAPPDATA", "")
+	for _, app := range adapterUserDirApps {
+		t.Run(app, func(t *testing.T) {
+			t.Run("link nested in the User folder", func(t *testing.T) {
+				base := t.TempDir()
+				home := filepath.Join(base, "home")
+				appData := filepath.Join(base, "redirected", "Roaming")
+				userDir := filepath.Join(appData, app, "User")
+				elsewhere := filepath.Join(base, "elsewhere")
+				for _, dir := range []string{home, userDir, elsewhere} {
+					if err := os.MkdirAll(dir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.Symlink(elsewhere, filepath.Join(userDir, "sub")); err != nil {
+					t.Skipf("directory symlinks unavailable: %v", err)
+				}
+				useRealUserHome(t, home)
+				t.Setenv("APPDATA", appData)
+				escape := filepath.Join(userDir, "sub", "file")
+				if got := WithConfigRoots([]string{home}, home, []string{escape}); !slices.Equal(got, []string{home}) {
+					t.Fatalf("WithConfigRoots(escape only) = %v, want only the home root", got)
+				}
+				roots := WithConfigRoots([]string{home}, home, []string{filepath.Join(userDir, "settings.json"), escape})
+				if want := []string{home, userDir}; !slices.Equal(roots, want) {
+					t.Fatalf("WithConfigRoots(escape + legit) = %v, want %v", roots, want)
+				}
+				if isPathUnderRoots(escape, roots) {
+					t.Fatalf("nested link escape %q accepted under %v", escape, roots)
+				}
+			})
+
+			t.Run("User folder under the home linked outside", func(t *testing.T) {
+				base := t.TempDir()
+				home := filepath.Join(base, "home")
+				appData := filepath.Join(home, "AppData", "Roaming")
+				escaped := filepath.Join(base, "escaped")
+				for _, dir := range []string{filepath.Join(appData, app), escaped} {
+					if err := os.MkdirAll(dir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.Symlink(escaped, filepath.Join(appData, app, "User")); err != nil {
+					t.Skipf("directory symlinks unavailable: %v", err)
+				}
+				useRealUserHome(t, home)
+				t.Setenv("APPDATA", appData)
+				contents, err := restoreThroughConfigRoots(t, home, filepath.Join(appData, app, "User", "settings.json"))
+				if err == nil || !strings.Contains(err.Error(), "invalid OriginalPath") || contents[0] != "changed" {
+					t.Fatalf("restore = %q, %v; want a refusal leaving the file untouched", contents[0], err)
+				}
+			})
+
+			t.Run("APPDATA linked into the home", func(t *testing.T) {
+				base := t.TempDir()
+				home := filepath.Join(base, "home")
+				homeAppData := filepath.Join(home, "AppData", "Roaming")
+				if err := os.MkdirAll(homeAppData, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				appData := filepath.Join(base, "roaming-link")
+				if err := os.Symlink(homeAppData, appData); err != nil {
+					t.Skipf("directory symlinks unavailable: %v", err)
+				}
+				useRealUserHome(t, home)
+				t.Setenv("APPDATA", appData)
+				target := filepath.Join(appData, app, "User", "settings.json")
+				if got := WithConfigRoots([]string{home}, home, []string{target}); !slices.Equal(got, []string{home}) {
+					t.Fatalf("WithConfigRoots() = %v, want only the home root", got)
+				}
+			})
+		})
+	}
+}
+
+// TestWithConfigRootsNonWindowsIgnoresAdapterUserDirs: off Windows the root
+// set stays the caller's even when %APPDATA% or XDG_CONFIG_HOME outside the
+// home hold the adapter User folders a target reaches.
+func TestWithConfigRootsNonWindowsIgnoresAdapterUserDirs(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "freebsd"} {
+		t.Run(goos, func(t *testing.T) {
+			useConfigRootsGOOS(t, goos)
+			base := t.TempDir()
+			home := filepath.Join(base, "home")
+			appData := filepath.Join(base, "Roaming")
+			xdg := filepath.Join(base, "xdg")
+			useRealUserHome(t, home)
+			t.Setenv("APPDATA", appData)
+			t.Setenv("LOCALAPPDATA", "")
+			t.Setenv("XDG_CONFIG_HOME", xdg)
+			targets := []string{
+				filepath.Join(appData, "Code", "User", "settings.json"),
+				filepath.Join(appData, "kiro", "User", "settings.json"),
+				filepath.Join(xdg, "kiro", "user", "settings.json"),
+				filepath.Join(xdg, "Code", "User", "settings.json"),
+				filepath.Join(xdg, "Windsurf", "User", "settings.json"),
+				filepath.Join(xdg, "Trae", "User", "mcp.json"),
+			}
+			if got := WithConfigRoots([]string{home}, home, targets); !slices.Equal(got, []string{home}) {
+				t.Fatalf("WithConfigRoots() = %v, want only the home root", got)
+			}
+		})
 	}
 }

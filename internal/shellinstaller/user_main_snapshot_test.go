@@ -111,6 +111,82 @@ func TestUserMainSnapshotNamesPublisherRefusal(t *testing.T) {
 	}
 }
 
+// The ref lookup asks for the bare SHA, so its size no longer follows the
+// files and patches of the newest Main commit (#5987). GitHub streams it
+// without a Content-Length.
+func TestUserMainSnapshotResolvesRefAsBareSHA(t *testing.T) {
+	t.Setenv("GENTLE_AI_MAIN_FALLBACK", "")
+	commit, archive := strings.Repeat("c", 40), "Main archive response DATA"
+	calls := 0
+	client := &http.Client{Transport: userMainResponse(func(req *http.Request) (*http.Response, error) {
+		calls++
+		body, url, accept := archive, "https://codeload.github.com/Gentleman-Programming/gentle-shell/zip/"+commit, ""
+		if calls == 1 {
+			body, url, accept = commit, "https://api.github.com/repos/Gentleman-Programming/gentle-shell/commits/main", "application/vnd.github.sha"
+		}
+		if req.Method != http.MethodGet || req.URL.String() != url || req.Header.Get("Accept") != accept || req.Header.Get("Accept-Encoding") != "identity" || req.Header.Get("Authorization") != "" {
+			t.Fatal("qualified publisher request changed", req.URL, req.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, ContentLength: -1, Body: userMainBody{Reader: strings.NewReader(body), close: func() {}}}, nil
+	})}
+	artifact, data, err := userMainSnapshotUsing(context.Background(), client)
+	want, descriptorErr := userMainDescriptor(commit, fmt.Sprintf("%x", sha256.Sum256([]byte(archive))))
+	if err != nil || descriptorErr != nil || artifact != want || string(data) != archive || calls != 2 {
+		t.Fatalf("bare-SHA Main snapshot differs: %+v %q %v calls=%d", artifact, data, err, calls)
+	}
+}
+
+// Only a bare 40-character lowercase hex SHA is a ref identity; an oversize
+// body names the bound and a failed read keeps its cause, so neither is
+// mistaken for the other.
+func TestUserMainSnapshotRefusesRefResponses(t *testing.T) {
+	commit := strings.Repeat("c", 40)
+	readCause := errors.New("controlled read failure")
+	for _, tt := range []struct {
+		name   string
+		body   io.Reader
+		want   []string
+		reject []string
+	}{
+		{name: "commit JSON", body: strings.NewReader(`{"sha":"` + commit + `"}`), want: []string{"canonical Main ref identity refused"}},
+		{name: "short", body: strings.NewReader(commit[:39]), want: []string{"canonical Main ref identity refused"}},
+		{name: "uppercase", body: strings.NewReader(strings.ToUpper(commit)), want: []string{"canonical Main ref identity refused"}},
+		{name: "trailing newline", body: strings.NewReader(commit + "\n"), want: []string{"canonical Main ref identity refused"}},
+		{name: "oversize", body: strings.NewReader(strings.Repeat("x", 437303)), want: []string{"api.github.com", "response exceeds 64 bytes"}, reject: []string{"read failed"}},
+		{name: "read failure", body: io.MultiReader(strings.NewReader(commit[:8]), &userMainFailingReader{cause: readCause}), want: []string{"api.github.com", "response read failed", readCause.Error()}, reject: []string{"exceeds"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GENTLE_AI_MAIN_FALLBACK", "")
+			calls := 0
+			client := &http.Client{Transport: userMainResponse(func(req *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, ContentLength: -1, Body: userMainBody{Reader: tt.body, close: func() {}}}, nil
+			})}
+			artifact, data, err := userMainSnapshotUsing(context.Background(), client)
+			if err == nil || artifact != (userSnapshotArtifact{}) || data != nil || calls != 1 {
+				t.Fatalf("refused ref became usable or reached the archive: %v calls=%d", err, calls)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("refusal %q does not name %q", err, want)
+				}
+			}
+			for _, reject := range tt.reject {
+				if strings.Contains(err.Error(), reject) {
+					t.Fatalf("refusal %q wrongly names %q", err, reject)
+				}
+			}
+			if tt.name == "read failure" && !errors.Is(err, readCause) {
+				t.Fatalf("read failure lost its cause: %v", err)
+			}
+		})
+	}
+}
+
+type userMainFailingReader struct{ cause error }
+
+func (r *userMainFailingReader) Read([]byte) (int, error) { return 0, r.cause }
+
 func TestUserMainDescriptorPreservesSourceOnlyContract(t *testing.T) {
 	commit, digest := strings.Repeat("a", 40), strings.Repeat("b", 64)
 	artifact, err := userMainDescriptor(commit, digest)
@@ -126,5 +202,24 @@ func TestUserMainDescriptorPreservesSourceOnlyContract(t *testing.T) {
 	cancel()
 	if result, data, err := userMainSnapshot(ctx); err == nil || result != (userSnapshotArtifact{}) || data != nil {
 		t.Fatal("production producer issued canceled requests", result, err)
+	}
+}
+
+// A Main SDK failure keeps its message and cause while matching the typed
+// sentinel the TUI fallback relies on (#6176).
+func TestUserMainSDKFailureIsTyped(t *testing.T) {
+	cause := errors.New("private installation: nonzero")
+	err := userMainSDKFailure("Main SDK + stock provider", cause)
+	if !errors.Is(err, ErrMainSDKInstall) || !errors.Is(err, cause) {
+		t.Fatalf("Main SDK failure lost its sentinel or cause: %v", err)
+	}
+	if err.Error() != "Main SDK + stock provider: private installation: nonzero" {
+		t.Fatalf("Main SDK failure message changed: %q", err.Error())
+	}
+	if userMainSDKFailure("Main SDK overlay", nil) != nil {
+		t.Fatal("nil cause produced a Main SDK failure")
+	}
+	if errors.Is(fmt.Errorf("Main SDK + stock provider: %w", cause), ErrMainSDKInstall) {
+		t.Fatal("untyped Main SDK wording matched the sentinel")
 	}
 }

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
 )
 
 // These POSIX fixtures prove invocation and file-access behavior, not native

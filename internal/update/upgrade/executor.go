@@ -3,9 +3,9 @@
 // isolated from install, pipeline, planner, and config-sync code paths.
 //
 // Import boundary: this package MUST NOT import:
-//   - github.com/gentleman-programming/gentle-ai/v4/internal/pipeline
-//   - github.com/gentleman-programming/gentle-ai/v4/internal/planner
-//   - github.com/gentleman-programming/gentle-ai/v4/internal/cli
+//   - github.com/gentleman-programming/gentle-ai/v5/internal/pipeline
+//   - github.com/gentleman-programming/gentle-ai/v5/internal/planner
+//   - github.com/gentleman-programming/gentle-ai/v5/internal/cli
 package upgrade
 
 import (
@@ -20,22 +20,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/antigravityrules"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/geminimodules"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update"
 )
 
 // Package-level vars for testability — same pattern as internal/update/detect.go.
@@ -273,6 +275,33 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 	}
 
 	switch adapter.Agent() {
+	case model.AgentAntigravity:
+		// The upgraded binary's sync republishes the staged guidance as agy
+		// rules and retires the sections older releases appended to GEMINI.md.
+		owned, err := antigravityrules.OwnedRulePaths(homeDir)
+		if err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: skipping Antigravity rules: %v", err)
+		}
+		add(owned...)
+		add(presentPaths([]string{antigravityrules.LegacyPromptPath(homeDir)})...)
+	case model.AgentGeminiCLI:
+		// The upgraded binary's sync moves the guidance older releases wrote
+		// into GEMINI.md to the staging file and republishes the modules
+		// GEMINI.md imports.
+		if _, err := geminimodules.OwnedModulePaths(homeDir); err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: Gemini CLI module manifest unreadable: %v", err)
+		}
+		// Owned and to-be-written modules, the manifest, staging and root.
+		add(presentPaths(geminimodules.ManagedPaths(homeDir))...)
+	case model.AgentCodex:
+		// Global Codex sync uses a core plus on-demand modules by default. Plan
+		// every known path, present or not, so rollback removes files created by
+		// the upgraded binary and restores the prior monolithic core.
+		modulePaths, err := agentguidance.RoutingPathsWithOptions(homeDir, model.AgentCodex, agentguidance.RoutingOptions{CodexGlobalModules: true})
+		if err != nil {
+			writeBackupDiagnostic(diagnostics, "backup: skipping Codex module paths: %v", err)
+		}
+		add(modulePaths...)
 	case model.AgentClaudeCode:
 		add(claude.UserConfigPath(homeDir))
 		add(theme.VisualThemePaths(homeDir, adapter)...)
@@ -590,13 +619,17 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	// VersionUnknown tools: surface them as skipped so the user gets a clear hint
 	// instead of a silent omission from the upgrade report.
 	for _, r := range versionUnknowns {
+		hint := update.BetaReleaseUnknownHint(r)
+		if hint == "" {
+			hint = fmt.Sprintf("installed binary was found but its version could not be determined — check `%s` and reinstall if it is a stale source/dev build", detectCommandHint(r.Tool))
+		}
 		toolResults = append(toolResults, ToolUpgradeResult{
 			ToolName:   r.Tool.Name,
 			OldVersion: r.InstalledVersion,
 			NewVersion: r.LatestVersion,
 			Method:     effectiveMethod(r.Tool, profile),
 			Status:     UpgradeSkipped,
-			ManualHint: fmt.Sprintf("installed binary was found but its version could not be determined — check `%s` and reinstall if it is a stale source/dev build", detectCommandHint(r.Tool)),
+			ManualHint: hint,
 		})
 	}
 
@@ -765,16 +798,13 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 //     or placeholder keys still take the binary path and fail authentication;
 //     signature failures never trigger a Go fallback.
 //
-//   - Windows publishes no official binary and no Scoop manifest while publicly
-//     trusted Authenticode signing is pending, so there is no signed asset to
-//     download and minisign is not an option there. With Go on PATH, a pinned
-//     `go install <importPath>@vX.Y.Z` is the automatic upgrade. That is not an
-//     unverified install: goInstallUpgrade deliberately does not touch cmd.Env,
-//     so the Go checksum database (sum.golang.org) still verifies the module
-//     against its transparency log. The trust anchor moves from our minisign key
-//     to Go's checksum log — a different anchor, not a missing one. (The `@main`
-//     beta path in goInstallMainUpgrade DOES bypass sumdb via goProxyBypassEnv;
-//     that is a separate, opt-in channel and is not this path.)
+//   - On Windows, an active executable owned by Scoop is upgraded by Scoop. The
+//     ownership check resolves both the executable and Scoop's current package
+//     directory, so a separate AppData or Go installation is never redirected.
+//     Otherwise, with Go on PATH, a pinned `go install <importPath>@vX.Y.Z` is
+//     the automatic upgrade. That is not an unverified install: goInstallUpgrade
+//     deliberately does not touch cmd.Env, so the Go checksum database
+//     (sum.golang.org) still verifies the module against its transparency log.
 //     `go install` can write somewhere the shell does not resolve, which is why
 //     goInstallUpgrade verifies the destination afterwards and warns on mismatch.
 //
@@ -786,6 +816,9 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 // legacy InstallScript declaration on Windows, where scriptUpgrade has no bash
 // and would point the user at a releases page that publishes no Windows assets.
 func gentleAISelfUpgradeMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
+	if profile.OS == "windows" && scoopGentleAIOwned() {
+		return update.InstallScoop
+	}
 	if (profile.OS == "windows" || isUnanchoredSourceBuild(profile)) && profile.GoAvailable && tool.GoImportPath != "" {
 		return update.InstallGoInstall
 	}

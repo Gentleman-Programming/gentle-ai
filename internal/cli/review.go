@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 const (
@@ -170,39 +170,6 @@ type ReviewGateDeniedError struct {
 	Reason  string
 	Context reviewtransaction.GateContext
 	Cause   error
-}
-
-func RunReviewStep(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review-step", stdout, "Read-only legacy v1 compatibility command. Mutation is rejected; use the negotiated review start and capture routes for compact authority.")
-	cwd := flags.String("cwd", "", "repository root")
-	lineage := flags.String("lineage", "", "review lineage identifier")
-	operation := flags.String("operation", "", "legacy lifecycle operation rejected as read-only")
-	inputPath := flags.String("input", "", "legacy JSON operation input")
-	_ = flags.String("ledger", "", "legacy ledger input")
-	if err := parseReviewFlags(flags, args); err != nil {
-		return err
-	}
-	if reviewHelpRequested(args) {
-		return nil
-	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected review-step argument %q", flags.Arg(0))
-	}
-	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*operation) == "" || strings.TrimSpace(*inputPath) == "" {
-		return errors.New("review-step requires --cwd, --lineage, --operation, and --input")
-	}
-	store, err := reviewtransaction.AuthoritativeStore(context.Background(), *cwd, *lineage)
-	if err != nil {
-		return fmt.Errorf("derive authoritative review store: %w", err)
-	}
-	if _, err := store.LoadChain(); err != nil {
-		return fmt.Errorf("load authoritative review transaction: %w", err)
-	}
-	attemptedOperation := strings.TrimSpace(*operation)
-	if !strings.HasPrefix(attemptedOperation, "review/") {
-		attemptedOperation = "review/" + attemptedOperation
-	}
-	return fmt.Errorf("%w: review-step cannot mutate shipped v1 authority; use the negotiated review start and capture routes", reviewtransaction.NewLegacyReadOnlyError(attemptedOperation, *lineage))
 }
 
 // Error renders the human-surface denial. It always names a continuation:
@@ -426,37 +393,6 @@ func (values *repeatedString) Set(value string) error {
 	return nil
 }
 
-func RunReviewStart(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review-start", stdout, "Read-only legacy v1 compatibility command. New authority is created with gentle-ai review start.")
-	cwd := flags.String("cwd", "", "repository root")
-	_ = flags.String("kind", string(reviewtransaction.TargetCurrentChanges), "legacy target kind")
-	_ = flags.String("base-ref", "", "legacy base revision")
-	_ = flags.String("revision", "", "legacy exact commit or A..B range")
-	_ = flags.String("intended-untracked-manifest", "", "legacy intended-untracked manifest")
-	lineage := flags.String("lineage", "", "review lineage identifier")
-	_ = flags.String("mode", string(reviewtransaction.ModeOrdinary4R), "legacy review mode")
-	_ = flags.Int("generation", 1, "legacy lineage generation")
-	policyFile := flags.String("policy-file", "", "legacy review policy argument (read-only compatibility)")
-	_ = flags.String("machine-transaction-out", "", "legacy non-authoritative transaction output")
-	var ignored repeatedString
-	flags.Var(&ignored, "intended-untracked", "legacy intended-untracked path")
-	flags.Var(&ignored, "ledger-id", "legacy ledger finding ID")
-	flags.Var(&ignored, "lens", "legacy selected review lens")
-	if err := parseReviewFlags(flags, args); err != nil {
-		return err
-	}
-	if reviewHelpRequested(args) {
-		return nil
-	}
-	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected review-start argument %q", flags.Arg(0))
-	}
-	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*policyFile) == "" {
-		return errors.New("review-start requires --cwd, --lineage, and --policy-file")
-	}
-	return fmt.Errorf("%w: review-start cannot create v1 authority; use gentle-ai review start", reviewtransaction.NewLegacyReadOnlyError("review/start", *lineage))
-}
-
 func RunReviewResume(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review-resume", stdout, "Re-emit the current authoritative review transaction without consuming budget.")
 	cwd := flags.String("cwd", "", "repository root")
@@ -521,12 +457,6 @@ func RunReviewBundleExport(args []string, stdout io.Writer) error {
 			return fmt.Errorf("export compact review transport: %w", loadErr)
 		}
 		if loadErr == nil {
-			legacy, legacyErr := reviewtransaction.AuthoritativeStore(context.Background(), *cwd, *lineage)
-			if legacyErr == nil {
-				if _, legacyLoadErr := legacy.LoadChain(); legacyLoadErr == nil {
-					return errors.New("lineage exists in both compact and legacy stores; explicit cleanup is required")
-				}
-			}
 			if err := reviewtransaction.WriteCompactTransportAtomic(*out, transport); err != nil {
 				return fmt.Errorf("write compact review transport: %w", err)
 			}
