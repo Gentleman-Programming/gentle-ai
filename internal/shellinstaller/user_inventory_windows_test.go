@@ -269,3 +269,89 @@ func TestUserWindowsLaunchArtefactBytesStayVerified(t *testing.T) {
 		t.Fatal("tampered installed executable admitted")
 	}
 }
+
+// An update stage carries the retired operator state (#6245): sessions and the
+// agent's own npm tree may exceed the artefact byte bounds and use data names,
+// exactly as at launch. Every other stage byte stays an installer artefact.
+func TestUserWindowsInventoryCarriedAdmitsOperatorStateOnly(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "agent/npm/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe"), 300<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(userWindowsInventoryFile(t, root, "agent/sessions/--C--R&D-proj!x--/2026-11-21_session.jsonl"), 56<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryInstalled); err == nil {
+		t.Fatal("fresh pre-publication inventory admitted operator state")
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryCarried); err != nil {
+		t.Fatalf("carried operator state refused before publication: %v", err)
+	}
+	for _, artefact := range []string{"home/giant.bin", "runtime/cache/giant.bin", "prefix/node_modules/giant-pi/blob"} {
+		blob := userWindowsInventoryFile(t, root, artefact)
+		if err := os.Truncate(blob, 33<<20); err != nil {
+			t.Fatal(err)
+		}
+		if err := userWindowsInventory(root, userWindowsInventoryCarried); err == nil {
+			t.Fatalf("oversized stage artefact %s admitted by carried inventory", artefact)
+		}
+		if err := os.Remove(blob); err != nil {
+			t.Fatal(err)
+		}
+	}
+	userWindowsInventoryFile(t, root, "home/100%^done/file")
+	if err := userWindowsInventory(root, userWindowsInventoryCarried); err == nil {
+		t.Fatal("selection-unsafe name outside carried operator state admitted")
+	}
+}
+
+func TestUserWindowsPublicationInventorySelectsCarriedOnlyForUpdates(t *testing.T) {
+	if got := userWindowsPublicationInventory(nil); got != userWindowsInventoryInstalled {
+		t.Fatalf("fresh stage inventory = %v, want installed", got)
+	}
+	if got := userWindowsPublicationInventory(&userWindowsManifest{}); got != userWindowsInventoryCarried {
+		t.Fatalf("update stage inventory = %v, want carried", got)
+	}
+}
+
+// Carried mode relaxes data names alone, independently of any byte bound.
+func TestUserWindowsInventoryCarriedAdmitsSessionDataNames(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	userWindowsInventoryFile(t, root, "agent/sessions/--C--100%^done--/session.jsonl")
+	if err := userWindowsInventory(root, userWindowsInventoryInstalled); err == nil {
+		t.Fatal("fresh pre-publication inventory admitted a session data name")
+	}
+	if err := userWindowsInventory(root, userWindowsInventoryCarried); err != nil {
+		t.Fatalf("carried session data name refused: %v", err)
+	}
+}
+
+// The other runtime-state roots are fresh installer output in an update stage.
+func TestUserWindowsInventoryCarriedKeepsOtherStateRootsStrict(t *testing.T) {
+	for _, entry := range []struct {
+		label, name string
+		size        int64
+	}{{"state_data_name", "state/100%^done/f", 0}, {"tmp_data_name", "tmp/a!b/f", 0}, {"state_oversized", "state/giant.bin", 33 << 20}, {"tmp_oversized", "tmp/giant.bin", 33 << 20}} {
+		// The label keeps metacharacters out of the t.TempDir() fixture root.
+		t.Run(entry.label, func(t *testing.T) {
+			root := userWindowsInventoryFixture(t)
+			if err := os.Truncate(userWindowsInventoryFile(t, root, entry.name), entry.size); err != nil {
+				t.Fatal(err)
+			}
+			if err := userWindowsInventory(root, userWindowsInventoryCarried); err == nil {
+				t.Fatalf("carried inventory admitted %s outside operator state", entry.name)
+			}
+		})
+	}
+}
+
+// Relaxed size and names never relax the per-entry ownership guards.
+func TestUserWindowsInventoryCarriedKeepsSessionGuards(t *testing.T) {
+	root := userWindowsInventoryFixture(t)
+	session := filepath.Join(root, "agent", "sessions", "--C--proj--")
+	userWindowsForeignACE(t, session)
+	userWindowsInventoryFile(t, root, "agent/sessions/--C--proj--/session.jsonl")
+	if err := userWindowsInventory(root, userWindowsInventoryCarried); err == nil {
+		t.Fatal("carried inventory admitted a session directory writable by another account")
+	}
+}
