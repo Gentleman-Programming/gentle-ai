@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
 )
 
 func TestExitCodeFixture(t *testing.T) {

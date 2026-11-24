@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // Unlike the native-adapter proof, this drives Agent through the real client.

@@ -40,7 +40,7 @@ func TestModulePathForVersion(t *testing.T) {
 			base:    base,
 			repo:    repo,
 			version: "v4.0.0-rc.1",
-			want:    "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai",
+			want:    "github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai",
 		},
 		{
 			name:    "10.0.0 multi-digit inserts /v10 before /cmd subpath",
@@ -68,21 +68,21 @@ func TestModulePathForVersion(t *testing.T) {
 			base:    base,
 			repo:    repo,
 			version: "latest",
-			want:    "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai",
+			want:    "github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai",
 		},
 		{
 			name:    "unparseable 'main@abc' falls back to running major /v4",
 			base:    base,
 			repo:    repo,
 			version: "main@abc",
-			want:    "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai",
+			want:    "github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai",
 		},
 		{
 			name:    "empty version falls back to running major /v4",
 			base:    base,
 			repo:    repo,
 			version: "",
-			want:    "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai",
+			want:    "github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai",
 		},
 		{
 			name:    "base without subpath appends /vN",
@@ -154,8 +154,8 @@ func TestParseMajorFromModulePath(t *testing.T) {
 		path string
 		want int
 	}{
-		{"github.com/gentleman-programming/gentle-ai/v4", 4},
-		{"github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai", 4},
+		{"github.com/gentleman-programming/gentle-ai/v5", 4},
+		{"github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai", 4},
 		{"github.com/gentleman-programming/gentle-ai/v3", 3},
 		{"github.com/gentleman-programming/gentle-ai/v10/cmd/x", 10},
 		{"github.com/gentleman-programming/gentle-ai", 0},

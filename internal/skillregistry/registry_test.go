@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/trae"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/trae"
 )
 
 func TestRegenerateWritesRegistryAndCacheThenHitsCache(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update"
 )
 
 // captureStderr runs fn with os.Stderr redirected to a pipe and returns what fn wrote.
@@ -315,7 +315,7 @@ func TestBetaGoInstallMainUpgradeWarnsWhenDestinationDiffers(t *testing.T) {
 		},
 		LatestVersion:  "main@abc1234abcde",
 		BetaCommit:     "abc1234abcde0123456789abcdef0123456789ab",
-		BetaModulePath: "github.com/gentleman-programming/gentle-ai/v4",
+		BetaModulePath: "github.com/gentleman-programming/gentle-ai/v5",
 		Status:         update.UpdateAvailable,
 	}
 

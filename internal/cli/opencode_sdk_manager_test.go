@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
 )
 
 const v2SDKManualInstall = "npm install --save-exact --no-audit --no-fund @opencode/plugin@2.0.4"

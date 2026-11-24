@@ -8,15 +8,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agenthooks"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mcp"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/agenthooks"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 // TestCodexMutationsValidateHome exercises the public component boundaries.

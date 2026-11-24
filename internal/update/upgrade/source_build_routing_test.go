@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update"
 )
 
 func TestGentleAISourceBuildRoutesToPinnedGoInstall(t *testing.T) {
@@ -40,7 +40,7 @@ func TestGentleAISourceBuildRoutesToPinnedGoInstall(t *testing.T) {
 				if name == "go" && len(args) == 2 && args[0] == "env" {
 					return mockCmd("echo", gobin)
 				}
-				if name != "go" || len(args) != 2 || args[0] != "install" || args[1] != "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0" {
+				if name != "go" || len(args) != 2 || args[0] != "install" || args[1] != "github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.0.0" {
 					t.Fatalf("unexpected command: %s %v", name, args)
 				}
 				installs++
@@ -99,7 +99,7 @@ func TestGentleAISourceBuildWithoutGoPreservesState(t *testing.T) {
 				report := ExecuteWithOptions(context.Background(), []update.UpdateResult{{
 					Tool: tool, LatestVersion: "4.0.0", Status: update.UpdateAvailable,
 				}}, system.PlatformProfile{OS: goos, Supported: true, GoAvailable: tc.goAvailable}, home, false, ExecuteOptions{})
-				wantHint := "This source build has no embedded release trust anchor. Automatic source upgrade requires Go on PATH and a declared Go import path. No files were changed. Install/update from source with Go 1.25.10+:\n  go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0"
+				wantHint := "This source build has no embedded release trust anchor. Automatic source upgrade requires Go on PATH and a declared Go import path. No files were changed. Install/update from source with Go 1.25.10+:\n  go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.0.0"
 				if len(report.Results) != 1 || report.Results[0].Status != UpgradeSkipped || report.Results[0].Err != nil || report.Results[0].ManualHint != wantHint {
 					t.Fatalf("source refusal = %#v, want skip with hint %q", report, wantHint)
 				}

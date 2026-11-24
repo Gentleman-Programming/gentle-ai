@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
+	assets "github.com/gentleman-programming/gentle-ai/v5/scripts"
 )
 
 func TestUserNativeCarrier(t *testing.T) {

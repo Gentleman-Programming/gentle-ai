@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agentbuilder"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/screens"
 )
 
 func TestRenderCustomAgents_Views(t *testing.T) {
