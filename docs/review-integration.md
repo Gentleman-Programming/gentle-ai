@@ -355,6 +355,8 @@ The v1 contract and historical artifacts remain published compatibility surfaces
 
 A `stop` carries one reason code and no executable transition. The table below is the complete continuation inventory for the atomic target-root lifecycle. `Terminal` means no in-lineage continuation exists; it never authorizes delivery. For every clone-scoped exit, gates remain unmanaged and ordinary repository policy decides delivery.
 
+When a last-event closure reports `targeted_validator_rejected`, its human-readable `action` prints a read-only v2 repair preflight, not a lifecycle continuation. A maintainer compares a returned successor-only selector to the closure's exact `lineage_id` and `store_revision` before consulting repair help. No match means this handoff does not apply. Preflight does not release authority; any release requires separate, explicit maintainer authorization. STATUS for a changed target still follows its existing target-scoped rules.
+
 | Reason code | Continuation |
 | --- | --- |
 | `captured_artifacts_unverifiable` | Terminal — a captured reviewer artifact failed local verification. Ask a maintainer to inspect the B authority, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |

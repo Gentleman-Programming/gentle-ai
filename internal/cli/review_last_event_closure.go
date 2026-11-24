@@ -142,8 +142,8 @@ func closeCorrectionOnCapturedValidator(
 		result.Acknowledgement = reviewApprovedAcknowledgementTransition(repo, acknowledgement)
 		telemetryRecordReviewOutcome("approved")
 	case reviewtransaction.StateEscalated:
-		result.Action = "the targeted validator rejected the correction; maintainer action is informational"
 		result.Escalation = state.EscalationEvidence()
+		result.Action = reviewRejectedValidatorClosureAction(repo, result.Escalation)
 		telemetryRecordReviewOutcome("escalated")
 	default:
 		return nil, fmt.Errorf("targeted validator capture produced unsupported state %q", state.State) // refusal:by-design human-authority: an unmodeled terminal authority outcome requires maintainer inspection
@@ -175,11 +175,29 @@ func newCorrectionCapturedValidatorClosure(repo string, state reviewtransaction.
 	if err := evidence.Validate(request, validation); err != nil || validation.OriginalCriteria.Passed && validation.CorrectionRegression.Passed {
 		return nil, errors.New("targeted validator closure evidence does not match its rejected verdict") // refusal:by-design human-authority: inconsistent rejection evidence requires authority inspection
 	}
+	escalation := state.EscalationEvidence()
 	return &reviewLastEventClosureResult{
 		Schema: reviewLastEventClosureSchema, Operation: "review/capture-validation", LineageID: state.LineageID,
-		State: state.State, Action: "the targeted validator rejected the correction; maintainer action is informational",
-		TargetedValidatorEvidence: &evidence, Escalation: state.EscalationEvidence(), AdvisoryFindings: reviewtransaction.AdvisoryFindingSetFor(state), StoreRevision: revision,
+		State: state.State, Action: reviewRejectedValidatorClosureAction(repo, escalation),
+		TargetedValidatorEvidence: &evidence, Escalation: escalation, AdvisoryFindings: reviewtransaction.AdvisoryFindingSetFor(state), StoreRevision: revision,
 	}, nil
+}
+
+func reviewRejectedValidatorClosureAction(repo string, escalation *reviewtransaction.CompactEscalationEvidence) string {
+	const verdict = "the targeted validator rejected the correction; "
+	if escalation == nil || escalation.Cause != "targeted_validator_rejected" {
+		return verdict + "maintainer action is informational"
+	}
+	// The closure proves a verdict, not disposition eligibility. Exact repair
+	// selectors can be refused, so start with the read-only selector inventory.
+	preflight := reviewTransitionCommandLine("review.repair", reviewTokenizedTransitionArguments([]ReviewTransitionArgument{
+		{Name: "cwd", Value: repo},
+		{Name: "contract", Value: ReviewIntegrationContractV2},
+		{Name: "preflight", Value: "true"},
+	}))
+	return verdict + "the lineage is stopped. For read-only maintainer inspection, run `" + preflight + "`. " +
+		"Compare a successor-only disposition selector's successor_lineage_id and successor_expected_revision to this closure's lineage_id and store_revision. " +
+		"Only on an exact match, consult `gentle-ai review repair --help`. Preflight neither authorizes nor performs release."
 }
 
 // reviewLastCapturedLensClosureSuperseded recognizes a sibling capture that

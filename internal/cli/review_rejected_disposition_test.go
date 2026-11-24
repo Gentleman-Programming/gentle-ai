@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,17 +40,10 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, closure, err := reviewProviderCloseTargetedValidatorRaw(t.Context(), repo, store, record.State, record.State.CapturePhaseRevision, payload)
-	if err != nil || closure == nil || closure.State != reviewtransaction.StateEscalated {
-		t.Fatalf("canonical rejected closure = %#v, %v", closure, err)
-	}
-	record, err = store.Load()
-	if err != nil || !record.State.CorrectionAttemptConsumed() {
-		t.Fatalf("rejection must consume correction: %v", err)
-	}
-	before, err := os.ReadFile(store.StatePath())
-	if err != nil {
-		t.Fatal(err)
+	captureArgs := []string{
+		"capture-validation", "--cwd", repo, "--lineage", lineage, "--target", request.CorrectionTargetIdentity,
+		"--expected-revision", record.State.CapturePhaseRevision, "--request-hash", request.RequestHash,
+		"--agent", "pi", "--input", writeReviewCLIRawInput(t, payload),
 	}
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -85,26 +79,56 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 		decodeStrictReviewJSON(t, out, dst)
 		return out
 	}
+	var closure reviewLastEventClosureResult
+	closureJSON := read(&closure, captureArgs...)
+	validatePublishedReviewSchema(t, compileWholePublishedReviewSchema(t, "v2", "last-event-closure.schema.json"), closureJSON)
+	if closure.State != reviewtransaction.StateEscalated || closure.LineageID != lineage || closure.Escalation == nil ||
+		closure.Escalation.Cause != "targeted_validator_rejected" || closure.TargetedValidatorEvidence == nil ||
+		closure.TargetedValidatorEvidence.CorrectionRegression.Passed || closure.StatusContinuation != nil || closure.Acknowledgement != nil {
+		t.Fatalf("expected a non-actionable, canonical rejected closure: %s", closureJSON)
+	}
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replay, _ := run(t, 0, captureArgs...); !bytes.Equal(replay, closureJSON) {
+		t.Fatalf("exact capture replay changed closure:\nfresh=%s\nreplay=%s", closureJSON, replay)
+	}
 	var status ReviewTargetStatusResult
-	statusJSON := read(&status, "status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2, "--next-transition")
-	if status.Action != reviewtransaction.TargetStatusActionStop || status.NextTransition == nil || status.NextTransition.ReasonCode != "native_stop_required" {
-		t.Fatalf("unchanged rejection must still stop: %#v", status)
+	statusArgs := []string{"status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2, "--next-transition"}
+	statusJSON := read(&status, statusArgs...)
+	if status.Action != reviewtransaction.TargetStatusActionStop || status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "native_stop_required" || status.NextTransition.Execute != nil || status.NextTransition.Collect != nil ||
+		status.NextTransition.Continuation != nil || status.Authority == nil || status.Authority.State != closure.State ||
+		status.Authority.LineageID != closure.LineageID || status.Authority.Revision != closure.StoreRevision {
+		t.Fatalf("unchanged rejection must still stop on the exact closure authority: %s", statusJSON)
 	}
 	var inspection ReviewInspectAuthorityResult
-	inspectionJSON := read(&inspection, "inspect-authority", "--cwd", repo)
+	inspectArgs := []string{"inspect-authority", "--cwd", repo}
+	inspectionJSON := read(&inspection, inspectArgs...)
 	if !inspection.Complete || inspection.Totals.CompactEntries != 1 {
 		t.Fatalf("expected one active authority: %#v", inspection)
 	}
 
-	base := []string{"repair", "--cwd", repo, "--contract", ReviewIntegrationContractV2}
-	preflightArgs := append(base, "--preflight")
+	_, guidance, ok := strings.Cut(closure.Action, "the targeted validator rejected the correction; the lineage is stopped. For read-only maintainer inspection, run `")
+	command, guidance, closed := strings.Cut(guidance, "`. ")
+	if !ok || !closed || guidance != "Compare a successor-only disposition selector's successor_lineage_id and successor_expected_revision to this closure's lineage_id and store_revision. Only on an exact match, consult `gentle-ai review repair --help`. Preflight neither authorizes nor performs release." {
+		t.Fatalf("closure action lacks read-only preflight and exact-selector guidance: %q", closure.Action)
+	}
+	argv, err := SplitPrintedCommandWords(command)
+	wantArgv := []string{"gentle-ai", "review", "repair", "--cwd=" + repo, "--contract=" + ReviewIntegrationContractV2, "--preflight=true"}
+	if err != nil || !slices.Equal(argv, wantArgv) {
+		t.Fatalf("closure printed unexpected preflight argv %q: %v", argv, err)
+	}
+	preflightArgs := argv[2:]
+	base := preflightArgs[:len(preflightArgs)-1 : len(preflightArgs)-1]
 	var choices ReviewRepairResult
 	choicesJSON := read(&choices, preflightArgs...)
 	if choices.DispositionProviderInputs != nil || len(choices.DispositionSelectors) != 1 {
 		t.Fatalf("selectorless preflight must offer an exact choice, not authority: %#v", choices)
 	}
 	selector := choices.DispositionSelectors[0]
-	if selector.SuccessorLineageID != lineage || selector.SuccessorExpectedRevision != record.Revision || selector.PredecessorLineageID != "" || selector.PredecessorExpectedRevision != "" {
+	if selector.SuccessorLineageID != closure.LineageID || selector.SuccessorExpectedRevision != closure.StoreRevision || selector.PredecessorLineageID != "" || selector.PredecessorExpectedRevision != "" {
 		t.Fatalf("incorrect selector: %#v", selector)
 	}
 	selection := []string{"--successor-lineage", selector.SuccessorLineageID, "--successor-revision", selector.SuccessorExpectedRevision}
@@ -167,16 +191,22 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 	args := append(append(base, selection...), "--plan-digest", public.Inputs["plan_digest"], "--inventory-revision", public.Inputs["authority_inventory_revision"], "--actor", actor, "--reason", reason)
 	authorityRoot := reviewCLIAuthorityRoot(t, repo)
 	quarantine := filepath.Join(authorityRoot, "quarantine")
-	for _, test := range []struct{ name, authorization string }{
-		{"tampered repository", strings.Replace(authorization, public.Inputs["repository_binding"], "sha256:"+strings.Repeat("0", 64), 1)},
-		{"trailing newline", authorization + "\n"},
+	const badBinding = "authority disposition plan refused: authorization does not bind to plan_digest and authority_inventory_revision"
+	for _, test := range []struct{ name, authorization, cause string }{
+		{"missing authorization", "", "review repair leaf authority disposition execution requires --plan-digest --inventory-revision --actor --reason --authorization; run `gentle-ai review repair --preflight` first to obtain --plan-digest and --inventory-revision"},
+		{"tampered repository", strings.Replace(authorization, public.Inputs["repository_binding"], "sha256:"+strings.Repeat("0", 64), 1), badBinding},
+		{"trailing newline", authorization + "\n", badBinding},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			stdout, stderr := run(t, 1, append(args, "--authorization", test.authorization)...)
+			invocation := args
+			if test.authorization != "" {
+				invocation = append(args, "--authorization", test.authorization)
+			}
+			stdout, stderr := run(t, 1, invocation...)
 			var failure ReviewIntegrationFailure
 			decodeStrictReviewJSON(t, stdout, &failure)
 			if failure.MutationOutcome != ReviewMutationNotStarted || failure.Code != "invalid_request" ||
-				failure.Cause != "authority disposition plan refused: authorization does not bind to plan_digest and authority_inventory_revision" ||
+				failure.Cause != test.cause ||
 				stderr != "Error: The negotiated review request is invalid. [invalid_request]\n" ||
 				bytes.Contains(stdout, []byte(actor)) || bytes.Contains(stdout, []byte(reason)) {
 				t.Fatalf("unexpected refusal: stdout=%s stderr=%q", stdout, stderr)
@@ -188,6 +218,12 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 				t.Fatalf("refused invocation left audit residue: %v, %v", entries, err)
 			}
 		})
+	}
+	if after, _ := run(t, 0, statusArgs...); !bytes.Equal(after, statusJSON) {
+		t.Fatalf("inspection and refused executions changed terminal STATUS: %s", after)
+	}
+	if after, _ := run(t, 0, inspectArgs...); !bytes.Equal(after, inspectionJSON) {
+		t.Fatalf("inspection and refused executions changed authority inventory: %s", after)
 	}
 	var committed ReviewRepairDispositionExecution
 	for attempt := 0; attempt < 2; attempt++ {
