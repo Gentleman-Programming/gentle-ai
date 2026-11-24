@@ -379,21 +379,45 @@ const (
 	userWindowsInventoryLaunch
 	// Complete owned stage before removal; data names permitted below the stage.
 	userWindowsInventoryCleanup
+	// Complete update stage before publication: installer artefacts stay as
+	// strict as a fresh stage, but the operator state carried from the retired
+	// installation (sessions and the agent's own npm tree) keeps the launch
+	// treatment, so a grown session or extension never blocks an update.
+	userWindowsInventoryCarried
 )
+
+// Operator state an update stage carries from the retired agent; the subset of
+// userWindowsMutableState that the installer never writes into a fresh stage.
+var userWindowsCarriedState = []string{"agent/sessions", "agent/npm"}
+
+// An update stage holds the retired operator state, either carried after a
+// rebuilt SDK or moved in with the reused agent tree; a fresh stage holds none.
+func userWindowsPublicationInventory(installed *userWindowsManifest) userWindowsInventoryMode {
+	if installed != nil {
+		return userWindowsInventoryCarried
+	}
+	return userWindowsInventoryInstalled
+}
 
 func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
 	// Runtime state is not an installed artefact: caches and sessions written
 	// after publication legitimately grow past the artefact byte bounds. Only
 	// the fresh pre-publication stage keeps every one of its bytes bounded.
 	state := map[string]bool{}
-	if mode != userWindowsInventoryInstalled {
-		for _, relative := range userWindowsMutableState {
-			state[filepath.Join(root, filepath.FromSlash(relative))] = true
-		}
+	roots := userWindowsMutableState
+	switch mode {
+	case userWindowsInventoryInstalled:
+		roots = nil
+	case userWindowsInventoryCarried:
+		roots = userWindowsCarriedState
 	}
-	// Launch additionally treats names below these roots as data names.
+	for _, relative := range roots {
+		state[filepath.Join(root, filepath.FromSlash(relative))] = true
+	}
+	// Launch and carried operator state additionally treat names below these
+	// roots as data names.
 	mutable := map[string]bool{}
-	if mode == userWindowsInventoryLaunch {
+	if mode == userWindowsInventoryLaunch || mode == userWindowsInventoryCarried {
 		mutable = state
 	}
 	stateDescendant := func(path string) bool {
@@ -939,7 +963,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 	}
-	if err := userWindowsInventory(stage, userWindowsInventoryInstalled); err != nil {
+	if err := userWindowsInventory(stage, userWindowsPublicationInventory(installed)); err != nil {
 		return result, err
 	}
 	observed, err := InspectUserInstall(req)
