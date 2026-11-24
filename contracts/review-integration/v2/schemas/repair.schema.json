@@ -14,11 +14,72 @@
     "provider_inputs": {"$ref": "../../v1/schemas/repair.schema.json#/properties/provider_inputs"},
     "required_inputs": {"$ref": "../../v1/schemas/repair.schema.json#/properties/required_inputs"},
     "execution": {"$ref": "../../v1/schemas/repair.schema.json#/properties/execution"},
-    "continuation": {"$ref": "../../v1/schemas/repair.schema.json#/properties/continuation"}
+    "continuation": {"$ref": "../../v1/schemas/repair.schema.json#/properties/continuation"},
+    "disposition_provider_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plan_digest", "authority_inventory_revision"],
+      "properties": {
+        "plan_digest": {"$ref": "#/$defs/sha256"},
+        "authority_inventory_revision": {"$ref": "#/$defs/sha256"},
+        "repository_binding": {"$ref": "#/$defs/sha256", "description": "Only published after exact preflight selection of an eligible rejected-validator terminal."}
+      }
+    },
+    "disposition_selectors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["predecessor_lineage_id", "predecessor_expected_revision", "successor_lineage_id", "successor_expected_revision"],
+        "properties": {
+          "predecessor_lineage_id": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/lineage"}]},
+          "predecessor_expected_revision": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/sha256"}]},
+          "successor_lineage_id": {"$ref": "#/$defs/lineage"},
+          "successor_expected_revision": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "disposition_execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "status", "lineage_id", "plan_digest", "authority_inventory_revision", "anomaly_class", "authorization_sha256"],
+      "properties": {
+        "schema": {"const": "gentle-ai.review-authority-disposition-proof/v1"},
+        "status": {"const": "committed"},
+        "lineage_id": {"$ref": "#/$defs/lineage"},
+        "plan_digest": {"$ref": "#/$defs/sha256"},
+        "authority_inventory_revision": {"$ref": "#/$defs/sha256"},
+        "anomaly_class": {"type": "string", "minLength": 1},
+        "authorization_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  },
+  "dependentSchemas": {
+    "disposition_provider_inputs": {
+      "properties": {"mode": {"const": "preflight"}},
+      "not": {"anyOf": [{"required": ["provider_inputs"]}, {"required": ["disposition_selectors"]}]},
+      "if": {"properties": {"disposition_provider_inputs": {"required": ["repository_binding"]}}},
+      "then": {"properties": {"assessment": {"properties": {"status": {"const": "unsupported"}}}}}
+    },
+    "disposition_selectors": {
+      "properties": {"mode": {"const": "preflight"}, "assessment": {"properties": {"status": {"const": "unsupported"}}}}
+    }
   },
   "allOf": [
-    {"$ref": "../../v1/schemas/repair.schema.json#/allOf/0"},
+    {
+      "if": {"required": ["disposition_execution"]},
+      "then": {
+        "properties": {"mode": {"const": "execute"}, "required_inputs": {"maxItems": 0}},
+        "not": {"anyOf": [{"required": ["provider_inputs"]}, {"required": ["execution"]}]}
+      },
+      "else": {"$ref": "../../v1/schemas/repair.schema.json#/allOf/0"}
+    },
     {"$ref": "../../v1/schemas/repair.schema.json#/allOf/1"},
     {"$ref": "../../v1/schemas/repair.schema.json#/allOf/2"}
-  ]
+  ],
+  "$defs": {
+    "sha256": {"$ref": "../../v1/schemas/repair.schema.json#/$defs/sha256"},
+    "lineage": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 128}
+  }
 }
