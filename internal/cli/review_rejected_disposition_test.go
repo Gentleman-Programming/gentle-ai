@@ -103,6 +103,46 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 		status.Authority.LineageID != closure.LineageID || status.Authority.Revision != closure.StoreRevision {
 		t.Fatalf("unchanged rejection must still stop on the exact closure authority: %s", statusJSON)
 	}
+	validatePublishedReviewSchema(t, compileWholeNativeStatusSchema(t, "status-v9.schema.json"), statusJSON)
+	if status.Forecast == nil || status.Forecast.Horizon != ForecastHorizonTerminal || len(status.Forecast.Steps) != 1 ||
+		status.Forecast.Steps[0].Step != 1 || status.Forecast.Steps[0].Kind != status.NextTransition.Kind ||
+		status.Forecast.Steps[0].ReasonCode != status.NextTransition.ReasonCode {
+		t.Fatalf("expected structural terminal forecast: %s", statusJSON)
+	}
+	for _, tc := range []struct{ name, lineage, contract string }{
+		{"selectorless", "", ReviewIntegrationContractV2},
+		{"unrelated lineage", "review-unrelated", ReviewIntegrationContractV2},
+		{"v1", lineage, ReviewIntegrationContractV1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"status", "--cwd", repo, "--contract", tc.contract, "--next-transition"}
+			if tc.lineage != "" {
+				args = append(args, "--lineage", tc.lineage)
+			}
+			out, _ := run(t, 0, args...)
+			if bytes.Contains(out, []byte("gentle-ai review repair")) || tc.contract == ReviewIntegrationContractV1 && bytes.Contains(out, []byte(`"forecast"`)) {
+				t.Fatalf("terminal handoff escaped its bound v2 STATUS: %s", out)
+			}
+		})
+	}
+	t.Run("RDD disabled", func(t *testing.T) {
+		reviewEnabledHome(t)
+		if _, err := SetGlobalReviewMode(t.Context(), repo, false); err != nil {
+			t.Fatal(err)
+		}
+		var disabled ReviewTargetStatusResult
+		out := read(&disabled, statusArgs...)
+		if disabled.NextTransition == nil || disabled.NextTransition.ReasonCode != "native_stop_required" || bytes.Contains(out, []byte("gentle-ai review repair")) {
+			t.Fatalf("terminal handoff changed STATUS for an existing lineage with RDD disabled: %s", out)
+		}
+		var unrelated ReviewTargetStatusResult
+		args := slices.Clone(statusArgs)
+		args[4] = "review-unrelated"
+		out = read(&unrelated, args...)
+		if unrelated.NextTransition == nil || unrelated.NextTransition.ReasonCode != "rdd_disabled" || bytes.Contains(out, []byte("gentle-ai review repair")) {
+			t.Fatalf("terminal handoff escaped into an rdd_disabled stop: %s", out)
+		}
+	})
 	var inspection ReviewInspectAuthorityResult
 	inspectArgs := []string{"inspect-authority", "--cwd", repo}
 	inspectionJSON := read(&inspection, inspectArgs...)
@@ -121,7 +161,7 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 		t.Fatalf("closure printed unexpected preflight argv %q: %v", argv, err)
 	}
 	preflightArgs := argv[2:]
-	base := preflightArgs[:len(preflightArgs)-1 : len(preflightArgs)-1]
+	base := preflightArgs[: len(preflightArgs)-1 : len(preflightArgs)-1]
 	var choices ReviewRepairResult
 	choicesJSON := read(&choices, preflightArgs...)
 	if choices.DispositionProviderInputs != nil || len(choices.DispositionSelectors) != 1 {
@@ -130,6 +170,22 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 	selector := choices.DispositionSelectors[0]
 	if selector.SuccessorLineageID != closure.LineageID || selector.SuccessorExpectedRevision != closure.StoreRevision || selector.PredecessorLineageID != "" || selector.PredecessorExpectedRevision != "" {
 		t.Fatalf("incorrect selector: %#v", selector)
+	}
+	description := status.Forecast.Steps[0].Description
+	_, statusGuidance, found := strings.Cut(description, "For read-only maintainer inspection, run `")
+	statusCommand, statusBinding, ended := strings.Cut(statusGuidance, "`. ")
+	if !found || !ended || statusCommand != command || !strings.Contains(statusBinding, "authority.lineage_id and authority.revision") || strings.Contains(statusBinding, "closure") {
+		t.Fatalf("bound STATUS lacks read-only preflight for its own authority: %q", description)
+	}
+	statusArgv, err := SplitPrintedCommandWords(statusCommand)
+	if err != nil || !slices.Equal(statusArgv, argv) {
+		t.Fatalf("STATUS printed unexpected preflight argv %q: %v", statusArgv, err)
+	}
+	var statusChoices ReviewRepairResult
+	if out := read(&statusChoices, statusArgv[2:]...); !bytes.Equal(out, choicesJSON) ||
+		statusChoices.DispositionSelectors[0].SuccessorLineageID != status.Authority.LineageID ||
+		statusChoices.DispositionSelectors[0].SuccessorExpectedRevision != status.Authority.Revision {
+		t.Fatalf("STATUS preflight did not find its exact authority: %s", out)
 	}
 	selection := []string{"--successor-lineage", selector.SuccessorLineageID, "--successor-revision", selector.SuccessorExpectedRevision}
 	var v1, selected ReviewRepairResult

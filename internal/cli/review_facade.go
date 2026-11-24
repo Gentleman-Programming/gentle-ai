@@ -1274,7 +1274,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			frozenCommittedTarget = frozenCommittedCorrectionTarget
 		} else if frozenCommittedEscalation != nil && intendedScope.NeedsSelection &&
 			native.State == reviewtransaction.StateEscalated && native.Revision == frozenCommittedEscalation.Revision &&
-			native.Escalation != nil && native.Escalation.Cause == "targeted_validator_rejected" &&
+			native.Escalation != nil && native.Escalation.Cause == reviewRejectedValidatorCause &&
 			liveSnapshot.CandidateTree == frozenCommittedEscalation.State.CurrentSnapshot.CandidateTree {
 			// The rejected snapshot is the fix diff: its tree identifies the
 			// rejected candidate, but only the initial snapshot names the range.
@@ -1669,6 +1669,13 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// `forecast` field and is never narrated to stderr, because a
 			// successful negotiated operation must stay byte-silent there.
 			forecast := newReviewForecast(*result.NextTransition)
+			if result.NextTransition.Kind == reviewNextTransitionStop && result.NextTransition.ReasonCode == "native_stop_required" &&
+				result.rddMode.Enabled() && native.Action == reviewtransaction.TargetStatusActionStop &&
+				result.Applicability == reviewtransaction.TargetApplicabilityCurrent &&
+				requestedLineage != "" && result.Authority != nil && requestedLineage == result.Authority.LineageID &&
+				result.Escalation != nil && result.Escalation.Cause == reviewRejectedValidatorCause {
+				forecast.Steps[0].Description += ". " + reviewRejectedValidatorPreflightGuidance(root, "this STATUS's authority.lineage_id and authority.revision")
+			}
 			result.Forecast = &forecast
 		}
 		var validationErr error

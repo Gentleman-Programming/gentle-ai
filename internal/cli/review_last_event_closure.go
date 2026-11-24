@@ -183,20 +183,26 @@ func newCorrectionCapturedValidatorClosure(repo string, state reviewtransaction.
 	}, nil
 }
 
+const reviewRejectedValidatorCause = "targeted_validator_rejected"
+
 func reviewRejectedValidatorClosureAction(repo string, escalation *reviewtransaction.CompactEscalationEvidence) string {
 	const verdict = "the targeted validator rejected the correction; "
-	if escalation == nil || escalation.Cause != "targeted_validator_rejected" {
+	if escalation == nil || escalation.Cause != reviewRejectedValidatorCause {
 		return verdict + "maintainer action is informational"
 	}
-	// The closure proves a verdict, not disposition eligibility. Exact repair
+	return verdict + "the lineage is stopped. " + reviewRejectedValidatorPreflightGuidance(repo, "this closure's lineage_id and store_revision")
+}
+
+func reviewRejectedValidatorPreflightGuidance(repo, bindingFields string) string {
+	// The terminal verdict does not prove disposition eligibility. Exact repair
 	// selectors can be refused, so start with the read-only selector inventory.
 	preflight := reviewTransitionCommandLine("review.repair", reviewTokenizedTransitionArguments([]ReviewTransitionArgument{
 		{Name: "cwd", Value: repo},
 		{Name: "contract", Value: ReviewIntegrationContractV2},
 		{Name: "preflight", Value: "true"},
 	}))
-	return verdict + "the lineage is stopped. For read-only maintainer inspection, run `" + preflight + "`. " +
-		"Compare a successor-only disposition selector's successor_lineage_id and successor_expected_revision to this closure's lineage_id and store_revision. " +
+	return "For read-only maintainer inspection, run `" + preflight + "`. " +
+		"Compare a successor-only disposition selector's successor_lineage_id and successor_expected_revision to " + bindingFields + ". " +
 		"Only on an exact match, consult `gentle-ai review repair --help`. Preflight neither authorizes nor performs release."
 }
 
