@@ -23,6 +23,16 @@ func TestGetTurnTimeout(t *testing.T) {
 	if got := GetTurnTimeout(); got != 2*time.Minute+30*time.Second {
 		t.Errorf("GetTurnTimeout() = %v, want %v", got, 2*time.Minute+30*time.Second)
 	}
+	// zero duration falls back to default
+	t.Setenv("GENTLE_AI_TURN_TIMEOUT", "0s")
+	if got := GetTurnTimeout(); got != 10*time.Minute {
+		t.Errorf("GetTurnTimeout() = %v, want %v (zero fallback)", got, 10*time.Minute)
+	}
+	// negative duration falls back to default
+	t.Setenv("GENTLE_AI_TURN_TIMEOUT", "-1s")
+	if got := GetTurnTimeout(); got != 10*time.Minute {
+		t.Errorf("GetTurnTimeout() = %v, want %v (negative fallback)", got, 10*time.Minute)
+	}
 	// invalid duration falls back to default
 	t.Setenv("GENTLE_AI_TURN_TIMEOUT", "notaduration")
 	if got := GetTurnTimeout(); got != 10*time.Minute {
@@ -50,11 +60,25 @@ func (e *sleepingEngine) Generate(ctx context.Context, _ string) (string, error)
 	}
 }
 
+// controllableEngine wraps an engine and captures the context passed to Generate.
+type controllableEngine struct {
+	engine      *sleepingEngine
+	capturedCtx context.Context
+}
+
+func (e *controllableEngine) Agent() model.AgentID { return e.engine.Agent() }
+func (e *controllableEngine) Available() bool      { return true }
+func (e *controllableEngine) Generate(ctx context.Context, prompt string) (string, error) {
+	e.capturedCtx = ctx
+	return e.engine.Generate(ctx, prompt)
+}
+
 func TestTurnTimeoutUsedInGeneration(t *testing.T) {
 	// A short timeout expires before the engine finishes its 300 ms of work.
 	t.Setenv("GENTLE_AI_TURN_TIMEOUT", "200ms")
 
-	engine := &sleepingEngine{agentID: model.AgentGeminiCLI, delay: 300 * time.Millisecond}
+	baseEngine := &sleepingEngine{agentID: model.AgentGeminiCLI, delay: 300 * time.Millisecond}
+	engine := &controllableEngine{engine: baseEngine}
 
 	// Simulate what the TUI does: create ctx with GetTurnTimeout()
 	timeout := GetTurnTimeout()
@@ -79,5 +103,17 @@ func TestTurnTimeoutUsedInGeneration(t *testing.T) {
 	}
 	if deadline.Sub(time.Now()) >= 0 {
 		t.Errorf("deadline already passed: %v", deadline)
+	}
+
+	// Verify the captured context has the same deadline as the parent context.
+	if engine.capturedCtx == nil {
+		t.Fatalf("engine.Generate was not called")
+	}
+	capturedDeadline, ok := engine.capturedCtx.Deadline()
+	if !ok {
+		t.Fatalf("captured context has no deadline")
+	}
+	if capturedDeadline.Sub(deadline).Abs() > time.Millisecond {
+		t.Errorf("captured deadline %v differs from parent %v", capturedDeadline, deadline)
 	}
 }
