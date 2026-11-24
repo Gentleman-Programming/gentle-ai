@@ -121,7 +121,7 @@ func (m shellInstallModel) View() string {
 	if m.busy {
 		return "Installing selected Gentle Shell. Ctrl-C cancels; waiting for stop/reap.\n"
 	}
-	rows := []string{"Gentle Shell Windows 11 x64 user installer", "Target: " + m.req.Destination, "Mode: Separate (private Node/Go/Pi; personal installation preserved)",
+	rows := []string{"Gentle Shell Windows 10/11 x64 user installer", "Target: " + m.req.Destination, "Mode: Separate (private Node/Go/Pi; personal installation preserved)",
 		"Channel: " + m.req.Channel + " (Left/Right selects; Main resolves once after confirmation)",
 		"Commands: " + filepath.Join(m.req.Destination, "bin/gentle-shell.cmd") + " and " + filepath.Join(m.req.Destination, "bin/pi.cmd"),
 		"Tab selects field; Enter reviews; Escape cancels. Personal PATH and configuration are not changed."}

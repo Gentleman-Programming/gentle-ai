@@ -137,11 +137,11 @@ func TestAntigravityCoordinationLockWorkspaceDistinctFromGlobal(t *testing.T) {
 
 func TestInjectAntigravityMalformedGlobalCreatesZeroPaths(t *testing.T) {
 	home := t.TempDir()
-	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
-	if err := os.MkdirAll(cliDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q) error = %v", cliDir, err)
+	configDir := filepath.Join(home, ".gemini", "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", configDir, err)
 	}
-	mcpPath := filepath.Join(cliDir, "mcp_config.json")
+	mcpPath := filepath.Join(configDir, "mcp_config.json")
 	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers":`), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q) error = %v", mcpPath, err)
 	}
@@ -152,9 +152,9 @@ func TestInjectAntigravityMalformedGlobalCreatesZeroPaths(t *testing.T) {
 	}
 	// Prevalidation is side-effect-free: not even the lock root may exist.
 	want := map[string]bool{
-		filepath.Join(".gemini"):                                       true,
-		filepath.Join(".gemini", "antigravity-cli"):                    true,
-		filepath.Join(".gemini", "antigravity-cli", "mcp_config.json"): true,
+		filepath.Join(".gemini"):                              true,
+		filepath.Join(".gemini", "config"):                    true,
+		filepath.Join(".gemini", "config", "mcp_config.json"): true,
 	}
 	got := map[string]bool{}
 	err = filepath.Walk(home, func(path string, info os.FileInfo, walkErr error) error {

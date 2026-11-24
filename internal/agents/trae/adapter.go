@@ -120,15 +120,21 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 	return filepath.Join(a.traeUserDir(homeDir), "mcp.json")
 }
 
-// traeUserDir returns the OS-specific Trae User config directory.
-// Trae follows VS Code conventions substituting "Trae" for "Code".
+func (a *Adapter) traeUserDir(homeDir string) string {
+	return UserDir(homeDir, runtime.GOOS)
+}
+
+// UserDir returns the Trae User config directory for goos. Trae follows VS Code
+// conventions substituting "Trae" for "Code". goos is injected so
+// backup.WithConfigRoots can admit %APPDATA%\Trae\User as a restore root when
+// %APPDATA% is redirected outside the profile (issue #6029).
 //
 // Environment overrides (XDG_CONFIG_HOME, APPDATA) are honored only when
 // homeDir is the real user home: a caller that passes a custom installation
 // root (sandboxed installs, tests) must stay contained inside that root, so
 // ambient environment can never redirect a write outside it.
-func (a *Adapter) traeUserDir(homeDir string) string {
-	switch runtime.GOOS {
+func UserDir(homeDir, goos string) string {
+	switch goos {
 	case "darwin":
 		return filepath.Join(homeDir, "Library", "Application Support", "Trae", "User")
 	case "windows":

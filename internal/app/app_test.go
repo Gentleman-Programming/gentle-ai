@@ -382,7 +382,6 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 		command string
 		want    string
 	}{
-		{command: "review-start", want: "review-start requires --cwd, --lineage, and --policy-file"},
 		{command: "review-resume", want: "review-resume requires --cwd and --lineage"},
 		{command: "review-bundle-export", want: "review-bundle-export requires --cwd, --lineage, and --out"},
 		{command: "review-bundle-import", want: "review-bundle-import requires --cwd and --bundle"},
@@ -399,7 +398,7 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 }
 
 func TestRunArgsReviewSubcommandHelpExitsSuccessfully(t *testing.T) {
-	for _, command := range []string{"review-start", "review-step", "review-resume", "review-validate", "review-bundle-export", "review-bundle-import"} {
+	for _, command := range []string{"review-resume", "review-validate", "review-bundle-export", "review-bundle-import"} {
 		t.Run(command, func(t *testing.T) {
 			var output bytes.Buffer
 			if err := RunArgs([]string{command, "--help"}, &output); err != nil {
@@ -2872,4 +2871,30 @@ func writeFakeOpenCodeRuntime(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return binDir
+}
+
+func TestAntigravityModelAssignmentsOverridePersistAndRestore(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{}
+	applyOverrides(&selection, &model.SyncOverrides{
+		AntigravityModelAssignments: map[string]model.AntigravityModelTier{"jd-judge-a": model.AntigravityModelPro},
+	})
+	if err := persistAssignments(home, selection); err != nil {
+		t.Fatalf("persistAssignments: %v", err)
+	}
+	got, err := state.Read(home)
+	if err != nil || got.AntigravityModelAssignments["jd-judge-a"] != "pro" {
+		t.Fatalf("persisted Antigravity tiers = %#v, err %v", got.AntigravityModelAssignments, err)
+	}
+	restored := model.Selection{}
+	loadPersistedAssignments(home, &restored)
+	if restored.AntigravityModelAssignments["jd-judge-a"] != model.AntigravityModelPro {
+		t.Fatalf("restored Antigravity tiers = %#v", restored.AntigravityModelAssignments)
+	}
+	if err := persistAssignments(home, model.Selection{AntigravityModelAssignments: map[string]model.AntigravityModelTier{}}); err != nil {
+		t.Fatalf("persistAssignments clear: %v", err)
+	}
+	if got, _ := state.Read(home); got.AntigravityModelAssignments != nil {
+		t.Fatalf("empty override must reset Antigravity tiers, got %#v", got.AntigravityModelAssignments)
+	}
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -198,6 +199,12 @@ type ReviewTransitionArtifact struct {
 
 func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []string, artifacts []ReviewTransitionArtifact, artifactErr error, input reviewNextTransitionInput) ReviewNextTransition {
 	transition := resolveReviewNextTransition(status, selectedLenses, artifacts, artifactErr, input)
+	// The frozen v1 STATUS shape has no correction-release continuation.
+	// Preserve its stop without widening that published schema.
+	if input.Contract == "gentle-ai.review-integration/v1" &&
+		(transition.ReasonCode == "correction_request_unavailable" || transition.ReasonCode == reviewCorrectionContextBudgetCode) {
+		transition.Continuation = nil
+	}
 	// Gate only active capture offers; recovery, acknowledgement, and existing
 	// stops retain their routing. Freshness never changes the bound authority.
 	if status.Applicability == reviewtransaction.TargetApplicabilityCurrent && status.Authority != nil && transition.Collect != nil {
@@ -278,15 +285,10 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 				Arguments: append(reviewTargetArguments(status), ReviewTransitionArgument{Name: "candidates", Value: strings.Join(status.Candidates, ",")}),
 			})
 		case reviewtransaction.TargetApplicabilityCorrupted:
-			if status.Repair.Status == reviewtransaction.AuthorityRepairEligible && status.Repair.Candidate != nil {
-				return reviewRepairTransition(status, input)
-			}
 			// Wave 6 (rdd-closure-disposition-execution / "Reachable Through
-			// the Negotiated Transition Route"): the classified vocabulary
-			// above has nothing to say about a closed content-mismatched-
-			// recovery-authorization closure — status.Disposition is
-			// populated only for exactly that gap, so it is checked only
-			// once the classified route above has already refused.
+			// the Negotiated Transition Route"): status.Disposition is
+			// populated only for a closed content-mismatched-recovery-
+			// authorization closure.
 			if status.Disposition != nil {
 				return reviewDispositionTransition(status, input)
 			}
@@ -397,6 +399,15 @@ func resolveReviewNextTransition(status ReviewTargetStatusResult, selectedLenses
 				return reviewStopTransition("manual_intervention_required")
 			}
 			return reviewStopTransition("manual_intervention_required")
+		}
+		// A validated authority whose correction-plan request its own
+		// contract refuses (a zero frozen budget, a non-actionable finding)
+		// cannot be planned on this lineage, but it is not corrupt (#6086).
+		// Every other missing request keeps the corrupted-authority stop.
+		if input.CorrectionRequest == nil && errors.Is(artifactErr, reviewtransaction.ErrCorrectionPlanRequestUnbuildable) {
+			transition := reviewStopTransition("correction_request_unavailable")
+			transition.Continuation = reviewCorrectionReleaseContinuation(status.repositoryRoot, string(input.RuntimeAgent), input.CorrectionReleaseEligibility)
+			return transition
 		}
 		if input.CorrectionForecasted {
 			if input.CorrectionRequest == nil {
@@ -922,6 +933,11 @@ func reviewStatusTargetEvidenceToken(status ReviewTargetStatusResult) string {
 	return token
 }
 
+// reviewBaseRefCommitIDHexLength is the 40-character width of a hexadecimal
+// git object id. It is only a spelling width: the guard below asks whether the
+// caller's spelling could be an object id, never which object type it names.
+const reviewBaseRefCommitIDHexLength = 40
+
 func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID, intended reviewIntendedUntrackedScope) []ReviewTransitionArgument {
 	contract := status.Contract
 	if contract == "" {
@@ -945,6 +961,32 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 	switch status.Projection.Kind {
 	case reviewtransaction.TargetBaseDiff:
 		baseRef := status.Projection.BaseTree
+		// Preserve a caller's immutable commit object, but keep symbolic refs
+		// pinned to the frozen tree so moving branches cannot change START scope.
+		// This is a commit id spelling guard, not an object-type check:
+		// hex.DecodeString accepts any 40-hex value, so a tree id spelled here is
+		// echoed exactly like a commit id. An explicit symbolic selector
+		// (origin/main, a branch, HEAD~1) therefore still emits
+		// Projection.BaseTree, which is the same frozen tree.
+		//
+		// This deliberately diverges from the REVIEWING re-entry echo, where
+		// reviewStartStatusContinuation replays the frozen
+		// InitialSnapshot.BaseTree even for a 40-hex selector, because that
+		// continuation must rebind the exact scope the reviewer artifacts were
+		// captured against (pinned by review_committed_correction_test.go).
+		//
+		// decision.Selector.BaseRef reaches this point already rebound to the
+		// caller's own spelling by bindTargetStatusDecisionBaseRef
+		// (reviewtransaction/target_status.go) for every base-diff or overlay
+		// STATUS that requested one; without that rebinding it is the frozen
+		// base tree seeded by projectTargetStatusDecision, so this guard is a
+		// no-op there.
+		selectorRef := status.decision.Selector.BaseRef
+		if len(selectorRef) == reviewBaseRefCommitIDHexLength {
+			if _, err := hex.DecodeString(selectorRef); err == nil {
+				baseRef = selectorRef
+			}
+		}
 		// Issue #4412: a selectorless STATUS that derived a committed range
 		// discloses the exact merge-base commit it resolved, not the tree
 		// object the derived snapshot froze, so the caller can see and
@@ -1029,51 +1071,12 @@ func reviewStartStatusContinuation(state reviewtransaction.CompactState, revisio
 	return &transition
 }
 
-func reviewRepairTransition(status ReviewTargetStatusResult, input reviewNextTransitionInput) ReviewNextTransition {
-	assessment := status.Repair
-	candidate := assessment.Candidate
-	binding := ReviewTransitionBinding{LineageID: candidate.LineageID, Revision: candidate.Revision, TargetIdentity: status.TargetIdentity}
-	providerArguments := []ReviewTransitionArgument{
-		{Name: "class", Value: string(assessment.Class)}, {Name: "lineage", Value: candidate.LineageID},
-		{Name: "expected-revision", Value: candidate.Revision}, {Name: "cause", Value: string(assessment.Cause)},
-		{Name: "disposition", Value: string(assessment.Disposition)}, {Name: "repository-binding", Value: assessment.RepositoryBinding},
-	}
-	request := reviewtransaction.ClassifiedAuthorityRepairRequest{
-		Class: assessment.Class, LineageID: candidate.LineageID, ExpectedRevision: candidate.Revision,
-		Cause: assessment.Cause, Disposition: assessment.Disposition, RepositoryBinding: assessment.RepositoryBinding,
-		Actor: input.RepairActor, Reason: input.RepairReason, MaintainerAuthorization: input.RepairAuthorization,
-	}
-	if reviewtransaction.ValidateClassifiedAuthorityRepairRequest(request, assessment) == nil {
-		arguments := append([]ReviewTransitionArgument{}, providerArguments...)
-		arguments = append(arguments,
-			ReviewTransitionArgument{Name: "actor", Value: input.RepairActor},
-			ReviewTransitionArgument{Name: "reason", Value: input.RepairReason},
-			ReviewTransitionArgument{Name: "maintainer-authorization", Value: "provided"},
-		)
-		return reviewExecuteTransition("repair_authorized", "review.repair", arguments, []ReviewTransitionArgument{
-			{Name: "repair_status", Value: string(reviewtransaction.AuthorityRepairEligible)},
-			{Name: "unique_candidate", Value: "true"}, {Name: "current_head", Value: candidate.Revision},
-			{Name: "repair_authorization", Value: "provided"},
-		}, binding, nil)
-	}
-	return reviewCollectTransition("repair_authorization_required", ReviewTransitionInput{
-		Name: "repair_authorization", Schema: assessment.AuthorizationSchema, CaptureOperation: "external.authorize_repair",
-		Arguments: providerArguments,
-	})
-}
-
 // reviewDispositionTransition is Wave 6's negotiated route for a closure
 // disposition plan (rdd-closure-disposition-execution / "Reachable Through
-// the Negotiated Transition Route", design decision D7): it serves the exact
-// same `review repair` verb reviewRepairTransition already routes to — no
-// new operation, no new CLI command — through collect{disposition_
-// authorization} then execute{review.repair, --plan-digest
-// --inventory-revision --actor --reason --authorization}, mirroring
-// reviewRepairTransition's own collect-then-execute shape byte-for-byte so a
-// caller who already understands one understands both. It is only ever
-// reached once the classified route above it has already refused (its
-// caller checks status.Disposition only after status.Repair), so it never
-// competes with or shadows Wave 2's classified vocabulary.
+// the Negotiated Transition Route", design decision D7): it serves the
+// `review repair` verb — no new operation, no new CLI command — through
+// collect{disposition_authorization} then execute{review.repair,
+// --plan-digest --inventory-revision --actor --reason --authorization}.
 func reviewDispositionTransition(status ReviewTargetStatusResult, input reviewNextTransitionInput) ReviewNextTransition {
 	disposition := status.Disposition
 	providerArguments := []ReviewTransitionArgument{
@@ -1086,15 +1089,13 @@ func reviewDispositionTransition(status ReviewTargetStatusResult, input reviewNe
 			ReviewTransitionArgument{Name: "actor", Value: input.RepairActor},
 			ReviewTransitionArgument{Name: "reason", Value: input.RepairReason},
 			// The authorization VALUE is deliberately the "provided" sentinel,
-			// never the real bytes — mirroring reviewRepairTransition's own
-			// "maintainer-authorization" argument (tasks.md 4.5's threat
-			// matrix: emitted tokens carry no authorization bytes).
+			// never the real bytes (tasks.md 4.5's threat matrix: emitted
+			// tokens carry no authorization bytes).
 			ReviewTransitionArgument{Name: "authorization", Value: "provided"},
 		)
-		// Every other "review.repair" execute transition carries a concrete
-		// lineage_id/revision binding (reviewRepairTransition's own
-		// candidate.LineageID/candidate.Revision) — the disposition plan's
-		// seed is the matching identity here (Wave 6 D7's status.Disposition
+		// A "review.repair" execute transition carries a concrete
+		// lineage_id/revision binding — the disposition plan's
+		// seed is that identity here (Wave 6 D7's status.Disposition
 		// carries it for exactly this reason).
 		return reviewExecuteTransition("disposition_authorized", "review.repair", arguments, []ReviewTransitionArgument{
 			{Name: "plan_digest", Value: disposition.PlanDigest},
@@ -1487,6 +1488,8 @@ func reviewReasonDescription(reason string) string {
 		return "Correction evidence and findings exceed the native context budget"
 	case "corrupted_or_unverifiable_authority":
 		return "Review authority is corrupted or unverifiable"
+	case "correction_request_unavailable":
+		return "Correction plan request cannot be built from the admitted review authority"
 	case "missing_authority_binding":
 		return "Target authority binding is missing"
 	case "unchanged_or_unverified_authority":

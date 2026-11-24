@@ -1,10 +1,12 @@
 package communitytool
 
 import (
+	"context"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // codeGraphInstalledVersion probes the CodeGraph binary that DetectStatus
@@ -27,8 +29,20 @@ func defaultCodeGraphInstalledVersion(cliPath string) (string, bool) {
 	}
 	// A nonzero exit still carries usable output on CLIs that print the
 	// banner before rejecting the flag, so the output is parsed either way
-	// and only an unparseable result counts as "cannot determine".
-	output, err := exec.Command(cliPath, "--version").CombinedOutput()
+	// and only an unparseable result counts as "cannot determine". The
+	// probe runs under a bounded context so a hung binary cannot block
+	// install detection; when the context expires exec returns a non-nil
+	// error with no captured output, so the existing
+	// `err != nil && len(output) == 0` branch preserves the original
+	// unknown-version fallback verbatim.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, cliPath, "--version")
+	// npm shims spawn the real CLI as a child that can keep the output pipes
+	// open after the shim is killed; WaitDelay bounds that wait so the probe
+	// still returns once the context expires.
+	cmd.WaitDelay = 2 * time.Second
+	output, err := cmd.CombinedOutput()
 	if err != nil && len(output) == 0 {
 		return "", false
 	}

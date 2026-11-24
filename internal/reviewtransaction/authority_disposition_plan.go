@@ -3,6 +3,9 @@ package reviewtransaction
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -434,7 +437,7 @@ func authorityDispositionClosure(report CompactRecoveryInspectionReport, seed st
 // (rdd-authority-disposition-plan / "Authorization Binds to Digest and
 // Revision, No Wall-Clock Expiry") can detect drift anywhere in the store,
 // including outside the closure. encoding/json sorts map keys, so this is
-// already deterministic (the same idiom classifiedAuthorityRepairDigest's own
+// already deterministic (the same idiom authorityDispositionDigest's own
 // doc comment relies on).
 func authorityInventoryRevision(records map[string]CompactRecord, historical map[string]historicalCompactForensicRecord) (string, error) {
 	revisions := make(map[string]string, len(records)+len(historical))
@@ -444,7 +447,7 @@ func authorityInventoryRevision(records map[string]CompactRecord, historical map
 	for lineage, record := range historical {
 		revisions[lineage] = record.RawDigest
 	}
-	return classifiedAuthorityRepairDigest("gentle-ai.review-authority-inventory-revision/v1", revisions)
+	return authorityDispositionDigest("gentle-ai.review-authority-inventory-revision/v1", revisions)
 }
 
 // authorityDispositionPlanDigest computes plan_digest over the seven derived
@@ -476,7 +479,7 @@ func authorityDispositionPlanDigest(plan AuthorityDispositionPlan) (string, erro
 		AuthorityInventoryRevision: plan.AuthorityInventoryRevision, AnomalyClass: plan.AnomalyClass,
 		Selector: plan.Selector, SeedSet: plan.SeedSet, Closure: plan.Closure, ExpectedRevisions: plan.ExpectedRevisions,
 	}
-	return classifiedAuthorityRepairDigest("gentle-ai.review-disposition-plan-digest/v1", canonical)
+	return authorityDispositionDigest("gentle-ai.review-disposition-plan-digest/v1", canonical)
 }
 
 // authorityDispositionAuthorizationSchema is the first line of the exact
@@ -584,4 +587,15 @@ func ListAuthorityDispositionSelectorsAtRepo(ctx context.Context, repo string) (
 		return cmp.Or(cmp.Compare(left.PredecessorLineageID, right.PredecessorLineageID), cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID))
 	})
 	return selectors, nil
+}
+
+// authorityDispositionDigest is the domain-separated SHA-256 of a value's
+// canonical JSON encoding.
+func authorityDispositionDigest(domain string, value any) (string, error) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(append([]byte(domain+"\x00"), payload...))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }

@@ -91,7 +91,7 @@ func TestDetect(t *testing.T) {
 				t.Fatalf("Detect() binaryPath = %q, want %q", binaryPath, tt.wantBinaryPath)
 			}
 
-			wantConfigPath := filepath.Join(homeDir, ".hermes")
+			wantConfigPath := system.HermesConfigDir(homeDir)
 			if configPath != wantConfigPath {
 				t.Fatalf("Detect() configPath = %q, want %q", configPath, wantConfigPath)
 			}
@@ -126,7 +126,7 @@ func TestInstallCommand(t *testing.T) {
 func TestConfigPaths(t *testing.T) {
 	a := NewAdapter()
 	homeDir := filepath.Join(string(filepath.Separator), "home", "test")
-	configDir := filepath.Join(homeDir, ".hermes")
+	configDir := system.HermesConfigDir(homeDir)
 	configYAML := filepath.Join(configDir, "config.yaml")
 	soulMD := filepath.Join(configDir, "SOUL.md")
 	skillsDir := filepath.Join(configDir, "skills")
@@ -211,5 +211,49 @@ func TestCapabilities(t *testing.T) {
 
 	if got := a.MCPStrategy(); got != model.StrategyMergeIntoYAML {
 		t.Fatalf("MCPStrategy() = %v, want StrategyMergeIntoYAML", got)
+	}
+}
+
+// TestConfigPathsHonorHermesHome checks that every managed Hermes path follows
+// HERMES_HOME for the real user home, so install, sync, doctor, verification
+// and uninstall all operate on the directory Hermes actually reads.
+func TestConfigPathsHonorHermesHome(t *testing.T) {
+	realHome := t.TempDir()
+	t.Setenv("HOME", realHome)
+	t.Setenv("USERPROFILE", realHome)
+	hermesHome := filepath.Join(realHome, "hermes-live")
+	t.Setenv("HERMES_HOME", hermesHome)
+
+	a := NewAdapter()
+	configYAML := filepath.Join(hermesHome, "config.yaml")
+
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"GlobalConfigDir", a.GlobalConfigDir(realHome), hermesHome},
+		{"SystemPromptDir", a.SystemPromptDir(realHome), hermesHome},
+		{"SystemPromptFile", a.SystemPromptFile(realHome), filepath.Join(hermesHome, "SOUL.md")},
+		{"SkillsDir", a.SkillsDir(realHome), filepath.Join(hermesHome, "skills")},
+		{"SettingsPath", a.SettingsPath(realHome), configYAML},
+		{"MCPConfigPath", a.MCPConfigPath(realHome, "codegraph"), configYAML},
+	}
+	for _, tt := range tests {
+		if tt.got != tt.want {
+			t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
+		}
+	}
+
+	a.lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	if err := os.MkdirAll(hermesHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, _, configPath, configFound, err := a.Detect(context.Background(), realHome)
+	if err != nil {
+		t.Fatalf("Detect() error = %v", err)
+	}
+	if configPath != hermesHome || !configFound {
+		t.Fatalf("Detect() configPath = %q found = %v, want %q found = true", configPath, configFound, hermesHome)
 	}
 }

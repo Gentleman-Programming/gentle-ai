@@ -130,11 +130,9 @@ func TestExecute_VersionUnknownIsSurfacedAsSkipped(t *testing.T) {
 	if report.Results[0].Status != UpgradeSkipped {
 		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSkipped)
 	}
-	if report.Results[0].ManualHint == "" {
-		t.Fatal("ManualHint must be populated for version-unknown tools")
-	}
-	if !strings.Contains(report.Results[0].ManualHint, "`engram version`") {
-		t.Fatalf("ManualHint = %q, want detect command hint", report.Results[0].ManualHint)
+	want := "installed binary was found but its version could not be determined — check `engram version` and reinstall if it is a stale source/dev build"
+	if report.Results[0].ManualHint != want {
+		t.Fatalf("ManualHint = %q, want %q", report.Results[0].ManualHint, want)
 	}
 	if report.BackupID != "" {
 		t.Fatalf("BackupID = %q, want empty when nothing is executed", report.BackupID)

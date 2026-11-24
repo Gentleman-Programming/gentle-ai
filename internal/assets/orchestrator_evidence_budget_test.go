@@ -11,6 +11,23 @@ func TestOrchestratorsCarryEvidenceBudget(t *testing.T) {
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)
+			if path == "antigravity/orchestrator.md" {
+				// Antigravity references this canonical section instead of
+				// repeating its exploration policy. Renderer tests separately
+				// prove that the resolved clauses remain always-on.
+				const section = "Orchestrator Routing and Delivery"
+				const reference = "{{GENTLE_AI_ODD_SECTION:" + section + "}}"
+				if !strings.Contains(content, reference) {
+					t.Fatal("missing canonical routing section reference")
+				}
+				shared := MustRead("skills/_shared/odd-orchestrator-sections.md")
+				_, rest, startFound := strings.Cut(shared, "<!-- odd-orchestrator-section:"+section+":start -->")
+				body, _, endFound := strings.Cut(rest, "<!-- odd-orchestrator-section:"+section+":end -->")
+				if !startFound || !endFound {
+					t.Fatal("missing canonical routing section body")
+				}
+				content = strings.ReplaceAll(content, reference, body)
+			}
 			for _, want := range []string{
 				"one parallel batch", "at most 3 calls", "approximately 10k tokens",
 				"bounded search/line ranges", "whole large files",

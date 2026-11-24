@@ -15,9 +15,9 @@ import (
 // fragment markers in odd-orchestrator-sections.md, not headings, select what
 // moves; the core keeps one pointer per fragment, and the ordered fragment
 // list reconstructs the public render byte for byte. Only the explicit
-// user-global Claude opt-in installs these files; RenderOrchestratorWithSource
-// and every other runtime and scope stay monolithic. The marker grammar itself is
-// decoded by orchestrator_module_fragments.go.
+// user-global module delivery installs these files; RenderOrchestratorWithSource
+// and workspace scopes stay monolithic. The marker grammar itself is decoded by
+// orchestrator_module_fragments.go.
 
 // orchestratorModuleIntro opens every module after its title.
 const orchestratorModuleIntro = "Read this file on demand, only when an orchestrator core pointer names it and its triggering reason applies; it is not always loaded.\n"
@@ -42,8 +42,7 @@ type orchestratorFragmentSpec struct{ id, title, reason string }
 // RDD/consent fallback, prelaunch verification, mandatory delegation and
 // incident handling must apply before a pointer could fire.
 var orchestratorFragmentSpecs = []orchestratorFragmentSpec{
-	{id: "writer.edit-surfaces", title: "Allowed edit surfaces", reason: "you prepare a bounded writer or relay its edit-surface request"},
-	{id: "delegation.key-learnings", title: "Key Learnings closing block", reason: "you write a delegated exploration, writer, or verification prompt"},
+	{id: "writer.edit-surfaces", title: "Allowed edit surfaces", reason: "you prepare a bounded writer or adjudicate its edit-surface request (relay only human-owned scope)"},
 	{id: "skills.discovery", title: "Intent-Driven Skill Discovery", reason: "a request is skill-shaped or names a known workflow"},
 	{id: "skills.registry", title: "Skill Registry Protocol", reason: "you resolve skills before a first delegation or a subagent reports skill_resolution"},
 }
@@ -69,14 +68,23 @@ type orchestratorModuleBundle struct {
 // core and on-demand modules referenced under moduleDir, a user-global
 // directory reference such as "~/.claude/gentle-ai/orchestrator".
 func buildOrchestratorModules(agent model.AgentID, source ReviewContractSource, moduleDir string) (orchestratorModuleBundle, error) {
-	if agent != model.AgentClaudeCode {
+	if agent != model.AgentClaudeCode && agent != model.AgentCodex {
 		return orchestratorModuleBundle{}, fmt.Errorf("build orchestrator modules for %q: %w", agent, errOrchestratorModulesUnsupported)
 	}
 	annotated, err := renderOrchestrator(agent, source, "", true)
 	if err != nil {
 		return orchestratorModuleBundle{}, err
 	}
-	return splitOrchestratorModules(annotated, orchestratorFragmentSpecs, moduleDir)
+	specs := orchestratorFragmentSpecs
+	if agent == model.AgentCodex {
+		// Codex embeds the shared routing section but not Claude's separate
+		// Skill Registry Protocol section. Split the same shared fragments that
+		// are actually part of its public render; reconstruction remains exact.
+		specs = slices.DeleteFunc(slices.Clone(specs), func(spec orchestratorFragmentSpec) bool {
+			return spec.id == "skills.registry"
+		})
+	}
+	return splitOrchestratorModules(annotated, specs, moduleDir)
 }
 
 // validateOrchestratorModuleDir accepts only a home-relative or absolute

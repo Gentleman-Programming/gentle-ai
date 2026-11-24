@@ -395,6 +395,10 @@ func ReadPersistedStdioCommands(homeDir string, installedAgentIDs []string) ([]S
 			// Claude Code reads user-scope MCP entries from ~/.claude.json.
 			paths = []string{claude.UserConfigPath(homeDir)}
 		}
+		if adapter.Agent() == model.AgentAntigravity {
+			// Antigravity Engram registration is plugin-owned (#797, #5607).
+			paths = append(paths, filepath.Join(AntigravityPluginDir(homeDir), "mcp_config.json"))
+		}
 
 		for _, path := range paths {
 			if path == "" {

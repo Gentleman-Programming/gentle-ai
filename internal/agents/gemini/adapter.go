@@ -89,8 +89,12 @@ func (a *Adapter) SystemPromptDir(homeDir string) string {
 	return filepath.Join(homeDir, ".gemini")
 }
 
+// SystemPromptFile is a gentle-ai-owned staging file Gemini CLI does not
+// load. Every prompt writer appends its section here, and geminimodules
+// publishes the sections as modules that ~/.gemini/GEMINI.md imports, keeping
+// that file small for Antigravity, which loads it too (#1989).
 func (a *Adapter) SystemPromptFile(homeDir string) string {
-	return filepath.Join(homeDir, ".gemini", "GEMINI.md")
+	return filepath.Join(homeDir, ".gemini", "gentle-ai", "guidance.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {

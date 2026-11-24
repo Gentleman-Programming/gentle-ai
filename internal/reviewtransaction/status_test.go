@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestInventoryAuthorityReportsActiveMalformedAndMixedCollisionWithoutMutation(t *testing.T) {
+func TestInventoryAuthorityReportsActiveAndMalformedWithoutMutation(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	state := newCompactTestState(t, repo, "active-lineage")
 	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
@@ -24,12 +24,6 @@ func TestInventoryAuthorityReportsActiveMalformedAndMixedCollisionWithoutMutatio
 	}
 	root, _, err := reviewAuthorityRoot(context.Background(), repo)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "v1", "active-lineage"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "v1", "active-lineage", "HEAD"), []byte("not-a-revision\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(root, "v2", "broken-lineage"), 0o755); err != nil {
@@ -47,7 +41,7 @@ func TestInventoryAuthorityReportsActiveMalformedAndMixedCollisionWithoutMutatio
 	if report.Schema != ReviewAuthorityStatusSchema {
 		t.Fatalf("report header = %#v", report)
 	}
-	if !hasAuthorityInventoryStatus(report.Entries, "active-lineage", AuthorityStatusCollision) ||
+	if !hasAuthorityInventoryStatus(report.Entries, "active-lineage", AuthorityStatusActive) ||
 		!hasAuthorityInventoryStatus(report.Entries, "broken-lineage", AuthorityStatusInvalid) {
 		t.Fatalf("inventory entries = %#v", report.Entries)
 	}
@@ -74,22 +68,15 @@ func TestInventoryAuthorityReportsResetResidueAndOwnedLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lock.release()
-	if err := os.MkdirAll(filepath.Join(root, "v1", "ambiguous-lock"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "v1", "ambiguous-lock", "LOCK"), []byte("not-json\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
 	report, err := InventoryAuthority(context.Background(), repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Complete || report.Authoritative || !hasAuthorityInventoryStatus(report.Entries, "reset-lineage", AuthorityStatusReset) {
+	if !hasAuthorityInventoryStatus(report.Entries, "reset-lineage", AuthorityStatusReset) {
 		t.Fatalf("reset report = %#v", report)
 	}
-	if len(report.Locks) != 2 || report.Locks[1].Status != AuthorityLockOwned || report.Locks[1].Owner != nil ||
-		report.Locks[0].Status != AuthorityLockAmbiguous || report.Locks[0].Problem == "" {
+	if len(report.Locks) != 1 || report.Locks[0].Status != AuthorityLockOwned || report.Locks[0].Owner != nil {
 		t.Fatalf("lock evidence = %#v", report.Locks)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
@@ -172,10 +173,9 @@ type InjectOptions struct {
 	// OpenCodeSettingsPath overrides only the OpenCode MCP settings merge target.
 	// Empty preserves adapter resolution for other callers and agents.
 	OpenCodeSettingsPath string
-	// CodexMultiAgent controls whether features.multi_agent is written as true
-	// in ~/.codex/config.toml. Default (false) writes multi_agent = false, which
-	// is the safe no-op value for the experimental Codex multi-agent tool set.
-	// Set to true only when the user explicitly opts in via a CLI flag or TUI choice.
+	// CodexMultiAgent is retained for source compatibility with older callers.
+	// Codex now uses agents.enabled; the zero value must not disable existing
+	// installations, so this legacy option no longer changes config.toml.
 	CodexMultiAgent bool
 
 	// CodexOrchestratorAssignment updates top-level model settings when non-nil.
@@ -211,9 +211,8 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	return injectWithOptions(homeDir, homeDir, adapter, InjectOptions{}, true)
 }
 
-// InjectWithOptions is like Inject but accepts additional options such as the
-// Codex multi-agent opt-in flag. Use this when the caller has a model.Selection
-// and needs to forward user-chosen configuration into the injection pass.
+// InjectWithOptions is like Inject but accepts additional user-selected model
+// and service-tier settings.
 func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
 	return injectWithOptions(homeDir, homeDir, adapter, opts, true)
 }
@@ -241,19 +240,45 @@ const antigravityEngramPluginJSON = `{
 
 const antigravityEngramToolsMessage = "CRITICAL FIRST ACTION — Ensure these Engram MCP tools are available before responding: mem_save, mem_search, mem_context, mem_session_summary, mem_session_start, mem_session_end, mem_get_observation, mem_suggest_topic_key, mem_capture_passive, mem_save_prompt, mem_update, mem_current_project, mem_judge. When available, also load/select optional mem_review for memory lifecycle review; if mem_review is unavailable, continue with the required tools above. If Antigravity defers MCP tools, load/select these tools from the engram MCP server first. Loading tools never resolves the project: before any initial mem_context, follow the Engram startup protocol (call mem_current_project and apply its workspace, ambiguous, and no-project checks), then pass only the resolved project to mem_context when the user asks about prior work or the session needs project memory."
 
+// antigravityEngramHookTimeout is the explicit handler timeout in agy's hook
+// shape {type, command, timeout}; the hook only prints a static message.
+const antigravityEngramHookTimeout = 10
+
+// antigravityEngramHooksJSON registers the Engram guidance as a SessionStart
+// hook, so agy injects it once per session instead of before every model call
+// (#5895).
 func antigravityEngramHooksJSON() []byte {
+	return antigravityEngramHooksJSONFor("SessionStart", antigravityEngramHookTimeout)
+}
+
+// legacyAntigravityEngramHooksJSON lists hooks.json bytes earlier gentle-ai
+// builds wrote: the per-invocation hook and the SessionStart hook without an
+// explicit timeout. They stay recognized as managed so migration and
+// uninstall can remove them.
+func legacyAntigravityEngramHooksJSON() [][]byte {
+	return [][]byte{
+		antigravityEngramHooksJSONFor("PreInvocation", 0),
+		antigravityEngramHooksJSONFor("SessionStart", 0),
+	}
+}
+
+// antigravityEngramHooksJSONFor renders the hook for event; a zero timeout
+// omits the field, reproducing the legacy handler shape.
+func antigravityEngramHooksJSONFor(event string, timeout int) []byte {
+	handler := map[string]any{
+		"type": "command",
+		"command": "printf '%s\\n' '" + mustJSONString(map[string]any{
+			"injectSteps": []any{
+				map[string]any{"ephemeralMessage": antigravityEngramToolsMessage},
+			},
+		}) + "'",
+	}
+	if timeout > 0 {
+		handler["timeout"] = timeout
+	}
 	cfg := map[string]any{
 		"gentle-ai-engram-tools": map[string]any{
-			"PreInvocation": []any{
-				map[string]any{
-					"type": "command",
-					"command": "printf '%s\\n' '" + mustJSONString(map[string]any{
-						"injectSteps": []any{
-							map[string]any{"ephemeralMessage": antigravityEngramToolsMessage},
-						},
-					}) + "'",
-				},
-			},
+			event: []any{handler},
 		},
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
@@ -681,7 +706,21 @@ func injectAntigravityMutationsUnderLock(configHomeDir, settingsPath, mcpPath st
 	if removalErr != nil {
 		return changed, files, classifyAntigravityOwnershipTransferFailure(mcpPath, transfer, removalErr)
 	}
-	return changed, files, nil
+	// #5930: the legacy plugin under antigravity-cli/plugins is retired only
+	// once the new registration is read back from disk exactly as installed.
+	for _, asset := range transfer.expected {
+		current, err := readAntigravityPluginAsset(asset.path)
+		if err != nil {
+			return changed, files, fmt.Errorf("verify Antigravity plugin asset %q before retiring the legacy plugin: %w", asset.path, err)
+		}
+		if !current.existed || !bytes.Equal(current.content, asset.content) {
+			return changed, files, fmt.Errorf("Antigravity plugin asset %q on disk does not match the state it was installed with; the legacy plugin was not retired", asset.path)
+		}
+	}
+	legacyRemoved, legacyErr := removeLegacyAntigravityPlugin(configHomeDir)
+	changed = changed || len(legacyRemoved) > 0
+	files = append(files, legacyRemoved...)
+	return changed, files, legacyErr
 }
 
 // injectAntigravityOwnership runs every managed Antigravity mutation under
@@ -736,11 +775,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 	case model.StrategySeparateMCPFiles:
 		if adapter.Agent() == model.AgentClaudeCode && userScope {
 			result, err := injectClaudeUserConfig(configHomeDir, adapter)
-			if err != nil {
-				return InjectionResult{}, err
-			}
+			// A landed mutation is reported even alongside the error: the managed
+			// legacy config is deleted before its empty parent is pruned.
 			changed = changed || result.Changed
 			files = append(files, result.Files...)
+			if err != nil {
+				return InjectionResult{Changed: changed, Files: files}, err
+			}
 			break
 		}
 		// Engram v1.10.3+ writes an absolute path for the command field when
@@ -789,8 +830,8 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		engramCommand := stableEngramCommandForMergedConfig(mcpPath, adapter.Agent())
 		if adapter.Agent() == model.AgentAntigravity {
 			// #797: Engram registration for Antigravity is plugin-owned only.
-			// The global ~/.gemini/antigravity-cli/mcp_config.json is shared
-			// with other MCP servers (e.g. Context7), so gentle-ai never
+			// The global ~/.gemini/config/mcp_config.json is shared with
+			// other MCP servers (e.g. Context7), so gentle-ai never
 			// writes it for Engram and removes only its own exact managed
 			// duplicate entry left behind by older versions.
 			//
@@ -862,21 +903,22 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		// Read existing config and apply all mutations in a single pass.
 		//
 		// Mutation order (matters for idempotency):
-		//   1. UpsertTOMLTableKey for [features] and [agents] — these are
+		//   1. Migrate the retired [features].multi_agent key to the current
+		//      [agents].enabled key, then upsert the [agents] limits. These are
 		//      applied FIRST so that the section headers are present before
 		//      UpsertTopLevelTOMLString and UpsertCodexEngramBlock run. When
 		//      the sections already exist, their keys are replaced in place.
 		//   2. UpsertTopLevelTOMLString for instruction-file keys — places
 		//      top-level keys before the first [section] header (i.e., before
-		//      [features]). Running model→experimental in this order is
+		//      the first table). Running model→experimental in this order is
 		//      self-correcting on re-runs (the pair of calls always produces
 		//      the same final ordering).
 		//   3. UpsertCodexEngramBlock — strips the [mcp_servers.engram] block
 		//      and re-appends it at EOF on every call. Running last ensures
 		//      engram always ends up at the bottom of the file. On re-runs,
-		//      UpsertCodexEngramBlock stops at [features] (the next section
-		//      header after engram on disk), so [features] and [agents] are
-		//      preserved above engram — the stable layout is:
+		//      UpsertCodexEngramBlock stops at the next section header after
+		//      engram on disk, so [features] and [agents] are preserved above
+		//      engram — the stable layout is:
 		//        model_instructions_file / experimental_compact_prompt_file
 		//        [features] / [agents]
 		//        [mcp_servers.engram]
@@ -885,13 +927,13 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 			return InjectionResult{}, err
 		}
 
-		// Step 1 — multi-agent ODD delegation keys ([features] and [agents]).
-		// features.multi_agent is enabled by default for bounded ODD workers. The
-		// orchestrator asset gracefully falls back to solo execution if the multi-agent
-		// tools are unavailable in the session. agents.max_threads/max_depth carry
-		// conservative defaults.
-		withFeatures := upsertCodexTableKeyBeforeMCPServers(existing, "features", "multi_agent", "true")
-		withMaxThreads := upsertCodexTableKeyBeforeMCPServers(withFeatures, "agents", "max_threads", "4")
+		// Step 1 — current multi-agent ODD delegation keys ([agents]). Remove the
+		// deprecated V1 feature key on every sync. A legacy false value migrates
+		// to agents.enabled=false only when the user has not already set the
+		// current key. Fresh installs use the current default-on switch. The V2
+		// feature key, when present, is an explicit user choice and is untouched.
+		withAgents := migrateCodexMultiAgentConfig(existing)
+		withMaxThreads := upsertCodexTableKeyBeforeMCPServers(withAgents, "agents", "max_threads", "4")
 		withMaxDepth := upsertCodexTableKeyBeforeMCPServers(withMaxThreads, "agents", "max_depth", "2")
 
 		// Step 2 — top-level instruction-file keys (before the first section header).
@@ -995,6 +1037,98 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 	return InjectionResult{Changed: changed, Files: files, CodexServiceTier: codexServiceTier}, nil
 }
 
+// migrateCodexMultiAgentConfig removes the retired V1 feature switch and
+// establishes the current agents.enabled switch without overriding an explicit
+// modern value. The narrow bool read intentionally accepts only the simple TOML
+// assignment shape that Codex and older gentle-ai versions wrote; ambiguous or
+// malformed legacy values are not reinterpreted as an opt-out.
+func migrateCodexMultiAgentConfig(content string) string {
+	hasModernValue := codexTOMLTableHasKey(content, "agents", "enabled")
+	legacyValue, hasValidLegacyValue := codexTOMLTableBool(content, "features", "multi_agent")
+
+	updated := filemerge.RemoveTOMLTableKeys(content, "features", []string{"multi_agent"})
+	if hasModernValue {
+		return updated
+	}
+
+	desired := "true"
+	if hasValidLegacyValue && !legacyValue {
+		desired = "false"
+	}
+	return upsertCodexTableKeyBeforeMCPServers(updated, "agents", "enabled", desired)
+}
+
+func codexTOMLTableHasKey(content, section, key string) bool {
+	var decoded map[string]any
+	if _, err := toml.Decode(content, &decoded); err == nil {
+		table, ok := decoded[section].(map[string]any)
+		if !ok {
+			return false
+		}
+		_, ok = table[key]
+		return ok
+	}
+
+	// Keep the narrow string fallback for malformed user configuration. It
+	// preserves the explicit simple-key form that older injection already
+	// recognized instead of silently overwriting it while Codex diagnoses the
+	// surrounding parse error.
+	normalized := filemerge.RemoveTOMLTableKeys(content, section, nil)
+	withoutKey := filemerge.RemoveTOMLTableKeys(content, section, []string{key})
+	return normalized != withoutKey
+}
+
+// codexTOMLTableBool reads only a unique, bare boolean assignment from one
+// table. It reuses the shared multiline-string scanner so examples embedded in
+// developer instructions are never mistaken for configuration.
+func codexTOMLTableBool(content, section, key string) (bool, bool) {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	header := "[" + section + "]"
+	inSection := false
+	found := false
+	value := false
+	var multiline byte
+
+	for _, line := range strings.Split(content, "\n") {
+		wasInString := multiline != 0
+		multiline = filemerge.ScanTOMLMultilineString(line, multiline)
+		if wasInString {
+			continue
+		}
+
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inSection = trimmed == header
+			continue
+		}
+		if !inSection || !(strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")) {
+			continue
+		}
+		if found {
+			return false, false
+		}
+		assignment := strings.TrimSpace(strings.TrimPrefix(trimmed, key))
+		if !strings.HasPrefix(assignment, "=") {
+			return false, false
+		}
+		raw := strings.TrimSpace(strings.TrimPrefix(assignment, "="))
+		if comment := strings.IndexByte(raw, '#'); comment >= 0 {
+			raw = strings.TrimSpace(raw[:comment])
+		}
+		switch raw {
+		case "true":
+			value = true
+		case "false":
+			value = false
+		default:
+			return false, false
+		}
+		found = true
+	}
+
+	return value, found
+}
+
 // upsertCodexTableKeyBeforeMCPServers behaves like filemerge.UpsertTOMLTableKey,
 // except that a missing table is created before the first [mcp_servers.*]
 // table instead of at EOF. Context7 and Engram both strip and re-append their
@@ -1059,7 +1193,14 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	}
 	removed, err := RemoveManagedLegacyClaudeConfig(legacyPath)
 	if err != nil {
-		return InjectionResult{}, err
+		// The managed legacy file is deleted before its empty parent is pruned,
+		// so a prune failure still lands a mutation. Report the removed path
+		// alongside the error instead of claiming nothing changed.
+		if removed {
+			result.Changed = true
+			result.Files = append(result.Files, legacyPath)
+		}
+		return result, err
 	}
 	if !removed {
 		return result, nil
@@ -1093,9 +1234,10 @@ func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) 
 }
 
 // writeCodexInstructionFiles writes the Engram memory protocol and compact prompt
-// files to ~/.codex/ and returns their paths and write results.
+// files to the resolved Codex home (honoring CODEX_HOME when the supplied home
+// is the real user home — issue #5031) and returns their paths and write results.
 func writeCodexInstructionFiles(homeDir string) (instructionsPath, compactPath string, changed bool, files []string, err error) {
-	codexDir := filepath.Join(homeDir, ".codex")
+	codexDir := system.CodexConfigDir(homeDir)
 	instructionsPath = filepath.Join(codexDir, "engram-instructions.md")
 	compactPath = filepath.Join(codexDir, "engram-compact-prompt.md")
 
@@ -1185,18 +1327,36 @@ func stableEngramCommandForExisting(cmd string, _ model.AgentID) string {
 func stableAntigravityEngramCommand(homeDir, globalPath string) string {
 	paths := []string{
 		globalPath,
-		filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json"),
+		filepath.Join(AntigravityPluginDir(homeDir), "mcp_config.json"),
+		filepath.Join(AntigravityLegacyPluginDir(homeDir), "mcp_config.json"),
 	}
 	for _, path := range paths {
 		raw, err := osReadFile(path)
 		if err != nil {
 			continue
 		}
-		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) {
+		// #5930: a preserved command that no longer resolves leaves agy with a
+		// disconnected Engram, so it falls through to the fresh-install command.
+		if cmd, ok := existingMergedEngramCommand(raw, model.AgentAntigravity); ok && isEngramCommand(cmd) && engramCommandResolves(cmd) {
 			return stableEngramCommandForExisting(cmd, model.AgentAntigravity)
 		}
 	}
 	return preferredStableEngramCommand()
+}
+
+// engramCommandResolves reports whether cmd can still be launched: a bare name
+// must be on PATH, and a path must name an existing executable file. It is a
+// variable so ownership-transfer tests can keep their fixed fixture commands.
+var engramCommandResolves = func(cmd string) bool {
+	if filepath.Base(cmd) == cmd {
+		p, err := EngramLookPath(cmd)
+		return err == nil && p != ""
+	}
+	info, err := os.Stat(cmd)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0
 }
 
 func preferredStableEngramCommand() string {

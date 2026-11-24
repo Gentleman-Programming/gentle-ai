@@ -112,30 +112,6 @@ func TestReviewNextTransitionDispositionCollectThenExecute(t *testing.T) {
 	})
 }
 
-// TestReviewNextTransitionClassifiedRepairTakesPriorityOverDisposition
-// satisfies tasks.md 4.1's implicit ordering: when BOTH a classified repair
-// candidate is eligible AND a disposition plan derives (an unlikely but
-// possible overlap), the pre-existing classified route wins — Wave 6 adds a
-// new route only for the case the classified vocabulary has nothing to say.
-func TestReviewNextTransitionClassifiedRepairTakesPriorityOverDisposition(t *testing.T) {
-	t.Parallel()
-
-	status := corruptedDispositionStatus()
-	status.Repair = reviewtransaction.AuthorityRepairAssessment{
-		Schema: reviewtransaction.AuthorityRepairAssessmentSchema, Status: reviewtransaction.AuthorityRepairEligible,
-		Class: "unchanged_target", RepositoryBinding: "binding", AuthorizationSchema: reviewtransaction.AuthorityRepairAuthorizationSchema,
-		Candidate: &reviewtransaction.AuthorityRepairCandidate{LineageID: "classified-candidate", Revision: "sha256:" + strings.Repeat("f", 64)},
-	}
-
-	got := newReviewNextTransition(status, nil, nil, nil, reviewNextTransitionInput{})
-	if got.Kind != reviewNextTransitionCollect || got.Collect == nil || len(got.Collect.Inputs) != 1 {
-		t.Fatalf("next transition = %#v, want a single classified collect", got)
-	}
-	if got.Collect.Inputs[0].Name != "repair_authorization" {
-		t.Fatalf("collect input name = %q, want the classified repair_authorization input (classified must win over disposition)", got.Collect.Inputs[0].Name)
-	}
-}
-
 // TestReviewNextTransitionCorruptedWithNeitherRepairNorDispositionStops is
 // the pre-existing (now regression-protected) behavior: a corrupted graph
 // with no classified candidate and no derivable disposition plan still

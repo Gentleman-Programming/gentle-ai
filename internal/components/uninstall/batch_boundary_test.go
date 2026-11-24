@@ -11,6 +11,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 // TestPartialUninstallCommitsSucceededAgentsWhenAnotherAgentFails reproduces
@@ -196,9 +197,9 @@ func TestBuildPlanAttributesOperationsToTheAgentsThatContributedThem(t *testing.
 	}
 
 	claudeSettings := filepath.Join(home, ".claude", "settings.json")
-	hermesConfig := filepath.Join(home, ".hermes", "config.yaml")
+	hermesConfig := filepath.Join(system.HermesConfigDir(home), "config.yaml")
 	assertOperationAgents(t, built, claudeSettings, []model.AgentID{model.AgentClaudeCode})
-	assertOperationAgents(t, built, filepath.Join(home, ".hermes", "SOUL.md"), []model.AgentID{model.AgentHermes})
+	assertOperationAgents(t, built, filepath.Join(system.HermesConfigDir(home), "SOUL.md"), []model.AgentID{model.AgentHermes})
 	// Hermes' native YAML settings are not a generic JSON target.
 	for _, op := range built.operations {
 		if op.path == hermesConfig {

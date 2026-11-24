@@ -6,7 +6,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/styles"
 )
 
-// RenderShellUpdate reports channel-scoped component availability only.
+// RenderShellUpdate reports channel-scoped component availability only. An
+// error without an available update is a failed check: it offers Retry.
 func RenderShellUpdate(target, mode, channel string, checking, available bool, components []string, detail, applyErr string, cursor, width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
@@ -23,10 +24,16 @@ func RenderShellUpdate(target, mode, channel string, checking, available bool, c
 		lines = append(lines, "Checking this channel for component updates…", "", detectedSubtleStyle.Render("Esc: back"))
 		return strings.Join(lines, "\n")
 	}
-	if applyErr != "" {
+	checkFailed := applyErr != "" && !available
+	if checkFailed {
+		lines = append(lines, styles.ErrorStyle.Render("Update check failed"), styles.ErrorStyle.Render(applyErr))
+	} else if applyErr != "" {
 		lines = append(lines, styles.ErrorStyle.Render(applyErr), "")
 	}
-	if available {
+	// A failed check says nothing about this channel until a check succeeds.
+	switch {
+	case checkFailed:
+	case available:
 		lines = append(lines, styles.WarningStyle.Render("Update available"))
 		for _, component := range components {
 			lines = append(lines, "  • "+component)
@@ -34,12 +41,14 @@ func RenderShellUpdate(target, mode, channel string, checking, available bool, c
 		if detail != "" {
 			lines = append(lines, detectedSubtleStyle.Render(detail))
 		}
-	} else {
+	default:
 		lines = append(lines, styles.SuccessStyle.Render("Up to date for this channel."))
 	}
 	lines = append(lines, "")
 	actions := []string{"Back"}
-	if available {
+	if checkFailed {
+		actions = []string{"Retry", "Back"}
+	} else if available {
 		actions = []string{"Update now", "Back"}
 	}
 	for index, action := range actions {

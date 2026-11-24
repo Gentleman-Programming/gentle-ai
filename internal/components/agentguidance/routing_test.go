@@ -170,12 +170,17 @@ func TestRenderRoutingSucceedsForEverySupportedAgent(t *testing.T) {
 			}
 
 			// The rendered thresholds must come from the canonical manifest, not
-			// from prose invented by the renderer.
+			// from prose invented by the renderer. Pi names its measured lookup
+			// gate instead (TestRenderRoutingNamesPiMeasuredExplorationGate).
+			lookups := fmt.Sprintf("more than approximately %d sequential lookups", routing.DelegatedDirect.ApproxSequentialLookupLimit)
+			if agent.ID == model.AgentPi {
+				lookups = "more than 3 lookups (the runtime's exploration notice fires past 3 lookups or 40,000 output bytes)"
+			}
 			for _, want := range []string{
 				fmt.Sprintf("one parallel batch (%d maximum)", routing.DirectInline.MaxEvidenceBatches),
 				fmt.Sprintf("at most %d calls", routing.DirectInline.MaxEvidenceCalls),
 				fmt.Sprintf("approximately %dk tokens", routing.DirectInline.ApproxEvidenceTokens/1000),
-				fmt.Sprintf("more than approximately %d sequential lookups", routing.DelegatedDirect.ApproxSequentialLookupLimit),
+				lookups,
 				fmt.Sprintf("at most approximately %dk tokens", routing.DelegatedDirect.ApproxHandoffTokens/1000),
 				fmt.Sprintf("one parent spot check (%d maximum)", routing.DelegatedDirect.MaxParentSpotChecks),
 				fmt.Sprintf("approximately %dk parent-context tokens", routing.DelegatedDirect.ApproxParentContextTokens/1000),
@@ -293,6 +298,8 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"omit tests, minify, add gratuitous abstractions, or split artificially to fit the heuristic",
 			"Forward this same advisory-only instruction when delegating tasks to subagents",
 			"Existing PR size gates remain unchanged",
+			// gentle-ai#6067 (GS-03): a user's line limit caps, it does not gate.
+			"A user's line limit is a ceiling, never an exact-count gate; never invent acceptance gates the user did not ask for",
 		}},
 		{"recover the right feature", []string{
 			"mem_context",
@@ -303,8 +310,17 @@ func TestRenderRoutingOrganicTaskContinuity(t *testing.T) {
 			"Reconcile current requirements, code, and proof before resuming",
 		}},
 		{"partial persistence and conflict", []string{
-			"Read back both writes; they are not atomic",
+			// gentle-ai#6067 (GS-03): a plain read-back, no reconciliation script.
+			"Read back both writes with the normal read tool; they are not atomic, but never author comparison or reconciliation scripts or gates for them",
+			// gentle-ai#6067 (GS-03): the file is the source; never replay.
+			"After a partial or failed sync, check which writes already applied and continue from that state; never replay an applied write",
+			"The file is the source: a mirror that differs from the file just written is refreshed from the file, never a blocker",
+			// gentle-ai#6067 (GS-10): Engram mirror cadence.
+			"Refresh the mirror once per task transition (a task starts, finishes, is blocked, reopened, or dropped) or material plan change, and at close; `## Log` entries and evidence added between those points go to the file only and reach the mirror at the next one",
+			// Sentences the port did not replace stay.
 			"Engram is unavailable, preserve local progress and explicitly mark the mirror pending",
+			"Resynchronize when available",
+			"If a file write is unsafe or unavailable, preserve existing state and report the limitation",
 			"do not claim success or block unrelated safe work",
 			"Preserve both versions on irreconcilable edits and ask only about the real conflict",
 		}},
@@ -424,7 +440,8 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 			"forecast authored changed lines (additions plus deletions, generated files excluded) from the task list",
 			"keep a running count from work-unit commits",
 			"`ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`",
-			"apply the chosen strategy before the next commit",
+			// harness-continuity S7: the menu belongs to publishing.
+			"apply the chosen strategy only when the user asks to publish (push or PR), never before a local work-unit commit",
 			"`ask-on-risk` asks once for the chain strategy, `stacked-to-main` or `feature-branch-chain`",
 			"`auto-chain` asks only for a missing chain strategy and slices automatically",
 			"record slice boundaries, which commits each pull request holds, in the feature document",
@@ -451,21 +468,21 @@ func TestRenderRoutingClosesEachTaskWithAWorkUnitCommitAndReviewsIt(t *testing.T
 		}},
 		{"a non-due assessment records its reason and continues", []string{
 			"When `review_due` is false, record `review_due_reason` and continue: `passive` needs no review and the boundary advances",
-			"`under_budget` stays pending in the slice until a later commit reaches the budget",
+			"`under_budget` (medium risk, not a size cap) is not auto-reviewed and stays pending until a high-risk commit or the user asks",
 			"`already_reviewed` means this exact range is already covered by terminal authority",
 		}},
-		// S14: commit per reviewable slice; a high-risk commit is reviewed
-		// alone only after the open medium slice before it is closed.
-		{"a high-risk unit closes the open slice first", []string{
-			"When a high-risk unit follows pending `under_budget` commits, close the open slice first, assessing and reviewing it as the slice, so the high-risk commit is then reviewed alone against the new boundary",
+		// A task boundary must preserve the provider's due decision and must not
+		// turn an unreviewed pending slice into a reviewed boundary.
+		{"a high-risk boundary preserves the provider due decision", []string{
+			"When a high-risk unit follows pending `under_budget` commits, assess the open slice first. Review the pending slice only when `review_due` is true or the user explicitly asks; otherwise preserve the pending boundary and proceed without starting review. A task boundary neither authorizes review nor advances a reviewed boundary",
 		}},
 		// S14: commit per reviewable slice; a commit may hold several tasks,
 		// so the assessment outcome is recorded per commit.
 		{"boundaries advance and outcomes are recorded per commit", []string{
 			"The first boundary is the branch point, and every reviewed boundary becomes the next base",
-			"Record per commit the assessed tier and outcome: granted, declined, passive, under budget, already reviewed, or unavailable",
-			"An unavailable or failed assessment never lowers the tier: treat the commit as due and run the preflight STATUS with `--base-ref <last reviewed boundary> --committed-only`",
-			"Never infer low risk from a failed assessment",
+			"Record per commit the assessed tier and outcome: granted, declined, passive, medium, already reviewed, or unavailable",
+			"An unavailable or failed assessment never lowers the tier: report the missing assessment proof; never infer `review_due` or construct a preflight transition",
+			"Keep existing risk, consent, and authority unchanged",
 		}},
 	}
 	// Runtimes without receipt-driven development verify each work unit by
@@ -965,7 +982,7 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 			"**Writer trigger:** a writer is delegated only for a named reason",
 			// pain-point-iteration S9 C4: a unit is an independent behavior with
 			// several minutes of work, never a test/doc/code split of one behavior.
-			"(a) parallelism: two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work (several files or roughly 100+ changed lines; a subagent spends one to two minutes reading before it writes), launched together",
+			"(a) parallelism: two or more independent units of behavior with disjoint edit surfaces, each needing several minutes of work (several files or roughly 100+ changed lines; a subagent spends one to two minutes reading before it writes), launched together in one turn",
 			"A unit is one independent piece of behavior with its code, tests, and docs together: never split one behavior into test, docs, and code writers, and a delivery that depends on another is not independent; several small independent changes run inline, one after another.",
 			"(b) context: the long-session backstop below",
 			"Never delegate a writer for size, a large task alone, file count, or a price ratio",
@@ -998,8 +1015,28 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 		}},
 		{"S4 no self-pause", []string{
 			"Hedged wording is not a stop",
-			"A tracked task ends pending only with the user's explicit stop or one **Needs your decision** result naming the open blockers or missing proof",
-		}, nil},
+			// harness-continuity S3: an authorized outcome continues; a pending
+			// child is a wait event that resumes on completion, never a synthetic
+			// human decision, and waiting on launched work never licenses
+			// abandonment or a fake final delivery.
+			"a pending child is a wait event whose completion resumes the turn without asking the human",
+			"A tracked task ends the turn pending only while it waits on already-launched work",
+			// A decided denial or an exhausted limit is not "still outstanding",
+			// so the rule names it as its own pending state of the affected work.
+			"for the affected work a denial, missing consent, the user's explicit stop, or an exhausted limit applies to",
+			"independent authorized work continues",
+			"never abandons runnable work or presents an unverified outcome as final",
+			// S3: an explicit stop bounds the work it applies to even when the
+			// task is small or untracked, beside denial, consent, exhaustion.
+			"only a real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit stops the work it applies to, never independent authorized work",
+			// S3: missing proof forbids the completion claim, not a required
+			// authorized check the existing budget still allows.
+			"a required authorized check the existing budget still allows keeps running",
+			"stop checking only inside an exhausted or denied boundary",
+		}, []string{
+			"**Needs your decision**",
+			"never more verification",
+		}},
 		{"S5 explore only to decide or route", []string{
 			"Explore only for a map you need to decide or route, never to read files you will read anyway before writing inline",
 			"when the Writer trigger delegates a write, reading that prepares it",
@@ -1048,6 +1085,16 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 						t.Errorf("%s: RenderRouting(%q) keeps retired %q", spec.name, agent.ID, retired)
 					}
 				}
+			}
+			// gentle-ai#6067: only Pi's rendering, mirrored by Gentle Shell, says
+			// the parallel units run in background when that mode is on.
+			const background = "launched together in one turn (in background when background mode is on);"
+			wantBackground := agent.ID == model.AgentPi
+			if got := strings.Contains(rendered, background); got != wantBackground {
+				t.Errorf("RenderRouting(%q) contains %q = %v, want %v", agent.ID, background, got, wantBackground)
+			}
+			if strings.Count(rendered, "launched together") != strings.Count(rendered, "launched together in one turn") {
+				t.Errorf("RenderRouting(%q) says \"launched together\" without \"in one turn\"", agent.ID)
 			}
 		})
 	}
@@ -1112,8 +1159,7 @@ func TestRenderRoutingGivesPiItsOwnODDSteps(t *testing.T) {
 	piClauses := []string{
 		"then create or rebuild the visible `todo` list from the reconciled feature tasks",
 		"Route each task through the orchestrator's Mechanisms",
-		"update the file, mirror, and visible `todo` projection after every task transition and material plan change",
-		"Never end with a tracked task pending unless you quote the user's explicit stop.",
+		"mirror the file and project the visible `todo` at each task transition",
 		"native review runs only under the user-owned RDD switch.",
 		"Phase reporting: the Gentle Shell prompt label is inferred automatically",
 		"Detail for steps 3–7: `orchestrator-delegation.md` and `orchestrator-memory.md`.",
@@ -1142,15 +1188,13 @@ func TestRenderRoutingGivesPiItsOwnODDSteps(t *testing.T) {
 // rule in Pi's own steps (piODDSteps), so the clause tests above hold every
 // runtime to the rule while Pi keeps Gentle Shell's phrasing.
 var piStepWording = map[string]string{
-	"1. **Authorize.** First establish whether the requested outcome explicitly authorizes a change.":                      "1. **Authorize.** Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
-	"First establish whether the requested outcome explicitly authorizes a change.":                                        "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
-	"Investigation, explanation, review, audit, comparison, and solution-proposal or planning-only requests are read-only": "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
-	"must not write or edit files, delegate a writer, invoke apply, or create implementation artifacts":                    "no writer, apply, or implementation artifacts",
-	"If change intent is ambiguous or conditional, ask one clarification and remain read-only until answered.":             "Ambiguous or conditional change intent (unclear whether a change is authorized at all) gets one clarification; stop and wait.",
-	"Size the task by the Task Size section below":                                                                         "Size the task by the orchestrator's Task Size section",
-	"push, pull request creation, and merge remain the user's decisions under ordinary repository policy":                  "push, pull request creation, and merge remain the user's decisions.",
-	"Hedged wording is not a stop": "that result is a valid stop, hedged wording is not",
-	"A tracked task ends pending only with the user's explicit stop or one **Needs your decision** result naming the open blockers or missing proof":                           "Never end with a tracked task pending unless you quote the user's explicit stop. An applicable quick check runs once; an unavailable verifier or subagent is reported as unavailable, never retried or escalated into extra ceremony. Partial, blocked, unavailable, or exhausted proof becomes one **Needs your decision** result naming the open blockers or missing proof",
+	"1. **Authorize.** First establish whether the requested outcome explicitly authorizes a change.":                                                                          "1. **Authorize.** Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"First establish whether the requested outcome explicitly authorizes a change.":                                                                                            "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"Investigation, explanation, review, audit, comparison, and solution-proposal or planning-only requests are read-only":                                                     "Investigation, explanation, review, comparison, and proposal-only requests stay read-only",
+	"must not write or edit files, delegate a writer, invoke apply, or create implementation artifacts":                                                                        "no writer, apply, or implementation artifacts",
+	"If change intent is ambiguous or conditional, ask one clarification and remain read-only until answered.":                                                                 "Ambiguous or conditional change intent (unclear whether a change is authorized at all) gets one clarification; stop and wait.",
+	"Size the task by the Task Size section below":                                                                                                                             "Size the task by the orchestrator's Task Size section",
+	"push, pull request creation, and merge remain the user's decisions under ordinary repository policy":                                                                      "push, pull request creation, and merge remain the user's decisions.",
 	"Explore only for a map you need to decide or route, never to read files you will read anyway before writing inline":                                                       "Do not delegate exploration of files you will read anyway to work inline; explore only for a map you need to decide or route.",
 	"Each test asserts every observable effect of the rule (output, exit code, persisted data), covers the cases the rule itself names, and goes through the public interface": "Each test asserts every observable effect of the rule it covers (exit code, exact stdout and stderr, and that rejected input leaves stored data and counters unchanged), covers the cases the rule itself names (its examples, boundaries, and errors), and checks through the public interface, never internal storage.",
 }

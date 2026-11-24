@@ -1,0 +1,194 @@
+//go:build windows
+
+package shellinstaller
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+// userWindowsRemoveReplacedBackup removes one <destination>.replaced-<UTC>
+// tree the Windows installer left behind when it retired an installation
+// during a reconfigure.
+//
+// The backup is removed only when it passes the shared read-only inspection
+// (exact clean absolute sibling, directory tree, canonical manifest/selection/
+// lock, original active destination, current SID and physical backup identity,
+// complete owned alias-free cleanup inventory), and only when its physical
+// identity is rechecked immediately before removal and the backup is absent
+// afterward. Invalid, unrelated, uncertain or noncanonical trees are preserved
+// and reported as an error, so nothing is ever removed by an unvalidated name
+// glob.
+func userWindowsRemoveReplacedBackup(destination, backup string) error {
+	manifest, err := userWindowsReplacedBackupInspect(destination, backup)
+	if err != nil {
+		return err
+	}
+	// Recheck the physical identity immediately before removal, exactly as the
+	// stage remove does.
+	observed, err := userWindowsIdentity(backup, true)
+	if err != nil || observed != manifest.Identity {
+		return errors.Join(err, fmt.Errorf("uncertain Windows replaced backup identity; preserved %q", backup))
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		return fmt.Errorf("Windows replaced backup %q could not be removed; preserved: %w", backup, err)
+	}
+	if _, err := os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(err, fmt.Errorf("Windows replaced backup %q survived removal", backup))
+	}
+	return nil
+}
+
+// userWindowsReplacedBackupInspect is the shared read-only validation every
+// retention path uses before it may act on a replaced backup. It refuses every
+// path that is not an exact clean absolute sibling with a canonical UTC
+// timestamp, a directory tree whose canonical manifest, canonical selection,
+// retained lock, original active destination, current SID and physical backup
+// identity all validate, and a complete owned, alias-free cleanup inventory.
+// It never deletes anything: callers recheck the physical identity and remove
+// only after this inspection succeeds.
+func userWindowsReplacedBackupInspect(destination, backup string) (userWindowsManifest, error) {
+	if err := userWindowsReplacedSibling(destination, backup); err != nil {
+		return userWindowsManifest{}, err
+	}
+	info, err := os.Lstat(backup)
+	if err != nil {
+		return userWindowsManifest{}, fmt.Errorf("Windows replaced backup %q cannot be inspected; preserved: %w", backup, err)
+	}
+	if !info.IsDir() {
+		return userWindowsManifest{}, fmt.Errorf("Windows replaced backup %q is not a directory tree; preserved", backup)
+	}
+	manifest, err := userWindowsManifestReadAs(backup, destination)
+	if err != nil {
+		return userWindowsManifest{}, fmt.Errorf("uncertain Windows replaced backup %q; preserved: %w", backup, err)
+	}
+	if err := userWindowsInventory(backup, userWindowsInventoryCleanup); err != nil {
+		return userWindowsManifest{}, errors.Join(err, fmt.Errorf("uncertain Windows replaced backup inventory; preserved %q", backup))
+	}
+	return manifest, nil
+}
+
+// userWindowsReplacedSibling refuses every path that is not an exact clean
+// absolute sibling of destination named <base>.replaced-<canonical UTC>.
+func userWindowsReplacedSibling(destination, backup string) error {
+	return userWindowsBackupSibling(destination, backup, "replaced")
+}
+
+// userWindowsBackupSibling is the shared name validator for a retired tree of
+// the given kind ("replaced" or "removed"): the path must be an exact clean
+// absolute sibling of destination named <base>.<kind>-<canonical UTC>. The
+// timestamp must round-trip through the canonical UTC layout so a
+// close-looking name can never reach the installer's removal path.
+func userWindowsBackupSibling(destination, backup, kind string) error {
+	refused := func(reason string) error {
+		return fmt.Errorf("Windows %s backup %q %s; preserved", kind, backup, reason)
+	}
+	if !filepath.IsAbs(destination) || filepath.Clean(destination) != destination {
+		return refused("targets a noncanonical active destination")
+	}
+	if !filepath.IsAbs(backup) || filepath.Clean(backup) != backup {
+		return refused("is not a clean absolute path")
+	}
+	if filepath.Dir(backup) != filepath.Dir(destination) {
+		return refused("is not an exact sibling of the active destination")
+	}
+	marker := "." + kind + "-"
+	base := filepath.Base(destination)
+	name := filepath.Base(backup)
+	if name == base || !strings.HasPrefix(name, base+marker) {
+		return refused("does not use the canonical " + kind + "-backup name")
+	}
+	stamp := strings.TrimPrefix(name, base+marker)
+	parsed, err := time.Parse("20060102T150405Z", stamp)
+	if err != nil || parsed.Format("20060102T150405Z") != stamp {
+		return refused("carries a noncanonical UTC timestamp")
+	}
+	return nil
+}
+
+// userWindowsPruneReplacedBackups bounds the Windows replaced-backup trees a
+// reconfigure leaves beside the active installation. Candidates are exact
+// siblings of destination discovered through the same userWindowsReplacedSibling
+// validator the single removal uses, so unrelated bases, wrong markers and
+// noncanonical timestamps are ignored. The exact keep (the backup just
+// created) is always retained, and the lexically latest candidate is also
+// retained when clock skew dated it in the future. Every other candidate is
+// removed through the validated single-backup primitive; an uncertain
+// candidate is preserved whole and reported in a joined error, so cleanup is
+// best-effort and never retracts a valid installation.
+func userWindowsPruneReplacedBackups(destination, keep string) error {
+	return userWindowsPruneBackups(destination, keep, "replaced", func(destination, backup string) error {
+		_, err := userWindowsReplacedBackupInspect(destination, backup)
+		return err
+	}, userWindowsRemoveReplacedBackup)
+}
+
+// userWindowsPruneBackups is the retention policy shared by every retired-tree
+// family: it keeps the exact keep (and a clock-skewed latest) and removes every
+// other validated sibling of the same kind through remove, inspecting a
+// skew-retained candidate read-only through inspect.
+func userWindowsPruneBackups(destination, keep, kind string, inspect, remove func(destination, backup string) error) error {
+	sibling := func(destination, backup string) error { return userWindowsBackupSibling(destination, backup, kind) }
+	if err := sibling(destination, keep); err != nil {
+		return err
+	}
+	// The exact keep is the backup just created; nothing may be removed unless
+	// it is actually on disk. A missing keep refuses the whole prune before any
+	// candidate is touched.
+	if _, err := os.Lstat(keep); err != nil {
+		return fmt.Errorf("Windows %s-backup keep %q is missing; preserved: %w", kind, keep, err)
+	}
+	prefix := filepath.Base(destination) + "." + kind + "-"
+	keepName := filepath.Base(keep)
+	keepStamp := strings.TrimPrefix(keepName, prefix)
+
+	entries, err := os.ReadDir(filepath.Dir(destination))
+	if err != nil {
+		return fmt.Errorf("Windows %s backups beside %q cannot be listed; preserved: %w", kind, destination, err)
+	}
+	candidates := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		candidate := filepath.Join(filepath.Dir(destination), entry.Name())
+		if err := sibling(destination, candidate); err != nil {
+			continue // unrelated base, wrong marker or noncanonical timestamp
+		}
+		candidates = append(candidates, candidate)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	// Timestamps are the fixed-width canonical UTC layout, so lexical order is
+	// chronological order; the last candidate is the lexically latest.
+	sort.Strings(candidates)
+	latestName := filepath.Base(candidates[len(candidates)-1])
+	// Clock skew can date a candidate in the future. Compare the canonical
+	// timestamp strings rather than the full backup name against the bare keep
+	// stamp: a destination base that sorts below the stamp digits (for example
+	// "1install") must still order a future candidate after the keep.
+	retainLatest := latestName != keepName && strings.TrimPrefix(latestName, prefix) > keepStamp
+	var errs []error
+	for _, candidate := range candidates {
+		name := filepath.Base(candidate)
+		switch {
+		case name == keepName:
+			// The exact keep is always retained, untouched.
+		case name == latestName && retainLatest:
+			// Clock skew retained this candidate; it stays on disk but is still
+			// inspected read-only so an uncertain future tree is preserved whole
+			// and reported, never silently kept.
+			if err := inspect(destination, candidate); err != nil {
+				errs = append(errs, err)
+			}
+		default:
+			if err := remove(destination, candidate); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}

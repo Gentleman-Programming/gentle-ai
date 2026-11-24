@@ -45,6 +45,7 @@ func TestFreshInstallShipsReviewAgentsOnlyToRDDRuntimes(t *testing.T) {
 		{model.AgentClaudeCode, true, true},
 		{model.AgentCursor, false, true},
 		{model.AgentKiroIDE, false, true},
+		{model.AgentAntigravity, false, true},
 		{model.AgentKimi, false, false},
 	} {
 		t.Run(string(tc.agent), func(t *testing.T) {

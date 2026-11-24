@@ -382,7 +382,7 @@ func TestNegotiatedStatusUsesRealMaintenanceLockTruth(t *testing.T) {
 	}
 	deadline := decodeReviewIntegrationFailure(t, deadlineOutput.Bytes())
 	if deadline.Code != "operation_timeout" || deadline.MutationOutcome != ReviewMutationNotStarted ||
-		deadline.RetrySafe || deadline.NextAction != "stop" {
+		!deadline.RetrySafe || deadline.NextAction != "retry" {
 		t.Fatalf("STATUS caller deadline = %#v", deadline)
 	}
 	if strings.Contains(deadlineOutput.String(), repo) {
@@ -404,6 +404,7 @@ func TestNegotiatedFacadeAggregateTimeoutPreservesMutationTruth(t *testing.T) {
 		args           []string
 		phase          string
 		mutation       ReviewMutationOutcome
+		retrySafe      bool
 		replayability  reviewtransaction.Replayability
 		nextAction     string
 		lineage        string
@@ -411,8 +412,8 @@ func TestNegotiatedFacadeAggregateTimeoutPreservesMutationTruth(t *testing.T) {
 	}{
 		{
 			name: "read only", args: []string{"status", "--contract", ReviewIntegrationContractV1},
-			phase: "pre_native", mutation: ReviewMutationNotStarted,
-			replayability: reviewtransaction.ReplayabilityManualActionRequired, nextAction: "stop",
+			phase: "pre_native", mutation: ReviewMutationNotStarted, retrySafe: true,
+			replayability: reviewtransaction.ReplayabilityNotReplayable, nextAction: "retry",
 		},
 		{
 			name: "repair execution", args: []string{"repair", "--contract", ReviewIntegrationContractV1, "--preflight=false", "--lineage", "repair-timeout"},
@@ -435,54 +436,8 @@ func TestNegotiatedFacadeAggregateTimeoutPreservesMutationTruth(t *testing.T) {
 			}
 			failure := decodeReviewIntegrationFailure(t, output.Bytes())
 			if failure.Code != "operation_timeout" || failure.Phase != tt.phase || failure.MutationOutcome != tt.mutation ||
-				failure.RetrySafe || failure.Replayability != tt.replayability || failure.NextAction != tt.nextAction || failure.LineageID != tt.lineage {
+				failure.RetrySafe != tt.retrySafe || failure.Replayability != tt.replayability || failure.NextAction != tt.nextAction || failure.LineageID != tt.lineage {
 				t.Fatalf("timeout failure = %#v", failure)
-			}
-		})
-	}
-}
-
-func TestNegotiatedRepairProgressFailurePreservesOpaqueReplayTruth(t *testing.T) {
-	base := reviewtransaction.ClassifiedAuthorityRepairExecution{
-		Class:     reviewtransaction.AuthorityRepairClassLegacyV1HistoricalAlias,
-		LineageID: "repair-progress", Revision: "sha256:" + strings.Repeat("a", 64),
-		ChainIdentity:    "sha256:" + strings.Repeat("b", 64),
-		Cause:            reviewtransaction.AuthorityRepairCauseUnsupportedHistoricalV1OperationAlias,
-		Disposition:      reviewtransaction.AuthorityRepairDispositionQuarantineHistoricalAlias,
-		AssessmentDigest: "sha256:" + strings.Repeat("c", 64), RequestDigest: "sha256:" + strings.Repeat("d", 64),
-		RecordIdentity: "sha256:" + strings.Repeat("e", 64),
-	}
-	for _, tt := range []struct {
-		name          string
-		status        string
-		phase         string
-		mutation      ReviewMutationOutcome
-		replayability reviewtransaction.Replayability
-		nextAction    string
-		exactReplay   bool
-	}{
-		{name: "prepared", status: reviewtransaction.CompactReclaimPrepared, phase: "native_running", mutation: ReviewMutationUnknown, replayability: reviewtransaction.ReplayabilityExactReplaySafe, nextAction: "review.repair", exactReplay: true},
-		{name: "committed verified", status: reviewtransaction.CompactReclaimCommitted, phase: "native_committed", mutation: ReviewMutationCommitted, replayability: reviewtransaction.ReplayabilityExactReplaySafe, nextAction: "review.repair", exactReplay: true},
-		{name: "committed unverified", status: reviewtransaction.CompactReclaimCommitted, phase: "native_committed", mutation: ReviewMutationCommitted, replayability: reviewtransaction.ReplayabilityStatusRequired, nextAction: "review.status"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			progress := base
-			progress.Status = tt.status
-			failure := newReviewIntegrationFailure("review.repair", []string{"--lineage", progress.LineageID}, &reviewtransaction.ClassifiedAuthorityRepairProgressError{
-				Progress: progress, ExactReplaySafe: tt.exactReplay, Cause: context.DeadlineExceeded,
-			})
-			if failure.Code != "operation_timeout" || failure.Phase != tt.phase || failure.MutationOutcome != tt.mutation ||
-				failure.Replayability != tt.replayability || failure.NextAction != tt.nextAction || failure.RetrySafe != tt.exactReplay ||
-				failure.LineageID != progress.LineageID || failure.RequestDigest != progress.RequestDigest || failure.ProgressIdentity != progress.RecordIdentity {
-				t.Fatalf("%s repair progress failure = %#v", tt.name, failure)
-			}
-			if err := failure.Validate(); err != nil {
-				t.Fatal(err)
-			}
-			withoutProgress := failure
-			withoutProgress.ProgressIdentity = ""
-			if err := withoutProgress.Validate(); err == nil {
-				t.Fatal("repair progress failure accepted a request digest without its progress identity")
 			}
 		})
 	}

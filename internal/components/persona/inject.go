@@ -924,7 +924,16 @@ func preserveManagedSections(existing, newPersona string, persona model.PersonaI
 		return "", false
 	}
 
+	// The new persona is written as the leading body, so a marked persona
+	// section in the preserved tail is a second copy. Releases that appended
+	// Antigravity sections to the shared ~/.gemini/GEMINI.md left one (#5608).
 	managedSuffix := existing[idx:]
+	if strings.Contains(managedSuffix, "<!-- /gentle-ai:persona -->") {
+		managedSuffix = strings.TrimLeft(filemerge.InjectMarkdownSection(managedSuffix, "persona", ""), "\n")
+		if managedSuffix == "" {
+			return newPersona, true
+		}
+	}
 	updated := newPersona
 	if !strings.HasSuffix(updated, "\n") {
 		updated += "\n"

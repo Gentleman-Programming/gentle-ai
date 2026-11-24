@@ -79,6 +79,10 @@ type RoutingOptions struct {
 	// caller installing the global scope may set it; every other agent and
 	// the default keep the monolithic delivery.
 	ClaudeGlobalModules bool
+	// CodexGlobalModules selects a user-global AGENTS.md core plus on-demand
+	// modules. CLI install and sync enable it by default only for global Codex;
+	// workspace Codex guidance remains monolithic.
+	CodexGlobalModules bool
 }
 
 // InjectRoutingWithOptions installs the organic routing guidance for one
@@ -138,7 +142,7 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 	var orchestrator string
 	var modules []orchestratorModule
 	switch {
-	case delivery.kind == deliveryClaudeModules:
+	case delivery.kind == deliveryOrchestratorModules:
 		// Pointers name the absolute directory of the planned module paths.
 		bundle, err := buildOrchestratorModules(agent, options.ReviewContract, filepath.Dir(delivery.paths[1]))
 		if err != nil {
@@ -163,8 +167,8 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 		return injectOrchestratorPrompt(delivery, agent, merge)
 	case deliveryJinjaModule:
 		return injectJinjaModule(targetDir, delivery, agent, merge)
-	case deliveryClaudeModules:
-		return commitOrchestratorCore(filepath.Dir(delivery.paths[0]), merge, modules)
+	case deliveryOrchestratorModules:
+		return commitOrchestratorCoreAt(filepath.Dir(delivery.paths[0]), delivery.paths[0], merge, modules)
 	default:
 		return injectPromptSection(delivery, merge)
 	}
@@ -215,9 +219,9 @@ const (
 	deliveryPromptSection routingDeliveryKind = iota
 	deliveryJinjaModule
 	deliveryOrchestratorPrompt
-	// deliveryClaudeModules is the opt-in Claude global core plus modules;
-	// its paths are the core, every known module name and the ledger.
-	deliveryClaudeModules
+	// deliveryOrchestratorModules is a user-global core plus modules; its paths
+	// are the core, every known module name and the ledger.
+	deliveryOrchestratorModules
 )
 
 // routingDelivery is the single resolution of how and where guidance reaches
@@ -275,12 +279,17 @@ func resolveRoutingDelivery(targetDir string, agent model.AgentID, options Routi
 			paths:        []string{filepath.Join(configDir, routingModuleFile), adapter.SystemPromptFile(targetDir)},
 		}, nil
 
-	case agent == model.AgentClaudeCode && options.ClaudeGlobalModules:
+	case (agent == model.AgentClaudeCode && options.ClaudeGlobalModules) ||
+		(agent == model.AgentCodex && options.CodexGlobalModules):
 		configDir := adapter.GlobalConfigDir(targetDir)
 		if !filepath.IsAbs(configDir) {
-			return routingDelivery{}, fmt.Errorf("%w: Claude global modules need an absolute config dir, got %q", ErrInvalidTarget, configDir)
+			return routingDelivery{}, fmt.Errorf("%w: %s global modules need an absolute config dir, got %q", ErrInvalidTarget, agent, configDir)
 		}
-		return routingDelivery{kind: deliveryClaudeModules, adapter: adapter, paths: orchestratorCorePaths(configDir)}, nil
+		corePath := adapter.SystemPromptFile(targetDir)
+		if !filepath.IsAbs(corePath) || filepath.Dir(corePath) != configDir {
+			return routingDelivery{}, fmt.Errorf("%w: %s global module core %q is outside config dir %q", ErrInvalidTarget, agent, corePath, configDir)
+		}
+		return routingDelivery{kind: deliveryOrchestratorModules, adapter: adapter, paths: orchestratorCorePathsFor(configDir, filepath.Base(corePath))}, nil
 
 	default:
 		promptPath := adapter.SystemPromptFile(targetDir)

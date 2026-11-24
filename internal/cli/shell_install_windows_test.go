@@ -17,7 +17,7 @@ import (
 
 func TestWindowsShellInstallUnconfirmedSelectionHasNoEffects(t *testing.T) {
 	if err := shellinstaller.UserKernelCheck(); err != nil {
-		t.Skip("requires actual Windows 11 x64 normal-account acceptance; not Server/ARM qualification")
+		t.Skip("requires actual Windows 10 22H2 or Windows 11 x64 normal-account acceptance; not Server/ARM qualification")
 	}
 	target := filepath.Join(t.TempDir(), "Gentle Shell")
 	if _, err := shellinstaller.InspectUserInstall(shellinstaller.UserInstallRequest{Destination: target, Mode: "separate"}); err != nil {
@@ -66,7 +66,7 @@ func TestWindowsShellInstallFlagsAndNoEffectHelp(t *testing.T) {
 	if err := RunShell([]string{"install", "--help"}, &output); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"--inspect", "--confirm", "Windows 11 x64", "Separate only", "personal PATH"} {
+	for _, expected := range []string{"--inspect", "--confirm", "Windows 10 22H2 (build 19045) or Windows 11 x64", "Separate only", "personal PATH"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("missing safe help: %s", expected)
 		}

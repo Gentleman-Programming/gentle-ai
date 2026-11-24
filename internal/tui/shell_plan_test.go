@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,7 +156,7 @@ func TestShellMainFailureOffersQualifiedFallback(t *testing.T) {
 	m = m.WithShellInstallRunner(func(ctx context.Context, got shellinstaller.UserInstallRequest, report func(shellinstaller.UserInstallProgress)) error {
 		calls++
 		report(shellinstaller.UserInstallProgress{Index: 1, Total: 5, Label: shellInstallStepLabels[0], State: "running"})
-		return errors.New("Main SDK + stock provider: private installation: nonzero")
+		return fmt.Errorf("Main SDK + stock provider: %w", shellinstaller.ErrMainSDKInstall)
 	})
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)

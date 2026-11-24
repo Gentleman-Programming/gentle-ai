@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,35 @@ import (
 // composition. HEAD is attempted first; this commit is used only when the TUI
 // retries after a Main composition failure.
 const userMainFallbackCommit = "63d6065f924ec366a321dd21f7396f04026c026f"
+
+// ErrMainSDKInstall marks a failed Main SDK composition. Callers match it
+// with errors.Is to offer the last qualified Main snapshot; the wording of
+// the wrapped error is never part of that contract.
+var ErrMainSDKInstall = errors.New("Main SDK installation failed")
+
+// userMainSDKError keeps the existing "<context>: <cause>" message while
+// matching ErrMainSDKInstall and unwrapping to the cause.
+type userMainSDKError struct {
+	context string
+	err     error
+}
+
+func (e *userMainSDKError) Error() string {
+	if e.context == "" {
+		return e.err.Error()
+	}
+	return e.context + ": " + e.err.Error()
+}
+func (e *userMainSDKError) Unwrap() error        { return e.err }
+func (e *userMainSDKError) Is(target error) bool { return target == ErrMainSDKInstall }
+
+// userMainSDKFailure wraps a Main SDK composition failure; nil stays nil.
+func userMainSDKFailure(context string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &userMainSDKError{context: context, err: err}
+}
 
 type userSnapshotArtifact struct {
 	URL, SHA, Archive, Prefix string
@@ -87,10 +115,13 @@ func userMainSnapshotUsing(ctx context.Context, client *http.Client) (userSnapsh
 	if client == nil {
 		return userSnapshotArtifact{}, nil, errors.New("Main acquisition requires a live context and client")
 	}
-	get := func(url string, bound int64) (content []byte, resultErr error) {
+	get := func(url, accept string, bound int64) (content []byte, resultErr error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return nil, err
+		}
+		if accept != "" {
+			req.Header.Set("Accept", accept)
 		}
 		req.Header.Set("Accept-Encoding", "identity")
 		req.Header.Set("User-Agent", "gentle-shell-windows-installer")
@@ -102,9 +133,14 @@ func userMainSnapshotUsing(ctx context.Context, client *http.Client) (userSnapsh
 		if err := userMainPublisherRefusal(req.URL.Host, response, bound); err != nil {
 			return nil, err
 		}
+		// GitHub streams without a Content-Length, so the oversize check above
+		// cannot fire; an oversize body and a failed read are named apart.
 		data, err := io.ReadAll(io.LimitReader(response.Body, bound+1))
-		if err != nil || int64(len(data)) > bound {
-			return nil, errors.Join(err, errors.New("Main publisher response bound"))
+		if err != nil {
+			return nil, fmt.Errorf("Main publisher %s response read failed: %w", req.URL.Host, err)
+		}
+		if int64(len(data)) > bound {
+			return nil, fmt.Errorf("Main publisher %s response exceeds %d bytes", req.URL.Host, bound)
 		}
 		return data, nil
 	}
@@ -112,19 +148,19 @@ func userMainSnapshotUsing(ctx context.Context, client *http.Client) (userSnapsh
 	if os.Getenv("GENTLE_AI_MAIN_FALLBACK") == "1" {
 		commit = userMainFallbackCommit
 	} else {
-		metadata, err := get("https://api.github.com/repos/Gentleman-Programming/gentle-shell/commits/main", 256<<10)
-		var record struct {
-			SHA string `json:"sha"`
-		}
+		// The bare-SHA media type answers with the 40-character SHA alone; the
+		// default commit JSON embeds the newest commit's files and patches, so
+		// its size followed whatever that commit touched (#5987).
+		ref, err := get("https://api.github.com/repos/Gentleman-Programming/gentle-shell/commits/main", "application/vnd.github.sha", 64)
 		if err != nil {
 			return userSnapshotArtifact{}, nil, err
 		}
-		if err := json.Unmarshal(metadata, &record); err != nil || !userSnapshotLowerHex(record.SHA, 40) {
-			return userSnapshotArtifact{}, nil, errors.Join(err, errors.New("canonical Main ref identity refused"))
+		if !userSnapshotLowerHex(string(ref), 40) {
+			return userSnapshotArtifact{}, nil, errors.New("canonical Main ref identity refused")
 		}
-		commit = record.SHA
+		commit = string(ref)
 	}
-	data, err := get("https://codeload.github.com/Gentleman-Programming/gentle-shell/zip/"+commit, 32<<20)
+	data, err := get("https://codeload.github.com/Gentleman-Programming/gentle-shell/zip/"+commit, "", 32<<20)
 	if err != nil {
 		return userSnapshotArtifact{}, nil, err
 	}

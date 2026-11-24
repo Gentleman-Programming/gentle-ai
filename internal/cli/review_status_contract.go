@@ -57,7 +57,14 @@ type ReviewForecast struct {
 	Steps   []ReviewForecastItem  `json:"steps"`
 }
 
+// ReviewV1ReceiptStatus is a compatibility marker, not receipt evidence.
+// Ordinary target STATUS selects no legacy receipt authority.
+type ReviewV1ReceiptStatus struct {
+	Status string `json:"status"`
+}
+
 type ReviewTargetStatusResult struct {
+	Receipt       *ReviewV1ReceiptStatus                `json:"receipt,omitempty"`
 	Schema        string                                `json:"schema"`
 	Contract      string                                `json:"contract"`
 	Operation     string                                `json:"operation"`
@@ -103,7 +110,13 @@ type ReviewTargetStatusResult struct {
 	Escalation        *reviewtransaction.CompactEscalationEvidence `json:"escalation,omitempty"`
 	RepositoryContext *ReviewRepositoryContextReference            `json:"repository_context,omitempty"`
 	ValidationRequest *reviewtransaction.TargetedValidationRequest `json:"validation_request,omitempty"`
-	decision          reviewtransaction.TargetStatusDecision       `json:"-"`
+	// NonBlockingFindings is emitted only to a client that passed
+	// --non-blocking-findings, and only for a current compact authority in
+	// correction_required or escalated (issue #6088). It never carries a
+	// finding to correct or an unresolved finding; nothing routes on it.
+	NonBlockingFindings *reviewtransaction.NonBlockingFindingSet `json:"non_blocking_findings,omitempty"`
+
+	decision          reviewtransaction.TargetStatusDecision `json:"-"`
 	intendedUntracked reviewIntendedUntrackedScope
 	repositoryRoot    string
 	rddMode           reviewtransaction.RDDModeStatus
@@ -175,7 +188,6 @@ const (
 	reviewActionEligibleCurrent             = "eligible_current_target"
 	reviewActionEligibleEscalatedRecovery   = "eligible_recovery_escalated"
 	reviewActionEligibleRecovery            = "eligible_recovery"
-	reviewActionEligibleClassifiedRepair    = "eligible_classified_authority_repair"
 	reviewActionForbiddenNotSelected        = "forbidden_not_selected_by_native_status"
 	reviewActionForbiddenAmbiguous          = "forbidden_ambiguous_authority"
 	reviewActionForbiddenCorrupted          = "forbidden_corrupted_authority"
@@ -249,6 +261,11 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 			InitialSnapshotIdentity: native.Projection.InitialSnapshotIdentity, CurrentSnapshotIdentity: native.Projection.CurrentSnapshotIdentity,
 		},
 	}
+	if contract == ReviewIntegrationContractV1 {
+		// The native loader selects compact authority only; its lifecycle
+		// does not publish deciding receipts. Never infer presence/identity.
+		result.Receipt = &ReviewV1ReceiptStatus{Status: "not_applicable"}
+	}
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
 		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
 		result.AuthorityTargetIdentity = native.AuthorityTargetIdentity
@@ -297,12 +314,7 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 			}
 		}
 	case reviewtransaction.TargetStatusActionRepairAuthority:
-		if status.Repair.Status == reviewtransaction.AuthorityRepairEligible && status.Repair.Candidate != nil {
-			allowed.Action, allowed.ReasonCode = "review.repair", reviewActionEligibleClassifiedRepair
-			allowed.RequiredInputs = []string{"actor", "reason", "maintainer_authorization"}
-		} else {
-			allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenManualIntervention
-		}
+		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenManualIntervention
 	default:
 		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenManualIntervention
 	}
@@ -371,10 +383,6 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	}
 	if err := result.Repair.Validate(); err != nil {
 		return err
-	}
-	if result.Repair.Status == reviewtransaction.AuthorityRepairEligible &&
-		(result.Applicability != reviewtransaction.TargetApplicabilityCorrupted || result.Action != reviewtransaction.TargetStatusActionRepairAuthority) {
-		return errors.New("eligible authority repair is not bound to corrupted status")
 	}
 	if err := result.Projection.Validate(); err != nil {
 		return err
@@ -483,10 +491,6 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			if !reviewContractCorrectionBudgetValid(result.Frozen.OriginalChangedLines, result.Frozen.CorrectionBudget) {
 				return errors.New("current-target frozen budget is invalid")
 			}
-		case reviewtransaction.AuthorityVersionLegacy:
-			if result.Frozen != nil || result.AuthorityTargetIdentity != "" {
-				return errors.New("legacy current-target status cannot contain compact frozen inputs")
-			}
 		default:
 			return errors.New("current-target authority version is unsupported")
 		}
@@ -498,7 +502,14 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		// stale lineages as optional, discoverable recovery candidates. An
 		// unrelated target with zero candidates remains equally valid.
 		terminalConsumed := result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityNotReplayable
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !terminalConsumed && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
+		// Issue #6156: an undeclared untracked population rewrites the terminal
+		// stop into the typed intended_untracked_selection_required collect, and
+		// the root action follows that transition (#3928). The collect input is
+		// still validated in full by validateNextTransitionTargets.
+		untrackedSelectionRequired := result.NextTransition != nil &&
+			result.NextTransition.Kind == reviewNextTransitionCollect &&
+			result.NextTransition.ReasonCode == "intended_untracked_selection_required"
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Action != reviewtransaction.TargetStatusActionStart && !terminalConsumed && !(result.Action == reviewtransaction.TargetStatusActionCollect && untrackedSelectionRequired) && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:
@@ -786,8 +797,8 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		return nil
 	}
 	// #3299, #4170: the continuation is the runnable follow-up of exactly the
-	// two stops that have one -- a stale managed-asset digest, and the #4680
-	// correction budget release. Attaching it to any other transition -- an
+	// stops that have one -- a stale managed-asset digest and the conditional
+	// correction-context or unavailable-request release. Attaching it to any other transition -- an
 	// execute the caller would run alongside a command it was never told
 	// about, or a stop for an unrelated reason -- would let a caller read two
 	// disagreeing exits out of one envelope. Each code's own shape is checked
@@ -803,7 +814,7 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			if err := validateManagedAssetsContinuation(continuation); err != nil {
 				return fmt.Errorf("invalid managed-assets STATUS continuation: %w", err)
 			}
-		case reviewCorrectionContextBudgetCode:
+		case reviewCorrectionContextBudgetCode, "correction_request_unavailable":
 			// #4680: the release route may not appear in the Pi facade
 			// contract's prose, so the stop is the only channel carrying it.
 			// Its shape is checked as strictly as the sync one.
@@ -811,7 +822,7 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 				return fmt.Errorf("invalid correction release STATUS continuation: %w", err)
 			}
 		default:
-			return errors.New("next_transition.continuation is valid only on a managed_assets_outdated or correction_context_budget_exceeded stop") // refusal:by-design world-action: a producer that attaches this continuation to any other stop built a malformed envelope and requires a code fix, not an operator command
+			return errors.New("next_transition.continuation is valid only on a managed_assets_outdated, correction_context_budget_exceeded or correction_request_unavailable stop") // refusal:by-design world-action: a producer that attaches this continuation to any other stop built a malformed envelope and requires a code fix, not an operator command
 		}
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
@@ -904,11 +915,6 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if err := result.validateSelectorNextTransition(); err != nil {
 		return err
 	}
-	if result.Repair.Status == reviewtransaction.AuthorityRepairEligible {
-		if err := result.validateRepairNextTransition(); err != nil {
-			return err
-		}
-	}
 	if result.NextTransition.Collect == nil {
 		return nil
 	}
@@ -983,6 +989,18 @@ func (result ReviewTargetStatusResult) validateIntendedUntrackedSelectionTransit
 	if !reflect.DeepEqual(input.Arguments[:4], reviewTargetArguments(result)) || input.Arguments[4].Name != "eligible_paths_json" ||
 		input.Arguments[5].Name != "expected_untracked_inventory" || input.Arguments[5].Value == "" {
 		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
+	}
+	if input.Submission != nil {
+		if result.Schema == ReviewIntegrationStatusSchemaV9 && input.Submission.OperationToken != "status" {
+			return errors.New("selected STATUS submission differs from its operation") // refusal:by-design world-action: selection can only re-enter read-only STATUS
+		}
+		lineage, selector, _ := reviewIntendedUntrackedSubmissionSelectors(input.Submission.ArgumentTokens)
+		if lineage != "" && (result.Schema != ReviewIntegrationStatusSchemaV9 || result.Authority == nil || lineage != result.Authority.LineageID) {
+			return errors.New("selected STATUS submission differs from its authority lineage") // refusal:by-design world-action: only STATUS can bind the lineage selector
+		}
+		if result.Schema == ReviewIntegrationStatusSchemaV9 && !reflect.DeepEqual(selector, reviewIntendedUntrackedSelectorTokens(result.Projection.Kind, result.Projection.BaseTree)) {
+			return errors.New("selected STATUS submission differs from its target selector") // refusal:by-design world-action: only STATUS can bind the target selector
+		}
 	}
 	return nil
 }
@@ -1111,59 +1129,6 @@ func reviewAuthorityTargetIdentity(status ReviewTargetStatusResult) string {
 		return status.AuthorityTargetIdentity
 	}
 	return status.TargetIdentity
-}
-
-func (result ReviewTargetStatusResult) validateRepairNextTransition() error {
-	transition := result.NextTransition
-	assessment, candidate := result.Repair, result.Repair.Candidate
-	if transition == nil || candidate == nil {
-		return errors.New("eligible authority repair lacks a classified transition")
-	}
-	provider := map[string]string{
-		"class": string(assessment.Class), "lineage": candidate.LineageID,
-		"expected-revision": candidate.Revision, "cause": string(assessment.Cause),
-		"disposition": string(assessment.Disposition), "repository-binding": assessment.RepositoryBinding,
-	}
-	switch transition.Kind {
-	case reviewNextTransitionCollect:
-		if transition.ReasonCode != "repair_authorization_required" || transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
-			return errors.New("classified repair authorization transition is incomplete")
-		}
-		input := transition.Collect.Inputs[0]
-		arguments, err := reviewTransitionArgumentMap(input.Arguments)
-		if err != nil || input.Name != "repair_authorization" || input.Schema != assessment.AuthorizationSchema ||
-			input.CaptureOperation != "external.authorize_repair" || !reflect.DeepEqual(arguments, provider) {
-			return errors.New("classified repair authorization transition is not provider-bound")
-		}
-	case reviewNextTransitionExecute:
-		if transition.ReasonCode != "repair_authorized" || transition.Execute == nil || transition.Execute.Operation != "review.repair" ||
-			transition.Execute.Binding.LineageID != candidate.LineageID || transition.Execute.Binding.Revision != candidate.Revision {
-			return errors.New("classified repair execution transition is incomplete")
-		}
-		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments, transition.Execute.Operation)
-		if err != nil || len(arguments) != len(provider)+3 {
-			return errors.New("classified repair execution arguments are incomplete")
-		}
-		for name, value := range provider {
-			if arguments[name] != value {
-				return errors.New("classified repair execution arguments differ from provider assessment")
-			}
-		}
-		if strings.TrimSpace(arguments["actor"]) == "" || strings.TrimSpace(arguments["reason"]) == "" || arguments["maintainer-authorization"] != "provided" {
-			return errors.New("classified repair execution exposes or omits authorization state")
-		}
-		preconditions, err := reviewTransitionArgumentMap(transition.Execute.Preconditions)
-		wantPreconditions := map[string]string{
-			"repair_status": string(reviewtransaction.AuthorityRepairEligible), "unique_candidate": "true",
-			"current_head": candidate.Revision, "repair_authorization": "provided",
-		}
-		if err != nil || !reflect.DeepEqual(preconditions, wantPreconditions) {
-			return errors.New("classified repair execution preconditions are incomplete")
-		}
-	default:
-		return errors.New("eligible authority repair may only collect authorization or execute repair")
-	}
-	return nil
 }
 
 // frozenManifestDigestForProjection publishes the digest a manifest-less
@@ -1499,29 +1464,42 @@ func (submission ReviewTransitionSubmission) Validate() error {
 
 func (submission ReviewTransitionSubmission) validateIntendedUntrackedSelection() error {
 	value, tokens := submission.Value, submission.ArgumentTokens
-	agent, hasAgent, selectorValid := "", false, false
-	if len(tokens) == 5 || len(tokens) == 6 {
-		agent, hasAgent = strings.CutPrefix(tokens[2], "--agent=")
-		// The selector replays the STATUS target: workspace current-changes,
-		// or an exact base tree with its committed-only or overlay scope.
-		selector := tokens[3 : len(tokens)-1]
-		baseTree, hasBase := "", false
-		if len(selector) == 2 {
-			baseTree, hasBase = strings.CutPrefix(selector[0], "--base-ref=")
-		}
-		selectorValid = len(selector) == 1 && selector[0] == "--projection=workspace" ||
-			hasBase && reviewTargetEvidenceTreePattern.MatchString(baseTree) && (selector[1] == "--committed-only=true" || selector[1] == "--workspace-overlay=true")
-	}
+	_, _, selectorValid := reviewIntendedUntrackedSubmissionSelectors(tokens)
 	if value == nil || len(submission.Values) != 0 || value.Slot != "intended_untracked_selection" || value.Domain != "schema_bound_json" || value.Schema != reviewIntendedUntrackedSelectionSchema || value.SubstitutionLocation != len(tokens)-1 || len(value.AllowedValues) != 0 || value.Minimum != 0 || value.Maximum != 0 ||
-		!selectorValid || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !hasAgent || tokens[len(tokens)-1] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
+		!selectorValid || tokens[0] != "--contract="+ReviewIntegrationContractV2 || tokens[1] != "--next-transition=true" || !strings.HasPrefix(tokens[2], "--agent=") || tokens[len(tokens)-1] != "--intended-untracked-selection="+reviewSubmissionValuePlaceholder {
 		// refusal:by-design world-action: the provider-generated intended-untracked submission descriptor requires a provider code fix.
 		return errors.New("intended-untracked submission descriptor is invalid")
 	}
-	if _, err := reviewRuntimeWithImmutableTransport(agent); err != nil {
+	if _, err := reviewRuntimeWithImmutableTransport(strings.TrimPrefix(tokens[2], "--agent=")); err != nil {
 		// refusal:by-design world-action: the provider-generated intended-untracked submission runtime requires a provider code fix.
 		return errors.New("intended-untracked submission runtime is unsupported")
 	}
 	return nil
+}
+
+// Selected STATUS replays an optional explicit lineage, followed by exactly
+// the frozen target selector. Neither is part of the substitutable JSON value.
+func reviewIntendedUntrackedSubmissionSelectors(tokens []string) (lineage string, selector []string, valid bool) {
+	if len(tokens) < 5 || len(tokens) > 7 {
+		return "", nil, false
+	}
+	selector = tokens[3 : len(tokens)-1]
+	if value, found := strings.CutPrefix(selector[0], "--lineage="); found {
+		if !validReviewIntegrationLineage(value) {
+			return "", nil, false
+		}
+		lineage, selector = value, selector[1:]
+	}
+	switch len(selector) {
+	case 1:
+		return lineage, selector, selector[0] == "--projection=workspace"
+	case 2:
+		baseTree, hasBase := strings.CutPrefix(selector[0], "--base-ref=")
+		return lineage, selector, hasBase && reviewTargetEvidenceTreePattern.MatchString(baseTree) &&
+			(selector[1] == "--committed-only=true" || selector[1] == "--workspace-overlay=true")
+	default:
+		return "", nil, false
+	}
 }
 
 // validateCaptureResult is the pi host-relay reviewer-result submission: the

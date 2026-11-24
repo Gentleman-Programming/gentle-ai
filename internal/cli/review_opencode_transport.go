@@ -896,7 +896,7 @@ func openCodeTransportCaptureRefusalCause(err error) string {
 // admission failure -- for example a payload the strict decoder refuses --
 // is named reviewer_result_not_admissible.
 var openCodeTransportAdmissionDiagnosticCauses = []string{
-	"inspection_coverage", "invalid_finding_location", "evidence_path_out_of_scope", "proof_path_out_of_scope",
+	"inspection_coverage", "invalid_finding_location", "proof_path_out_of_scope",
 	"candidate_causality_unclaimed_id", "candidate_causality_evidence_degraded",
 }
 

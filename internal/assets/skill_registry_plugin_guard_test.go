@@ -86,15 +86,19 @@ appendFileSync(process.env.GENTLE_AI_RELAY_LOG, JSON.stringify(process.argv.slic
 	}
 }
 
-// TestSkillRegistryPluginMarkersMatchCLIGuard pins the plugin's PROJECT_MARKERS to the CLI guard's set: .git, .atl, and every ProjectSkillDirs workspace skill directory.
+// Both plugin versions mirror the CLI guard's .git, .atl and project skill roots.
 func TestSkillRegistryPluginMarkersMatchCLIGuard(t *testing.T) {
-	list := regexp.MustCompile(`const PROJECT_MARKERS = \[[^\]]*\]`).FindString(MustRead("opencode/plugins/skill-registry.ts"))
-	got := regexp.MustCompile(`"[^"]*"`).FindAllString(list, -1)
 	want := []string{`".git"`, `".atl"`}
 	for _, dir := range skillregistry.ProjectSkillDirs("") {
 		want = append(want, `"`+filepath.ToSlash(dir)+`"`)
 	}
-	if strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Fatalf("plugin PROJECT_MARKERS = %v, want the CLI guard's markers %v", got, want)
+	for _, asset := range []string{"opencode/plugins/skill-registry.ts", "opencode/plugins-v2/skill-registry.ts"} {
+		t.Run(asset, func(t *testing.T) {
+			list := regexp.MustCompile(`const PROJECT_MARKERS = \[[^\]]*\]`).FindString(MustRead(asset))
+			got := regexp.MustCompile(`"[^"]*"`).FindAllString(list, -1)
+			if strings.Join(got, " ") != strings.Join(want, " ") {
+				t.Fatalf("plugin PROJECT_MARKERS = %v, want the CLI guard's markers %v", got, want)
+			}
+		})
 	}
 }

@@ -38,6 +38,9 @@ MODE = sys.argv[1] if len(sys.argv) == 2 else 'full'
 REPORT = {}
 COMMAND_FAILURE = None
 FAULT = ''
+# TEST-only answer of the pi.dev latest-version stub: the release a stock
+# `pi update --self` installs. 1.0.0 lies outside every reviewed lock.
+PI_LATEST = '1.0.0'
 FAULT_SEEN = threading.Event()
 FAULT_RELEASE = threading.Event()
 CACHE = {}
@@ -313,7 +316,7 @@ class Mirror(http.server.BaseHTTPRequestHandler):
                 FAULT_SEEN.set()
                 status, headers, raw = 404, {}, b''
             elif host == 'pi.dev' and self.path == '/api/latest-version':
-                status, headers, raw = 200, {'content-type': 'application/json'}, b'{"version":"1.0.0"}'
+                status, headers, raw = 200, {'content-type': 'application/json'}, json.dumps({'version': PI_LATEST}, separators=(',', ':')).encode()
             else:
                 status, headers, raw = public_bytes(host, self.path)
             self.send_response(status)
@@ -622,6 +625,14 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
     sent = False
     typed = False
     expected = b'type, or / for commands' if opening_only else b'el Gentleman package is active.'
+    # The channel contract installs whatever gentle-pi npm's latest resolves:
+    # recent releases start with a codemode consent dialog and no longer print
+    # the historical registration line. Their branded header is rendered with
+    # cursor positioning between glyphs, so the witness is searched over the
+    # ANSI-stripped visible stream with flexible spacing — fixed bytes, never
+    # a dynamic or vacuous pass.
+    branded = re.compile(rb'\xe2\x9c\xbf\s+Gentle\s+Shell')
+    witnessed = False
     confirmed = False
     stopped = False
     observed_cwd = ''
@@ -664,6 +675,11 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     del raw[:discarded]
                     truncated += discarded
                 require(len(raw) <= 65536, 'whole PTY capture bound')
+                # The channel contract witnesses registration with either the
+                # historical line or the branded header over the ANSI-stripped
+                # stream; the exit choreography starts on the same witness.
+                visible = re.sub(rb'\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-B]|\x1b[=>]', b'', bytes(raw))
+                witnessed = expected in raw or (not opening_only and branded.search(visible))
                 input_ready = installer_seen if installer is not None else (no_models_seen or prompt_seen)
                 if not trust_answered and b'Trust project folder' in raw:
                     time.sleep(0.2)
@@ -686,7 +702,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                 if installer is not None and not confirmed and b'Confirm this physical selection' in raw:
                     os.write(master, b'y')
                     confirmed = True
-                if installer is None and expected in raw and (input_ready or not opening_only) and not stopped:
+                if installer is None and witnessed and (input_ready or not opening_only) and not stopped:
                     foreground = os.tcgetpgrp(master)
                     observed_cwd = os.readlink(f'/proc/{foreground}/cwd')
                     require(observed_cwd == str(project), 'actual foreground caller CWD differs')
@@ -716,7 +732,7 @@ def pty_status(binding, project, command=None, extra=None, installer=None, cance
                     os.write(master, b'finish\n')
                     break
         if installer is None:
-            require(expected in raw, 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')
+            require(witnessed, 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')
             if opening_only:
                 require(stopped and b'GUEST-STATUS:0' in raw, 'Gentle opening did not settle successfully')
             require(not installer_seen, 'ordinary launch opened installer')
@@ -1145,7 +1161,7 @@ def mvp_smoke(personal):
 
 
 def main():
-    global FAULT
+    global FAULT, PI_LATEST
     require(MODE in {'probe', 'direct', 'full', 'smoke'}, 'explicit qualification mode')
     if MODE == 'probe':
         kernel()
@@ -1232,16 +1248,45 @@ def main():
         require('0.99.2' in run([str(target / 'bin/pi'), '--version']), 'authenticated prior did not launch')
         nested = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui/package.json'
         require(json.loads(nested.read_text())['version'] == '0.99.2', 'actual prior nested TUI placement differs')
-        run([str(target / 'bin/pi'), 'update', '--self'], cwd=WORK / 'project', timeout=180)
-        require('1.3.0' in run([str(target / 'bin/pi'), '--version']), 'actual stock prior-to-next transition absent')
-        require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'update replaced physical selected roots')
-        require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'update changed owned command bindings')
-        REPORT['trueUpgrade'] = 'actual published 0.99.2 to 1.3.0 stock updater; TEST-only Pi API selection, not public latest authority'
-        run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180)
-        run([str(target / 'bin/pi'), '--version'], cwd=WORK / 'project')
-        REPORT['stockForce'] = 'actual separate same-version reinstall after true upgrade'
+        # The stub selects the Pi release the generated lock pinned. From the
+        # frozen prior parent even that update is refused by construction:
+        # stock `npm install -g` keeps the prior lock's top-level packages
+        # (pi-ai 1.0.0 among them), which the generated lock never admits once
+        # Pi leaves 0.99.2 (#6170, #6045). The next launch stays refused and
+        # confirmed recovery restores the modern locked cohort prepare-prior
+        # saved.
+        lock_pi = json.loads((target / 'runtime/project/package-lock.json').read_text())['packages']['node_modules/@earendil-works/pi-coding-agent']['version']
+        PI_LATEST = lock_pi
+        refused = run([str(target / 'bin/pi'), 'update', '--self'], cwd=WORK / 'project', timeout=180, good=False)
+        require('global package lacks authenticated metadata' in refused, 'prior-parent self-update was not refused for its unauthenticated packages')
+        require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'refused update replaced physical selected roots')
+        require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'refused update changed owned command bindings')
+        run([str(target / 'bin/pi'), '--version'], good=False)
+        upgrade_recovery = run([SUPERVISOR, 'shell', 'recover', str(target), 'inspect'])
+        upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
+        run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
         coding_metadata = prefix / 'lib/node_modules/@earendil-works/pi-coding-agent/package.json'
+        # The recovered locked cohort's metadata is the reference every later
+        # recovery must restore byte for byte.
         expected_metadata = coding_metadata.read_bytes()
+        require(json.loads(expected_metadata)['version'] == lock_pi, 'prior-parent recovery did not restore the locked cohort')
+        require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'locked cohort did not launch after prior-parent refusal')
+        REPORT['priorParentUpdate'] = 'refused+recovered %s' % lock_pi
+        # On the modern cohort the stock updater reinstalls the locked release,
+        # but `npm install -g` reshapes the graph the install sealed, so the
+        # post-launch readback refuses it like every npm-driven Pi update and
+        # confirmed recovery restores the sealed cohort.
+        refused = run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180, good=False)
+        require('global graph changed' in refused, 'locked force reinstall was not refused for its changed graph')
+        require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'refused update replaced physical selected roots')
+        require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'refused update changed owned command bindings')
+        run([str(target / 'bin/pi'), '--version'], good=False)
+        upgrade_recovery = run([SUPERVISOR, 'shell', 'recover', str(target), 'inspect'])
+        upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
+        run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
+        require(coding_metadata.read_bytes() == expected_metadata, 'locked force recovery did not restore known bytes')
+        require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'locked cohort did not launch after force refusal')
+        REPORT['lockedForceUpdate'] = 'graph-refused+recovered %s' % lock_pi
         corrupted = json.loads(expected_metadata)
         corrupted['version'] = '9.9.9'
         coding_metadata.write_text(json.dumps(corrupted))
@@ -1250,8 +1295,25 @@ def main():
         upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
         run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
         require(coding_metadata.read_bytes() == expected_metadata, 'separate upgrade preimages did not restore known bytes')
-        require('1.3.0' in run([str(target / 'bin/pi'), '--version']), 'restored known cohort did not retry successfully')
+        require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'restored known cohort did not retry successfully')
         REPORT['upgradeRecovery'] = 'actual unknown cohort refused, full saved trees restored and authenticated retry observed'
+        # A stock self-update to a release outside the reviewed lock (#6170):
+        # npm writes it, the post-launch readback refuses its unauthenticated
+        # packages or the changed graph (whichever check fires first), the
+        # next launch stays refused, and confirmed recovery restores the
+        # authenticated locked cohort.
+        PI_LATEST = '1.0.0'
+        refused = run([str(target / 'bin/pi'), 'update', '--self', '--force'], cwd=WORK / 'project', timeout=180, good=False)
+        require('global package lacks authenticated metadata' in refused or 'global graph changed' in refused, 'out-of-lock self-update was not refused by the global readback')
+        require(roots_before == [(p.stat().st_dev, p.stat().st_ino) for p in [prefix, agent]], 'refused update replaced physical selected roots')
+        require(all((target / 'bin' / name).read_bytes() == data for name, data in bindings_before.items()), 'refused update changed owned command bindings')
+        run([str(target / 'bin/pi'), '--version'], good=False)
+        upgrade_recovery = run([SUPERVISOR, 'shell', 'recover', str(target), 'inspect'])
+        upgrade_token = next(line.split(': ', 1)[1] for line in upgrade_recovery.splitlines() if line.startswith('Recovery confirmation: '))
+        run([SUPERVISOR, 'shell', 'recover', str(target), upgrade_token], timeout=120)
+        require(coding_metadata.read_bytes() == expected_metadata, 'out-of-lock recovery did not restore known bytes')
+        require(lock_pi in run([str(target / 'bin/pi'), '--version']), 'authenticated cohort did not launch after out-of-lock refusal')
+        REPORT['outOfLockUpdate'] = '1.0.0 refused+recovered %s' % lock_pi
         shared_prefix, shared_agent = WORK / 'shared-prefix', WORK / 'shared-agent'
         shutil.copytree(manifest['Prefix'], shared_prefix, symlinks=True)
         drop_separate_companion(shared_prefix)
@@ -1306,21 +1368,31 @@ def main():
         if MODE == 'full':
             format_data = WORK / 'gofmt.data'
             require(format_data.is_file() and format_data.stat().st_size == 0, 'whole source formatting not yet qualified')
-            require(all(key in REPORT for key in ['manager', 'nativeBackend', 'trueUpgrade', 'upgradeRecovery', 'installerTUI', 'installerCancel', 'publicationUncertainty', 'sharedRecovery', 'recoveryFaultMatrix']), 'full observed qualification record incomplete')
+            require(all(key in REPORT for key in ['manager', 'nativeBackend', 'priorParentUpdate', 'lockedForceUpdate', 'upgradeRecovery', 'outOfLockUpdate', 'installerTUI', 'installerCancel', 'publicationUncertainty', 'sharedRecovery', 'recoveryFaultMatrix']), 'full observed qualification record incomplete')
     finally:
         server.shutdown()
         server.server_close()
+    sys.stdout.buffer.write(bounded_report())
+
+
+def bounded_report():
+    # The workflow surfaces the whole Guest output only below 4096 bytes, and
+    # the pnpm root diagnostics printed earlier already use part of it. Every
+    # qualification assertion has run by now, so an oversized record is
+    # replaced by its reached keys plus the size and digest of the full record.
     output = (json.dumps(REPORT, sort_keys=True, separators=(',', ':')) + '\n').encode()
-    require(len(output) < 4096, 'entire raw Guest report withheld above bound')
-    sys.stdout.buffer.write(output)
+    if len(output) >= 2048:
+        compact = {'functionalReady': REPORT.get('functionalReady', False), 'reached': sorted(REPORT),
+                   'reportBytes': len(output), 'reportSHA256': hashlib.sha256(output).hexdigest()}
+        output = (json.dumps(compact, sort_keys=True, separators=(',', ':')) + '\n').encode()
+    require(len(output) < 2048, 'entire raw Guest report withheld above bound')
+    return output
 
 
 try:
     main()
     if MODE == 'smoke':
-        output = (json.dumps(REPORT, sort_keys=True, separators=(',', ':')) + '\n').encode()
-        require(len(output) < 4096, 'entire raw Guest report withheld above bound')
-        sys.stdout.buffer.write(output)
+        sys.stdout.buffer.write(bounded_report())
 except Exception as error:
     message = {'functionalReady': False, 'errorType': type(error).__name__, 'reason': str(error)[:240], 'rawStockOutput': 'withheld',
                'elapsedSeconds': round(time.monotonic() - START), 'reached': sorted(key for key in REPORT if not key.startswith('pty'))}

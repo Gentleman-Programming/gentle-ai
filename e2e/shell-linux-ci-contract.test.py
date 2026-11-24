@@ -49,6 +49,9 @@ class LinuxCIContract(unittest.TestCase):
         self.assertIn('STOP: entire Guest output withheld at byte/NUL bound', large.stderr)
         self.assertNotIn('GUEST-RAW-BASE64:', large.stdout)
         self.assertIn('GUEST-REPORT-BASE64:' + base64.b64encode(verdict).decode(), large.stdout)
+        self.assertIn('GUEST-REPORT-TEXT:"{\\"functionalReady\\":false,\\"reason\\":\\"named cause\\"}"', large.stdout)
+        forged = self.run_guest_report(b'diagnostic line\n' * 400 + b'::error::x\n')
+        self.assertNotIn('\n::error::', forged.stdout)
         unbounded = self.run_guest_report(b'x' * 5000 + b'\n')
         self.assertNotEqual(unbounded.returncode, 0)
         self.assertNotIn('GUEST-REPORT-BASE64:', unbounded.stdout)
@@ -135,7 +138,18 @@ class LinuxCIContract(unittest.TestCase):
         geometry = next(node for node in ast.walk(function) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'pack' and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'HHHH')
         self.assertEqual([value.value for value in geometry.args[1:]], [80, 72, 0, 0])
         self.assertIn("b'el Gentleman package is active.'", text)
-        self.assertIn("require(expected in raw,", text)
+        # The channel contract witnesses registration with either the
+        # historical line or the pinned branded header searched over the
+        # ANSI-stripped visible stream (recent releases open with a
+        # codemode consent dialog first and position the header glyphs with
+        # cursor moves); both alternatives are fixed bytes, never a dynamic
+        # or vacuous pass. The same witness starts the exit choreography,
+        # because the historical line never arrives to trigger it.
+        self.assertIn("branded = re.compile(rb'\\xe2\\x9c\\xbf\\s+Gentle\\s+Shell')", text)
+        self.assertIn("witnessed = expected in raw or (not opening_only and branded.search(visible))", text)
+        self.assertIn("require(witnessed, 'actual Gentle UI opening not observed' if opening_only else 'actual Gentle command registration not observed')", text)
+        self.assertIn("visible = re.sub(rb'\\x1b\\[[0-9;?]*[a-zA-Z]", text)
+        self.assertIn("if installer is None and witnessed and (input_ready or not opening_only) and not stopped:", text)
         # The window covers the first boot's expansive setup on the single-CPU
         # worker (#5904); no success check was lowered, only given time.
         self.assertIn("min(150, remaining())", text)

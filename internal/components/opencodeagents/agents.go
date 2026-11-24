@@ -100,7 +100,73 @@ func Entry(spec Spec) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read embedded prompt for %q: %w", spec.Name, err)
 	}
+	if spec.Name == "gentle-ai-verify" {
+		// Inline carriers must work even when no skills component is selected.
+		method, err := assets.Read("skills/_shared/verify-method.md")
+		if err != nil {
+			return nil, fmt.Errorf("read shared verification method: %w", err)
+		}
+		prompt = strings.ReplaceAll(prompt, "{{GENTLE_AI_VERIFY_METHOD}}", method)
+	}
 	return map[string]any{"mode": "subagent", "hidden": true, "description": spec.Description, "prompt": prompt, "permission": spec.Permission}, nil
+}
+
+// releasedPromptEdits reverse, per agent, every asset edit made since v4.5.0
+// (f2f7d7b16), current text first and released text second, so the exact
+// prompt v4.5.0 installed is derived from the current one. An upgrading user's
+// unmodified agent is then still recognized as ours instead of being kept as a
+// user edit. Each current snippet must occur exactly once, or the derivation
+// fails and nothing extra is owned. Add a pair here whenever a released prompt
+// changes; never remove one while that release can still be installed.
+var releasedPromptEdits = map[string][][2]string{
+	"gentle-ai-explore": {
+		{"file contents. Never claim evidence", "file contents. Any requested `## Key Learnings` block follows it. Never claim evidence"},
+	},
+	"gentle-ai-worker": {
+		{"list. Never widen it yourself: a route beyond it is reported to the parent with the exact candidate paths and reasons, and only a parent-issued replacement of that section authorizes it, carrying every still-needed path because the replacement is not a union. That declaration never substitutes for repository or worktree authority and never authorizes an operation the existing rules prohibit.", "list."},
+		{"choice the task does not delegate to you is ambiguous, stop with `status: interaction_required`; do not guess. Escalate in the answerable shape required by the Interaction contract below: a derived candidate set the parent can approve, narrow, or route to the human, never an open request for anyone", "human choice is ambiguous, stop with `status: interaction_required`; do not guess. Escalate in the answerable shape required by the Interaction contract below: a derived candidate set the human can approve or narrow, never an open request for the human"},
+		{"is not yours to make must use the deterministic `interaction_required` payload below; the parent decides whether it is a technical extension inside the same authorized objective, which it may approve itself, or a real human choice.", "requires a human must use the deterministic `interaction_required` payload below."},
+		{"any input you may not decide is", "any human input is"},
+		{"decision owner can approve, decline, or select from, and never ask anyone", "human can approve, decline, or select from, and never ask the human"},
+		{"each with its reason, and ask the parent to approve that list, narrow it, or route it to the human.", "and ask the human to approve that list or name which entries to drop."},
+		{"text, or unchanged file contents.", "text, or unchanged file contents. Any requested `## Key Learnings` block follows it."},
+		{"never looping. Name in `summary` the loop's diagnosed cause (for example a wrong test, a wrong hypothesis, missing context, a setup or environment error, or a real blocker). Exhaustion ends this cycle, not the unit: the parent decides the next step from your evidence. Making a new test fail for the expected reason is RED construction, not a fix correction: its own harness or setup errors get the setup bound (one self-fix), separate from the fix's limit; if the test still cannot reproduce the failure, return `status: partial` naming a reproduction blocker, not exhausted corrections.", "never looping."},
+	},
+	"gentle-ai-verify": {
+		{"probe regression tests follow it.", "probe regression tests, then any requested `## Key Learnings` block, follow it."},
+	},
+}
+
+// releasedPrompt derives the prompt v4.5.0 installed for name from the current
+// rendered prompt; ok is false when name has no released derivation or the
+// current prompt no longer carries every edited snippet exactly once.
+func releasedPrompt(name, prompt string) (string, bool) {
+	edits, ok := releasedPromptEdits[name]
+	if !ok {
+		return "", false
+	}
+	for _, edit := range edits {
+		if strings.Count(prompt, edit[0]) != 1 {
+			return "", false
+		}
+		prompt = strings.Replace(prompt, edit[0], edit[1], 1)
+	}
+	return prompt, true
+}
+
+// legacyVerifyPrompt derives the pre-refactor verifier prompt (3132b5bc6) from
+// the v4.5.0 expanded prompt and the canonical method asset.
+func legacyVerifyPrompt(prompt string) (string, error) {
+	method, err := assets.Read("skills/_shared/verify-method.md")
+	if err != nil {
+		return "", err
+	}
+	prompt = strings.ReplaceAll(prompt, "plus the scratch-copy probes in the shared method.", "plus the scratch-copy probes below.")
+	body := strings.Index(method, "For behavior changes")
+	if body <= 0 {
+		return "", fmt.Errorf("verification method lost its body marker")
+	}
+	return strings.ReplaceAll(prompt, method[:body], ""), nil
 }
 
 func Refuter() map[string]any {
@@ -190,5 +256,31 @@ func Shape(name string, entry map[string]any) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return bytes.Equal(got, expected), nil
+	if bytes.Equal(got, expected) {
+		return true, nil
+	}
+	// A prompt an earlier release installed, unmodified, is still ours; every
+	// other field must match exactly.
+	released, ok := releasedPrompt(name, want["prompt"].(string))
+	if !ok {
+		return false, nil
+	}
+	priors := []string{released}
+	if name == "gentle-ai-verify" {
+		legacy, err := legacyVerifyPrompt(released)
+		if err != nil {
+			return false, err
+		}
+		priors = append(priors, legacy)
+	}
+	for _, prior := range priors {
+		want["prompt"] = prior
+		if expected, err = json.Marshal(want); err != nil {
+			return false, err
+		}
+		if bytes.Equal(got, expected) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

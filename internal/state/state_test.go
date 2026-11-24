@@ -66,7 +66,8 @@ func fullyPopulatedInstallState() InstallState {
 		ClaudePhaseAssignments: map[string]ClaudePhaseAssignmentState{
 			"sdd-apply": {Model: "opus", Effort: "max"},
 		},
-		KiroModelAssignments: map[string]string{"sdd-design": "opus"},
+		KiroModelAssignments:        map[string]string{"sdd-design": "opus"},
+		AntigravityModelAssignments: map[string]string{"jd-judge-a": "pro"},
 		CodexModelAssignments: map[string]string{
 			"sdd-verify": "high",
 		},
@@ -89,6 +90,24 @@ func fullyPopulatedInstallState() InstallState {
 		RDDMode:           "off",
 		RDDModeRecordedAt: &rddModeRecordedAt,
 		BackgroundIntent:  model.OpenCodeBackgroundOn,
+	}
+}
+
+func TestLegacyStateWithoutAntigravityModelAssignmentsLoads(t *testing.T) {
+	home := t.TempDir()
+	legacy := []byte(`{"installed_agents":["antigravity"],"kiro_model_assignments":{"default":"auto"}}`)
+	if err := os.MkdirAll(Dir(home), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(home), legacy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AntigravityModelAssignments != nil || got.KiroModelAssignments["default"] != "auto" {
+		t.Fatalf("legacy state changed on load: %#v", got)
 	}
 }
 

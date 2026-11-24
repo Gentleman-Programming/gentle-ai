@@ -1,51 +1,13 @@
 package reviewtransaction
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
-func TestInvalidatePristineFencesLegacyReadOnlyAndKeepsCompactTerminal(t *testing.T) {
+func TestInvalidatePristineKeepsCompactTerminal(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
-
-	legacy, err := AuthoritativeStore(context.Background(), repo, "invalidate-legacy")
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	transaction, err := NewTransaction(Start{LineageID: "invalidate-legacy", Mode: ModeOrdinary4R, Generation: 1, Snapshot: snapshot, PolicyHash: hash("a")})
-	if err != nil || transaction.StartReview() != nil {
-		t.Fatalf("create legacy review: %v", err)
-	}
-	genesis, err := legacy.Append("", Record{Operation: "review/start", Transaction: *transaction})
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy, _ = AuthoritativeStore(context.Background(), repo, transaction.LineageID)
-	beforeHead, beforeEvent := readLegacyAuthorityBytes(t, legacy, genesis)
-	for attempt := 0; attempt < 2; attempt++ {
-		fresh, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = fresh.InvalidatePristine(genesis, "operator abandoned", snapshot)
-		var typed *LegacyReadOnlyError
-		if !errors.Is(err, ErrLegacyReadOnly) || !errors.As(err, &typed) || typed.Code() != LegacyReadOnlyErrorCode || typed.Operation != "review/invalidate" || typed.LineageID != transaction.LineageID {
-			t.Fatalf("legacy invalidation error = %#v", err)
-		}
-		afterHead, afterEvent := readLegacyAuthorityBytes(t, fresh, genesis)
-		if !bytes.Equal(afterHead, beforeHead) || !bytes.Equal(afterEvent, beforeEvent) {
-			t.Fatal("legacy invalidation changed authority bytes")
-		}
-	}
 
 	compact := newCompactTestState(t, repo, "invalidate-compact")
 	compactStore, _ := CompactAuthoritativeStore(context.Background(), repo, compact.LineageID)
@@ -63,19 +25,6 @@ func TestInvalidatePristineFencesLegacyReadOnlyAndKeepsCompactTerminal(t *testin
 	if retry, err := compactStore.Replace(revision, "review/invalidate", compact); err != nil || retry != invalidated {
 		t.Fatalf("compact exact retry = %q, %v", retry, err)
 	}
-}
-
-func readLegacyAuthorityBytes(t *testing.T, store Store, revision string) ([]byte, []byte) {
-	t.Helper()
-	head, err := os.ReadFile(filepath.Join(store.Dir, "HEAD"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	event, err := os.ReadFile(filepath.Join(store.Dir, "events", revision[len("sha256:"):]+".json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return head, event
 }
 
 func TestInvalidatePristineRejectsLiveCandidateDriftWithoutMutation(t *testing.T) {

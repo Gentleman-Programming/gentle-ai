@@ -341,6 +341,13 @@ func TestConcurrentFinalLensCaptureElectsOneCloserAndLeavesNoAuthority(t *testin
 
 func providerCorrectionReadyWithoutVerificationEvidence(t *testing.T, startArgs ...string) (string, string, reviewtransaction.TargetedValidationRequest) {
 	t.Helper()
+	return providerCorrectionReadyWithFindings(t, nil, startArgs...)
+}
+
+// providerCorrectionReadyWithFindings is providerCorrectionReadyWithoutVerificationEvidence
+// with extra non-severe findings admitted next to the one finding to correct.
+func providerCorrectionReadyWithFindings(t *testing.T, extra []facadeFinding, startArgs ...string) (string, string, reviewtransaction.TargetedValidationRequest) {
+	t.Helper()
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -350,11 +357,11 @@ func providerCorrectionReadyWithoutVerificationEvidence(t *testing.T, startArgs 
 		LineageID: started.LineageID, TargetIdentity: started.RepositoryContext.TargetIdentity,
 		SelectedLenses: started.SelectedLenses,
 	}
-	args := cliReviewerCaptureArgs(t, repo, legacyStarted, 0, []facadeFinding{{
+	args := cliReviewerCaptureArgs(t, repo, legacyStarted, 0, append([]facadeFinding{{
 		Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "terminal value is incorrect",
 		ProofRefs: []string{"tracked.txt:5 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 		CausalDisposition: reviewtransaction.CausalIntroduced,
-	}})
+	}}, extra...))
 	if err := RunReviewCaptureResult(args, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}

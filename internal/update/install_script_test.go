@@ -155,6 +155,7 @@ func TestWindowsInstallScriptBetaGoInstallPreservesGoProxyBypassEnv(t *testing.T
 
 	script := string(content)
 	for _, want := range []string{
+		`$goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/v5/cmd/$BINARY_NAME@$version"`,
 		"Add-GoEnvPattern -Name \"GONOSUMDB\" -Pattern \"github.com/gentleman-programming/gentle-ai/v5\"",
 		"Add-GoEnvPattern -Name \"GOPRIVATE\" -Pattern \"github.com/gentleman-programming/gentle-ai/v5\"",
 		"Add-GoEnvPattern -Name \"GONOPROXY\" -Pattern \"github.com/gentleman-programming/gentle-ai/v5\"",
@@ -216,8 +217,8 @@ func TestInstallScriptsGoInstallPackageMatchesModuleMajor(t *testing.T) {
 		t.Fatalf("go.mod module line %q does not carry a major version suffix", moduleLine)
 	}
 	major := majorMatch[1]
-	if major != "v4" {
-		t.Errorf("current module major = %s, want v4", major)
+	if major != "v5" {
+		t.Errorf("current module major = %s, want v5", major)
 	}
 
 	cases := []struct {

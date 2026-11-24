@@ -19,13 +19,13 @@ func issue3748Journeys() []Journey {
 	return []Journey{{
 		ID:     "j116-codex-committed-correction-runs-returned-status-continuation",
 		Review: reviewOptedIn,
-		Title:  "Codex committed correction executes the provider-returned STATUS continuation unchanged",
-		Source: "issue #3748 follow-up to PR #3751: Codex parity for committed correction re-entry",
+		Title:  "Codex committed correction keeps its frozen exclusion when the returned STATUS continuation runs beside an unrelated untracked file",
+		Source: "issues #3748/#6058: Codex parity for committed correction re-entry; an unrelated untracked file must not reopen the frozen empty intended-untracked exclusion",
 		Steps: []Step{
 			{Name: "fixture: committed medium-risk candidate and isolated Codex runtime", Fixture: issue3748CodexFixture},
 			{Name: "negotiate and start the committed Codex review", Requires: statusCapability, Composite: issue3748StartCodexReview},
 			{Name: "Codex reports a candidate-caused blocker and returns correction_required", Requires: issue3748CodexCaptureCapability, Composite: issue3748CaptureCodexBlocker},
-			{Name: "the returned ordered STATUS tokens re-enter the frozen committed correction", Requires: statusCapability, Composite: issue3748ExecuteCodexContinuation},
+			{Name: "the returned ordered STATUS tokens re-enter the frozen committed correction beside an unrelated untracked file", Requires: statusCapability, Composite: issue3748ExecuteCodexContinuation},
 		},
 	}}
 }
@@ -132,6 +132,13 @@ func issue3748CaptureCodexBlocker(r *journeyRun) error {
 	if input.Name != "reviewer_result" || input.CaptureOperation != "review.capture-result" {
 		return fmt.Errorf("committed Codex capture input = %+v", input)
 	}
+	// The reviewing authority's own target identity is the frozen committed
+	// range the correction must keep binding after an unrelated untracked file
+	// appears (#6058).
+	if status.TargetIdentity == "" {
+		return errors.New("committed Codex reviewing STATUS carried no target identity")
+	}
+	r.sandbox.Scratch["issue-3748-target-identity"] = status.TargetIdentity
 	arguments := []string{"review", "capture-result"}
 	for _, argument := range input.Arguments {
 		if argument.Token == "" {
@@ -176,13 +183,48 @@ func issue3748ExecuteCodexContinuation(r *journeyRun) error {
 			return fmt.Errorf("Codex correction continuation omitted %q", token)
 		}
 	}
+	// #6058: an unrelated untracked file exists when the exact returned
+	// continuation runs. The frozen empty selection is still the authority's
+	// decision, so STATUS must keep offering the same correction plan instead
+	// of demanding a fresh live declaration.
+	const untracked = "unrelated-local-notes.md"
+	if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, untracked), "local-only notes outside the frozen committed range\n"); err != nil {
+		return err
+	}
+	porcelain, err := gitOut(r.sandbox, r.sandbox.Repo, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(porcelain, "?? "+untracked) {
+		return fmt.Errorf("fixture did not leave %q untracked: %s", untracked, porcelain)
+	}
 	status, terminal, err := correctionStatusFromLastEventCapture(r, closure)
 	if err != nil || !terminal {
-		return fmt.Errorf("execute Codex correction continuation: terminal=%t err=%v", terminal, err)
+		return fmt.Errorf("execute Codex correction continuation beside %q: terminal=%t err=%v", untracked, terminal, err)
+	}
+	frozenTarget := r.sandbox.Scratch["issue-3748-target-identity"]
+	if frozenTarget == "" {
+		return errors.New("fixture did not record the frozen committed target identity")
 	}
 	if status.Authority.LineageID != issue3748CodexLineage || status.Authority.State != "correction_required" ||
-		status.Projection.BaseTree != r.sandbox.Scratch["issue-3748-base-tree"] || status.NextTransition.ReasonCode != "correction_plan_required" {
-		return fmt.Errorf("Codex committed correction STATUS = authority=%+v projection=%+v transition=%+v", status.Authority, status.Projection, status.NextTransition)
+		status.TargetIdentity != frozenTarget || status.Projection.BaseTree != r.sandbox.Scratch["issue-3748-base-tree"] ||
+		status.NextTransition.ReasonCode != "correction_plan_required" || status.NextTransition.Kind != "collect" ||
+		len(status.NextTransition.Collect.Inputs) != 1 {
+		return fmt.Errorf("Codex committed correction STATUS beside %q = authority=%+v target=%q projection=%+v transition=%+v, want the frozen target %q and correction_plan_required (#6058)",
+			untracked, status.Authority, status.TargetIdentity, status.Projection, status.NextTransition, frozenTarget)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.Name != "correction_lines" || input.CaptureOperation != "review.capture-correction-plan" ||
+		status.argument("lineage") != issue3748CodexLineage || status.argument("target") != frozenTarget ||
+		status.argument("expected-revision") == "" || status.argument("request-hash") == "" {
+		return fmt.Errorf("Codex committed correction plan input = %+v lineage=%q target=%q, want the frozen target %q (#6058)",
+			input, status.argument("lineage"), status.argument("target"), frozenTarget)
+	}
+	// The inventory was published: the unrelated file was eligible, and the
+	// frozen exclusion still won. This is what distinguishes the fix from a
+	// status that never saw the file.
+	if status.EligibleUntrackedInventory == "" {
+		return errors.New("Codex committed correction STATUS beside an unrelated untracked file published no eligible_untracked_inventory (#6058)")
 	}
 	return nil
 }

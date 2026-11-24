@@ -46,7 +46,7 @@ func TestNativeAgentManifestShipsReviewAgentsOnlyToRDDRuntimes(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"jd-fix-agent.md", "jd-judge-a.md", "jd-judge-b.md"} {
-		for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCursor} {
+		for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentCursor, model.AgentAntigravity} {
 			if !containsName(NativeAgentManifest[agent], want) {
 				t.Errorf("%s lost Judgment Day agent %s", agent, want)
 			}
@@ -65,7 +65,7 @@ func TestNativeAgentManifestShipsReviewAgentsOnlyToRDDRuntimes(t *testing.T) {
 func TestFreshInstallOnNonRDDRuntimesInstallsNoReviewAgents(t *testing.T) {
 	t.Parallel()
 
-	for _, agent := range []model.AgentID{model.AgentCursor, model.AgentKiroIDE, model.AgentKimi} {
+	for _, agent := range []model.AgentID{model.AgentCursor, model.AgentKiroIDE, model.AgentKimi, model.AgentAntigravity} {
 		t.Run(string(agent), func(t *testing.T) {
 			t.Parallel()
 
