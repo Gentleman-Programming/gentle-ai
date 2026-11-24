@@ -1365,7 +1365,7 @@ type retiredOpenCodeSDDSettingsStep struct {
 func (s retiredOpenCodeSDDSettingsStep) ID() string { return s.id }
 
 func (s retiredOpenCodeSDDSettingsStep) Run() error {
-	settings, err := legacyassets.RetireOpenCodeSDDSettings(s.target.settings, s.target.agentDirs...)
+	settings, err := legacyassets.RetireOpenCodeSDDSettings(s.target.settings, s.target.homeDir, s.target.agentDirs...)
 	if settings.Changed && s.changedFiles != nil {
 		*s.changedFiles = append(*s.changedFiles, s.target.settings)
 	}
