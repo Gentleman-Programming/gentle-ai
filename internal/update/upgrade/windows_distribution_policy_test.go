@@ -1,9 +1,12 @@
 package upgrade
 
 import (
+	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v5/internal/update"
 )
 
@@ -29,7 +32,54 @@ func TestWindowsBetaGentleAIUpgradeUsesShippedRegistryGoTarget(t *testing.T) {
 	)
 
 	var tool update.ToolInfo
-	_ = tool
-	_ = mainSHA
-	_ = module
+	for _, candidate := range update.Tools {
+		if candidate.Name == "gentle-ai" {
+			tool = candidate
+			break
+		}
+	}
+	if tool.GoImportPath == "" {
+		t.Fatal("shipped gentle-ai registry entry must declare GoImportPath")
+	}
+
+	gobin := t.TempDir()
+	destination := writeFakeBinary(t, gobin, "gentle-ai.exe")
+	originalLookPath := lookPathFn
+	t.Cleanup(func() { lookPathFn = originalLookPath })
+	lookPathFn = func(string) (string, error) { return destination, nil }
+
+	originalExec := execCommand
+	t.Cleanup(func() { execCommand = originalExec })
+	var gotName string
+	var gotArgs []string
+	var gotCmd *exec.Cmd
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "go" && len(args) == 2 && args[0] == "env" {
+			return mockCmd("echo", gobin)
+		}
+		gotName = name
+		gotArgs = args
+		gotCmd = mockCmd("true")
+		return gotCmd
+	}
+
+	r := update.UpdateResult{Tool: tool, LatestVersion: "main@" + mainSHA[:12], BetaCommit: mainSHA, BetaModulePath: module, Status: update.UpdateAvailable}
+	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true, Supported: true}
+	if _, err := runStrategy(context.Background(), r, profile); err != nil {
+		t.Fatalf("runStrategy beta Windows self-upgrade: %v", err)
+	}
+
+	wantTarget := module + "/cmd/gentle-ai@" + mainSHA
+	if gotName != "go" || len(gotArgs) != 2 || gotArgs[0] != "install" || gotArgs[1] != wantTarget {
+		t.Fatalf("go command = %q %v, want go install %s", gotName, gotArgs, wantTarget)
+	}
+	for _, want := range []string{
+		"GONOSUMDB=" + module,
+		"GOPRIVATE=" + module,
+		"GONOPROXY=" + module,
+	} {
+		if gotCmd == nil || !envContains(gotCmd.Env, want) {
+			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
+		}
+	}
 }
