@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 func TestUpdateCatalogOmitsExternalOpenCodePlugins(t *testing.T) {
@@ -267,7 +267,7 @@ func TestBetaTargetBindsModuleAndFullCommit(t *testing.T) {
 			}
 			json.NewEncoder(w).Encode(githubCommit{SHA: next})
 		case "/Gentleman-Programming/gentle-ai/" + sha + "/go.mod":
-			fmt.Fprint(w, "module github.com/gentleman-programming/gentle-ai/v4\n")
+			fmt.Fprint(w, "module github.com/gentleman-programming/gentle-ai/v5\n")
 		default:
 			http.NotFound(w, r)
 		}
@@ -276,8 +276,8 @@ func TestBetaTargetBindsModuleAndFullCommit(t *testing.T) {
 	httpClient = server.Client()
 	httpClient.Transport = &testTransport{server: server, forwardRaw: true}
 	result := checkSingleTool(context.Background(), Tools[0], "3.0.0-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
-	want := "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@" + sha
-	if result.Status != UpdateAvailable || result.UpdateHint != want || result.BetaCommit != sha || result.BetaModulePath != "github.com/gentleman-programming/gentle-ai/v4" {
+	want := "go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@" + sha
+	if result.Status != UpdateAvailable || result.UpdateHint != want || result.BetaCommit != sha || result.BetaModulePath != "github.com/gentleman-programming/gentle-ai/v5" {
 		t.Fatalf("beta result = %+v; want %s", result, want)
 	}
 	moved, err := fetchMainCommit(context.Background(), "Gentleman-Programming", "gentle-ai")
@@ -300,8 +300,8 @@ func TestBetaCheckRejectsUntrustedMetadata(t *testing.T) {
 		{name: "wrong repository", sha: sha, module: "github.com/other/gentle-ai/v4"},
 		{name: "invalid semantic major", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v1"},
 		{name: "malformed major", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v04"},
-		{name: "malformed module directive", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v4 extra"},
-		{name: "truncated commit", sha: "972997650b51", module: "github.com/gentleman-programming/gentle-ai/v4"},
+		{name: "malformed module directive", sha: sha, module: "github.com/gentleman-programming/gentle-ai/v5 extra"},
+		{name: "truncated commit", sha: "972997650b51", module: "github.com/gentleman-programming/gentle-ai/v5"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1223,7 +1223,7 @@ func TestUpdateHint(t *testing.T) {
 			name:    "gentle-ai windows",
 			tool:    ToolInfo{Name: "gentle-ai"},
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
-			want:    "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced. Install/update from source with Go 1.25.10+: go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest",
+			want:    "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced. Install/update from source with Go 1.25.10+: go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@latest",
 		},
 		{
 			name:          "engram macOS brew-owned",

@@ -41,7 +41,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/legacyassets"
 )
 
 var anchors = []string{"v1.10.0", "v3.7.0", "v4.0.0"}

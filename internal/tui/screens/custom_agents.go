@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agentbuilder"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/styles"
 )
 
 // RenderCustomAgents renders the Custom Agents management screen.

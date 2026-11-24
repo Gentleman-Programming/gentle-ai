@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/testsupport/windowsrunner"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/testsupport/windowsrunner"
 )
 
 // The Gentle Shell flows below run the real Windows inspection, so the test

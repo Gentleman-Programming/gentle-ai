@@ -6,8 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/styles"
 )
 
 func TestShellOriginalHeroCampaign(t *testing.T) {

@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/testenv"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update"
 )
 
 func TestMain(m *testing.M) {
@@ -151,7 +151,7 @@ func TestRunStrategy_GoInstallUpgradeCrossMajorDerivesSuffixFromVersion(t *testi
 		{
 			name:       "v3 binary targeting v4.0.0 composes /v4",
 			latestVer:  "4.0.0",
-			wantTarget: "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0",
+			wantTarget: "github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.0.0",
 		},
 		{
 			name:       "v3 binary targeting v2.0.0 composes /v2",
@@ -225,7 +225,7 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 		},
 		LatestVersion:  "main@972997650b51",
 		BetaCommit:     "972997650b51abcdef0123456789abcdef012345",
-		BetaModulePath: "github.com/gentleman-programming/gentle-ai/v4",
+		BetaModulePath: "github.com/gentleman-programming/gentle-ai/v5",
 		Status:         update.UpdateAvailable,
 	}
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true}
@@ -238,14 +238,14 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	if gotName != "go" {
 		t.Fatalf("exec name = %q, want %q", gotName, "go")
 	}
-	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@972997650b51abcdef0123456789abcdef012345"}
+	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@972997650b51abcdef0123456789abcdef012345"}
 	if len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
 	for _, want := range []string{
-		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v4",
-		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v4",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v4",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v5",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v5",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v5",
 	} {
 		if !envContains(gotCmd.Env, want) {
 			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
@@ -262,7 +262,7 @@ func TestBetaInstallRejectsUnverifiedTargetBeforeMutation(t *testing.T) {
 	cases := []struct{ name, sha, module, version string }{
 		{name: "no metadata", version: "main@972997650b51"},
 		{name: "wrong module", sha: "972997650b51abcdef0123456789abcdef012345", module: "github.com/other/gentle-ai/v4", version: "main@972997650b51"},
-		{name: "mismatched short revision", sha: "972997650b51abcdef0123456789abcdef012345", module: "github.com/gentleman-programming/gentle-ai/v4", version: "main@6eff4a1ba110"},
+		{name: "mismatched short revision", sha: "972997650b51abcdef0123456789abcdef012345", module: "github.com/gentleman-programming/gentle-ai/v5", version: "main@6eff4a1ba110"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

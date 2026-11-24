@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/testenv"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/versions"
 )
 
 // resolveGitBashForTest derives the Git Bash path the same way the installcmd

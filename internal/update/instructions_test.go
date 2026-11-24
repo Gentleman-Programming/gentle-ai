@@ -15,10 +15,10 @@ func TestGentleAISourceInstallCommandSameMajorStaysV4(t *testing.T) {
 		version string
 		want    string
 	}{
-		{name: "empty version uses @latest with running major /v4", version: "", want: "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest"},
+		{name: "empty version uses @latest with running major /v4", version: "", want: "go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@latest"},
 		{name: "unresolved beta commit has no safe source command", version: "main@972997650b51", want: ""},
-		{name: "v4.0.0 uses @v4.0.0 with /v4", version: "v4.0.0", want: "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0"},
-		{name: "4.0.0 (no v prefix) uses @v4.0.0 with /v4", version: "4.0.0", want: "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0"},
+		{name: "v4.0.0 uses @v4.0.0 with /v4", version: "v4.0.0", want: "go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.0.0"},
+		{name: "4.0.0 (no v prefix) uses @v4.0.0 with /v4", version: "4.0.0", want: "go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.0.0"},
 		{name: "v3.7.0 still composes /v3 for cross-major installs", version: "v3.7.0", want: "go install github.com/gentleman-programming/gentle-ai/v3/cmd/gentle-ai@v3.7.0"},
 	}
 
@@ -46,7 +46,7 @@ func TestGentleAISourceInstallCommandCrossMajorDerivesFromVersion(t *testing.T) 
 		version string
 		want    string
 	}{
-		{name: "v4.0.0 composes /v4 even when running major is /v3", version: "v4.0.0", want: "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0"},
+		{name: "v4.0.0 composes /v4 even when running major is /v3", version: "v4.0.0", want: "go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v4.0.0"},
 		{name: "v2.0.0 composes /v2 even when running major is /v3", version: "v2.0.0", want: "go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.0.0"},
 		{name: "v1.9.0 stays unsuffixed (major 1 has no /vN)", version: "v1.9.0", want: "go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.9.0"},
 	}

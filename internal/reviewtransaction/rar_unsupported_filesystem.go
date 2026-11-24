@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/pathquote"
 )
 
 // UnsupportedAuthorityFilesystemError reports a review authority path -- the

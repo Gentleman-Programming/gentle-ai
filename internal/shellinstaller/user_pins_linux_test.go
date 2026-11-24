@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"testing"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
+	assets "github.com/gentleman-programming/gentle-ai/v5/scripts"
 )
 
 // Exact role captures, not literal presence: missing or duplicate roles fail closed.

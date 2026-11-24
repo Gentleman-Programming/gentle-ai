@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/capabilitymanifest"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // resolveUncertaintyStep is ODD step 3, shared verbatim by every runtime.

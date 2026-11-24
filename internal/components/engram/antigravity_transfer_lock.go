@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/filecoord"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/filecoord"
 )
 
 // antigravityLockTarget returns the stable coordination target for one config

@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
 )
 
 func TestWindowsShellInstallUnconfirmedSelectionHasNoEffects(t *testing.T) {
