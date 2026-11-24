@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/cursor"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 func TestCursorRuleActivation(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 func TestStrictTDDCarrierLifecycle(t *testing.T) {

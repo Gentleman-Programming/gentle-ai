@@ -3,9 +3,9 @@ package cli
 import (
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/geminimodules"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/pipeline"
 )
 
 // geminiLegacyRootSteps runs before every prompt writer when Gemini CLI is

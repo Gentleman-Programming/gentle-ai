@@ -13,7 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
 )
 
 func TestShellInstallReviewFitsAndScrolls(t *testing.T) {

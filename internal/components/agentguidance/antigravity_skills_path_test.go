@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
 )
 
 // TestAntigravityOrchestratorNamesInstalledSharedSkillsDir keeps the global

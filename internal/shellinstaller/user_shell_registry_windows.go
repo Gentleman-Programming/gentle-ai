@@ -174,18 +174,38 @@ func RecordUserShellInstall(string, UserShellInstall) error { return nil }
 
 func RemoveUserShellInstall(string, string) error { return nil }
 
-// userWindowsReplaceFile replaces one managed preference file: the parent
-// custody is verified, any previous file is removed and the replacement is
-// written and read back through the exclusive owned writer.
+// userWindowsReplaceFile replaces one managed preference file atomically: the
+// parent custody is verified, the replacement is written and read back as an
+// exclusive sibling through the owned writer, and only then renamed over the
+// previous file (MoveFileEx with MOVEFILE_REPLACE_EXISTING, via os.Rename,
+// retried while a reader briefly holds it). Any failure keeps the previous
+// file and removes the sibling, so an interrupted replacement never leaves the
+// preference missing.
 func userWindowsReplaceFile(path string, data []byte) error {
-	if _, err := userWindowsIdentity(filepath.Dir(path), true); err != nil {
+	parent := filepath.Dir(path)
+	if _, err := userWindowsIdentity(parent, true); err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	staged := path + ".replace-new"
+	// A sibling left by an interrupted replacement is ours and is dropped.
+	if err := userWindowsRemoveBusy(parent, staged); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return userWindowsWrite(path, data)
+	if err := userWindowsReplaceWrite(staged, data); err != nil {
+		return errors.Join(err, userWindowsOverlayRemoveIfPresent(staged))
+	}
+	if err := userWindowsRenameBusy(parent, staged, path); err != nil {
+		return errors.Join(err, userWindowsOverlayRemoveIfPresent(staged))
+	}
+	actual, err := userWindowsRead(path, int64(len(data)))
+	if err != nil || string(actual) != string(data) {
+		return errors.Join(err, fmt.Errorf("Windows replacement readback differs for %q", path))
+	}
+	return nil
 }
+
+// userWindowsReplaceWrite is the exclusive owned writer of the staged sibling.
+var userWindowsReplaceWrite = userWindowsWrite
 
 // userWindowsMergePreference loads a bounded JSON object, applies one update
 // and replaces the file, keeping unrelated keys intact.
@@ -214,6 +234,16 @@ func ApplyUserExperiencePreferences(install UserShellInstall, selected UserExper
 	if err := selected.Validate(); err != nil {
 		return err
 	}
+	if !filepath.IsAbs(install.Target) {
+		return errors.New("in-place preferences require an absolute Separate installation")
+	}
+	_, err := userWithOperationLock(install.Target, func() (struct{}, error) {
+		return struct{}{}, userWindowsApplyPreferences(install, selected)
+	})
+	return err
+}
+
+func userWindowsApplyPreferences(install UserShellInstall, selected UserExperience) error {
 	userForceGGAInert(&selected)
 	if _, err := userWindowsManifestRead(install.Target); err != nil {
 		return fmt.Errorf("managed Windows installation manifest is not canonical: %w", err)
@@ -314,6 +344,12 @@ func UninstallUserShellInstall(_ string, install UserShellInstall) (string, erro
 	if install.Mode != "separate" || !filepath.IsAbs(install.Target) {
 		return "", errors.New("Windows uninstall requires an absolute Separate installation")
 	}
+	// Held for the whole uninstall: a concurrent install, update or uninstall
+	// of the same target fails fast instead of racing on the rename.
+	return userWithOperationLock(install.Target, func() (string, error) { return userWindowsUninstall(install) })
+}
+
+func userWindowsUninstall(install UserShellInstall) (string, error) {
 	if _, err := userWindowsIdentity(install.Target, true); err != nil {
 		return "", err
 	}
@@ -321,7 +357,7 @@ func UninstallUserShellInstall(_ string, install UserShellInstall) (string, erro
 	if _, err := os.Lstat(backup); !os.IsNotExist(err) {
 		return "", errors.Join(err, errors.New("Windows uninstall backup already exists"))
 	}
-	if err := os.Rename(install.Target, backup); err != nil {
+	if err := userWindowsRenameBusy(install.Target, install.Target, backup); err != nil {
 		return "", err
 	}
 	// The active install is already fully moved aside; prune the backup to
@@ -330,8 +366,10 @@ func UninstallUserShellInstall(_ string, install UserShellInstall) (string, erro
 	pruneErr := userWindowsPruneRemovedBackup(backup)
 	launcherErr := userWindowsRemoveLauncher(install.Target)
 	cacheErr := userWindowsRemoveDownloadCache()
-	if pruneErr != nil || launcherErr != nil || cacheErr != nil {
-		return backup, fmt.Errorf("installation moved to %s but cleanup failed; the backup keeps more than config, agent, home, selection.json and manifest.json, or the per-user download cache could not be removed: %w", backup, errors.Join(pruneErr, launcherErr, cacheErr))
+	// Keep at most one removed backup: drop the ones earlier uninstalls left.
+	retentionErr := userWindowsPruneRemovedBackups(install.Target, backup)
+	if pruneErr != nil || launcherErr != nil || cacheErr != nil || retentionErr != nil {
+		return backup, fmt.Errorf("installation moved to %s but cleanup failed; the backup keeps more than config, agent, home, selection.json and manifest.json, an earlier removed backup could not be pruned, or the per-user download cache could not be removed: %w", backup, errors.Join(pruneErr, launcherErr, cacheErr, retentionErr))
 	}
 	return backup, nil
 }
@@ -363,10 +401,15 @@ func userWindowsRemoveDownloadCache() error {
 	return nil
 }
 
-// CheckUserShellUpdate routes at the persisted SDK source channel: Stable
-// compares the installed stable components with this build, Main compares the
-// installed Main descriptor with the latest Main snapshot. It never installs
-// or replaces anything.
+// userWindowsUpdateMainSnapshot resolves the latest Main snapshot for the
+// update check; tests replace it to stay off the network.
+var userWindowsUpdateMainSnapshot = userWindowsMainSnapshot
+
+// CheckUserShellUpdate routes at the persisted SDK source channel. Stable
+// compares the stock SDK lock and reviewed gentle-pi release; Main compares
+// the installed Main descriptor with the latest Main snapshot. Both channels
+// then compare the supervisor, runtimes and pinned components with this
+// build. It never installs or replaces anything.
 func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserShellUpdate, error) {
 	if install.Mode != "separate" {
 		return UserShellUpdate{}, errors.New("Windows update checks require a Separate installation")
@@ -385,6 +428,7 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 		}
 	}
 	update := UserShellUpdate{Channel: "stable"}
+	changed := map[string]bool{}
 	if channel == "main" {
 		update.Channel = "main-preview"
 		if manifest.MainCommit == "" {
@@ -394,16 +438,24 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 			update.Detail = "Main SDK is not installed in this tree yet"
 			return update, nil
 		}
-		latest, _, err := userWindowsMainSnapshot(ctx)
+		latest, _, err := userWindowsUpdateMainSnapshot(ctx)
 		if err != nil {
 			return update, err
 		}
 		if latest.SHA != manifest.MainArchiveSHA {
-			update.Available = true
-			update.Components = []string{"SDK Main snapshot"}
-			update.Scope = []string{UserComponentSDK}
+			changed[UserComponentSDK] = true
 			update.Detail = "new Main snapshot available"
 		}
+	} else if manifest.MainCommit != "" {
+		// A Main composition with a Stable preference is itself the channel
+		// delta: Update-now routes it to the in-place overlay, which restores
+		// the retained stock package without reinstalling any component. This
+		// check mirrors the Unix check so both platforms offer the same switch
+		// back.
+		update.Available = true
+		update.Components = []string{"SDK Main snapshot"}
+		update.Scope = []string{UserComponentSDK}
+		update.Detail = "Main SDK is installed; the stable channel preference wants the stock composition"
 		return update, nil
 	}
 	self, err := userWindowsExecutable()
@@ -414,43 +466,42 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 	if err != nil {
 		return update, err
 	}
-	// A Main composition with a Stable preference is itself the channel
-	// delta: Update-now routes it to the in-place overlay, which restores the
-	// retained stock package without reinstalling any component. This check
-	// mirrors the Unix check so both platforms offer the same switch back.
-	if manifest.MainCommit != "" {
-		update.Available = true
-		update.Components = []string{"SDK Main snapshot"}
-		update.Scope = []string{UserComponentSDK}
-		update.Detail = "Main SDK is installed; the stable channel preference wants the stock composition"
-		return update, nil
-	}
-	changed := map[string]bool{}
+	// The supervisor, runtimes and pinned components are checked on every
+	// channel (#6239), like the Unix check: a Main installation runs the same
+	// stock supervisor, Node, Go, helpers, CodeGraph and Context7.
 	if userWindowsSHA(image) != manifest.SupervisorSHA {
 		changed[UserComponentSupervisor] = true
 	}
-	node, err := userWindowsRead(filepath.Join(install.Target, "runtime", "node", "node.exe"), 256<<20)
+	// The Node pin is the digest of node.zip, not of the unpacked node.exe.
+	// Launch verification binds runtime/node/node.exe to the retained
+	// archive, so the retained archive is the comparable installed identity.
+	nodeArchive, err := userWindowsRead(filepath.Join(install.Target, "runtime", "archives", userWindowsArtifacts[0].Archive), userWindowsArtifacts[0].Bound)
 	if err != nil {
 		return update, err
 	}
-	if userWindowsSHA(node) != userWindowsArtifacts[0].SHA {
+	if userWindowsSHA(nodeArchive) != userWindowsArtifacts[0].SHA {
 		changed[UserComponentNode] = true
 	}
 	// Component pins: a legacy manifest without the pins refreshes the
 	// missing components once, so the next update records them.
 	legacy := manifest.SDKLockSHA == ""
-	if lock, err := userWindowsSDKLockSHA(); err == nil && manifest.SDKLockSHA != lock {
-		changed[UserComponentSDK] = true
-	}
-	// S14: the installed gentle-pi version is outdated only when it is strictly
-	// older than the newest reviewed release of the selected list (live
-	// repository copy with the embedded fallback — the same authority the
-	// update installs), or unrecorded. A newer recorded version — e.g. after a
-	// fallback to an older embedded list — never offers a downgrade (S17(c)).
-	// A manifest without the version field is a pre-feature install reported
-	// outdated once; the next update records the version it installs.
-	if list, _, err := userSelectedReviewedListFunc(ctx); err == nil && userReviewedVersionOlder(manifest.SDKVersion, list.newestReviewedRelease()) {
-		changed[UserComponentSDK] = true
+	if channel != "main" {
+		// The stock gentle-pi lock and reviewed release are Stable inputs; the
+		// Main SDK is the snapshot compared above.
+		if lock, err := userWindowsSDKLockSHA(); err == nil && manifest.SDKLockSHA != lock {
+			changed[UserComponentSDK] = true
+		}
+		// S14: the installed gentle-pi version is outdated only when it is
+		// strictly older than the newest reviewed release of the selected list
+		// (live repository copy with the embedded fallback — the same authority
+		// the update installs), or unrecorded. A newer recorded version — e.g.
+		// after a fallback to an older embedded list — never offers a downgrade
+		// (S17(c)). A manifest without the version field is a pre-feature
+		// install reported outdated once; the next update records the version
+		// it installs.
+		if list, _, err := userSelectedReviewedListFunc(ctx); err == nil && userReviewedVersionOlder(manifest.SDKVersion, list.newestReviewedRelease()) {
+			changed[UserComponentSDK] = true
+		}
 	}
 	if tools, err := userWindowsToolsPinSHA(); err == nil && manifest.ToolsSHA != tools {
 		changed[UserComponentSDK] = true
@@ -480,17 +531,26 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 	}
 	update.Available = true
 	update.Scope = userSortedComponents(changed)
+	sdkLabel := "gentle-pi SDK"
+	if channel == "main" {
+		sdkLabel = "SDK Main snapshot"
+	}
 	labels := map[string]string{
 		UserComponentSupervisor: "Gentle Shell supervisor",
 		UserComponentNode:       "Node runtime",
-		UserComponentSDK:        "gentle-pi SDK",
+		UserComponentSDK:        sdkLabel,
 		UserComponentCodeGraph:  "CodeGraph",
 		UserComponentContext7:   "Context7",
 	}
 	for _, component := range update.Scope {
 		update.Components = append(update.Components, labels[component])
 	}
-	update.Detail = "stable channel components differ from this build"
+	if update.Detail == "" {
+		update.Detail = "stable channel components differ from this build"
+		if channel == "main" {
+			update.Detail = "main channel components differ from this build"
+		}
+	}
 	return update, nil
 }
 

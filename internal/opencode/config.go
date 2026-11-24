@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // ConfigSnapshot is the file-backed OpenCode configuration view shared by UI,

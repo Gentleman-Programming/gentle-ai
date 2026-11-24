@@ -35,12 +35,27 @@ already contains this unreleased installer.
 | Processes | Suspended child bound before resume; Job Object CPU/memory/process readback, inherited console, bounded cleanup |
 | Preservation | Isolated HOME/agent/config, caller CWD inherited; console modes saved/restored; personal PATH unchanged |
 
+## Downloads on slow or flaky networks
+
+Supplier archives (Node, Go, fd, ripgrep, CodeGraph) have no whole-download deadline. A transfer fails only when it receives no data for 60 seconds, or after a 30-minute ceiling. Connection resets, timeouts, temporary DNS errors and HTTP 5xx or 429 responses are retried up to three attempts with backoff. Other HTTP errors and any size or SHA-256 mismatch fail at once. GitHub release redirects are accepted to any HTTPS host under `githubusercontent.com`; the pinned SHA-256 and size remain the integrity check.
+
+Verified archives are cached in `%LOCALAPPDATA%\gentle-shell\cache\downloads`. A cache entry is written under a temporary name and renamed into place, so a crash cannot leave a partial entry. An owned entry that fails its size or SHA-256 check is deleted and downloaded again.
+
 ## Replaced-backup retention
 
 A reconfigure that retires the installed tree renames it to a sibling
 `TARGET.replaced-<UTC>` backup (for example
 `C:\Users\...\gentle-shell.replaced-20260101T130000Z`) before publishing the
-replacement. After the new installation is published, verified and its
+replacement. The Main snapshot is acquired before that rename, so a failed
+Main download retires nothing. When any later step fails before the
+replacement is published (a download, provisioning, or a changed selection),
+the installer first stops its acquisitions and cleans the stage, then moves
+the backup back to `TARGET` and reports `previous Windows installation
+restored`. It never removes or overwrites a destination that exists: if one is
+present, or the backup's physical identity changed, or the rename fails, both
+trees are kept and the error names the path as `backup retained at ...`. A
+failure after publication (verification or launchers) keeps the published
+tree and the backup. After the new installation is published, verified and its
 launchers are confirmed, the installer bounds those backups to **one recent
 tree**: the backup it just created is always retained, and when the system
 clock has drifted the lexically latest candidate is retained as well, so clock
@@ -51,6 +66,34 @@ identity, rechecked immediately before deletion). Unrelated folders, wrong
 markers and noncanonical timestamps are ignored; an invalid or uncertain
 candidate is preserved whole and reported. Retention failure is a warning and
 never retracts a valid installation.
+
+## Removed-backup retention
+
+An uninstall renames the installed tree to a sibling `TARGET.removed-<UTC>`
+backup and prunes it to the minimal retained set (config, agent, home,
+selection and manifest). The same one-tree bound applies: after the uninstall
+succeeds, the backup it just created is kept and every older `TARGET.removed-*`
+backup is removed. A removed backup is deleted only when it is an exact
+canonical sibling, a directory owned by the current account, carries a canonical
+manifest and selection for the original destination, and every top-level entry
+passes the owned-identity check, rechecked immediately before deletion. Replaced
+backups are a separate family and are never touched by this step. An uncertain
+older backup is preserved whole and reported; the uninstall itself is never
+undone.
+
+## Files in use
+
+Renames and removals of installer-owned paths retry a
+sharing, lock or access violation with a short bounded backoff (about 2.6 s in
+total), which covers an antivirus scan or the search indexer briefly holding a
+freshly written file. A path still busy after the last attempt reports the
+original Windows error and asks you to close the program holding the file
+(for example an antivirus scan or an open editor or terminal) and retry. A
+CodeGraph archive that stays locked still fails the install, because the stage
+is published as the installation and must not carry it. Preference files are
+replaced atomically: the new content is written and read back as a sibling
+first and then renamed over the previous file, so an interrupted replacement
+keeps the previous file.
 
 ## Persistent memory (Engram)
 

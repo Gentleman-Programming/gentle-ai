@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
 )
 
 func TestShellInstallSelectionExecutionRechecksConsent(t *testing.T) {

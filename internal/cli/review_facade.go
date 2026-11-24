@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // reviewContractRequiredForActionEligibilityReason is the single wording
@@ -600,7 +600,7 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-unachievable|capture-validation|lens-context|capabilities|assess|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Provider transports relay opaque bytes only; Go materializes, admits, captures, and closes review on its final causal event. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <acknowledge-approved|capture-result|capture-correction-plan|capture-refuter|capture-unachievable|capture-validation|lens-context|capabilities|assess|start|validate|status|repair|invalidate|abandon|recover|reclaim|store-reset|inspect-authority|inspect-candidate|reopen-results|schema|opencode-transport> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Provider transports relay opaque bytes only; Go materializes, admits, captures, and closes review on its final causal event. Generic review recover remains unchanged. Use review repair --preflight to inspect damaged authority and its leaf disposition plan.")
 		return nil
 	}
 	operation, negotiated, preflightFailure := reviewIntegrationFailureRoute(args)
@@ -797,7 +797,7 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 }
 
 func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory; initialize local Git only for a genuinely unversioned workspace.")
+	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 authority from the shared Git common directory; initialize local Git only for a genuinely unversioned workspace.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
@@ -815,13 +815,13 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	recoveryReason := flags.String("recovery-reason", "", "authorized recovery reason")
 	recoveryActor := flags.String("recovery-actor", "", "authorized recovery actor")
 	recoveryAuthorization := flags.String("recovery-authorization", "", "exact authorized recovery binding")
-	repairActor := flags.String("repair-actor", "", "authorized classified repair actor")
-	repairReason := flags.String("repair-reason", "", "authorized classified repair reason")
-	repairAuthorization := flags.String("repair-authorization", "", "exact classified repair authorization binding")
+	repairActor := flags.String("repair-actor", "", "authorized leaf authority disposition actor")
+	repairReason := flags.String("repair-reason", "", "authorized leaf authority disposition reason")
+	repairAuthorization := flags.String("repair-authorization", "", "exact leaf authority disposition authorization binding")
 	untrackedScope := reviewSingleValueFlag{}
 	intendedUntracked := reviewRepeatedPathFlag{}
 	expectedUntrackedInventory := reviewSingleValueFlag{}
-	intendedUntrackedSelection := flags.String("intended-untracked-selection", "", "provider-bound intended-untracked selection JSON")
+	intendedUntrackedSelection := flags.String("intended-untracked-selection", "", "provider-bound intended-untracked selection JSON; replay the submission's target and lineage selectors unchanged")
 	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
 	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
 	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
@@ -976,6 +976,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// frozen exclusion instead of demanding a fresh live declaration
 		// (#6058).
 		var frozenCommittedCorrectionTarget *reviewtransaction.Snapshot
+		var frozenCommittedEscalation *reviewtransaction.CompactRecord
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 				return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review status --projection staged`"))
@@ -1029,6 +1030,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							return reviewPreflightError(inventoryErr)
 						}
 						resumeCorrectionUntracked = reviewUntrackedInventoryContainsSelection(inventory, declaredUntracked)
+					} else if record.State.State == reviewtransaction.StateEscalated && *committedOnly &&
+						record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff && len(declaredUntracked) == 0 {
+						// Wait for native STATUS to confirm that this selector still
+						// reaches the rejected candidate's terminal stop.
+						frozenCommittedEscalation = &record
 					}
 					if pendingApproval || resumeCorrectionUntracked {
 						intendedScope = reviewIntendedUntrackedScope{
@@ -1263,14 +1269,24 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// authority's immutable decision: an unrelated untracked file must not
 		// replace it with a fresh live declaration. A different base tree stays
 		// a different target and never inherits this decision.
-		// guard:population committed-correction-frozen-exclusion too-loose: only a current, stop-routed correction_required base-diff whose assessed live base tree and projection equal the frozen target and whose frozen intended-untracked selection is empty reuses that exclusion; a different base tree or projection, a declared selection, another lineage, state, or action still takes its own declaration path
-		if frozenCommittedCorrectionTarget != nil && !intendedScope.Declared &&
+		var frozenCommittedTarget *reviewtransaction.Snapshot
+		if native.State == reviewtransaction.StateCorrectionRequired {
+			frozenCommittedTarget = frozenCommittedCorrectionTarget
+		} else if frozenCommittedEscalation != nil && intendedScope.NeedsSelection &&
+			native.State == reviewtransaction.StateEscalated && native.Revision == frozenCommittedEscalation.Revision &&
+			native.Escalation != nil && native.Escalation.Cause == reviewRejectedValidatorCause &&
+			liveSnapshot.CandidateTree == frozenCommittedEscalation.State.CurrentSnapshot.CandidateTree {
+			// The rejected snapshot is the fix diff: its tree identifies the
+			// rejected candidate, but only the initial snapshot names the range.
+			frozenCommittedTarget = &frozenCommittedEscalation.State.InitialSnapshot
+		}
+		// guard:population committed-correction-frozen-exclusion too-loose: only a current, stop-routed base-diff of the bound lineage with the same frozen base, projection, and empty selection can reuse the correction's exclusion. After validator rejection this additionally requires the same authority revision and rejected candidate tree; a changed candidate's recovery still follows the ordinary selection rules.
+		if frozenCommittedTarget != nil && !intendedScope.Declared &&
 			native.Applicability == reviewtransaction.TargetApplicabilityCurrent &&
-			native.LineageID == requestedLineage && native.State == reviewtransaction.StateCorrectionRequired &&
-			native.Action == reviewtransaction.TargetStatusActionStop &&
+			native.LineageID == requestedLineage && native.Action == reviewtransaction.TargetStatusActionStop &&
 			native.Projection.Kind == reviewtransaction.TargetBaseDiff &&
-			native.Projection.BaseTree == frozenCommittedCorrectionTarget.BaseTree &&
-			native.Projection.Projection == frozenCommittedCorrectionTarget.Projection &&
+			native.Projection.BaseTree == frozenCommittedTarget.BaseTree &&
+			native.Projection.Projection == frozenCommittedTarget.Projection &&
 			len(native.Projection.IntendedUntracked) == 0 {
 			intendedScope.Declared = true
 			intendedScope.NeedsSelection = false
@@ -1341,18 +1357,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			result.Repair = repair
 			// Wave 6 (rdd-closure-disposition-execution / "Reachable Through
-			// the Negotiated Transition Route"): only when the classified
-			// vocabulary above has nothing to offer, mirroring `review repair
+			// the Negotiated Transition Route"): mirrors `review repair
 			// --preflight`'s own read-only prediction (review_repair.go) —
 			// actor/reason stay empty so nothing maintainer-specific is ever
 			// derived here, and a derivation refusal is never propagated (no
 			// eligible edge this round is not a status-assembly error).
-			if repair.Status != reviewtransaction.AuthorityRepairEligible || repair.Candidate == nil {
-				if plan, planErr := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", ""); planErr == nil && reviewtransaction.AdmitAuthorityDispositionClosure(plan) == nil {
-					result.Disposition = &ReviewRepairDispositionProviderInputs{
-						PlanDigest: plan.PlanDigest, AuthorityInventoryRevision: plan.AuthorityInventoryRevision,
-						SeedLineageID: plan.SeedSet[0], SeedExpectedRevision: plan.ExpectedRevisions[plan.SeedSet[0]],
-					}
+			if plan, planErr := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", ""); planErr == nil && reviewtransaction.AdmitAuthorityDispositionClosure(plan) == nil {
+				result.Disposition = &ReviewRepairDispositionProviderInputs{
+					PlanDigest: plan.PlanDigest, AuthorityInventoryRevision: plan.AuthorityInventoryRevision,
+					SeedLineageID: plan.SeedSet[0], SeedExpectedRevision: plan.ExpectedRevisions[plan.SeedSet[0]],
 				}
 			}
 		}
@@ -1641,7 +1654,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// per-request bump is needed here anymore.
 		if intendedScope.NeedsSelection &&
 			(result.NextTransition == nil || result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled") {
-			transition := reviewIntendedUntrackedCollection(result, intendedScope, runtime)
+			transition := reviewIntendedUntrackedCollection(result, intendedScope, runtime, requestedLineage)
 			result.NextTransition = &transition
 		}
 		// v1 envelopes keep their pinned schema; only v2 projects the root action.
@@ -1656,6 +1669,13 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// `forecast` field and is never narrated to stderr, because a
 			// successful negotiated operation must stay byte-silent there.
 			forecast := newReviewForecast(*result.NextTransition)
+			if result.NextTransition.Kind == reviewNextTransitionStop && result.NextTransition.ReasonCode == "native_stop_required" &&
+				result.rddMode.Enabled() && native.Action == reviewtransaction.TargetStatusActionStop &&
+				result.Applicability == reviewtransaction.TargetApplicabilityCurrent &&
+				requestedLineage != "" && result.Authority != nil && requestedLineage == result.Authority.LineageID &&
+				result.Escalation != nil && result.Escalation.Cause == reviewRejectedValidatorCause {
+				forecast.Steps[0].Description += ". " + reviewRejectedValidatorPreflightGuidance(root, "this STATUS's authority.lineage_id and authority.revision")
+			}
 			result.Forecast = &forecast
 		}
 		var validationErr error
@@ -2322,12 +2342,6 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 	}
 	record, loadErr := compact.Load()
 	if loadErr == nil {
-		legacy, legacyErr := reviewtransaction.AuthoritativeStore(context.Background(), root, *lineage)
-		if legacyErr == nil {
-			if _, legacyLoadErr := legacy.LoadChain(); legacyLoadErr == nil {
-				return errors.New("review authority is ambiguous across compact v2 and legacy v1 stores")
-			}
-		}
 		approvedInvalidation := record.State.State == reviewtransaction.StateApproved ||
 			record.State.State == reviewtransaction.StateInvalidated && record.State.InvalidationEvidence != nil
 		if approvedInvalidation {
@@ -2362,25 +2376,7 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 		}
 		return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: state.LineageID, State: state.State, StoreRevision: revision})
 	}
-	if !errors.Is(loadErr, os.ErrNotExist) {
-		return fmt.Errorf("load explicit compact review lineage: %w", loadErr)
-	}
-	if strings.TrimSpace(*reason) == "" {
-		return errors.New("legacy review invalidation requires --reason")
-	}
-	legacy, err := reviewtransaction.AuthoritativeStore(context.Background(), root, *lineage)
-	if err != nil {
-		return err
-	}
-	chain, err := legacy.LoadChain()
-	if err != nil {
-		return fmt.Errorf("load explicit review lineage: %w", err)
-	}
-	revision, err := legacy.InvalidatePristine(*expected, *reason, chain.Records[len(chain.Records)-1].Transaction.Snapshot)
-	if err != nil {
-		return err
-	}
-	return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: *lineage, State: reviewtransaction.StateInvalidated, StoreRevision: revision})
+	return fmt.Errorf("load explicit compact review lineage: %w", loadErr)
 }
 
 func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) error {

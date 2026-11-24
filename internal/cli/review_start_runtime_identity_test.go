@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // reviewPrintedIdentityRegexp captures the runtime identity any command this

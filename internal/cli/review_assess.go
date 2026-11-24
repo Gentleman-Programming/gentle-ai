@@ -7,8 +7,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // ReviewAssessmentSchema is the typed envelope gentle-ai review assess prints
@@ -61,16 +61,17 @@ type ReviewAssessmentNextTransition struct {
 // Public review_due_reason vocabulary. Exactly one of these accompanies every
 // review_due value, in the precedence order reviewAssessDue evaluates: a
 // consumed candidate always reports already_reviewed regardless of its risk
-// tier, high risk always reports true, a medium candidate reports true only
-// once its changed_lines reaches the same reviewtransaction.LargeChangeLines
-// slice boundary the ODD delivery-budget rule already names, and passive
-// never needs review at all.
+// tier, high risk always reports true, a medium candidate is never due
+// automatically, and passive never needs review at all. reviewAssessDue is the
+// ONE place review_due is decided; every other consumer (the Stop hook
+// included) reads its result. under_budget is a frozen wire spelling (the
+// published v1 enum) for "medium risk: not reviewed automatically"; it is not
+// a size cap. The reviewer capacity cap is lens_context_budget_exceeded.
 const (
-	reviewAssessDueReasonHighRisk           = "high_risk"
-	reviewAssessDueReasonSliceBudgetReached = "slice_budget_reached"
-	reviewAssessDueReasonPassive            = "passive"
-	reviewAssessDueReasonUnderBudget        = "under_budget"
-	reviewAssessDueReasonAlreadyReviewed    = "already_reviewed"
+	reviewAssessDueReasonHighRisk        = "high_risk"
+	reviewAssessDueReasonPassive         = "passive"
+	reviewAssessDueReasonUnderBudget     = "under_budget"
+	reviewAssessDueReasonAlreadyReviewed = "already_reviewed"
 )
 
 // ReviewAssessmentResult is the complete gentle-ai.review-assessment/v1

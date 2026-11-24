@@ -10,6 +10,7 @@ import "os"
 //   - PI_CODING_AGENT_DIR (internal/agents/pi.AgentConfigPath)
 //   - OPENCODE_CONFIG_DIR (internal/opencode.ResolveRuntimeConfigForHome)
 //   - XDG_CONFIG_HOME (OpenCode config resolution when homeDir is the OS home)
+//   - HERMES_HOME (internal/system.HermesConfigDir when homeDir is the OS home)
 //   - GENTLE_AI_HOME, GENTLE_AI_PI_CONFIG_DIR, GENTLE_AI_ENGRAM_BIN (isolated
 //     installs: a bundled Gentle Shell exports them to its agent, so a test run
 //     from there would otherwise write into that real prefix)
@@ -22,6 +23,7 @@ var overrideEnvVars = []string{
 	"PI_CODING_AGENT_DIR",
 	"OPENCODE_CONFIG_DIR",
 	"XDG_CONFIG_HOME",
+	"HERMES_HOME",
 	"GENTLE_AI_HOME",
 	"GENTLE_AI_PI_CONFIG_DIR",
 	"GENTLE_AI_ENGRAM_BIN",

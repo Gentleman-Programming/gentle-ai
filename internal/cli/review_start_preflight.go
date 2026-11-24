@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // reviewStartPreflightOptionNames are the START options STATUS preflights

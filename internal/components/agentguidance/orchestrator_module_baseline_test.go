@@ -15,13 +15,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
 )
 
 // #5256 T1 characterizes the orchestrator every non-Pi runtime receives before

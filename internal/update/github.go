@@ -93,9 +93,13 @@ func fetchLatestRelease(ctx context.Context, owner, repo string) (githubRelease,
 }
 
 func fetchMainCommit(ctx context.Context, owner, repo string) (githubCommit, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/main", owner, repo)
+	return fetchCommit(ctx, owner, repo, "main")
+}
 
-	resp, err := doGitHubRequest(ctx, url)
+func fetchCommit(ctx context.Context, owner, repo, ref string) (githubCommit, error) {
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s", owner, repo, url.PathEscape(ref))
+
+	resp, err := doGitHubRequest(ctx, endpoint)
 	if err != nil {
 		return githubCommit{}, err
 	}
@@ -110,6 +114,31 @@ func fetchMainCommit(ctx context.Context, owner, repo string) (githubCommit, err
 		return githubCommit{}, fmt.Errorf("decode github commit: %w", err)
 	}
 	return commit, nil
+}
+
+type githubCommitComparison struct {
+	Status   string `json:"status"`
+	AheadBy  int    `json:"ahead_by"`
+	BehindBy *int   `json:"behind_by"`
+}
+
+// compareCommits compares already resolved commit SHAs, not moving refs.
+func compareCommits(ctx context.Context, owner, repo, base, head string) (githubCommitComparison, error) {
+	// The comparison metadata covers the range even when the commit list is paginated.
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/compare/%s...%s?per_page=1", owner, repo, base, head)
+	resp, err := doGitHubRequest(ctx, endpoint)
+	if err != nil {
+		return githubCommitComparison{}, err
+	}
+	defer resp.Body.Close()
+	if err := checkGitHubResponse(resp, owner, repo); err != nil {
+		return githubCommitComparison{}, err
+	}
+	var comparison githubCommitComparison
+	if err := json.NewDecoder(resp.Body).Decode(&comparison); err != nil {
+		return githubCommitComparison{}, fmt.Errorf("decode github commit comparison: %w", err)
+	}
+	return comparison, nil
 }
 
 // fetchBetaModulePath reads the module directive at the same immutable commit

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // The OpenCode relay is spawned in the host session directory, which names

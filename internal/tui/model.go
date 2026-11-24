@@ -17,26 +17,26 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agentbuilder"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/v4/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v5/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update/upgrade"
 )
 
 // tuiNowFn returns the current time for the update-check cooldown gate.
@@ -660,7 +660,12 @@ type Model struct {
 	shellPlan             []string
 	shellPlanConfig       *shellExperienceConfig
 	shellPlanRequest      shellinstaller.UserInstallRequest
-	shellRootRisk         *shellRootRiskPrompt
+	// shellChannelRestore holds the channel preference persisted before a
+	// channel-only update plan; cancel or failure restores it.
+	shellChannelRestore *shellChannelRestore
+	shellRootRisk       *shellRootRiskPrompt
+	// shellUpdateGeneration numbers update checks; stale results are ignored.
+	shellUpdateGeneration int
 	shellInstallRun       *shellInstallRun
 	shellInstallEvents    <-chan shellInstallEvent
 	shellInstallRunner    func(context.Context, shellinstaller.UserInstallRequest, func(shellinstaller.UserInstallProgress)) error
@@ -1523,7 +1528,7 @@ func (m Model) View() string {
 			screens.WelcomeAdvisory{Message: m.AdvisoryMessage, URL: m.AdvisoryURL, Scroll: m.AdvisoryScroll},
 		)
 	case ScreenShellInstall:
-		return m.shellInstallView()
+		return m.shellInstallScreenView()
 	case ScreenUpgrade:
 		return screens.RenderUpgradeWithWidth(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame, m.Width)
 	case ScreenSync:

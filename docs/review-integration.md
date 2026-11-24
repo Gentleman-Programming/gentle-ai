@@ -134,6 +134,8 @@ Without the flags, START keeps the tier default and the persisted authority is u
 
 Callers detect both START inputs, and their STATUS preflight, from `gentle-ai review capabilities` instead of probing START or STATUS. Both negotiated advertisements (`capabilities/v1.5` and `capabilities/v2.6`) list four optional features:
 
+Legacy v1 authority is unsupported, so `capabilities/v2.6` does not announce it: `compatibility.modes` is `["compact-v2"]`, there is no `compatibility.legacy_window`, and `legacy_v1_target_scoped_read_only` is not a mandatory feature. The published `capabilities-v2.6.schema.json` was corrected in place for this (no version bump). The frozen `capabilities/v1.5` advertisement still carries the legacy mode and window its published schema requires.
+
 | Feature | Input | Requires |
 | --- | --- | --- |
 | `start_request_context` | START `--request-context <file>` | `compact_v2_authority` |
@@ -154,6 +156,22 @@ A reviewing START carries `next_transition.execute(review.status)` — the provi
 | `stop` | Run no lifecycle operation. Do not infer a recovery from prose. |
 
 A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
+
+#### Untracked selection in bound STATUS
+
+When no runtime agent is resolved, STATUS v9 offers manual selection without a `submission`. Omitting `--agent` alone does not guarantee this: a bound review can supply its frozen runtime.
+With `--agent=pi`, older Pi can decode the historical submission when the
+bound-selection opt-in is absent or unrecognized. That submission carries the
+target selector but omits `--lineage`; it does not let older Pi recover the
+bound review through selection.
+
+For an explicitly selected authority, the exact environment setting
+`GENTLE_AI_BOUND_SELECTION_CONTRACT=gentle-ai.review-bound-selection/v1` lets
+STATUS with a named runtime emit a submission that preserves `--lineage`.
+A compatible Pi refuses to replay an unbound submission for a bound review;
+it must not infer a lineage or retry with unbound tokens. For manual selection,
+rerun STATUS with the same lineage and target selector, adding `--untracked-scope`,
+`--expected-untracked-inventory`, and `--intended-untracked` for each selected path.
 
 #### Native recovery for an explicitly selected lineage
 
@@ -243,6 +261,8 @@ The role submission descriptor is a negotiated status contract change, so the ne
 Native Go alone selects lenses, classifies candidate causality, performs refutation, derives repository evidence, and permits at most one bounded correction. A validator that cannot inspect its immutable trees has no verdict; report that block rather than submitting a failed validation.
 
 A committed-range correction re-entered with the exact selector the final capture returned (`--base-ref <frozen tree> --committed-only`), or with the commit START was pinned to, keeps its frozen empty intended-untracked exclusion. Unrelated untracked files do not reopen that decision or require a new `--untracked-scope` declaration. A different base tree names a different target and never inherits the frozen decision.
+
+After a targeted validator rejects that correction, bound STATUS with the same committed-only range and unchanged rejected candidate still reports `native_stop_required`, even if unrelated untracked files now exist. This does not authorize recovery. A changed committed candidate or a fresh lineage does not inherit the exclusion.
 
 ### Non-blocking findings of a stopped review (`--non-blocking-findings`)
 
@@ -335,6 +355,8 @@ The v1 contract and historical artifacts remain published compatibility surfaces
 
 A `stop` carries one reason code and no executable transition. The table below is the complete continuation inventory for the atomic target-root lifecycle. `Terminal` means no in-lineage continuation exists; it never authorizes delivery. For every clone-scoped exit, gates remain unmanaged and ordinary repository policy decides delivery.
 
+When a last-event closure reports `targeted_validator_rejected`, its human-readable `action` prints a read-only v2 repair preflight. With RDD enabled, bound v2 STATUS for that same unchanged terminal lineage also prints it in the stop forecast's `description`, not in `next_transition`. Before consulting repair help, match a returned successor-only selector to the closure's `lineage_id` and `store_revision`, or to STATUS's `authority.lineage_id` and `authority.revision`. No exact match means this handoff does not apply. Preflight does not release authority; any release requires separate, explicit maintainer authorization. Changed-target STATUS keeps its existing target-scoped rules.
+
 | Reason code | Continuation |
 | --- | --- |
 | `captured_artifacts_unverifiable` | Terminal — a captured reviewer artifact failed local verification. Ask a maintainer to inspect the B authority, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
@@ -348,7 +370,7 @@ A `stop` carries one reason code and no executable transition. The table below i
 | `corrupted_or_unverifiable_authority` | Terminal — the authority is unreadable or unsupported. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `manual_intervention_required` | Terminal — the authority state is outside the negotiated lifecycle. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `missing_authority_binding` | Terminal — a current target had no authority binding. File a bounded defect with the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
-| `native_stop_required` | Terminal — the lineage is escalated but has no native continuation. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `native_stop_required` | Terminal — there is no in-lineage continuation. For an isolated canonical rejected-validator terminal, a maintainer can follow the [exact `review repair` disposition procedure](review-authority-threat-model.md#rejected-validator-terminal-disposition). Otherwise ask a maintainer to inspect the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. Disposition does not approve the candidate or authorize delivery. |
 | `recovery_scope_unchanged` | Change B so its target identity differs, then retry the exact returned `gentle-ai review recover` invocation. |
 | `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and start a fresh target; otherwise run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `unachievable_lens_slot` | A host reported a selected reviewer slot unachievable under current conditions. If that was transient, re-run `gentle-ai review capture-unachievable` with the same binding and `--withdraw=true` so B re-offers the same slot. If it is not transient, reduce the B candidate scope and start a new `gentle-ai review start`, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |

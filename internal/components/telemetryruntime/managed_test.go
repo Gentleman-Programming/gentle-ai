@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mutationjournal"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/mutationjournal"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
 )
 
 func TestOpenCodeTelemetryApprovedPriorAssetUpgrade(t *testing.T) {

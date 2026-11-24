@@ -2560,11 +2560,6 @@ func ImportCompactTransport(ctx context.Context, repo string, transport CompactT
 	if err != nil {
 		return CompactRecord{}, err
 	}
-	if legacy, legacyErr := AuthoritativeStore(ctx, repo, validated.Record.State.LineageID); legacyErr == nil {
-		if _, loadErr := legacy.LoadChain(); loadErr == nil {
-			return CompactRecord{}, errors.New("cannot import compact authority over an existing legacy v1 lineage")
-		}
-	}
 	if recovery := validated.Record.State.Recovery; recovery != nil {
 		predecessorStore, predecessorErr := CompactAuthoritativeStore(ctx, repo, recovery.PredecessorLineageID)
 		if predecessorErr != nil {

@@ -346,3 +346,20 @@ func TestUserWindowsVerifyContextRespectsCooperativeCancel(t *testing.T) {
 		t.Fatal("cooperative cancellation did not reach the post-publish verify context")
 	}
 }
+
+func TestWindowsEnvironmentForwardsMainFallback(t *testing.T) {
+	t.Setenv("GENTLE_AI_MAIN_FALLBACK", "1")
+	env, err := userWindowsEnvironment("")
+	if err != nil {
+		t.Skip(err)
+	}
+	for _, want := range []string{"GENTLE_AI_MAIN_FALLBACK=1"} {
+		found := false
+		for _, entry := range env {
+			found = found || entry == want
+		}
+		if !found {
+			t.Fatalf("worker environment lacks %s: %v", want, env)
+		}
+	}
+}

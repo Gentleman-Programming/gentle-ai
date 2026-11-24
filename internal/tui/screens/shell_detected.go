@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/styles"
 )
 
 // ShellDetectedInstall is the read-only discovery summary. It grants no

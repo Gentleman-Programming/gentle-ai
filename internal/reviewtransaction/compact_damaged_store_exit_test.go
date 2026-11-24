@@ -4,15 +4,8 @@ package reviewtransaction
 // four refusals that stop the operator without naming what actually clears
 // the block. These tests pin the honest replacements:
 //
-//   - `review reclaim` on an entry holding authority names the operation that
-//     admits THAT entry's shape — abandon for a pristine entry the
-//     abandonment gate's own prediction accepts — and, when nothing admits
-//     it, says so precisely and names the machine-readable diagnosis instead
-//     of a command that would then refuse. (Reconciliation used to also be a
-//     possible named continuation here; the `review reconcile-authority`
-//     verb and its provider retired in Wave 7 S3a/S3b, so reclaim's own
-//     refusal for a reconcilable-shaped edge now falls through to the same
-//     abandon-or-Blocked logic every other shape uses.)
+//   - `review reclaim` on an entry holding authority names `review abandon`,
+//     which accepts every shape (pristine, captured, corrupt or unreadable).
 //   - `review start` over an invalid authority graph names the sanctioned exit
 //     the read-only inspection proves, instead of stopping at the bare graph
 //     violation.
@@ -21,8 +14,10 @@ package reviewtransaction
 // command dead-ends fails here, not in the field.
 
 import (
+	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -44,9 +39,7 @@ func truncateCompactStateFile(t *testing.T, store CompactStore) []byte {
 }
 
 // abandonPerEligibility runs the abandonment exactly as an operator following
-// a refusal's template would: the persisted values come from the same
-// read-only prediction the refusal rendered, and only the operator-owned
-// actor and reason are supplied here.
+// a refusal's printed command would: only the lineage, actor and reason.
 func abandonPerEligibility(t *testing.T, repo, lineage, _ string) CompactReclaimRecord {
 	t.Helper()
 	ctx := context.Background()
@@ -57,20 +50,16 @@ func abandonPerEligibility(t *testing.T, repo, lineage, _ string) CompactReclaim
 	if !eligibility.Eligible {
 		t.Fatalf("successor %q is not abandonable; the named continuation does not run", lineage)
 	}
-	request := CompactAbandonRequest{
-		LineageID: lineage, ExpectedRevision: eligibility.Revision,
-		Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
-	}
-	request.MaintainerAuthorization = RenderCompactAbandonAuthorization(
-		lineage, eligibility.Revision, eligibility.SnapshotIdentity, request.Actor, request.Reason, eligibility.DiscardedWork)
-	record, err := AbandonPristineCompactStore(ctx, repo, request)
+	record, err := abandonAuthorized(t, ctx, repo, CompactAbandonRequest{
+		LineageID: lineage, Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
+	})
 	if err != nil {
 		t.Fatalf("abandon %q: %v", lineage, err)
 	}
 	if record.Status != CompactReclaimCommitted {
 		t.Fatalf("abandon %q record = %#v", lineage, record)
 	}
-	return record
+	return record.CompactReclaimRecord
 }
 
 func requireAuthoritativeInventory(t *testing.T, repo string) {
@@ -123,8 +112,6 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 		for _, want := range []string{
 			"gentle-ai review abandon",
 			"--lineage \"" + successor.State.LineageID + "\"",
-			"--expected-revision \"" + successor.Revision + "\"",
-			CompactAbandonAuthorizationSchema,
 		} {
 			if !strings.Contains(refusal, want) {
 				t.Fatalf("reclaim refusal does not name %q:\n%s", want, refusal)
@@ -165,7 +152,6 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 		refusal := reclaim(t, repo, successor.State.LineageID)
 		for _, want := range []string{
 			"gentle-ai review abandon",
-			CompactAbandonAuthorizationSchema,
 		} {
 			if !strings.Contains(refusal, want) {
 				t.Fatalf("reclaim refusal does not carry %q:\n%s", want, refusal)
@@ -175,23 +161,27 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 		requireAuthoritativeInventory(t, repo)
 	})
 
-	t.Run("unreadable record names the diagnosis, not an operation that cannot load it", func(t *testing.T) {
+	t.Run("unreadable record names abandon, which quarantines it uninterpreted", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		_, successor, successorStore := forgedRecoveryPair(t, repo, "reclaim-halved", "half-written reclaim target\n")
-		truncateCompactStateFile(t, successorStore)
+		truncated := truncateCompactStateFile(t, successorStore)
 		refusal := reclaim(t, repo, successor.State.LineageID)
 		for _, want := range []string{
-			"malformed_compact_state",
-			"gentle-ai review inspect-authority",
+			"gentle-ai review abandon",
+			"--lineage \"" + successor.State.LineageID + "\"",
 		} {
 			if !strings.Contains(refusal, want) {
 				t.Fatalf("reclaim refusal does not carry %q:\n%s", want, refusal)
 			}
 		}
-		for _, deadEnd := range []string{"gentle-ai review abandon", "gentle-ai review reconcile-authority"} {
-			if strings.Contains(refusal, deadEnd) {
-				t.Fatalf("reclaim names %q for a record neither can load (named dead end):\n%s", deadEnd, refusal)
-			}
+		if strings.Contains(refusal, "gentle-ai review reconcile-authority") {
+			t.Fatalf("reclaim names a retired verb:\n%s", refusal)
 		}
+		record := abandonPerEligibility(t, repo, successor.State.LineageID, "clear the damaged entry")
+		moved, err := os.ReadFile(filepath.Join(record.QuarantinePath, "residue", compactStateFileName))
+		if err != nil || !bytes.Equal(moved, truncated) {
+			t.Fatalf("quarantine did not byte-preserve the unreadable record: %v", err)
+		}
+		requireAuthoritativeInventory(t, repo)
 	})
 }

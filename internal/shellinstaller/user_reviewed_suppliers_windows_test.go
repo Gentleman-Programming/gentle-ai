@@ -56,7 +56,7 @@ func userWindowsRecordSDKVersion(t *testing.T, target, version string) {
 // userWindowsStableCheckWithList runs the stable update check against a stub
 // reviewed list whose newest release is the given version: no test touches the
 // network. Every other component is made current — the fixture node bytes are
-// pinned as this build's node artifact — so the SDK scope is the only signal
+// pinned as this build's node archive — so the SDK scope is the only signal
 // the assertions read.
 func userWindowsStableCheckWithList(t *testing.T, target, newest string) UserShellUpdate {
 	t.Helper()
@@ -67,7 +67,7 @@ func userWindowsStableCheckWithList(t *testing.T, target, newest string) UserShe
 	stub := embedded
 	stub.Releases = map[string]userReviewedSupplier{"4.3.0": embedded.Releases["4.3.0"]}
 	stub.Releases[newest] = embedded.Releases["4.5.0"]
-	node, err := os.ReadFile(filepath.Join(target, "runtime", "node", "node.exe"))
+	node, err := os.ReadFile(filepath.Join(target, "runtime", "archives", "node.zip"))
 	if err != nil {
 		t.Fatal(err)
 	}

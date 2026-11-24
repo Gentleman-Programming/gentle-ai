@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/testenv"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/testenv"
 )
 
 // TestMain neutralizes ambient agent runtime-dir overrides (PI_CODING_AGENT_DIR,

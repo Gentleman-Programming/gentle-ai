@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/telemetry"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/telemetry"
 )
 
 type runtimeHeldInput struct {
