@@ -65,6 +65,13 @@ func writeWindowsChannelFixture(t *testing.T) (home, target string, install User
 	if err := userWindowsWrite(filepath.Join(target, "runtime", "node", "node.exe"), []byte("fixture node, never executed")); err != nil {
 		t.Fatal(err)
 	}
+	// The update check compares the retained node.zip with the Node pin.
+	if err := os.MkdirAll(filepath.Join(target, "runtime", "archives"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := userWindowsWrite(filepath.Join(target, "runtime", "archives", "node.zip"), []byte("fixture node archive, never unpacked")); err != nil {
+		t.Fatal(err)
+	}
 	return home, target, UserShellInstall{Target: target, Mode: "separate", Channel: "stable", Prefix: filepath.Join(target, "prefix"), Agent: filepath.Join(target, "agent")}
 }
 

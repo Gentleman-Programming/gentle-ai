@@ -653,9 +653,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 				return result, fmt.Errorf("component update requires a recorded installation: %w", manifestErr)
 			}
 			installed = &recorded
-			if pin, pinErr := userWindowsGoPinSHA(); pinErr == nil && scope.reused[UserComponentNode] && installed.GoSHA == pin {
-				goReuse = true
-			}
+			goReuse = userWindowsGoReusable(req.Destination, installed, scope)
 		} else if recorded, manifestErr := userWindowsManifestRead(req.Destination); manifestErr == nil {
 			// A full reconfigure of a recorded installation still rebuilds a
 			// fresh stage, so the operator state is carried from the recorded
