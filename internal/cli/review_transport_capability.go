@@ -82,19 +82,18 @@ type reviewImmutableRuntimePolicy struct {
 // reviewOpenCodeRuntimeProbe memoizes the OpenCode runtime answer, failures
 // included, for the life of the process, keyed by the executable PATH
 // resolves. Every gate in one process (assess, STATUS, START, consent, relay,
-// capture) therefore reads the same answer and eligibility cannot flap
-// between them (#4984, #5058, #5117).
+// capture) therefore reads the same version evidence (#4984, #5058, #5117).
 var reviewOpenCodeRuntimeProbe struct {
 	sync.Mutex
 	answers map[string]reviewOpenCodeRuntimeAnswer
 }
 
 type reviewOpenCodeRuntimeAnswer struct {
-	major opencode.RuntimeMajor
-	err   error
+	version opencode.RuntimeVersion
+	err     error
 }
 
-func reviewOpenCodeRuntimeMajor() (opencode.RuntimeMajor, error) {
+func reviewOpenCodeRuntimeVersion() (opencode.RuntimeVersion, error) {
 	executable, err := exec.LookPath("opencode")
 	if err != nil {
 		executable = ""
@@ -102,15 +101,18 @@ func reviewOpenCodeRuntimeMajor() (opencode.RuntimeMajor, error) {
 	reviewOpenCodeRuntimeProbe.Lock()
 	defer reviewOpenCodeRuntimeProbe.Unlock()
 	if answer, ok := reviewOpenCodeRuntimeProbe.answers[executable]; ok {
-		return answer.major, answer.err
+		return answer.version, answer.err
 	}
-	major, err := opencode.DetectRuntimeMajor(context.Background())
+	version, err := opencode.DetectRuntimeVersion(context.Background())
 	if reviewOpenCodeRuntimeProbe.answers == nil {
 		reviewOpenCodeRuntimeProbe.answers = make(map[string]reviewOpenCodeRuntimeAnswer)
 	}
-	reviewOpenCodeRuntimeProbe.answers[executable] = reviewOpenCodeRuntimeAnswer{major: major, err: err}
-	return major, err
+	reviewOpenCodeRuntimeProbe.answers[executable] = reviewOpenCodeRuntimeAnswer{version: version, err: err}
+	return version, err
 }
+
+// refusal:by-design world-action: this specific host release does not return a completed foreground Task to the relay
+var errReviewOpenCode241Dispatch = errors.New("OpenCode 2.4.1 does not return completed foreground reviewer Tasks for immutable receipt review. Switch to a compatible OpenCode release (for example, 2.0.19 with the managed V2 relay plugin) and rerun.")
 
 // reviewOpenCodeRuntimeRefusal checks the OpenCode host conditions. The relay
 // declaration and the detected runtime must agree: the V1 plugin declares
@@ -125,7 +127,7 @@ func reviewOpenCodeRuntimeRefusal() error {
 	if declaration != "" && declaration != openCodeRelayContractV2 {
 		return reviewOpenCodeRuntimeUnproven()
 	}
-	major, err := reviewOpenCodeRuntimeMajor()
+	version, err := reviewOpenCodeRuntimeVersion()
 	if errors.Is(err, opencode.ErrRuntimeVersionTimeout) {
 		// refusal:by-design world-action: an unproven runtime cannot receive immutable review authority; the exit is re-running once the host answers the probe
 		return errors.New("OpenCode immutable receipt-review eligibility could not be proven because `opencode --version` timed out in this process; nothing was started, so re-run the same command once `opencode --version` answers promptly")
@@ -134,8 +136,11 @@ func reviewOpenCodeRuntimeRefusal() error {
 	if declaration == openCodeRelayContractV2 {
 		want = opencode.RuntimeV2
 	}
-	if err != nil || major != want {
+	if err != nil || version.Major != want {
 		return reviewOpenCodeRuntimeUnproven()
+	}
+	if version.Version == "2.4.1" {
+		return errReviewOpenCode241Dispatch
 	}
 	return nil
 }
@@ -310,6 +315,17 @@ func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
 // becomes, at most, an optional extra witness some hosts still export --
 // never the gate.
 func reviewCaptureBoundRuntimeCapability(agent model.AgentID) reviewImmutableRuntimePolicy {
+	if agent == model.AgentOpenCode {
+		// The version exclusion governs new host Task dispatch, not bound
+		// capture. All other OpenCode host and capture checks still apply.
+		return reviewImmutableRuntimeCapabilityChecking(agent, func() error {
+			refusal := reviewOpenCodeRuntimeRefusal()
+			if errors.Is(refusal, errReviewOpenCode241Dispatch) {
+				return nil
+			}
+			return refusal
+		})
+	}
 	if agent != model.AgentPi {
 		return reviewImmutableRuntimeCapability(agent)
 	}

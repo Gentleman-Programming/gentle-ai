@@ -23,17 +23,29 @@ const (
 	RuntimeV2
 )
 
-var stableRuntimeVersion = regexp.MustCompile(`^(?:opencode |OpenCode )?v?([12])\.[0-9]+\.[0-9]+$`)
+// RuntimeVersion is the stable version reported by the executable, with any
+// accepted prefix removed. An unknown runtime has the zero value.
+type RuntimeVersion struct {
+	Major   RuntimeMajor
+	Version string
+}
+
+var stableRuntimeVersion = regexp.MustCompile(`^(?:opencode |OpenCode )?v?(([12])\.[0-9]+\.[0-9]+)$`)
+
+func parseRuntimeVersion(version string) RuntimeVersion {
+	match := stableRuntimeVersion.FindStringSubmatch(strings.TrimSpace(version))
+	if match == nil {
+		return RuntimeVersion{}
+	}
+	major := RuntimeV1
+	if match[2] == "2" {
+		major = RuntimeV2
+	}
+	return RuntimeVersion{Major: major, Version: match[1]}
+}
 
 func ParseRuntimeMajor(version string) RuntimeMajor {
-	match := stableRuntimeVersion.FindStringSubmatch(strings.TrimSpace(version))
-	if len(match) != 2 {
-		return RuntimeUnknown
-	}
-	if match[1] == "2" {
-		return RuntimeV2
-	}
-	return RuntimeV1
+	return parseRuntimeVersion(version).Major
 }
 
 type VersionCommandRunner func(context.Context, Command) (CommandOutput, error)
@@ -91,6 +103,13 @@ var ErrRuntimeVersionTimeout = errors.New("`opencode --version` timed out")
 var runtimeVersionTimeout = 15 * time.Second
 
 func DetectRuntimeMajor(ctx context.Context) (RuntimeMajor, error) {
+	version, err := DetectRuntimeVersion(ctx)
+	return version.Major, err
+}
+
+// DetectRuntimeVersion returns the major and exact stable version from the
+// same bounded executable probe.
+func DetectRuntimeVersion(ctx context.Context) (RuntimeVersion, error) {
 	ctx, cancel := context.WithTimeout(ctx, runtimeVersionTimeout)
 	defer cancel()
 	probe := Command{Path: "opencode", Args: []string{"--version"}, OutputLimit: 4096}
@@ -106,14 +125,14 @@ func DetectRuntimeMajor(ctx context.Context) (RuntimeMajor, error) {
 		}
 	}
 	if err == nil && len(output.Stdout) <= 4096 && len(output.Stderr) <= 4096 {
-		if major := ParseRuntimeMajor(string(output.Stdout)); major != RuntimeUnknown {
-			return major, nil
+		if version := parseRuntimeVersion(string(output.Stdout)); version.Major != RuntimeUnknown {
+			return version, nil
 		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return RuntimeUnknown, fmt.Errorf("%w after %s; managed runtime assets were not selected", ErrRuntimeVersionTimeout, runtimeVersionTimeout)
+		return RuntimeVersion{}, fmt.Errorf("%w after %s; managed runtime assets were not selected", ErrRuntimeVersionTimeout, runtimeVersionTimeout)
 	}
-	return RuntimeUnknown, errors.New("OpenCode runtime version unavailable or unsupported; managed runtime assets were not selected")
+	return RuntimeVersion{}, errors.New("OpenCode runtime version unavailable or unsupported; managed runtime assets were not selected")
 }
 
 // brokenManagedLauncherFallback resolves an alternate executable only when
