@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 // setStdioHelperProcess routes the execCommandContext seam through this test
@@ -854,6 +856,9 @@ func TestReadPersistedStdioCommands_PreservesConfiguredCommandAndArguments(t *te
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(homeDir, tt.path)
+			if tt.agentID == "hermes" {
+				path = filepath.Join(system.HermesConfigDir(homeDir), "config.yaml")
+			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				t.Fatal(err)
 			}

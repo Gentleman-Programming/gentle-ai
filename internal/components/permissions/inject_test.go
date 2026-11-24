@@ -11,17 +11,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/cursor"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 func TestSelectedPermissionsRefuseNestedCommentsAndLockedMode(t *testing.T) {
@@ -484,7 +485,7 @@ func TestInjectHermesSkipsPermissions(t *testing.T) {
 	}
 
 	// Confirm no config.yaml or settings file was created.
-	hermesDir := filepath.Join(home, ".hermes")
+	hermesDir := system.HermesConfigDir(home)
 	if _, err := os.Stat(hermesDir); err == nil {
 		t.Fatal("Inject(hermes) created ~/.hermes directory, want no files written")
 	}

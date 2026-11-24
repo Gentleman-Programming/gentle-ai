@@ -23,6 +23,16 @@ Wide configuration retains colored headings above each group. Its contextual pan
 
 The embedded destination view uses the historical two-column field/About layout. Ready offers the original Plan action cursor and About panel, with a zero-based line-offset indicator and responsive compact fallbacks. Selecting Install forwards only the existing physical confirmation/quit path; Back clears old consent without discarding the request; Cancel returns to Welcome. Complete JSON, SDK qualifications and changes/scopes remain pageable, including long paths and confirmation values. No additional preference authority or nested program is introduced.
 
+## One operation per destination
+
+Install, update, reconfigure, preference apply and uninstall each hold an exclusive cross-process lock on their destination for the whole operation. The lock is the file `.<destination name>.gentle-shell.lock` in the destination's parent directory (for example `.install.gentle-shell.lock`), taken with `flock` on Linux/macOS and `LockFileEx` on Windows. A second operation on the same destination, from another TUI or `gentle-ai shell install`, fails immediately with:
+
+```text
+another Gentle Shell operation is in progress for <destination>; wait for it to finish and retry
+```
+
+The operating system releases the lock when its owner exits, including on a crash, so no stale lock needs manual cleanup. The lock file exists only while an operation holds it: the holder removes it on release, and Windows also deletes it when the owner exits. A file a killed Linux/macOS owner left behind is unlocked; the next operation reuses and removes it. It is never an installation and discovery never lists it. On Linux and Windows the installer worker process takes the lock, never the outer process that launched it.
+
 ## Verification and rollback
 
 On Linux, `TestShellInstallParentPhysicalPTY` drives the real common TUI through an owned PTY: confirm, Escape/Ctrl+C while editing and Escape/Ctrl+C on review. It observes exactly one parent program, a fresh physical-selection token and full termios restoration before the inert worker boundary. Successful cleanup joins the parent and PTY reader before restoring process-global state. Each scenario runs in an isolated invocation of the same test binary, with a bounded parent wait/kill/reap; a failed join fails the test without leaking hooks or streams into its parent test process. Worker count is exactly zero for cancellation and one for confirmation. A controlled stalled-child case checks the deadline, completed wait and absent PID; its expected timeout is a negative fixture, not a suppressed product failure. The spy never acquires or installs a runtime; startup network commands are isolated, so this is not full ordinary-startup, installed or human visual acceptance.

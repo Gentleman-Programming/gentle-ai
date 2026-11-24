@@ -101,7 +101,12 @@
       ],
       "properties": {
         "mandatory": {
-          "$ref": "capabilities-v2.3.schema.json#/properties/features/properties/mandatory"
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": {
+            "$ref": "capabilities-v2.3.schema.json#/$defs/feature"
+          }
         },
         "optional": {
           "type": "array",
@@ -117,7 +122,43 @@
       "$ref": "capabilities-v2.3.schema.json#/properties/bootstrap"
     },
     "compatibility": {
-      "$ref": "capabilities-v2.3.schema.json#/properties/compatibility"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_protocol_major",
+        "maximum_protocol_major",
+        "additive_minor_policy",
+        "unknown_mandatory",
+        "unknown_optional",
+        "modes"
+      ],
+      "properties": {
+        "minimum_protocol_major": {
+          "const": 2
+        },
+        "maximum_protocol_major": {
+          "const": 2
+        },
+        "additive_minor_policy": {
+          "const": "optional-fields-only"
+        },
+        "unknown_mandatory": {
+          "const": "reject"
+        },
+        "unknown_optional": {
+          "const": "ignore"
+        },
+        "modes": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "compact-v2"
+            }
+          ],
+          "minItems": 1,
+          "items": false
+        }
+      }
     }
   }
 }

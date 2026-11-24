@@ -13,16 +13,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update"
 )
 
 // --- helpers ---
@@ -130,11 +130,9 @@ func TestExecute_VersionUnknownIsSurfacedAsSkipped(t *testing.T) {
 	if report.Results[0].Status != UpgradeSkipped {
 		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSkipped)
 	}
-	if report.Results[0].ManualHint == "" {
-		t.Fatal("ManualHint must be populated for version-unknown tools")
-	}
-	if !strings.Contains(report.Results[0].ManualHint, "`engram version`") {
-		t.Fatalf("ManualHint = %q, want detect command hint", report.Results[0].ManualHint)
+	want := "installed binary was found but its version could not be determined — check `engram version` and reinstall if it is a stale source/dev build"
+	if report.Results[0].ManualHint != want {
+		t.Fatalf("ManualHint = %q, want %q", report.Results[0].ManualHint, want)
 	}
 	if report.BackupID != "" {
 		t.Fatalf("BackupID = %q, want empty when nothing is executed", report.BackupID)

@@ -15,7 +15,7 @@ func TestExactReviewLineageOccupiedChecksOnlyRequestedVersionedPaths(t *testing.
 		want    bool
 	}{
 		{name: "free despite unrelated sibling", lineage: "requested-free", want: false},
-		{name: "v1", version: "v1", lineage: "requested-v1", want: true},
+		{name: "v1 is no longer authority", version: "v1", lineage: "requested-v1", want: false},
 		{name: "v2", version: "v2", lineage: "requested-v2", want: true},
 		{name: "v3", version: "v3", lineage: "requested-v3", want: true},
 	} {

@@ -19,18 +19,18 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/update/upgrade"
 )
 
 func TestClaudeNativeReviewAssignmentsPersistThroughAppStateConversion(t *testing.T) {
@@ -382,7 +382,6 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 		command string
 		want    string
 	}{
-		{command: "review-start", want: "review-start requires --cwd, --lineage, and --policy-file"},
 		{command: "review-resume", want: "review-resume requires --cwd and --lineage"},
 		{command: "review-bundle-export", want: "review-bundle-export requires --cwd, --lineage, and --out"},
 		{command: "review-bundle-import", want: "review-bundle-import requires --cwd and --bundle"},
@@ -399,7 +398,7 @@ func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *test
 }
 
 func TestRunArgsReviewSubcommandHelpExitsSuccessfully(t *testing.T) {
-	for _, command := range []string{"review-start", "review-step", "review-resume", "review-validate", "review-bundle-export", "review-bundle-import"} {
+	for _, command := range []string{"review-resume", "review-validate", "review-bundle-export", "review-bundle-import"} {
 		t.Run(command, func(t *testing.T) {
 			var output bytes.Buffer
 			if err := RunArgs([]string{command, "--help"}, &output); err != nil {

@@ -89,7 +89,10 @@ func userWindowsCodeGraphProvision(ctx context.Context, root string, profile *Us
 		if err := userWindowsCodeGraphExtract(ctx, root, source, data); err != nil {
 			return err
 		}
-		if err := os.Remove(filepath.Join(archives, source.archive)); err != nil {
+		// An antivirus scan of the freshly written archive can hold it for a
+		// moment; retry it. A leftover archive is not tolerated: the stage is
+		// published as the installation and its inventory bounds the archives.
+		if err := userWindowsRemoveBusy(root, filepath.Join(archives, source.archive)); err != nil {
 			return err
 		}
 	}

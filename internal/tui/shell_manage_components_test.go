@@ -11,9 +11,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/screens"
 )
 
 // setManifestCodeGraph records the installed CodeGraph component the way a
@@ -321,7 +321,7 @@ func TestShellManageChannelOnlyDeltaKeepsOverlay(t *testing.T) {
 	m = experienceFocus(t, m, screens.ShellExperienceUpdate, "")
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
-	next, _ = m.Update(shellUpdateResult{info: shellinstaller.UserShellUpdate{Channel: "main-preview", Available: true, Components: []string{"SDK Main snapshot"}}})
+	next, _ = m.Update(shellUpdateResult{generation: m.shellUpdate.generation, info: shellinstaller.UserShellUpdate{Channel: "main-preview", Available: true, Components: []string{"SDK Main snapshot"}}})
 	m = next.(Model)
 	assertViewContains(t, m.View(), "Update available", "SDK Main snapshot", " ▸ Update now")
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -346,7 +346,7 @@ func TestShellUpdateNowCarriesSelectedComponentDelta(t *testing.T) {
 	m = experienceFocus(t, m, screens.ShellExperienceUpdate, "")
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
-	next, _ = m.Update(shellUpdateResult{info: shellinstaller.UserShellUpdate{Channel: "stable", Available: true, Components: []string{"Node runtime"}}})
+	next, _ = m.Update(shellUpdateResult{generation: m.shellUpdate.generation, info: shellinstaller.UserShellUpdate{Channel: "stable", Available: true, Components: []string{"Node runtime"}}})
 	m = next.(Model)
 	assertViewContains(t, m.View(), "Update available", "Node runtime", " ▸ Update now")
 	m = experienceKey(m, tea.KeyMsg{Type: tea.KeyEnter})

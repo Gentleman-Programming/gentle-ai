@@ -29,7 +29,7 @@ $GITHUB_OWNER = "Gentleman-Programming"
 $GITHUB_REPO = "gentle-ai"
 $BINARY_NAME = "gentle-ai"
 $WINDOWS_DISTRIBUTION_HOLD = "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced."
-$STABLE_SOURCE_COMMAND = "go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@latest"
+$STABLE_SOURCE_COMMAND = "go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0`nBefore v5.0.0 is published, use the exact Go command in the latest stable release notes: https://github.com/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
 
 function Write-Info    { param([string]$Message) Write-Host "[info]    $Message" -ForegroundColor Blue }
 function Write-Success { param([string]$Message) Write-Host "[ok]      $Message" -ForegroundColor Green }
@@ -92,14 +92,12 @@ function Install-ViaGo {
     Write-Step "Installing via go install"
     if ($Channel -eq "beta") {
         $version = "main"
-        # /v4 is part of the module path, not decoration: Go refuses to resolve a
-        # module whose tags are v4.x unless the import path carries the major
-        # version suffix.
-        $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/v4/cmd/$BINARY_NAME@$version"
+        # The module path for main must include its Go major-version suffix.
+        $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/v5/cmd/$BINARY_NAME@$version"
     } else {
         # Stable pins the latest release tag and derives the module path from
-        # its major. Never use @latest: before a v4.x tag exists Go resolves the
-        # /v4 path to an unreleased pseudo-version at the default-branch tip.
+        # its major. Never use @latest: before a tag for a new module major
+        # exists, Go can resolve that path to an unreleased pseudo-version.
         $releaseUrl = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
         $tag = ""
         try {
@@ -118,9 +116,9 @@ function Install-ViaGo {
     Write-Info "Running: go install $goPackage"
 
     if ($Channel -eq "beta") {
-        Add-GoEnvPattern -Name "GONOSUMDB" -Pattern "github.com/gentleman-programming/gentle-ai/v4"
-        Add-GoEnvPattern -Name "GOPRIVATE" -Pattern "github.com/gentleman-programming/gentle-ai/v4"
-        Add-GoEnvPattern -Name "GONOPROXY" -Pattern "github.com/gentleman-programming/gentle-ai/v4"
+        Add-GoEnvPattern -Name "GONOSUMDB" -Pattern "github.com/gentleman-programming/gentle-ai/v5"
+        Add-GoEnvPattern -Name "GOPRIVATE" -Pattern "github.com/gentleman-programming/gentle-ai/v5"
+        Add-GoEnvPattern -Name "GONOPROXY" -Pattern "github.com/gentleman-programming/gentle-ai/v5"
     }
 
     & go install $goPackage

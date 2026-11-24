@@ -1,6 +1,6 @@
 package catalog
 
-import "github.com/gentleman-programming/gentle-ai/v4/internal/model"
+import "github.com/gentleman-programming/gentle-ai/v5/internal/model"
 
 type Skill struct {
 	ID       model.SkillID

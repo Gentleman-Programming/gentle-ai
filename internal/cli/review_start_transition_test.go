@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 func TestNegotiatedStatusStartLineageSelection(t *testing.T) {
@@ -22,7 +22,7 @@ func TestNegotiatedStatusStartLineageSelection(t *testing.T) {
 	}{
 		{name: "explicit free lineage", lineage: "status-start-free", wantExact: true},
 		{name: "free recovery successor", lineage: "status-start-predecessor", successor: "status-start-successor", occupy: true, wantExact: true},
-		{name: "explicit occupied legacy path", lineage: "status-start-occupied", occupy: true},
+		{name: "explicit lineage whose name a legacy v1 record carries", lineage: "status-start-occupied", occupy: true, wantExact: true},
 		{name: "no explicit lineage"},
 	}
 	for _, test := range tests {
@@ -31,8 +31,8 @@ func TestNegotiatedStatusStartLineageSelection(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 			if test.occupy {
-				// A legacy-v1 record occupies the requested compatibility name but
-				// never resumes or shadows the current compact START target.
+				// A legacy-v1 record carrying the requested name is not authority:
+				// it neither occupies the name nor shadows the compact START target.
 				addPristineLegacyAuthority(t, repo, test.lineage)
 			}
 			selectors := []string{}

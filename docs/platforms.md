@@ -78,11 +78,12 @@ Restart OpenCode after enabling managed activation. Start a new login shell so t
 
 ## Windows Notes
 
-- **Install from source** with Go 1.25.10+, pinned to the latest release:
-  `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.0.0`.
+- **Install from source** with Go 1.25.10+, pinned to v5.0.0:
+  `go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0`.
+  Until v5.0.0 is published, use `go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@v4.6.0`.
 - **`gentle-ai upgrade` updates itself automatically on release channels when Go 1.25.10+ is on `PATH`.** It runs `go install …/cmd/gentle-ai@vX.Y.Z` pinned to the exact release tag. The module is verified against the Go checksum database (`sum.golang.org`) — a different trust anchor than the minisign signature used for the Linux/macOS release binaries, not a missing one.
   Because `go install` writes to `GOBIN` (or `GOPATH\bin`), which is not necessarily the directory your shell resolves, the upgrade checks the destination afterwards and warns — naming both full paths — if a different `gentle-ai.exe` earlier on `PATH` would keep running.
-   On the beta/development channel, `$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade` advances the binary from `main` and refreshes managed tools. If a manual source install sees stale `main` commits, run `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v4/cmd/gentle-ai@main`).
+   On the beta/development channel, `$env:GENTLE_AI_CHANNEL="beta"; gentle-ai upgrade` advances the binary from `main` and refreshes managed tools. If a manual source install sees stale `main` commits, run `GOPROXY=direct go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@main` (PowerShell: `$env:GOPROXY="direct"; go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@main`).
    Re-running either installer defaults to stable, so preserve beta explicitly: `curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta` on macOS/Linux, or `$env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex` in PowerShell.
 - **Without Go on `PATH`, the upgrader fails closed.** It downloads and executes nothing, and prints the runnable `go install` command instead.
 - **Scoop and official Windows binaries are still temporarily unavailable.** No unsigned artifact is ever downloaded and `gentle-ai upgrade` never executes a remote update script.
@@ -112,4 +113,4 @@ Restart OpenCode after enabling managed activation. Start a new login shell so t
 | OpenClaw | `%USERPROFILE%\.openclaw\openclaw.json` (global MCP/settings) + active workspace from `agents.defaults.workspace` for `AGENTS.md` / `SOUL.md` / workspace-scoped skills |
 | Trae | `%USERPROFILE%\.trae\` (skills) + `%APPDATA%\Trae\User\user_rules.md` (rules) + `%APPDATA%\Trae\User\mcp.json` (MCP) |
 | Pi | `%USERPROFILE%\.pi\` (Pi config, project agents/chains, Gentle AI support assets) |
-| Hermes | `%USERPROFILE%\.hermes\` (config.yaml, SOUL.md, skills/) |
+| Hermes | `%HERMES_HOME%` when set, otherwise `%LOCALAPPDATA%\hermes\` (config.yaml, SOUL.md, skills/) |
