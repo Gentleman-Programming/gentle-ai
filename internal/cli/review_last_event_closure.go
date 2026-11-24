@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
@@ -201,7 +202,19 @@ func reviewRejectedValidatorPreflightGuidance(repo, bindingFields string) string
 		{Name: "contract", Value: ReviewIntegrationContractV2},
 		{Name: "preflight", Value: "true"},
 	}))
-	return "For read-only maintainer inspection, run `" + preflight + "`. " +
+	// Shell quoting protects argv; a CommonMark code span separately needs a
+	// delimiter longer than any literal run of backticks in the command.
+	longest, run := 0, 0
+	for _, char := range preflight {
+		if char == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	delimiter := strings.Repeat("`", longest+1)
+	return "For read-only maintainer inspection, run " + delimiter + preflight + delimiter + ". " +
 		"Compare a successor-only disposition selector's successor_lineage_id and successor_expected_revision to " + bindingFields + ". " +
 		"Only on an exact match, consult `gentle-ai review repair --help`. Preflight neither authorizes nor performs release."
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"html"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,22 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the CLI in disposable state")
 	}
+	t.Run("ordinary path", func(t *testing.T) { testRejectedValidatorDispositionCompiledCLI(t, false) })
+	t.Run("path with Markdown delimiters", func(t *testing.T) {
+		if _, err := os.Stat("/bin/sh"); err != nil {
+			t.Skip("requires /bin/sh")
+		}
+		dir := filepath.Join(t.TempDir(), "repo`. west $literal ```` tail")
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("TMPDIR", dir)
+		t.Run("verbatim shell preflight", func(t *testing.T) { testRejectedValidatorDispositionCompiledCLI(t, true) })
+	})
+}
+
+func testRejectedValidatorDispositionCompiledCLI(t *testing.T, backtickPath bool) {
+	t.Helper()
 	reviewEnabledHome(t)
 	repo, lineage, request := providerCorrectionReadyWithoutVerificationEvidence(t)
 	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
@@ -150,9 +167,8 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 		t.Fatalf("expected one active authority: %#v", inspection)
 	}
 
-	_, guidance, ok := strings.Cut(closure.Action, "the targeted validator rejected the correction; the lineage is stopped. For read-only maintainer inspection, run `")
-	command, guidance, closed := strings.Cut(guidance, "`. ")
-	if !ok || !closed || guidance != "Compare a successor-only disposition selector's successor_lineage_id and successor_expected_revision to this closure's lineage_id and store_revision. Only on an exact match, consult `gentle-ai review repair --help`. Preflight neither authorizes nor performs release." {
+	command, guidance := rejectedValidatorPrintedPreflight(t, closure.Action, backtickPath)
+	if !strings.HasPrefix(closure.Action, "the targeted validator rejected the correction; the lineage is stopped. ") || guidance != "Compare a successor-only disposition selector's successor_lineage_id and successor_expected_revision to this closure's lineage_id and store_revision. Only on an exact match, consult `gentle-ai review repair --help`. Preflight neither authorizes nor performs release." {
 		t.Fatalf("closure action lacks read-only preflight and exact-selector guidance: %q", closure.Action)
 	}
 	argv, err := SplitPrintedCommandWords(command)
@@ -172,9 +188,8 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 		t.Fatalf("incorrect selector: %#v", selector)
 	}
 	description := status.Forecast.Steps[0].Description
-	_, statusGuidance, found := strings.Cut(description, "For read-only maintainer inspection, run `")
-	statusCommand, statusBinding, ended := strings.Cut(statusGuidance, "`. ")
-	if !found || !ended || statusCommand != command || !strings.Contains(statusBinding, "authority.lineage_id and authority.revision") || strings.Contains(statusBinding, "closure") {
+	statusCommand, statusBinding := rejectedValidatorPrintedPreflight(t, description, backtickPath)
+	if statusCommand != command || !strings.Contains(statusBinding, "authority.lineage_id and authority.revision") || strings.Contains(statusBinding, "closure") {
 		t.Fatalf("bound STATUS lacks read-only preflight for its own authority: %q", description)
 	}
 	statusArgv, err := SplitPrintedCommandWords(statusCommand)
@@ -182,7 +197,44 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 		t.Fatalf("STATUS printed unexpected preflight argv %q: %v", statusArgv, err)
 	}
 	var statusChoices ReviewRepairResult
-	if out := read(&statusChoices, statusArgv[2:]...); !bytes.Equal(out, choicesJSON) ||
+	var statusPreflightJSON []byte
+	if backtickPath {
+		git, err := exec.LookPath("git")
+		if err != nil || !filepath.IsAbs(git) {
+			t.Fatalf("expected absolute path to fixture Git: %q, %v", git, err)
+		}
+		if pandoc, err := exec.LookPath("pandoc"); err == nil {
+			for _, text := range []string{closure.Action, description} {
+				render := exec.CommandContext(ctx, pandoc, "--from=commonmark", "--to=html")
+				render.Stdin = strings.NewReader(text)
+				out, err := render.Output()
+				_, code, found := strings.Cut(string(out), "<code>")
+				literal, _, closed := strings.Cut(code, "</code>")
+				if err != nil || !found || !closed || html.UnescapeString(literal) != command {
+					t.Fatalf("CommonMark did not render the complete command: %v\n%s", err, out)
+				}
+			}
+		} else {
+			t.Log("pandoc unavailable; skipped CommonMark rendering smoke check")
+		}
+		for _, printed := range []string{command, statusCommand} {
+			shell := exec.CommandContext(ctx, "/bin/sh", "-c", printed)
+			shell.Dir = t.TempDir() // The printed --cwd must be sufficient.
+			shell.Env = append(shell.Environ(), "PATH="+filepath.Dir(binary)+string(os.PathListSeparator)+filepath.Dir(git),
+				"DO_NOT_TRACK=1", "GENTLE_AI_TELEMETRY=0", "GENTLE_AI_NO_SELF_UPDATE=1")
+			var stderr bytes.Buffer
+			shell.Stderr = &stderr
+			out, err := shell.Output()
+			if err != nil || stderr.Len() != 0 || !bytes.Equal(out, choicesJSON) {
+				t.Fatalf("verbatim preflight differed: err=%v stdout=%s stderr=%s", err, out, &stderr)
+			}
+			statusPreflightJSON = out
+		}
+		decodeStrictReviewJSON(t, statusPreflightJSON, &statusChoices)
+	} else {
+		statusPreflightJSON = read(&statusChoices, statusArgv[2:]...)
+	}
+	if out := statusPreflightJSON; !bytes.Equal(out, choicesJSON) ||
 		statusChoices.DispositionSelectors[0].SuccessorLineageID != status.Authority.LineageID ||
 		statusChoices.DispositionSelectors[0].SuccessorExpectedRevision != status.Authority.Revision {
 		t.Fatalf("STATUS preflight did not find its exact authority: %s", out)
@@ -309,4 +361,17 @@ func TestRejectedValidatorDispositionCompiledCLI(t *testing.T) {
 	if err != nil || !bytes.Equal(before, retained) {
 		t.Fatalf("historical rejected authority bytes changed: %v", err)
 	}
+}
+
+func rejectedValidatorPrintedPreflight(t *testing.T, text string, backtickPath bool) (command, guidance string) {
+	t.Helper()
+	_, rendered, found := strings.Cut(text, "For read-only maintainer inspection, run ")
+	body := strings.TrimLeft(rendered, "`")
+	delimiter := rendered[:len(rendered)-len(body)]
+	command, guidance, closed := strings.Cut(body, delimiter+". ")
+	if !found || !closed || delimiter == "" || strings.Contains(command, delimiter) ||
+		(!backtickPath && len(delimiter) != 1) || (backtickPath && len(delimiter) <= 4) {
+		t.Fatalf("preflight has an ambiguous CommonMark delimiter: %q", rendered)
+	}
+	return command, guidance
 }
