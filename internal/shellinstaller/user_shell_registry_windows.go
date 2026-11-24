@@ -401,10 +401,15 @@ func userWindowsRemoveDownloadCache() error {
 	return nil
 }
 
-// CheckUserShellUpdate routes at the persisted SDK source channel: Stable
-// compares the installed stable components with this build, Main compares the
-// installed Main descriptor with the latest Main snapshot. It never installs
-// or replaces anything.
+// userWindowsUpdateMainSnapshot resolves the latest Main snapshot for the
+// update check; tests replace it to stay off the network.
+var userWindowsUpdateMainSnapshot = userWindowsMainSnapshot
+
+// CheckUserShellUpdate routes at the persisted SDK source channel. Stable
+// compares the stock SDK lock and reviewed gentle-pi release; Main compares
+// the installed Main descriptor with the latest Main snapshot. Both channels
+// then compare the supervisor, runtimes and pinned components with this
+// build. It never installs or replaces anything.
 func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserShellUpdate, error) {
 	if install.Mode != "separate" {
 		return UserShellUpdate{}, errors.New("Windows update checks require a Separate installation")
@@ -423,6 +428,7 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 		}
 	}
 	update := UserShellUpdate{Channel: "stable"}
+	changed := map[string]bool{}
 	if channel == "main" {
 		update.Channel = "main-preview"
 		if manifest.MainCommit == "" {
@@ -432,16 +438,24 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 			update.Detail = "Main SDK is not installed in this tree yet"
 			return update, nil
 		}
-		latest, _, err := userWindowsMainSnapshot(ctx)
+		latest, _, err := userWindowsUpdateMainSnapshot(ctx)
 		if err != nil {
 			return update, err
 		}
 		if latest.SHA != manifest.MainArchiveSHA {
-			update.Available = true
-			update.Components = []string{"SDK Main snapshot"}
-			update.Scope = []string{UserComponentSDK}
+			changed[UserComponentSDK] = true
 			update.Detail = "new Main snapshot available"
 		}
+	} else if manifest.MainCommit != "" {
+		// A Main composition with a Stable preference is itself the channel
+		// delta: Update-now routes it to the in-place overlay, which restores
+		// the retained stock package without reinstalling any component. This
+		// check mirrors the Unix check so both platforms offer the same switch
+		// back.
+		update.Available = true
+		update.Components = []string{"SDK Main snapshot"}
+		update.Scope = []string{UserComponentSDK}
+		update.Detail = "Main SDK is installed; the stable channel preference wants the stock composition"
 		return update, nil
 	}
 	self, err := userWindowsExecutable()
@@ -452,18 +466,9 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 	if err != nil {
 		return update, err
 	}
-	// A Main composition with a Stable preference is itself the channel
-	// delta: Update-now routes it to the in-place overlay, which restores the
-	// retained stock package without reinstalling any component. This check
-	// mirrors the Unix check so both platforms offer the same switch back.
-	if manifest.MainCommit != "" {
-		update.Available = true
-		update.Components = []string{"SDK Main snapshot"}
-		update.Scope = []string{UserComponentSDK}
-		update.Detail = "Main SDK is installed; the stable channel preference wants the stock composition"
-		return update, nil
-	}
-	changed := map[string]bool{}
+	// The supervisor, runtimes and pinned components are checked on every
+	// channel (#6239), like the Unix check: a Main installation runs the same
+	// stock supervisor, Node, Go, helpers, CodeGraph and Context7.
 	if userWindowsSHA(image) != manifest.SupervisorSHA {
 		changed[UserComponentSupervisor] = true
 	}
@@ -480,18 +485,23 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 	// Component pins: a legacy manifest without the pins refreshes the
 	// missing components once, so the next update records them.
 	legacy := manifest.SDKLockSHA == ""
-	if lock, err := userWindowsSDKLockSHA(); err == nil && manifest.SDKLockSHA != lock {
-		changed[UserComponentSDK] = true
-	}
-	// S14: the installed gentle-pi version is outdated only when it is strictly
-	// older than the newest reviewed release of the selected list (live
-	// repository copy with the embedded fallback — the same authority the
-	// update installs), or unrecorded. A newer recorded version — e.g. after a
-	// fallback to an older embedded list — never offers a downgrade (S17(c)).
-	// A manifest without the version field is a pre-feature install reported
-	// outdated once; the next update records the version it installs.
-	if list, _, err := userSelectedReviewedListFunc(ctx); err == nil && userReviewedVersionOlder(manifest.SDKVersion, list.newestReviewedRelease()) {
-		changed[UserComponentSDK] = true
+	if channel != "main" {
+		// The stock gentle-pi lock and reviewed release are Stable inputs; the
+		// Main SDK is the snapshot compared above.
+		if lock, err := userWindowsSDKLockSHA(); err == nil && manifest.SDKLockSHA != lock {
+			changed[UserComponentSDK] = true
+		}
+		// S14: the installed gentle-pi version is outdated only when it is
+		// strictly older than the newest reviewed release of the selected list
+		// (live repository copy with the embedded fallback — the same authority
+		// the update installs), or unrecorded. A newer recorded version — e.g.
+		// after a fallback to an older embedded list — never offers a downgrade
+		// (S17(c)). A manifest without the version field is a pre-feature
+		// install reported outdated once; the next update records the version
+		// it installs.
+		if list, _, err := userSelectedReviewedListFunc(ctx); err == nil && userReviewedVersionOlder(manifest.SDKVersion, list.newestReviewedRelease()) {
+			changed[UserComponentSDK] = true
+		}
 	}
 	if tools, err := userWindowsToolsPinSHA(); err == nil && manifest.ToolsSHA != tools {
 		changed[UserComponentSDK] = true
@@ -521,17 +531,26 @@ func CheckUserShellUpdate(ctx context.Context, install UserShellInstall) (UserSh
 	}
 	update.Available = true
 	update.Scope = userSortedComponents(changed)
+	sdkLabel := "gentle-pi SDK"
+	if channel == "main" {
+		sdkLabel = "SDK Main snapshot"
+	}
 	labels := map[string]string{
 		UserComponentSupervisor: "Gentle Shell supervisor",
 		UserComponentNode:       "Node runtime",
-		UserComponentSDK:        "gentle-pi SDK",
+		UserComponentSDK:        sdkLabel,
 		UserComponentCodeGraph:  "CodeGraph",
 		UserComponentContext7:   "Context7",
 	}
 	for _, component := range update.Scope {
 		update.Components = append(update.Components, labels[component])
 	}
-	update.Detail = "stable channel components differ from this build"
+	if update.Detail == "" {
+		update.Detail = "stable channel components differ from this build"
+		if channel == "main" {
+			update.Detail = "main channel components differ from this build"
+		}
+	}
 	return update, nil
 }
 
