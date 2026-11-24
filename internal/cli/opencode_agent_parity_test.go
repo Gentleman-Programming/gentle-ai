@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -148,7 +149,8 @@ func TestOpenCodeFamilyWorkerUpgradeAndUninstallPreserveOwnership(t *testing.T) 
 		t.Fatalf("missing parity role %s", name)
 		return nil
 	}
-	currentPrompt := makeEntry(worker)["prompt"].(string)
+	shippedWorker := makeEntry(worker)
+	currentPrompt := shippedWorker["prompt"].(string)
 	releasedPrompt := v5WorkerPrompt(t, currentPrompt)
 	for _, tc := range []struct {
 		agent     model.AgentID
@@ -157,6 +159,9 @@ func TestOpenCodeFamilyWorkerUpgradeAndUninstallPreserveOwnership(t *testing.T) 
 		upgrade   bool
 	}{
 		{model.AgentOpenCode, "opencode", "absent", true},
+		{model.AgentOpenCode, "opencode", "model-only", true},
+		{model.AgentOpenCode, "opencode", "variant-only", true},
+		{model.AgentOpenCode, "opencode", "model-and-variant", true},
 		{model.AgentOpenCode, "opencode", "released", true},
 		{model.AgentOpenCode, "opencode", "released", false},
 		{model.AgentOpenCode, "opencode", "user-edited", true},
@@ -183,7 +188,15 @@ func TestOpenCodeFamilyWorkerUpgradeAndUninstallPreserveOwnership(t *testing.T) 
 			judgeEntry["variant"] = "high"
 			agents := map[string]map[string]any{judge: judgeEntry}
 			seedPrompt := releasedPrompt
-			if tc.state != "absent" {
+			switch tc.state {
+			case "absent":
+			case "model-only":
+				agents[worker] = map[string]any{"model": "local/worker"}
+			case "variant-only":
+				agents[worker] = map[string]any{"variant": "high"}
+			case "model-and-variant":
+				agents[worker] = map[string]any{"model": "local/worker", "variant": "high"}
+			default:
 				if tc.state == "user-edited" {
 					seedPrompt += "\r\nMy worker instruction.  \n"
 				}
@@ -231,7 +244,7 @@ func TestOpenCodeFamilyWorkerUpgradeAndUninstallPreserveOwnership(t *testing.T) 
 				if entry["prompt"] != wantPrompt {
 					t.Errorf("%s: worker prompt changed (present=%v); want exact prompt bytes", phase, entry != nil)
 				}
-				if tc.state != "absent" && (entry["model"] != "local/worker" || entry["variant"] != "high") {
+				if entry["model"] != agents[worker]["model"] || entry["variant"] != agents[worker]["variant"] {
 					t.Errorf("%s: worker model or variant changed", phase)
 				}
 			}
@@ -244,6 +257,11 @@ func TestOpenCodeFamilyWorkerUpgradeAndUninstallPreserveOwnership(t *testing.T) 
 				wantPrompt := seedPrompt
 				if managed {
 					wantPrompt = currentPrompt
+					for key, want := range shippedWorker {
+						if !reflect.DeepEqual(upgraded[worker][key], want) {
+							t.Errorf("upgrade: worker %s differs from shipped value", key)
+						}
+					}
 				}
 				assertWorker("upgrade", upgraded[worker], managed || tc.state != "absent", wantPrompt)
 				if upgraded[judge]["prompt"] != judgePrompt || upgraded[judge]["variant"] != "high" {

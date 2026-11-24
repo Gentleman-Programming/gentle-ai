@@ -2515,7 +2515,16 @@ func installOpenCodeFamilyParityAgents(settingsPath string, agent model.AgentID)
 					return false, err
 				}
 				if !owned {
-					continue
+					// A pins-only stub opts into the shipped worker with overrides.
+					pins := 0
+					for _, key := range [...]string{"model", "variant"} {
+						if _, ok := entry[key].(string); ok {
+							pins++
+						}
+					}
+					if pins == 0 || len(entry) != pins {
+						continue
+					}
 				}
 			}
 		}
