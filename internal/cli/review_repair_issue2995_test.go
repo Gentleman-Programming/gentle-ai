@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // Issue #2995 work-unit 2 CLI contract: a store with more than one
@@ -98,6 +98,16 @@ func TestIssue2995ReviewRepairPreflightSurfacesHistoricalSelectorsAndScopedPlans
 		}
 		if strings.Contains(scopedOutput.String(), repo) || strings.Contains(scopedOutput.String(), lineage) {
 			t.Fatalf("scoped preflight leaked path or lineage identity: %s", scopedOutput.String())
+		}
+		scopedOutput.Reset()
+		if err := RunReview(append(args, "--contract", ReviewIntegrationContractV2), &scopedOutput); err != nil {
+			t.Fatal(err)
+		}
+		var v2 ReviewRepairResult
+		decodeStrictReviewJSON(t, scopedOutput.Bytes(), &v2)
+		if v2.DispositionProviderInputs == nil || *v2.DispositionProviderInputs != *scoped.DispositionProviderInputs ||
+			strings.Contains(scopedOutput.String(), "repository_binding") {
+			t.Fatalf("v2 historical preflight changed provider inputs: %s", scopedOutput.String())
 		}
 		digests[lineage] = scoped.DispositionProviderInputs.PlanDigest
 	}

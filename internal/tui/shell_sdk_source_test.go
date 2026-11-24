@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/screens"
 )
 
 func sdkSourceRow(t *testing.T, m Model) Model {

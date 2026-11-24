@@ -17,24 +17,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/statecoord"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 func TestUninstallOpenCodeFamilyManagedAgents(t *testing.T) {
@@ -2733,6 +2734,10 @@ func TestPartialUninstallLeavesNonJSONNativeSettingsUntouched(t *testing.T) {
 			home := t.TempDir()
 			settingsPath := filepath.Join(home, tt.settings)
 			promptPath := filepath.Join(home, tt.prompt)
+			if tt.agent == model.AgentHermes {
+				settingsPath = filepath.Join(system.HermesConfigDir(home), "config.yaml")
+				promptPath = filepath.Join(system.HermesConfigDir(home), "SOUL.md")
+			}
 			writeBatchFile(t, settingsPath, tt.content)
 			if err := os.Chmod(settingsPath, 0o600); err != nil {
 				t.Fatal(err)

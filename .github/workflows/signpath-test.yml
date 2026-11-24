@@ -1,0 +1,115 @@
+name: SignPath TEST signing pilot
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/signpath-test.yml
+      - .github/signpath/github-test-zip.xml
+      - scripts/verify-signpath-test.ps1
+      - scripts/verify-signpath-test.tests.ps1
+      - internal/update/signpath_test_workflow_test.go
+      - docs/signpath-test.md
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  premerge-fixtures:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build test binaries
+        shell: pwsh
+        run: |
+          $env:CGO_ENABLED = '0'
+          $env:GOOS = 'windows'
+          $dir = Join-Path $env:RUNNER_TEMP 'signpath-unsigned'
+          New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+          foreach ($arch in @('amd64', 'arm64')) {
+            $env:GOARCH = $arch
+            go build -trimpath -ldflags='-s -w -X main.version=signpath-test' -o (Join-Path $dir "gentle-ai-windows-$arch.exe") ./cmd/gentle-ai
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Test verifier
+        shell: pwsh
+        run: ./scripts/verify-signpath-test.tests.ps1 -UnsignedDirectory "$env:RUNNER_TEMP\signpath-unsigned"
+
+  signpath-test:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    environment: signpath-test
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Check expected certificate
+        shell: pwsh
+        env:
+          EXPECTED_CERTIFICATE_SHA256: ${{ vars.SIGNPATH_TEST_CERTIFICATE_SHA256 }}
+        run: |
+          if ($env:EXPECTED_CERTIFICATE_SHA256 -cnotmatch '^[0-9a-fA-F]{64}$') {
+            throw 'Set SIGNPATH_TEST_CERTIFICATE_SHA256 to the 64 hexadecimal digit DER certificate SHA256.'
+          }
+      - name: Build test binaries
+        shell: pwsh
+        run: |
+          $env:CGO_ENABLED = '0'
+          $env:GOOS = 'windows'
+          $dir = Join-Path $env:RUNNER_TEMP 'signpath-unsigned'
+          New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+          foreach ($arch in @('amd64', 'arm64')) {
+            $env:GOARCH = $arch
+            go build -trimpath -ldflags='-s -w -X main.version=signpath-test' -o (Join-Path $dir "gentle-ai-windows-$arch.exe") ./cmd/gentle-ai
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Test verifier
+        shell: pwsh
+        run: ./scripts/verify-signpath-test.tests.ps1 -UnsignedDirectory "$env:RUNNER_TEMP\signpath-unsigned"
+      - name: Upload unsigned artifact
+        id: unsigned
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signpath-test-unsigned
+          path: ${{ runner.temp }}\signpath-unsigned\*.exe
+          if-no-files-found: error
+      - name: Sign with SignPath
+        uses: SignPath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: 9a59d047-c41a-4405-b96e-e8ba1b034c28
+          project-slug: gentle-ai
+          signing-policy-slug: test-signing
+          artifact-configuration-slug: github-test-zip
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: ${{ runner.temp }}\signpath-signed
+      - name: Verify signed artifacts
+        shell: pwsh
+        env:
+          EXPECTED_CERTIFICATE_SHA256: ${{ vars.SIGNPATH_TEST_CERTIFICATE_SHA256 }}
+        run: ./scripts/verify-signpath-test.ps1 -Directory "$env:RUNNER_TEMP\signpath-signed" -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256
+      - name: Upload verified test artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signpath-test-verified-NOT-FOR-RELEASE
+          path: ${{ runner.temp }}\signpath-signed\*.exe
+          if-no-files-found: error

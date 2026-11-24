@@ -13,19 +13,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/gemini"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/qwen"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/qwen"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 // ─── #1635 Antigravity prevalidation and write accounting tests ─────────────
@@ -2924,7 +2925,7 @@ func TestInjectEngramHermesYAMLOverlay(t *testing.T) {
 		t.Fatal("Inject(hermes) first run: changed = false, want true")
 	}
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(system.HermesConfigDir(home), "config.yaml")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("ReadFile(config.yaml) error = %v", err)
@@ -2957,7 +2958,7 @@ func TestEngramYAMLCommandRecoveryCustomPath(t *testing.T) {
 	home := t.TempDir()
 	SetLookPathForTest(t, "engram", "")
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(system.HermesConfigDir(home), "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -2989,7 +2990,7 @@ func TestEngramYAMLCommandRecoveryVersionedCellar(t *testing.T) {
 	home := t.TempDir()
 	SetLookPathForTest(t, "engram", "")
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(system.HermesConfigDir(home), "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -3034,7 +3035,7 @@ func TestEngramYAMLCommandRecoveryAbsent(t *testing.T) {
 		t.Fatal("Inject(hermes) changed = false")
 	}
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(system.HermesConfigDir(home), "config.yaml")
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -3051,7 +3052,7 @@ func TestEngramYAMLCommandRecoveryListShape(t *testing.T) {
 	home := t.TempDir()
 	SetLookPathForTest(t, "engram", "")
 
-	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	configPath := filepath.Join(system.HermesConfigDir(home), "config.yaml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}

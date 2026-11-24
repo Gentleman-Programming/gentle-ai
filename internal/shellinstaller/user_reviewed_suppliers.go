@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
+	assets "github.com/gentleman-programming/gentle-ai/v5/scripts"
 )
 
 // The reviewed gentle-pi supplier list: one JSON file in the gentle-ai

@@ -5,10 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 const ReviewIntegrationRepairSchema = "gentle-ai.review-integration.repair/v1"
@@ -52,6 +51,8 @@ type ReviewRepairDispositionProviderInputs struct {
 	AuthorityInventoryRevision string `json:"authority_inventory_revision"`
 	SeedLineageID              string `json:"seed_lineage_id,omitempty"`
 	SeedExpectedRevision       string `json:"seed_expected_revision,omitempty"`
+	// Published only by v2 repair preflight for an exact rejected-validator selector.
+	RepositoryBinding string `json:"repository_binding,omitempty"`
 }
 
 // ReviewRepairDispositionExecution is the safe, path-free projection of a
@@ -100,13 +101,12 @@ type ReviewRepairResult struct {
 	Assessment reviewtransaction.AuthorityRepairAssessment `json:"assessment"`
 	// Continuation is populated only for a truncated preflight, and is then
 	// exactly reviewRepairTruncatedContinuation.
-	Continuation              string                                                `json:"continuation,omitempty"`
-	ProviderInputs            *ReviewRepairProviderInputs                           `json:"provider_inputs,omitempty"`
-	RequiredInputs            []string                                              `json:"required_inputs"`
-	Execution                 *reviewtransaction.ClassifiedAuthorityRepairExecution `json:"execution,omitempty"`
-	DispositionProviderInputs *ReviewRepairDispositionProviderInputs                `json:"disposition_provider_inputs,omitempty"`
-	DispositionSelectors      []reviewtransaction.AuthorityDispositionSelector      `json:"disposition_selectors,omitempty"`
-	DispositionExecution      *ReviewRepairDispositionExecution                     `json:"disposition_execution,omitempty"`
+	Continuation              string                                           `json:"continuation,omitempty"`
+	ProviderInputs            *ReviewRepairProviderInputs                      `json:"provider_inputs,omitempty"`
+	RequiredInputs            []string                                         `json:"required_inputs"`
+	DispositionProviderInputs *ReviewRepairDispositionProviderInputs           `json:"disposition_provider_inputs,omitempty"`
+	DispositionSelectors      []reviewtransaction.AuthorityDispositionSelector `json:"disposition_selectors,omitempty"`
+	DispositionExecution      *ReviewRepairDispositionExecution                `json:"disposition_execution,omitempty"`
 }
 
 func (result ReviewRepairResult) Validate() error {
@@ -133,7 +133,7 @@ func (result ReviewRepairResult) Validate() error {
 	}
 	switch result.Mode {
 	case ReviewRepairModePreflight:
-		if result.Execution != nil || result.DispositionExecution != nil {
+		if result.DispositionExecution != nil {
 			return errors.New("review repair preflight contains execution output")
 		}
 		if result.DispositionProviderInputs != nil {
@@ -141,6 +141,13 @@ func (result ReviewRepairResult) Validate() error {
 			if !validReviewCapabilitySHA256(inputs.PlanDigest) || !validReviewCapabilitySHA256(inputs.AuthorityInventoryRevision) {
 				// refusal:by-design human-authority: this result is built by runReviewRepair itself from a freshly-derived plan digest and inventory revision; reaching this means a product defect a maintainer must fix, not a value any operator command supplies
 				return errors.New("review repair preflight disposition provider inputs are incomplete")
+			}
+			if binding := inputs.RepositoryBinding; binding != "" && (!nativeGitContract ||
+				result.Assessment.Status != reviewtransaction.AuthorityRepairUnsupported ||
+				!validReviewCapabilitySHA256(binding) || binding != strings.ToLower(binding) ||
+				inputs.SeedLineageID != "" || inputs.SeedExpectedRevision != "") {
+				// refusal:by-design world-action: preflight derives this binding from the selected plan; malformed provider output needs a code fix, not different operator input.
+				return errors.New("review repair preflight disposition repository binding is invalid")
 			}
 		}
 		if selectors := result.DispositionSelectors; len(selectors) > 0 {
@@ -179,21 +186,8 @@ func (result ReviewRepairResult) Validate() error {
 				previous = lineages
 			}
 		}
-		if result.Assessment.Status != reviewtransaction.AuthorityRepairEligible {
-			if result.ProviderInputs != nil || len(result.RequiredInputs) != 0 {
-				return errors.New("stopped review repair preflight contains executable inputs")
-			}
-			return nil
-		}
-		candidate := result.Assessment.Candidate
-		inputs := result.ProviderInputs
-		if candidate == nil || inputs == nil ||
-			inputs.Class != result.Assessment.Class || inputs.LineageID != candidate.LineageID ||
-			inputs.ExpectedRevision != candidate.Revision || inputs.Cause != result.Assessment.Cause ||
-			inputs.Disposition != result.Assessment.Disposition || inputs.RepositoryBinding != result.Assessment.RepositoryBinding ||
-			inputs.AuthorizationSchema != reviewtransaction.AuthorityRepairAuthorizationSchema ||
-			!reflect.DeepEqual(result.RequiredInputs, []string{"actor", "reason", "maintainer_authorization"}) {
-			return errors.New("eligible review repair preflight inputs are incomplete")
+		if result.ProviderInputs != nil || len(result.RequiredInputs) != 0 {
+			return errors.New("stopped review repair preflight contains executable inputs")
 		}
 	case ReviewRepairModeExecute:
 		if result.ProviderInputs != nil || len(result.RequiredInputs) != 0 || result.DispositionProviderInputs != nil || len(result.DispositionSelectors) != 0 {
@@ -201,9 +195,6 @@ func (result ReviewRepairResult) Validate() error {
 		}
 		switch {
 		case result.DispositionExecution != nil:
-			if result.Execution != nil {
-				return errors.New("review repair execution shape is invalid")
-			}
 			exec := result.DispositionExecution
 			if exec.Schema != reviewtransaction.AuthorityDispositionProofSchema || exec.Status != string(reviewtransaction.CompactReclaimCommitted) ||
 				strings.TrimSpace(exec.LineageID) == "" || !validReviewCapabilitySHA256(exec.PlanDigest) ||
@@ -211,19 +202,6 @@ func (result ReviewRepairResult) Validate() error {
 				!validReviewCapabilitySHA256(exec.AuthorizationSHA256) {
 				// refusal:by-design human-authority: this result is built by newReviewRepairDispositionExecutionResult from a committed CompactReclaimRecord RepairAuthorityDisposition itself returned; reaching this means a product defect a maintainer must fix
 				return errors.New("review repair disposition execution output is invalid")
-			}
-		case result.Execution != nil:
-			execution := result.Execution
-			if execution.Status != reviewtransaction.CompactReclaimCommitted ||
-				execution.Class != reviewtransaction.AuthorityRepairClassLegacyV1HistoricalAlias ||
-				execution.Cause != reviewtransaction.AuthorityRepairCauseUnsupportedHistoricalV1OperationAlias ||
-				execution.Disposition != reviewtransaction.AuthorityRepairDispositionQuarantineHistoricalAlias ||
-				strings.TrimSpace(execution.LineageID) == "" || !validReviewCapabilitySHA256(execution.Revision) ||
-				!validReviewCapabilitySHA256(execution.ChainIdentity) ||
-				!validReviewCapabilitySHA256(execution.AssessmentDigest) ||
-				!validReviewCapabilitySHA256(execution.RequestDigest) ||
-				!validReviewCapabilitySHA256(execution.RecordIdentity) {
-				return errors.New("review repair execution output is invalid")
 			}
 		default:
 			return errors.New("review repair execution shape is invalid")
@@ -257,19 +235,31 @@ func (err *reviewRepairOperationError) Error() string {
 func (err *reviewRepairOperationError) Unwrap() error { return err.cause }
 
 func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When content-mismatched leaves, historical entries, or isolated canonical rejected-validator terminals require selection, --preflight enumerates exact selectors; re-run it with one selector before executing its plan. Rejected-validator disposition preserves the verdict and consumed correction; it releases active authority without approval or an automatic review restart.")
+	flags := newReviewFlagSet("review repair", stdout, `Assess the review authority inventory and execute only an admitted leaf authority disposition plan. Preflight is read-only and never supplies maintainer authorization. For content-mismatched leaves or historical entries, repeat preflight with one exact selector when offered.
+
+To release an isolated canonical rejected-validator terminal:
+1. Run gentle-ai review repair --preflight --contract `+ReviewIntegrationContractV2+` --cwd <repo>.
+2. Repeat with --successor-lineage <successor_lineage_id> and --successor-revision <successor_expected_revision> from the selected successor-only disposition_selectors entry. Copy the three values from disposition_provider_inputs, not assessment.authorization_schema (legacy classified repair). If repository_binding is absent, this recipe does not apply.
+3. If you authorize release, re-run the same exact selection without --preflight. Pass --plan-digest and --inventory-revision from those inputs, plus --actor, --reason, and the binding as a single --authorization argument. Use the same single-line actor and reason in the binding, with surrounding whitespace trimmed.
+
+--authorization is exactly eight LF-separated lines with no trailing newline:
+
+`+reviewtransaction.AuthorityDispositionAuthorizationSchema+`
+schema=`+reviewtransaction.AuthorityDispositionPlanSchema+`
+repository=<repository_binding>
+class=`+reviewtransaction.RejectedValidatorDispositionClass+`
+plan_digest=<plan_digest>
+inventory_revision=<authority_inventory_revision>
+actor=<actor>
+reason=<reason>
+
+This releases active authority without approving the candidate, changing the rejected verdict, restoring the consumed correction, or starting another review. It does not authorize delivery.`)
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", ReviewIntegrationContractV1, "review integration contract")
 	preflight := flags.Bool("preflight", false, "perform deterministic read-only classification without authority mutation")
-	class := flags.String("class", "", "provider-owned classified repair class")
 	lineage := flags.String("lineage", "", "optional preflight selector or exact provider-owned lineage")
-	expectedRevision := flags.String("expected-revision", "", "exact provider-owned authority revision")
-	cause := flags.String("cause", "", "provider-owned classified repair cause")
-	disposition := flags.String("disposition", "", "provider-owned classified repair disposition")
-	repositoryBinding := flags.String("repository-binding", "", "opaque provider-owned repository binding")
 	actor := flags.String("actor", "", "maintainer actor; never emitted in public output")
 	reason := flags.String("reason", "", "maintainer reason; never emitted in public output")
-	authorization := flags.String("maintainer-authorization", "", "exact nine-line LF-only maintainer authorization; never emitted in public output")
 	planDigest := flags.String("plan-digest", "", "exact provider-owned leaf authority disposition plan digest")
 	inventoryRevision := flags.String("inventory-revision", "", "exact provider-owned authority inventory revision the plan is bound to")
 	dispositionAuthorization := flags.String("authorization", "", "exact maintainer authorization binding for an eligible leaf authority disposition plan; never emitted in public output")
@@ -333,13 +323,9 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		return &reviewRepairOperationError{message: "review repair assessment failed safely", cause: err}
 	}
 	if *preflight {
-		if repairExecutionInputPresent(*class, *expectedRevision, *cause, *disposition, *repositoryBinding, *actor, *reason, *authorization) ||
+		if repairExecutionInputPresent(*actor, *reason) ||
 			repairExecutionInputPresent(*planDigest, *inventoryRevision, *dispositionAuthorization) {
 			return reviewPreflightError(errors.New("review repair --preflight does not accept execution inputs"))
-		}
-		if *lineage != "" && assessment.Status == reviewtransaction.AuthorityRepairEligible &&
-			(assessment.Candidate == nil || assessment.Candidate.LineageID != *lineage) {
-			return reviewPreflightError(errors.New("review repair selector does not match the unique classified candidate"))
 		}
 		result := newReviewRepairPreflightResult(assessment, *contract)
 		// A read-only preview: actor/reason stay empty, so nothing maintainer-
@@ -354,17 +340,22 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 				// SeedLineageID/SeedExpectedRevision stay unset here
 				// (omitempty): `review repair --preflight` must never leak the
 				// lineage identity (TestReviewRepairPreflightSurfacesAuthorityDispositionPlanForEligibleLeaf's
-				// own byte-level assertion) — only PlanDigest and
-				// AuthorityInventoryRevision are published, the pre-existing
-				// Slice S3 contract. The negotiated `review status
+				// own byte-level assertion). Older flows publish only the
+				// plan digest and inventory revision. The negotiated `review status
 				// --next-transition` route below (review_facade.go) is a
 				// different publication surface with a different contract: an
 				// execute{review.repair} transition needs a concrete
 				// lineage_id/revision binding the way every other
 				// "review.repair" execute transition already carries one.
-				result.DispositionProviderInputs = &ReviewRepairDispositionProviderInputs{
+				inputs := &ReviewRepairDispositionProviderInputs{
 					PlanDigest: plan.PlanDigest, AuthorityInventoryRevision: plan.AuthorityInventoryRevision,
 				}
+				if *contract == ReviewIntegrationContractV2 && selectorPresent &&
+					assessment.Status == reviewtransaction.AuthorityRepairUnsupported &&
+					plan.AnomalyClass == reviewtransaction.RejectedValidatorDispositionClass {
+					inputs.RepositoryBinding = plan.RepositoryBinding
+				}
+				result.DispositionProviderInputs = inputs
 			}
 		} else if selectorPresent {
 			return reviewPreflightError(planErr)
@@ -383,9 +374,6 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		return encodeReviewJSON(stdout, result)
 	}
 	if repairExecutionInputPresent(*planDigest, *inventoryRevision, *dispositionAuthorization) {
-		if repairExecutionInputPresent(*class, *lineage, *expectedRevision, *cause, *disposition, *repositoryBinding, *authorization) {
-			return reviewPreflightError(errors.New("review repair execution accepts either classified repair inputs or leaf authority disposition inputs, not both; run `gentle-ai review repair` again with only one input set"))
-		}
 		for _, required := range []string{*planDigest, *inventoryRevision, *actor, *reason, *dispositionAuthorization} {
 			if strings.TrimSpace(required) == "" {
 				return reviewPreflightError(errors.New("review repair leaf authority disposition execution requires --plan-digest --inventory-revision --actor --reason --authorization; run `gentle-ai review repair --preflight` first to obtain --plan-digest and --inventory-revision"))
@@ -440,36 +428,7 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	if selectorPresent {
 		return reviewPreflightError(errors.New("review repair exact selector requires --plan-digest --inventory-revision --actor --reason --authorization; run `gentle-ai review repair --preflight` with the selector first"))
 	}
-	for _, required := range []string{*class, *lineage, *expectedRevision, *cause, *disposition, *repositoryBinding, *actor, *reason, *authorization} {
-		if strings.TrimSpace(required) == "" {
-			return reviewPreflightError(errors.New("review repair execution requires provider inputs, actor, reason, and maintainer authorization"))
-		}
-	}
-	request := reviewtransaction.ClassifiedAuthorityRepairRequest{
-		Class: reviewtransaction.AuthorityRepairClass(*class), LineageID: *lineage, ExpectedRevision: *expectedRevision,
-		Cause: reviewtransaction.AuthorityRepairCause(*cause), Disposition: reviewtransaction.AuthorityRepairDisposition(*disposition),
-		RepositoryBinding: *repositoryBinding, Actor: *actor, Reason: *reason, MaintainerAuthorization: *authorization,
-	}
-	if assessment.Status == reviewtransaction.AuthorityRepairEligible {
-		if err := reviewtransaction.ValidateClassifiedAuthorityRepairRequest(request, assessment); err != nil {
-			return reviewPreflightError(&reviewRepairOperationError{message: "review repair authorization does not match the provider assessment", cause: err})
-		}
-	}
-	execution, err := reviewtransaction.RepairClassifiedAuthority(ctx, root, request)
-	if err != nil {
-		return &reviewRepairOperationError{message: "review repair did not complete", cause: err}
-	}
-	result := ReviewRepairResult{
-		Schema: ReviewIntegrationRepairSchema, Contract: ReviewIntegrationContractV1, Operation: "review.repair",
-		Mode: ReviewRepairModeExecute, Assessment: assessment, RequiredInputs: []string{}, Execution: &execution,
-	}
-	if *contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract = ReviewIntegrationRepairSchemaV2, ReviewIntegrationContractV2
-	}
-	if err := result.Validate(); err != nil {
-		return fmt.Errorf("validate review repair execution: %w", err)
-	}
-	return encodeReviewJSON(stdout, result)
+	return reviewPreflightError(errors.New("review repair executes only a leaf authority disposition plan; run `gentle-ai review repair --preflight` and re-run with the --plan-digest and --inventory-revision it returns"))
 }
 
 // newReviewRepairDispositionExecutionResult projects a committed leaf
@@ -523,14 +482,5 @@ func newReviewRepairPreflightResult(assessment reviewtransaction.AuthorityRepair
 		result.Continuation = reviewRepairTruncatedContinuation
 		return result
 	}
-	if assessment.Status != reviewtransaction.AuthorityRepairEligible || assessment.Candidate == nil {
-		return result
-	}
-	result.ProviderInputs = &ReviewRepairProviderInputs{
-		Class: assessment.Class, LineageID: assessment.Candidate.LineageID, ExpectedRevision: assessment.Candidate.Revision,
-		Cause: assessment.Cause, Disposition: assessment.Disposition, RepositoryBinding: assessment.RepositoryBinding,
-		AuthorizationSchema: assessment.AuthorizationSchema,
-	}
-	result.RequiredInputs = []string{"actor", "reason", "maintainer_authorization"}
 	return result
 }

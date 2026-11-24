@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // reviewStatusNonBlockingFindings reads the non-blocking findings STATUS

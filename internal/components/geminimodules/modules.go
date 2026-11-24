@@ -18,9 +18,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/managedownership"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/antigravityrules"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/managedownership"
 )
 
 // ImportSectionID marks the only Gentle AI block GEMINI.md keeps.
