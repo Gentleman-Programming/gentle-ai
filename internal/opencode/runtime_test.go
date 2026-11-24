@@ -29,7 +29,7 @@ func TestDetectRuntimeMajorBounded(t *testing.T) {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Fatal("unbounded probe")
 		}
-		return CommandOutput{Stdout: []byte("2.0.4")}, nil
+		return CommandOutput{Stdout: []byte("OpenCode v2.4.1\n")}, nil
 	}
 	if got, err := DetectRuntimeMajor(context.Background()); got != RuntimeV2 || err != nil {
 		t.Fatalf("%v %v", got, err)

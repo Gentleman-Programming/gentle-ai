@@ -258,7 +258,11 @@ func openCodeTransportRefusedFrameFor(err error) openCodeTransportRefusedFrame {
 }
 
 func runReviewOpenCodeTransportFrames(args []string, stdin io.Reader, stdout io.Writer) error {
-	if !reviewImmutableRuntimeCapability(model.AgentOpenCode).supportsImmutableReceiptReview() {
+	capability := reviewImmutableRuntimeCapability(model.AgentOpenCode)
+	if !capability.supportsImmutableReceiptReview() {
+		if errors.Is(capability.Refusal, errReviewOpenCode241Dispatch) {
+			return fmt.Errorf("%s: %w", reviewImmutableTransportUnsupportedCode, capability.Refusal)
+		}
 		return errors.New(reviewImmutableTransportUnsupportedCode)
 	}
 	if len(args) != 0 {
