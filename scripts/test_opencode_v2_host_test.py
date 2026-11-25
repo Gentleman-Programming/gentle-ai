@@ -871,7 +871,7 @@ class ReviewStepCheckTests(unittest.TestCase):
     def check(self, step, **observed):
         from opencode_v2_loopback import check_review_step
         values = {"child_prompts": [HEADER + " {\"task_prompt\":\"x\"}\nprovider"], "tool_texts": ["{\"state\":\"approved\"}"],
-                  "observed_texts": [], "before": "a", "after": "b"}
+                  "after_hooks": [], "before": "a", "after": "b"}
         values.update(observed)
         return check_review_step(step, **values)
 
@@ -900,7 +900,8 @@ class ReviewStepCheckTests(unittest.TestCase):
         step = review_step(expect="refused", child_requests=0, tool_contains=[])
         refusal = "opencode_review_transport_relay_refused"
         self.assertEqual(self.check(step, child_prompts=[], tool_texts=[refusal], after="a"), [])
-        self.assertEqual(self.check(step, child_prompts=[], tool_texts=[], observed_texts=[refusal], after="a"), [])
+        hook = {"type": "after", "status": "error", "error": refusal}
+        self.assertEqual(self.check(step, child_prompts=[], tool_texts=[], after_hooks=[hook], after="a"), [])
         self.assertIn("authority changed by a refused step", self.check(step, child_prompts=[], tool_texts=[refusal]))
         self.assertIn("refusal was not observed", self.check(step, child_prompts=[], tool_texts=["ok"], after="a"))
         self.assertIn("expected 0 child requests, observed 1", self.check(step, tool_texts=[refusal], after="a"))
@@ -911,7 +912,10 @@ class ReviewStepCheckTests(unittest.TestCase):
         step = review_step(expect="refused", child_requests=0, tool_contains=[], reason="agent_mismatch")
         refusal = "opencode_review_transport_relay_refused"
         self.assertEqual(self.check(step, child_prompts=[], tool_texts=[refusal + " (reason: agent_mismatch)"], after="a"), [])
-        self.assertEqual(self.check(step, child_prompts=[], tool_texts=[], observed_texts=['{"reason": "agent_mismatch", "code": "' + refusal + '"}'], after="a"), [])
+        for error in ({"reason": "agent_mismatch", "code": refusal},
+                      {"message": refusal + " (reason: agent_mismatch)"}):
+            hook = {"type": "after", "status": "error", "error": error}
+            self.assertEqual(self.check(step, child_prompts=[], tool_texts=[], after_hooks=[hook], after="a"), [])
         self.assertIn("refusal reason 'agent_mismatch' was not observed",
                       self.check(step, child_prompts=[], tool_texts=[refusal + " (reason: relay_unavailable)"], after="a"))
         self.assertIn("refusal reason 'agent_mismatch' was not observed",
@@ -920,25 +924,43 @@ class ReviewStepCheckTests(unittest.TestCase):
     def test_refused_step_accepts_only_documented_output_causes(self):
         refusal = "opencode_review_transport_relay_refused"
         cases = (
-            ("output_refused", "", True),
-            ("output_refused", ", cause: reviewer_result_not_admissible", True),
-            ("output_refused", ", cause: validator_result_not_admissible", True),
-            ("output_refused", ", cause: targeted_validation_inconclusive", True),
-            ("output_refused", ", cause: role_capture_failed", True),
-            ("output_refused", ", cause: inspection_coverage", True),
-            ("output_refused", ", cause: invalid_finding_location", True),
-            ("output_refused", ", cause: proof_path_out_of_scope", True),
-            ("output_refused", ", cause: candidate_causality_unclaimed_id", True),
-            ("output_refused", ", cause: candidate_causality_evidence_degraded", True),
-            ("output_refused", ", cause: reviewer_result_not_admissible_extra", False),
-            ("agent_mismatch", ", cause: reviewer_result_not_admissible", False),
+            ("output_refused", None, True),
+            ("output_refused", "reviewer_result_not_admissible", True),
+            ("output_refused", "validator_result_not_admissible", True),
+            ("output_refused", "targeted_validation_inconclusive", True),
+            ("output_refused", "role_capture_failed", True),
+            ("output_refused", "inspection_coverage", True),
+            ("output_refused", "invalid_finding_location", True),
+            ("output_refused", "proof_path_out_of_scope", True),
+            ("output_refused", "candidate_causality_unclaimed_id", True),
+            ("output_refused", "candidate_causality_evidence_degraded", True),
+            ("output_refused", "reviewer_result_not_admissible_extra", False),
+            ("agent_mismatch", "reviewer_result_not_admissible", False),
         )
-        for reason, suffix, accepted in cases:
-            with self.subTest(reason=reason, suffix=suffix):
-                step = review_step(expect="refused", child_requests=0, tool_contains=[], reason=reason)
-                message = f"{refusal} (reason: {reason}{suffix})"
-                want = [] if accepted else [f"refusal reason {reason!r} was not observed"]
+        for reason, cause, accepted in cases:
+            step = review_step(expect="refused", child_requests=0, tool_contains=[], reason=reason)
+            suffix = f", cause: {cause}" if cause is not None else ""
+            message = f"{refusal} (reason: {reason}{suffix})"
+            structured = {"code": refusal, "reason": reason}
+            if cause is not None:
+                structured["cause"] = cause
+            want = [] if accepted else [f"refusal reason {reason!r} was not observed"]
+            with self.subTest(reason=reason, cause=cause, source="tool text"):
                 self.assertEqual(self.check(step, child_prompts=[], tool_texts=[message], after="a"), want)
+            for hook in (
+                {"type": "after", "status": "completed", "result": {"output": {"status": "unavailable", **structured}}},
+                {"type": "after", "status": "error", "error": structured},
+            ):
+                with self.subTest(reason=reason, cause=cause, source=hook["status"]):
+                    self.assertEqual(self.check(step, child_prompts=[], tool_texts=[], after_hooks=[hook], after="a"), want)
+
+    def test_structured_refusal_requires_the_code_on_the_same_record_as_the_reason(self):
+        step = review_step(expect="refused", child_requests=0, tool_contains=[], reason="output_refused")
+        hook = {"type": "after", "status": "error", "error": {"code": "other", "reason": "output_refused",
+                                                                "cause": "reviewer_result_not_admissible"}}
+        self.assertEqual(self.check(step, child_prompts=[], tool_texts=["opencode_review_transport_relay_refused"],
+                                    after_hooks=[hook], after="a"),
+                         ["refusal reason 'output_refused' was not observed"])
 
 
 class ReviewModeArgumentTests(unittest.TestCase):

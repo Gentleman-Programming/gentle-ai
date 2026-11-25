@@ -261,7 +261,7 @@ def authority_digest(directory):
     return digest.hexdigest()
 
 
-def check_review_step(step, child_prompts, tool_texts, observed_texts, before, after):
+def check_review_step(step, child_prompts, tool_texts, after_hooks, before, after):
     """Return every violated expectation for one host-dispatched review step."""
     problems = []
     child = step.get("child") or ""
@@ -285,16 +285,32 @@ def check_review_step(step, child_prompts, tool_texts, observed_texts, before, a
     else:
         if "child_requests" in step and len(child_prompts) != step["child_requests"]:
             problems.append(f"expected {step['child_requests']} child requests, observed {len(child_prompts)}")
-        if not any(RELAY_REFUSED in text for text in tool_texts + observed_texts):
+        texts = list(tool_texts)
+        structured = []
+        for hook in after_hooks:
+            if hook["status"] == "completed":
+                result = hook.get("result") or {}
+                output, text = result.get("output"), result.get("content")
+            else:
+                output = hook.get("error")
+                text = output.get("message") if isinstance(output, dict) else output
+            # Do not let text from the same hook bypass a structured refusal.
+            if isinstance(output, dict) and any(key in output for key in ("code", "reason", "cause")):
+                if output.get("code") == RELAY_REFUSED:
+                    structured.append(output)
+            elif isinstance(text, str):
+                texts.append(text)
+        if not structured and not any(RELAY_REFUSED in text for text in texts):
             problems.append("refusal was not observed")
         reason = step.get("reason")
         if reason:
-            # The parent sees the refusal message; the after hook can record the structured reason.
+            causes = OUTPUT_REFUSAL_CAUSES if reason == "output_refused" else ()
             prefix = f"{RELAY_REFUSED} (reason: {reason}"
-            expected = [f"{prefix})", f'"reason": "{reason}"']
-            if reason == "output_refused":
-                expected.extend(f"{prefix}, cause: {cause})" for cause in OUTPUT_REFUSAL_CAUSES)
-            if not any(fragment in text for text in tool_texts + observed_texts for fragment in expected):
+            expected = [f"{prefix})", *(f"{prefix}, cause: {cause})" for cause in causes)]
+            has_text = any(fragment in text for text in texts for fragment in expected)
+            has_structured = any(output.get("reason") == reason and
+                                 ("cause" not in output or output["cause"] in causes) for output in structured)
+            if not has_text and not has_structured:
                 problems.append(f"refusal reason {reason!r} was not observed")
         if before != after:
             problems.append("authority changed by a refused step")
@@ -323,8 +339,8 @@ def run_review_scenario(request, scenario, observation_log, requests, failures, 
                       for message in body["messages"] if message.get("role") == "tool"]
         lines = observation_log.read_text().splitlines()[observed_before:] if observation_log.exists() else []
         observations = [json.loads(line) for line in lines]
-        observed_texts = [json.dumps(item) for item in observations if item["type"] == "after"]
-        problems = check_review_step(step, child_prompts, tool_texts, observed_texts, before, after)
+        after_hooks = [item for item in observations if item["type"] == "after"]
+        problems = check_review_step(step, child_prompts, tool_texts, after_hooks, before, after)
         evidence.append({
             "name": step["name"], "agent": step["agent"], "expect": step["expect"], "problems": problems,
             "child_requests": len(child_prompts),
@@ -334,7 +350,7 @@ def run_review_scenario(request, scenario, observation_log, requests, failures, 
             "child_prompt_materialized": [strip_host_preamble(prompt).startswith(MATERIALIZATION_HEADER + " ") for prompt in child_prompts],
             "tool_texts": [text[:2000] for text in tool_texts],
             "hooks": [{key: item.get(key) for key in ("type", "status", "error")} for item in observations if item["type"] in ("before", "after")],
-            "after_hooks": [text[:2000] for text in observed_texts],
+            "after_hooks": [json.dumps(item)[:2000] for item in after_hooks],
             "authority_before": before, "authority_after": after, "host_error": host_error,
         })
     if failures:
