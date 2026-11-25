@@ -4937,10 +4937,8 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 			}
 		}()
 
-		turnTimeout := GetTurnTimeout()
-		ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
-		defer cancel()
-		_ = ctx // timeout enforced; Install itself is synchronous
+		// GENTLE_AI_TURN_TIMEOUT applies only to LLM turns; installation is synchronous
+		_ = GetTurnTimeout()
 
 		// Validate before any adapter writes, including earlier non-Codex targets.
 		for _, adapter := range adapters {
