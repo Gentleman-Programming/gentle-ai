@@ -1373,6 +1373,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			result.Eligibility = newReviewActionEligibility(result)
 		}
 		var compactAuthority *reviewStatusCompactAuthority
+		var blockedProviderRoleDispatch error
 		if *nextTransition {
 			artifacts := []ReviewTransitionArtifact{}
 			repositoryContext := ""
@@ -1526,6 +1527,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							// transport; the pi host relay collects the same roles
 							// through the printed materialize + submission route.
 							// Both discover pending roles identically here.
+							var dispatchErr error
 							if runtime == "" && record.State.RuntimeAgent != "" {
 								// The lineage froze its runtime at START, so a STATUS
 								// that omits --agent still binds every lens, refuter,
@@ -1533,11 +1535,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								// under its relay handshake, else the frozen one
 								// (#3805, #4808). A record without the field keeps
 								// the manual route.
-								if recorded, recordedErr := reviewRuntimeWithImmutableTransport(string(reviewEffectiveRuntime("", record.State.RuntimeAgent))); recordedErr == nil {
+								recorded, recordedErr := reviewRuntimeWithImmutableTransport(string(reviewEffectiveRuntime("", record.State.RuntimeAgent)))
+								if recordedErr == nil {
 									runtime = recorded
+								} else if *contract == ReviewIntegrationContractV2 && errors.Is(recordedErr, errReviewOpenCode241Dispatch) {
+									// Discover pending non-lens roles without enabling Task dispatch.
+									dispatchErr = recordedErr
 								}
 							}
-							providerRoleHost := runtime == model.AgentOpenCode || reviewProviderHostRelayMaterializeRuntime(runtime) || reviewProviderCaptureRuntime(runtime)
+							providerRoleHost := dispatchErr != nil || runtime == model.AgentOpenCode || reviewProviderHostRelayMaterializeRuntime(runtime) || reviewProviderCaptureRuntime(runtime)
 							if providerRoleHost && record.State.State == reviewtransaction.StateReviewing && len(artifacts) == len(record.State.SelectedLenses) {
 								_, readErr := readCapturedProviderRefuterResult(ctx, root, store.Dir, record.State, record.State.CapturePhaseRevision)
 								switch {
@@ -1587,6 +1593,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 									// unverifiable evidence, never silent continuation.
 									artifactErr = readErr
 								}
+							}
+							if dispatchErr != nil && providerRole != "" {
+								blockedProviderRoleDispatch = dispatchErr
+								providerRole = ""
 							}
 						}
 					}
@@ -1663,6 +1673,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		if err := reviewStatusStartOptionsUnapplied(startOptions, result.NextTransition, *contract); err != nil {
 			return reviewPreflightError(err)
+		}
+		// Keep the ordinary selector, budget, evidence and terminal routing.
+		// Only a pending role whose Task was withheld replaces the manual stop.
+		if blockedProviderRoleDispatch != nil && result.NextTransition != nil && result.NextTransition.ReasonCode == "manual_intervention_required" {
+			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, blockedProviderRoleDispatch)
 		}
 		if *contract == ReviewIntegrationContractV2 && result.NextTransition != nil {
 			// The forecast is structural only: it rides the v2 envelope's
@@ -3130,17 +3145,18 @@ func (result facadeValidationResult) compact(fixDeltaHash string, findingIDs []s
 	if result.TargetedValidationRequestHash != request.RequestHash || result.CorrectionTargetIdentity != request.CorrectionTargetIdentity {
 		return reviewtransaction.ScopedValidationResult{}, errors.New("targeted validation result does not bind the provider-owned correction request") // refusal:by-design operator-knowledge: the external validator must echo both bindings from the provider-owned request
 	}
-	if result.FollowUps == nil {
-		result.FollowUps = []reviewtransaction.FollowUp{}
-	}
+	// Inspection gates admission above; only the compact check evidence is
+	// retained. Hash that same projection rather than the provider wire shape.
+	evidence := reviewProviderTargetedValidatorEvidence(result)
+	originalDigest, regressionDigest := evidence.CheckDigests()
 	return reviewtransaction.ScopedValidationResult{
-		LedgerIDs: append([]string(nil), findingIDs...), FixCausedFindings: []reviewtransaction.Finding{}, FollowUps: result.FollowUps,
+		LedgerIDs: append([]string(nil), findingIDs...), FixCausedFindings: []reviewtransaction.Finding{}, FollowUps: evidence.FollowUps,
 		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
 		OriginalCriteria: reviewtransaction.ValidationCheck{
-			EvidenceHash: facadeValueHash("original-criteria", result.OriginalCriteria), FixDeltaHash: fixDeltaHash, Passed: result.OriginalCriteria.Passed,
+			EvidenceHash: originalDigest, FixDeltaHash: fixDeltaHash, Passed: evidence.OriginalCriteria.Passed,
 		},
 		CorrectionRegression: reviewtransaction.ValidationCheck{
-			EvidenceHash: facadeValueHash("correction-regression", result.CorrectionRegression), FixDeltaHash: fixDeltaHash, Passed: result.CorrectionRegression.Passed,
+			EvidenceHash: regressionDigest, FixDeltaHash: fixDeltaHash, Passed: evidence.CorrectionRegression.Passed,
 		},
 	}, nil
 }

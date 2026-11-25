@@ -13,7 +13,7 @@ version evidence refuses incompatible writes rather than assuming V2.
 | Managed plugins | Existing assets retained | Four assets: telemetry, model catalog, skill registry and review transport |
 | Gentle logo | Existing placement unchanged | Explicitly skipped; no equivalent `home_logo` slot, no relocation or config writes |
 | Community TUI plugins | Existing integration retained | Compatibility unproven; installation/update refuses, not silently omitted |
-| Native review | Existing V1 capability path retained | Admitted only for a V2 runtime whose managed plugin declares the V2 relay contract (see below) |
+| Native review | Existing V1 capability path retained | Requires the managed V2 relay contract; OpenCode 2.4.1 is refused (see below) |
 
 ## What has actually been checked
 
@@ -35,11 +35,23 @@ with a detected V2 runtime. Any other declaration refuses before the version
 probe, and a disagreeing pair refuses, so a V2 host whose PATH resolves a
 coexisting V1 binary never inherits V1 capability (or the reverse).
 
+OpenCode **2.4.1** is excluded even with the matching declaration: it does not
+return a completed foreground Task to the review relay. Negotiated `review status`
+and `review start` with `--agent opencode` refuse before starting review work.
+A direct relay refuses before reading a Task. The `cause` in the negotiated failure names
+the release and suggests switching to a compatible runtime (for example,
+OpenCode 2.0.19 with the managed V2 relay plugin). The relay retains its bounded
+`capability_unavailable` response to the plugin. For an already-bound OpenCode
+lineage waiting for a refuter or targeted validator Task, V2 `review status
+--next-transition` reports the same cause even without `--agent`. No Task is
+issued and the lineage is unchanged. Switch to a compatible OpenCode host and
+rerun the same STATUS to resume that lineage. This exclusion does not affect
+install, sync, bound manual lens capture, or acknowledgement of a completed review.
+
 Each `gentle-ai` process runs the `opencode --version` probe at most once per
 resolved executable and reuses that answer, failures included, at every review
-gate (assess, STATUS, START, consent, relay, capture), so eligibility cannot
-change between steps of one invocation. The supported-runtime list in a refusal
-never probes: it names what the binary supports, and an OpenCode refusal states
+gate (assess, STATUS, START, consent, relay, capture). The supported-runtime list
+in a refusal never probes: it names what the binary supports, and an OpenCode refusal states
 the host condition that failed. Runtime-major detection allows up to 15 seconds
 for `opencode --version`, accommodating slow external CLI startup while keeping
 the probe bounded. A timeout reports the elapsed budget and that managed runtime
