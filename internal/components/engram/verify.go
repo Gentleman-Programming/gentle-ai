@@ -2,7 +2,9 @@ package engram
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -21,6 +23,52 @@ func VerifyInstalled() error {
 	}
 
 	return nil
+}
+
+// VerifyPiInstanceIdentity reports only a confirmed lack of instance-id, so a
+// missing core or an unrelated probe error does not change install or sync.
+func VerifyPiInstanceIdentity(ctx context.Context) error {
+	if strings.TrimSpace(os.Getenv("ENGRAM_URL")) != "" {
+		return nil
+	}
+	command, explicit := CallerBinary()
+	if !explicit {
+		command = strings.TrimSpace(os.Getenv("ENGRAM_BIN"))
+		if command == "" {
+			command = "engram"
+		}
+	}
+	binary, err := lookPath(command)
+	if err != nil {
+		return nil
+	}
+	// instance-id can create identity files. Probe offline, away from the
+	// user's Engram store and any configured ENGRAM_DATA_DIR.
+	dataDir, err := os.MkdirTemp("", "gentle-ai-engram-")
+	if err != nil {
+		return nil
+	}
+	defer os.RemoveAll(dataDir)
+
+	ctx, cancel := context.WithTimeout(ctx, protocolProbeTimeout)
+	defer cancel()
+	cmd := execCommandContext(ctx, binary, "instance-id")
+	cmd.Env = append(cmd.Environ(), "ENGRAM_NO_UPDATE_CHECK=1", "ENGRAM_DATA_DIR="+dataDir)
+	_, err = cmd.Output()
+	var exit *exec.ExitError
+	if ctx.Err() != nil || !errors.As(err, &exit) {
+		return nil
+	}
+	stderr := strings.ToLower(string(exit.Stderr))
+	if !strings.Contains(stderr, "unknown command") || !strings.Contains(stderr, "instance-id") {
+		return nil
+	}
+
+	label := fmt.Sprintf("%q", binary)
+	if version, err := VerifyVersionCommand(binary); err == nil {
+		label += " (" + version + ")"
+	}
+	return fmt.Errorf("Engram %s does not support instance-id, which the Pi companion requires. Upgrade that core before retrying", label)
 }
 
 // runVersionCommand executes `engram version` and returns raw stdout. It is a

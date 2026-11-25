@@ -67,6 +67,10 @@ ISOLATED INSTALLS (absolute paths; all unset by default)
   GENTLE_AI_ENGRAM_BIN=<file>        Use this Engram executable: no brew, download, go install or PATH change,
                                      and dependency detection runs no git, curl, node, npm, brew or go command
 
+PI ENGRAM
+  If the local Engram core lacks instance-id, install keeps the managed files
+  but exits with a verification error. Upgrade the named core before retrying.
+
 ORPHAN MODIFIERS
   Rerun gentle-ai install with the required consumer added to your existing
   component list, or remove the modifier. Components are not added automatically.
