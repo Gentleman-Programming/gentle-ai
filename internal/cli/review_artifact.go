@@ -149,7 +149,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	lens := flags.String("lens", "", "exact selected lens")
 	order := flags.Int("order", -1, "zero-based selected lens order")
 	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
-	subjectHash := flags.String("subject-hash", "", "exact provider-issued artifact subject hash from the collect binding (optional for manual input; do not copy it into reviewer output)")
+	subjectHash := flags.String("subject-hash", "", "exact provider-issued artifact subject hash from the collect binding (optional for in-process capture or manual input; do not copy it into reviewer output)")
 	runtimeAgent := flags.String("agent", "", "compiled reviewer runtime that invokes the provider-owned request; may be combined with --input only for compiled host-relay submissions and remains mutually exclusive with --preflight")
 	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin; `gentle-ai review schema reviewer` emits the schema and a working example")
 	preflight := flags.Bool("preflight", false, "validate the capture binding and, when --input is supplied, the result admission without persisting anything")
@@ -337,7 +337,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		// never runs under preflight and its preservation needs no guard.
 		admitted, rawPayload, err = reviewProviderCaptureWithOneCorrection(ctx, reviewProviderCapture{
 			root: root, runtime: providerRuntime, adapter: adapter, state: state, frozen: frozen, subject: subject,
-		}, request.Invocation, !subjectHashProvided)
+		}, request.Invocation, subjectHashProvided)
 		if err != nil {
 			return reviewPreflightError(err)
 		}
@@ -346,7 +346,11 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("read reviewer result: %w", err))
 		}
-		admitted, err = reviewProviderAdmitRaw(ctx, root, state, frozen, subject, !subjectHashProvided, rawPayload)
+		echo := reviewProviderIgnoreEcho
+		if !subjectHashProvided {
+			echo = reviewProviderRequireInputEcho
+		}
+		admitted, err = reviewProviderAdmitRaw(ctx, root, state, frozen, subject, echo, rawPayload)
 		if err != nil {
 			// A host-submitted result gets no corrective re-invocation, since
 			// the host owns the reviewer, but its rejected bytes are preserved

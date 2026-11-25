@@ -101,7 +101,7 @@ func reviewProviderExtractRoleRaw(role string, raw []byte) ([]byte, error) {
 // reviewProviderAdmitLensRaw preserves the native pre-capture semantics while
 // keeping durable capture outside this materialization and admission slice.
 func reviewProviderAdmitLensRaw(ctx context.Context, root string, state reviewtransaction.CompactState, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, raw []byte) (reviewtransaction.ReviewerResult, error) {
-	admitted, err := reviewProviderAdmitRaw(ctx, root, state, frozen, subject, true, raw)
+	admitted, err := reviewProviderAdmitRaw(ctx, root, state, frozen, subject, reviewProviderRequireEcho, raw)
 	if err != nil {
 		return reviewtransaction.ReviewerResult{}, err
 	}
@@ -121,10 +121,17 @@ func reviewProviderMatchLegacySubject(ctx context.Context, root string, state re
 	return frozen, subject, false
 }
 
-// reviewProviderAdmitRaw preserves capture-result's strict native admission
-// without publishing bytes or mutating authority. Without a host-bound hash,
-// an optional echo must match this slot's current or legacy provider subject.
-func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransaction.CompactState, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, checkEcho bool, raw []byte) (reviewProviderAdmittedResult, error) {
+type reviewProviderEchoPolicy uint8
+
+const (
+	reviewProviderIgnoreEcho       reviewProviderEchoPolicy = iota // a host hash already selected the subject
+	reviewProviderPreferLegacyEcho                                 // in-process capture can use a matching legacy echo
+	reviewProviderRequireEcho                                      // external transport without a host hash
+	reviewProviderRequireInputEcho                                 // capture-result --input, with CLI recovery guidance
+)
+
+// reviewProviderAdmitRaw admits the result without publishing bytes or mutating authority.
+func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransaction.CompactState, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, echo reviewProviderEchoPolicy, raw []byte) (reviewProviderAdmittedResult, error) {
 	payload, err := reviewProviderExtractRoleRaw(reviewProviderRoleLens, raw)
 	if err != nil {
 		return reviewProviderAdmittedResult{}, err
@@ -143,10 +150,12 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 	if err != nil {
 		return reviewProviderAdmittedResult{}, err
 	}
-	if checkEcho && result.SubjectHash != subject.SubjectHash {
+	if echo != reviewProviderIgnoreEcho && result.SubjectHash != subject.SubjectHash {
+		requireMatch := echo == reviewProviderRequireEcho || echo == reviewProviderRequireInputEcho
 		var decision reviewtransaction.ArtifactAdmissionDecision
 		var diagnostic string
-		if result.SubjectHash == "" {
+		switch {
+		case result.SubjectHash == "" && requireMatch:
 			// The typed result decodes absent, null, and empty to the same
 			// value. Only an absent field opts out of the manual echo check.
 			var fields struct {
@@ -159,12 +168,18 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 				decision = reviewtransaction.ArtifactAdmissionIncomplete
 				diagnostic = "reviewer result omitted the provider-owned artifact subject"
 			}
-		} else {
+		case result.SubjectHash != "":
 			var matched bool
 			frozen, subject, matched = reviewProviderMatchLegacySubject(ctx, root, state, frozen, subject, result.SubjectHash)
-			if !matched {
+			if !matched && requireMatch {
 				decision = reviewtransaction.ArtifactAdmissionBindingMismatch
-				diagnostic = "reviewer result echoed a different artifact subject: expected " + subject.SubjectHash
+				const mismatch = "reviewer result echoed a different artifact subject: "
+				diagnostic = mismatch + "expected " + subject.SubjectHash
+				if echo == reviewProviderRequireInputEcho {
+					diagnostic = mismatch + "the rejected admission did not consume the lens slot, " +
+						"so re-run the lens and invoke gentle-ai review capture-result again on the same lineage " +
+						"with a result that echoes the binding's top-level subject_hash, which is " + subject.SubjectHash
+				}
 			}
 		}
 		if decision != "" {

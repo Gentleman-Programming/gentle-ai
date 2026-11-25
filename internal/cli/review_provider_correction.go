@@ -65,9 +65,15 @@ func (err *reviewProviderCaptureRefusedError) Unwrap() error { return err.cause 
 // reviewProviderCaptureWithOneCorrection invokes the reviewer, admits its raw
 // bytes, and on an admission failure invokes it once more with feedback. A
 // transport failure is not an admission failure and is returned as is.
-func reviewProviderCaptureWithOneCorrection(ctx context.Context, capture reviewProviderCapture, invocation reviewerprovider.Invocation, checkEcho bool) (reviewProviderAdmittedResult, []byte, error) {
+func reviewProviderCaptureWithOneCorrection(ctx context.Context, capture reviewProviderCapture, invocation reviewerprovider.Invocation, hostSubjectProvided bool) (reviewProviderAdmittedResult, []byte, error) {
+	// This invocation already binds the slot. Without a host hash, an echo
+	// can select a matching legacy subject, but cannot refuse admission.
+	echo := reviewProviderPreferLegacyEcho
+	if hostSubjectProvided {
+		echo = reviewProviderIgnoreEcho
+	}
 	admit := func(ctx context.Context, raw []byte) (reviewProviderAdmittedResult, error) {
-		return reviewProviderAdmitRaw(ctx, capture.root, capture.state, capture.frozen, capture.subject, checkEcho, raw)
+		return reviewProviderAdmitRaw(ctx, capture.root, capture.state, capture.frozen, capture.subject, echo, raw)
 	}
 	return reviewProviderCaptureRetry(ctx, capture.adapter, invocation, capture.state.RuntimeAgent, admit, capture.preserve, capture.continuation, nil)
 }

@@ -411,13 +411,20 @@ func TestRawInputCapturePreservesRejectedResultWithoutInvokingProvider(t *testin
 }
 
 func TestProviderCaptureIgnoresSubjectHashEchoWithoutRetry(t *testing.T) {
-	for _, name := range []string{"target identity", "unrelated hash"} {
-		t.Run(name, func(t *testing.T) {
+	for _, test := range []struct {
+		name                     string
+		targetEcho, withHostHash bool
+	}{
+		{name: "target identity", targetEcho: true, withHostHash: true},
+		{name: "unrelated hash", withHostHash: true},
+		{name: "target identity without host hash", targetEcho: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			repo, binding, record, _ := newCandidateInspectionReview(t, "candidate\n", false)
 			result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
 			subjectHash := result.SubjectHash
 			result.SubjectHash = "sha256:" + strings.Repeat("b", 64)
-			if name == "target identity" {
+			if test.targetEcho {
 				// #4027: the model copied the adjacent target identity, not the subject.
 				result.SubjectHash = record.State.InitialSnapshot.Identity
 			}
@@ -430,7 +437,11 @@ func TestProviderCaptureIgnoresSubjectHashEchoWithoutRetry(t *testing.T) {
 			}
 			prompts := recordingProviderAdapter(t, func() ([]byte, error) { return raw, nil })
 			var output bytes.Buffer
-			if err := RunReviewCaptureResult(append(binding, "--agent", string(model.AgentClaudeCode), "--subject-hash", subjectHash), &output); err != nil {
+			args := append(append([]string{"capture-result"}, binding...), "--agent", string(model.AgentClaudeCode))
+			if test.withHostHash {
+				args = append(args, "--subject-hash", subjectHash)
+			}
+			if err := RunReview(args, &output); err != nil {
 				t.Fatalf("capture with an unrelated echo: %v\n%s", err, output.String())
 			}
 			if len(*prompts) != 1 {
