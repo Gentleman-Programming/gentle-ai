@@ -3,8 +3,14 @@ package engram
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 func TestVerifyInstalled(t *testing.T) {
@@ -19,6 +25,34 @@ func TestVerifyInstalled(t *testing.T) {
 	lookPath = func(string) (string, error) { return "", errors.New("missing") }
 	if err := VerifyInstalled(); err == nil {
 		t.Fatalf("VerifyInstalled() expected missing binary error")
+	}
+}
+
+func TestVerifyPiInstanceIdentityBoundsInheritedStdout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX launcher passes the child an inherited pipe")
+	}
+	t.Setenv("ENGRAM_URL", "")
+	t.Setenv(system.EngramBinEnv, "/bin/sh")
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	// Release the child eventually even if the probe hangs draining stdout.
+	release := time.AfterFunc(3*protocolProbeTimeout, func() { _ = writer.Close() })
+	defer release.Stop()
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+	execCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `(read -r line <&3) & echo 'unknown command "instance-id"' >&2; exit 1`)
+		cmd.ExtraFiles = []*os.File{reader}
+		return cmd
+	}
+	start := time.Now()
+	if err := VerifyPiInstanceIdentity(t.Context()); err != nil || time.Since(start) >= 2*protocolProbeTimeout {
+		t.Fatalf("probe took %v, error = %v; want a bounded, inconclusive probe", time.Since(start), err)
 	}
 }
 

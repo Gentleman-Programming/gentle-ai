@@ -397,7 +397,7 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		if rollback.Err != nil {
 			persistErr = errors.Join(persistErr, rollback.Err)
 		}
-		return result, persistErr
+		return result, errors.Join(persistErr, verificationErr)
 	}
 
 	if verificationErr == nil {

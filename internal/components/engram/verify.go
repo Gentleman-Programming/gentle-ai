@@ -53,6 +53,7 @@ func VerifyPiInstanceIdentity(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, protocolProbeTimeout)
 	defer cancel()
 	cmd := execCommandContext(ctx, binary, "instance-id")
+	cmd.WaitDelay = protocolProbeTimeout // Bound pipes a launcher may leave open in a child.
 	cmd.Env = append(cmd.Environ(), "ENGRAM_NO_UPDATE_CHECK=1", "ENGRAM_DATA_DIR="+dataDir)
 	_, err = cmd.Output()
 	var exit *exec.ExitError
