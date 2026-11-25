@@ -289,6 +289,8 @@ When a review stops in `correction_required` or `escalated`, the correction requ
 - Without the opt-in, STATUS output is unchanged. The last-event closure is unchanged for every client: `advisory_findings` and `reviewer_results` stay approved-only.
 - The flag requires `--contract gentle-ai.review-integration/v2`; without it, or with v1, STATUS refuses. A provider older than this change refuses the unknown flag, so a client can fall back to plain STATUS.
 
+START checks the frozen lens context budget before asking for review consent. An oversized candidate returns `lens_context_budget_exceeded` without creating review authority. With a smaller commit checked out, run the STATUS command the refusal prints from the repository and follow the returned transition. It reviews only that last commit's committed changes.
+
 Medium and high-risk START may return the typed `gentle-ai.review-integration.consent/v3` envelope. Relay the complete choice envelope losslessly, preserve machine tokens and invocations exactly, and run only the invocation selected by the human. Global RDD mode permits review; it never grants per-candidate consent. A decline is not the kill switch.
 
 ## Read-only risk assessment (`gentle-ai review assess`)

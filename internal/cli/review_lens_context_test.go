@@ -413,16 +413,17 @@ func TestNegotiatedStatusReoffersEmptyReviewerResultWithoutBudgetTerminal(t *tes
 
 func TestReviewLensContextRecoveryGuidanceRefreshesThenExecutesNextTransition(t *testing.T) {
 	tests := []struct {
-		name   string
-		action string
+		name    string
+		action  string
+		command string
 	}{
-		{name: "evidence capacity", action: reviewLensContextBudgetAction},
-		{name: "start capacity", action: reviewLensContextStartBudgetAction},
-		{name: "deadline", action: reviewLensContextDeadlineAction},
+		{name: "evidence capacity", action: reviewLensContextBudgetAction, command: reviewNextTransitionRefreshCommandV21},
+		{name: "start capacity", action: reviewLensContextStartBudgetAction, command: reviewLensContextStartBudgetRefreshCommand},
+		{name: "deadline", action: reviewLensContextDeadlineAction, command: reviewNextTransitionRefreshCommandV21},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if !strings.Contains(test.action, reviewNextTransitionRefreshCommandV21) ||
+			if !strings.Contains(test.action, test.command) ||
 				!strings.Contains(test.action, "refresh the exact native next transition") ||
 				!strings.Contains(test.action, "execute the returned transition") {
 				t.Fatalf("recovery guidance = %q, want STATUS to refresh the exact transition and the caller to execute it", test.action)
