@@ -13,12 +13,31 @@ import (
 )
 
 func TestWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t *testing.T) {
+	testWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t, reviewtransaction.TargetCurrentChanges)
+}
+
+func TestWorkspaceOverlayCorrectionKeepsFrozenEmptyUntrackedExclusion(t *testing.T) {
+	testWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t, reviewtransaction.TargetBaseWorkspaceOverlay)
+}
+
+func testWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t *testing.T, kind reviewtransaction.TargetKind) {
+	t.Helper()
 	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo := initReviewCLIRepo(t)
 	const lineage = "frozen-empty-untracked-6225"
 	const candidate = "candidate.go"
 	const excluded = "local-only.txt"
+	baseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD^{tree}"))
+	bound := []string{"--agent=pi", "--lineage=" + lineage}
+	if kind == reviewtransaction.TargetBaseWorkspaceOverlay {
+		baseCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+		bound = append(bound, "--base-ref="+baseCommit, "--workspace-overlay")
+		// Make the overlay base differ from HEAD so falling back to current
+		// changes could not return the same projection.
+		writeReviewStartCandidate(t, repo, candidate, "package candidate\n\nfunc value() int { return 0 }\n", 0o644)
+		runReviewCLIGit(t, repo, "commit", "-qm", "advance past the overlay base")
+	}
 	writeReviewStartCandidate(t, repo, candidate, "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
 	writeUndeclaredWorkspaceFile(t, repo, excluded, "unrelated workspace file\n", 0o644)
 
@@ -49,7 +68,6 @@ func TestWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t *testing.T) {
 		}
 		return payload
 	}
-	bound := []string{"--agent=pi", "--lineage=" + lineage}
 	digest, paths := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo, bound...))
 	if len(paths) != 1 || paths[0] != excluded {
 		t.Fatalf("eligible untracked paths = %q, want only %q", paths, excluded)
@@ -64,10 +82,10 @@ func TestWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t *testing.T) {
 	manifest := startedChangedPathManifest(t, started)
 	frozenTarget := ready.TargetIdentity
 	if started.LineageID != lineage || started.Projection != reviewtransaction.ProjectionWorkspace ||
-		ready.Projection.Kind != reviewtransaction.TargetCurrentChanges || started.State != reviewtransaction.StateReviewing ||
+		ready.Projection.Kind != kind || started.BaseTree != baseTree || started.State != reviewtransaction.StateReviewing ||
 		started.RepositoryContext == nil || started.RepositoryContext.TargetIdentity != frozenTarget ||
 		len(manifest) != 1 || manifest[0].Path != candidate || manifest[0].IntendedUntracked {
-		t.Fatalf("START did not freeze the tracked-only workspace candidate: %#v", started)
+		t.Fatalf("START did not freeze the tracked-only %s candidate with base %q: %#v", kind, baseTree, started)
 	}
 
 	collect := func(status ReviewTargetStatusResult, reason string) []ReviewTransitionInput {
@@ -113,6 +131,12 @@ func TestWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t *testing.T) {
 		continuation == nil || continuation.Operation != "review.status" || continuation.Binding.TargetIdentity != frozenTarget {
 		t.Fatalf("expected correction_required with a bound STATUS continuation: %#v", closure)
 	}
+	if kind == reviewtransaction.TargetBaseWorkspaceOverlay {
+		args, err := reviewTransitionArgumentMap(continuation.Arguments)
+		if err != nil || args["base-ref"] != baseTree || args["workspace-overlay"] != "true" {
+			t.Fatalf("correction continuation lost the overlay selector for base %q: %#v (%v)", baseTree, continuation.Arguments, err)
+		}
+	}
 	statusArgs := []string{strings.TrimPrefix(continuation.Operation, "review.")}
 	for _, argument := range continuation.Arguments {
 		statusArgs = append(statusArgs, argument.Token)
@@ -123,6 +147,9 @@ func TestWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t *testing.T) {
 		decodeStrictReviewJSON(t, run(statusArgs), &status)
 		if err := status.Validate(); err != nil {
 			t.Fatal(err)
+		}
+		if status.Projection.Kind != kind || status.Projection.Projection != reviewtransaction.ProjectionWorkspace || status.Projection.BaseTree != baseTree {
+			t.Fatalf("%s: bound STATUS changed the %s workspace projection with base %q: %#v", phase, kind, baseTree, status.Projection)
 		}
 		if status.NextTransition != nil {
 			t.Logf("%s: bound STATUS = %s/%s, authority=%+v", phase, status.NextTransition.Kind, status.NextTransition.ReasonCode, status.Authority)
