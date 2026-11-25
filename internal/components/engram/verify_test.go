@@ -45,14 +45,21 @@ func TestVerifyPiInstanceIdentityBoundsInheritedStdout(t *testing.T) {
 	defer release.Stop()
 	original := execCommandContext
 	t.Cleanup(func() { execCommandContext = original })
-	execCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+	execCommandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		if len(args) > 0 && args[0] == "version" {
+			return exec.CommandContext(ctx, "/bin/sh", "-c", `echo 'engram 1.20.0'`)
+		}
 		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `(read -r line <&3) & echo 'unknown command "instance-id"' >&2; exit 1`)
 		cmd.ExtraFiles = []*os.File{reader}
 		return cmd
 	}
 	start := time.Now()
-	if err := VerifyPiInstanceIdentity(t.Context()); err != nil || time.Since(start) >= 2*protocolProbeTimeout {
-		t.Fatalf("probe took %v, error = %v; want a bounded, inconclusive probe", time.Since(start), err)
+	err = VerifyPiInstanceIdentity(t.Context())
+	// The bound is the contract. Whether the exit status wins over the pipe
+	// wait differs by platform, so either outcome is valid: inconclusive (nil)
+	// or the confirmed diagnostic, since the launcher did reject instance-id.
+	if (err != nil && !strings.Contains(err.Error(), "does not support instance-id")) || time.Since(start) >= 2*protocolProbeTimeout {
+		t.Fatalf("probe took %v, error = %v; want a bounded probe", time.Since(start), err)
 	}
 }
 
