@@ -130,6 +130,12 @@ const (
 	reviewProviderRequireInputEcho                                 // capture-result --input, with CLI recovery guidance
 )
 
+// reviewProviderInputRecapture tells a manual capture-result caller how to
+// refill the lens slot that a rejected subject echo left unconsumed.
+const reviewProviderInputRecapture = "the rejected admission did not consume the lens slot, " +
+	"so re-run the lens and invoke gentle-ai review capture-result again on the same lineage " +
+	"with a result that echoes the binding's top-level subject_hash, which is "
+
 // reviewProviderAdmitRaw admits the result without publishing bytes or mutating authority.
 func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransaction.CompactState, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, echo reviewProviderEchoPolicy, raw []byte) (reviewProviderAdmittedResult, error) {
 	payload, err := reviewProviderExtractRoleRaw(reviewProviderRoleLens, raw)
@@ -167,6 +173,9 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 			if fields.SubjectHash != nil {
 				decision = reviewtransaction.ArtifactAdmissionIncomplete
 				diagnostic = "reviewer result omitted the provider-owned artifact subject"
+				if echo == reviewProviderRequireInputEcho {
+					diagnostic += ": " + reviewProviderInputRecapture + subject.SubjectHash
+				}
 			}
 		case result.SubjectHash != "":
 			var matched bool
@@ -176,9 +185,7 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 				const mismatch = "reviewer result echoed a different artifact subject: "
 				diagnostic = mismatch + "expected " + subject.SubjectHash
 				if echo == reviewProviderRequireInputEcho {
-					diagnostic = mismatch + "the rejected admission did not consume the lens slot, " +
-						"so re-run the lens and invoke gentle-ai review capture-result again on the same lineage " +
-						"with a result that echoes the binding's top-level subject_hash, which is " + subject.SubjectHash
+					diagnostic = mismatch + reviewProviderInputRecapture + subject.SubjectHash
 				}
 			}
 		}

@@ -95,3 +95,45 @@ func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T)
 		t.Fatalf("recapture artifact = %#v", artifact)
 	}
 }
+
+func TestReviewCaptureResultRecapturesSameLensAfterEmptyEcho(t *testing.T) {
+	for name, echo := range map[string]any{"empty echo": "", "null echo": nil} {
+		t.Run(name, func(t *testing.T) {
+			reviewEnabledHome(t)
+			repo, started, _, record := newArtifactReview(t, false)
+			lens := record.State.SelectedLenses[0]
+			result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+			empty := filepath.Join(t.TempDir(), "result.json")
+			writeReviewCLIJSON(t, empty, map[string]any{
+				"inspection": result.Inspection, "findings": result.Findings, "evidence": result.Evidence, "subject_hash": echo,
+			})
+			args := []string{
+				"capture-result", "--cwd", repo, "--lineage", started.LineageID, "--target", started.TargetIdentity,
+				"--lens", lens, "--order", "0", "--input",
+			}
+
+			before := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+			var refused bytes.Buffer
+			err := RunReview(append(args, empty), &refused)
+			after := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+			if !reflect.DeepEqual(before, after) {
+				t.Error("empty echo changed STATUS authority or slot offers")
+			}
+			failure := decodeCaptureRefusalEnvelope(t, err, refused.Bytes())
+			want := "reviewer artifact admission incomplete: reviewer result omitted the provider-owned artifact subject: " +
+				"the rejected admission did not consume the lens slot, so re-run the lens and invoke gentle-ai review capture-result again " +
+				"on the same lineage with a result that echoes the binding's top-level subject_hash, which is " + result.SubjectHash
+			const preserved = "; the rejected reviewer payload was preserved at "
+			cause, _, _ := strings.Cut(strings.TrimSuffix(err.Error(), " [invalid_request]"), preserved)
+			if cause != want || failure.Code != "invalid_request" || failure.MutationOutcome != ReviewMutationNotStarted {
+				t.Fatalf("manual empty echo refusal = %#v; error = %v; want cause %q", failure, err, want)
+			}
+
+			var captured bytes.Buffer
+			corrected := writeReviewerOutputWithOptionalEcho(t, result, result.SubjectHash)
+			if err := RunReview(append(args, corrected), &captured); err != nil {
+				t.Fatalf("recapture on the same lineage and lens: %v", err)
+			}
+		})
+	}
+}
