@@ -310,8 +310,9 @@ func narrowCommittedRangeBase(ctx context.Context, repo, head, base, defaultName
 		return base
 	}
 	var tips []string
-	for _, remote := range strings.Fields(string(remotes)) {
-		if remote == "origin" {
+	// One remote per line: a valid name may contain non-ASCII spaces.
+	for _, remote := range strings.Split(string(remotes), "\n") {
+		if remote = strings.TrimSuffix(remote, "\r"); remote == "" || remote == "origin" {
 			continue
 		}
 		tip, err := resolveCommit(ctx, repo, "refs/remotes/"+remote+"/"+defaultName)

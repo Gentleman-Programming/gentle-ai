@@ -236,10 +236,12 @@ func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
 				runReviewCLIGit(t, repo, "commit", "-qm", "revert upstream changes")
 			case "incomparable_tips":
 				// Neither tip subsumes the other, even though upstream leaves fewer changed paths.
+				// The remote name holds an ideographic space Git accepts; it must not be split.
+				mirror := "mirror　copy"
 				runReviewCLIGit(t, repo, "switch", "-qc", "mirror-default", origin)
 				commitFile("mirror.txt", "independent mirror path\n")
-				runReviewCLIGit(t, repo, "remote", "add", "mirror", "mirror.git")
-				runReviewCLIGit(t, repo, "update-ref", "refs/remotes/mirror/main", "HEAD")
+				runReviewCLIGit(t, repo, "remote", "add", mirror, "mirror.git")
+				runReviewCLIGit(t, repo, "update-ref", "refs/remotes/"+mirror+"/main", "HEAD")
 				runReviewCLIGit(t, repo, "switch", "-q", "feature")
 				runReviewCLIGit(t, repo, "merge", "--no-ff", "-qm", "merge mirror default", "mirror-default")
 				want = origin
