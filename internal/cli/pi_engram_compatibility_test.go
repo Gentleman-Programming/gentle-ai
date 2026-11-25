@@ -115,18 +115,20 @@ func TestPiEngramCompatibility(t *testing.T) {
 						prefix, retry = "post-apply", "gentle-ai install --agent pi"
 					}
 					want := prefix + " verification failed:\n" + reportPrefix + "1 failed, 0 warnings, 0 skipped\n" + passed +
-						fmt.Sprintf("[!!] verify:pi:engram:instance-id (Engram %q (engram 1.20.0) does not support instance-id, which the Pi companion requires. Upgrade that core before retrying)\n", bin) +
-						"Installation completed with verification issues. Run `" + retry + "` to retry the failed checks.\n"
+						fmt.Sprintf("[!!] verify:pi:engram:instance-id (Engram %q (engram 1.20.0) does not support instance-id, which the Pi companion requires. Upgrade that core before retrying)\n", bin)
+					footer := "Installation completed with verification issues. Run `" + retry + "` to retry the failed checks.\n"
 					if tc.persistFails {
 						persist := "persist install state"
 						if verb == "sync" {
 							persist = "persist sync managed asset state"
 						}
-						if !strings.HasPrefix(err.Error(), persist+":") || !strings.HasSuffix(err.Error(), "\n"+want) {
-							t.Fatalf("want both persistence and verification failures, got %v", err)
+						got := err.Error()
+						if !strings.HasPrefix(got, persist+": acquire install state lock:") || !strings.HasSuffix(got, "\n"+want) ||
+							strings.Contains(got, "Installation completed with verification issues") || strings.Contains(got, "to retry the failed checks.") {
+							t.Fatalf("want both persistence and verification failures without the completion or retry footer, got %v", err)
 						}
-					} else if err.Error() != want || report.RollbackRequired {
-						t.Fatalf("error = %q, rollback = %t; want %q without rollback", err, report.RollbackRequired, want)
+					} else if err.Error() != want+footer || report.RollbackRequired {
+						t.Fatalf("error = %q, rollback = %t; want %q without rollback", err, report.RollbackRequired, want+footer)
 					}
 				} else {
 					want := reportPrefix + "0 failed, 0 warnings, 0 skipped\n" + passed + "You're ready. Start building.\n"
