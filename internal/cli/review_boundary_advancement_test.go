@@ -3,9 +3,14 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
@@ -337,6 +342,71 @@ func TestReviewCommittedRangeBoundaryOverlapsFromBranchPoint(t *testing.T) {
 	}
 	if base, matches := committedBoundaryStartScope(t, offered, c, "runtime/follow-up.md"); !matches {
 		t.Fatalf("START base-ref=%s paths=%v; want base-ref=%s paths=[runtime/follow-up.md]", base, offered.Projection.Paths, c)
+	}
+}
+
+func TestReviewStatusAncestryDoesNotRepeatGitIdentityResolution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Git latency shim requires a POSIX shell")
+	}
+	repo := committedBoundaryRepo(t)
+	writeReviewStartCandidate(t, repo, "runtime/README.md", "# Runtime\n", 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qm", "acknowledged slice")
+	acknowledgeCommittedBoundaryRange(t, repo, committedBoundaryStatus(t, repo), boundaryOverlapChecks, "")
+	boundary := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	writeReviewStartCandidate(t, repo, "runtime/impl.go", "package runtime\n", 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qm", "start next slice")
+	for i := 0; i < 62; i++ {
+		writeReviewStartCandidate(t, repo, "runtime/impl.go", fmt.Sprintf("package runtime\nconst Value = %d\n", i), 0o644)
+		runReviewCLIGit(t, repo, "commit", "-qam", "advance next slice")
+	}
+
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	trace := filepath.Join(dir, "identity-count")
+	// Git commands that inspect frozen content use a sanitized environment;
+	// embed the real executable so those calls still run normally.
+	quote := func(path string) string { return "'" + strings.ReplaceAll(path, "'", "'\\''") + "'" }
+	shim := `#!/bin/sh
+for arg do
+  if [ "$arg" = --git-common-dir ]; then
+    printf '.\n' >> ` + quote(trace) + `
+    sleep 0.45
+    break
+  fi
+done
+exec ` + quote(git) + ` "$@"
+`
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var out, stderr bytes.Buffer
+	previous := reviewStatusPhaseTimingsWriter
+	reviewStatusPhaseTimingsWriter = &stderr
+	t.Cleanup(func() { reviewStatusPhaseTimingsWriter = previous })
+	args := []string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition", "--phase-timings"}
+	start := time.Now()
+	err = RunReview(args, &out)
+	elapsed := time.Since(start)
+	seen, readErr := os.ReadFile(trace)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	resolutions := bytes.Count(seen, []byte{'\n'})
+	t.Logf("selectorless STATUS: %v, %d Git identity resolutions, %s", elapsed, resolutions, stderr.String())
+	if err != nil {
+		t.Fatalf("STATUS did not offer the unacknowledged slice within its unchanged budget: %v\n%s", err, out.String())
+	}
+	var result ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, out.Bytes(), &result)
+	assertCommittedBoundaryStart(t, result, boundary, "runtime/impl.go")
+	if resolutions == 0 || resolutions >= 30 {
+		t.Fatalf("Git identity resolutions = %d; want a fixed number well below the 63-commit slice", resolutions)
 	}
 }
 

@@ -79,13 +79,31 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 	if err != nil {
 		return AcknowledgedBoundary{}, false, err
 	}
+	if len(ancestors) == 0 {
+		return AcknowledgedBoundary{}, false, nil
+	}
+	// Every candidate range checks a tombstone in the same repository. Resolve
+	// its authority directory once and revalidate the Git identity before
+	// using a matched boundary; a changed repository must not suppress review.
+	lease, err := openRepositoryIdentityLeaseAtRoot(ctx, root)
+	if err != nil {
+		return AcknowledgedBoundary{}, false, err
+	}
+	authority := lease.Identity()
+	consumptionRoot := reviewAuthorityRootIn(authority.GitCommonDir)
+	confirm := func(boundary AcknowledgedBoundary) (AcknowledgedBoundary, bool, error) {
+		if err := lease.Validate(ctx); err != nil {
+			return AcknowledgedBoundary{}, false, err
+		}
+		return boundary, true, nil
+	}
 	consumedRange := func(baseTree, candidateTree string) ([]string, bool, error) {
 		paths, err := builder.changedPaths(ctx, baseTree, candidateTree)
 		if err != nil {
 			return nil, false, err
 		}
 		identity := IdentityForComponents(TargetBaseDiff, live.Projection, baseTree, candidateTree, digestPaths(paths))
-		consumed, err := CompactTargetConsumed(ctx, root, identity)
+		consumed, err := compactTargetConsumedAtRoot(consumptionRoot, authority.RepositoryRoot, identity)
 		return paths, consumed, err
 	}
 	// The walk starts at the branch point. Later slices may START from any
@@ -111,7 +129,7 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 				return AcknowledgedBoundary{}, false, err
 			}
 			if consumed {
-				return AcknowledgedBoundary{Commit: ancestor.commit, Tree: ancestor.tree, DeltaPaths: paths}, true, nil
+				return confirm(AcknowledgedBoundary{Commit: ancestor.commit, Tree: ancestor.tree, DeltaPaths: paths})
 			}
 		}
 		if next < 0 {
@@ -145,7 +163,7 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 	if len(deltaPaths) == 0 {
 		// Every commit since the boundary was empty: the boundary reaches
 		// the live content, so there is no delta to classify.
-		return AcknowledgedBoundary{Commit: ancestor.commit, Tree: ancestor.tree}, true, nil
+		return confirm(AcknowledgedBoundary{Commit: ancestor.commit, Tree: ancestor.tree})
 	}
 	delta := Snapshot{
 		Kind: TargetBaseDiff, Projection: live.Projection,
@@ -158,8 +176,8 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 		return AcknowledgedBoundary{}, false, err
 	}
 	// guard:population acknowledged-passive-delta too-loose: only a committed HEAD base-diff whose first-parent boundary is reached by contiguous, exact consumed identities from the same base tree is reported; the shared risk assessor classifies the remaining delta, and lookup failures keep the offer
-	return AcknowledgedBoundary{
+	return confirm(AcknowledgedBoundary{
 		Commit: ancestor.commit, Tree: ancestor.tree,
 		DeltaPaths: deltaPaths, Passive: assessment.Level == RiskLow,
-	}, true, nil
+	})
 }
