@@ -814,43 +814,52 @@ func reviewConsoleTerminal(file *os.File) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-// authorizeReviewStart is the single call site where a new review start meets
-// the user. The kill switch and asset checks gate the read-only candidate
-// preflight, which in turn gates consent so a question is only asked for a
-// candidate the reviewer can inspect.
-//
-// A consent declaration selects candidate-scoped negotiated semantics: relay
-// returns the typed question for an admitted candidate, while granted and
-// declined apply only to the exact frozen candidate and never touch the legacy
-// clone-wide latch. An undeclared plain START keeps the one-time console
-// behavior; an undeclared negotiated START authorizes silently (see below).
-func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode, negotiated bool, runtimeAgent string, preflight func() error) error {
+// authorizeReviewStart runs the read-only gates before preparing the candidate.
+// Consent runs only after preparation admits the candidate, and the prepared
+// request is returned unchanged for the atomic START.
+func authorizeReviewStart(
+	ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode,
+	negotiated bool, runtimeAgent string, prepare func() (reviewtransaction.CompactAtomicStartRequest, error),
+) (reviewtransaction.CompactAtomicStartRequest, error) {
 	global, err := readGlobalRDDMode()
 	if err != nil {
-		return err
+		return reviewtransaction.CompactAtomicStartRequest{}, err
 	}
 	if _, err := reviewtransaction.AuthorizeRDDOperation(
 		ctx, repo, global, reviewtransaction.RDDOperationStart); err != nil {
-		return reviewModeUnreadable(ctx, repo, global, err)
+		return reviewtransaction.CompactAtomicStartRequest{}, reviewModeUnreadable(ctx, repo, global, err)
 	}
 	// #3299, #4170: STATUS classifies this same skew before ever offering
 	// START, but a caller that reaches START directly (or replays a stale
 	// offer) still needs the exact sync continuation, not just a refusal.
 	if provenance := checkManagedReviewerAssets(); provenance.stale() {
 		continuation := managedAssetsContinuation(runtimeAgent, provenance.staleAssetIdentities())
-		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, provenance.refusal(), continuation)
+		return reviewtransaction.CompactAtomicStartRequest{}, reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, provenance.refusal(), continuation)
 	}
 	if consent == reviewConsentModeDeclined {
 		// Tier 0 is silent structural readback, with no question to decline.
 		if assessment.Level == reviewtransaction.RiskLow {
-			return errReviewConsentDeclineWithoutQuestion
+			return reviewtransaction.CompactAtomicStartRequest{}, errReviewConsentDeclineWithoutQuestion
 		}
 		// An explicit relayed "no" needs no preparation or persisted state.
-		return fmt.Errorf("%w: the next candidate is asked again", errReviewDeclinedForCandidate)
+		return reviewtransaction.CompactAtomicStartRequest{}, fmt.Errorf("%w: the next candidate is asked again", errReviewDeclinedForCandidate)
 	}
-	if err := preflight(); err != nil {
-		return err
+	request, err := prepare()
+	if err != nil {
+		return reviewtransaction.CompactAtomicStartRequest{}, err
 	}
+	if err := authorizeReviewStartConsent(ctx, repo, assessment, consent, negotiated); err != nil {
+		return reviewtransaction.CompactAtomicStartRequest{}, err
+	}
+	return request, nil
+}
+
+// A consent declaration selects candidate-scoped negotiated semantics: relay
+// returns the typed question for an admitted candidate, while granted and
+// declined apply only to the exact frozen candidate and never touch the legacy
+// clone-wide latch. An undeclared plain START keeps the one-time console
+// behavior; an undeclared negotiated START authorizes silently (see below).
+func authorizeReviewStartConsent(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode, negotiated bool) error {
 	if assessment.Level == reviewtransaction.RiskLow {
 		return nil
 	}

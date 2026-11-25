@@ -2598,23 +2598,21 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	// Freeze and check one request before any consent question (#4790). If
 	// START proceeds, the same request is used at the atomic write boundary.
-	var request reviewtransaction.CompactAtomicStartRequest
-	preflight := func() error {
-		var err error
-		request, err = prepareReviewFacadeCompactAtomicStartFor(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, reviewLensSelectionReason(selection), startRuntime)
+	prepare := func() (reviewtransaction.CompactAtomicStartRequest, error) {
+		request, err := prepareReviewFacadeCompactAtomicStartFor(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, reviewLensSelectionReason(selection), startRuntime)
 		if err != nil {
-			return reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
+			return reviewtransaction.CompactAtomicStartRequest{}, reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
 		}
 		// Charge the frozen request context against the same evidence budget.
 		if requestContext != "" {
 			if err := request.State.FreezeRequestContext(requestContext); err != nil {
-				return reviewPreflightError(fmt.Errorf("freeze review request context: %w", err))
+				return reviewtransaction.CompactAtomicStartRequest{}, reviewPreflightError(fmt.Errorf("freeze review request context: %w", err))
 			}
 			request.Binding.RequestContextHash = request.State.RequestContextHash
 		}
 		if escalation != nil {
 			if err := request.State.FreezeAgentEscalation(*escalation); err != nil {
-				return reviewPreflightError(fmt.Errorf("freeze review agent escalation: %w", err))
+				return reviewtransaction.CompactAtomicStartRequest{}, reviewPreflightError(fmt.Errorf("freeze review agent escalation: %w", err))
 			}
 			frozen := *escalation
 			request.Binding.AgentEscalation = &frozen
@@ -2631,9 +2629,13 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		// #1854: the atomic commit reports a requested trace's committed-but-
 		// degraded outcome for both reviewed and zero-lens candidates.
 		request.TracePath = strings.TrimSpace(*tracePath)
-		return reviewLensContextCompactAtomicStartBudgetRefusal(ctx, root, request)
+		if err := reviewLensContextCompactAtomicStartBudgetRefusal(ctx, root, request); err != nil {
+			return reviewtransaction.CompactAtomicStartRequest{}, err
+		}
+		return request, nil
 	}
-	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated, *runtimeAgent, preflight); err != nil {
+	request, err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated, *runtimeAgent, prepare)
+	if err != nil {
 		if errors.Is(err, errReviewConsentQuestionRequired) {
 			// The caller declared it can relay a blocking question, so the
 			// typed question IS this start's response. Nothing has been
