@@ -74,7 +74,7 @@ func TestReviewAssessExtensionlessShebang(t *testing.T) {
 		{"python", "bin/deploy", python, python + "print('ready')\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
 		{"bare-marker", "data/catalog", "#!\n", "#!\nordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
 		{"spaces-only", "data/catalog", "#!   \n", "#!   \nordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
-		{"test-fixture", "__tests__/deploy", bash, bash + "echo ready\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"test-fixture", "__tests__/deploy", bash, bash + "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
 		{"removed-shebang", "bin/deploy", bash + "echo ready\n", "echo ready\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
 		{"large-data", "data/catalog", largeData, largeData + "ordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
 		{"shell-source", "bin/deploy.sh", bash, bash + "# deployment note\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary, reviewtransaction.RiskReasonShellSource}},

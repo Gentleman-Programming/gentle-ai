@@ -695,10 +695,7 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 	paths := make([]string, 0, len(stats))
 	var extensionlessPaths []string
 	for _, stat := range stats {
-		if isTestRiskPath(stat.Path) {
-			continue
-		}
-		if isContentScanEligible(stat) {
+		if isContentScanEligible(stat) && !isTestRiskPath(stat.Path) {
 			paths = append(paths, stat.Path)
 		} else if path.Ext(stat.Path) == "" && (stat.NewMode == "100644" || stat.NewMode == "100755") {
 			extensionlessPaths = append(extensionlessPaths, stat.Path)
