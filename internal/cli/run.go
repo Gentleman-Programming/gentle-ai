@@ -412,6 +412,7 @@ func verificationErrorAfterPersistenceRollback(stage string, report *verify.Repo
 		return nil
 	}
 	report.FinalNote = ""
+	// refusal:by-design world-action: the rendered report names each failed check and its remedy, such as upgrading the core
 	return fmt.Errorf("%s verification failed:\n%s", stage, strings.TrimSuffix(verify.RenderReport(*report), "\n"))
 }
 
