@@ -88,6 +88,56 @@ func TestRunInstallAntigravityPublishesRulesAndRetiresLegacyGeminiSections(t *te
 	if got := readString(t, antigravityrules.LegacyPromptPath(home)); got != legacyGeminiUserContent {
 		t.Fatalf("GEMINI.md = %q, want only the user content %q", got, legacyGeminiUserContent)
 	}
+
+	configAgents := antigravityrules.ConfigAgentsMDPath(home)
+	if !strings.Contains(readString(t, configAgents), "<!-- gentle-ai:persona -->") {
+		t.Fatalf("config AGENTS.md missing persona marker")
+	}
+	homeAgents := antigravityrules.AgentsMDPath(home)
+	if !strings.Contains(readString(t, homeAgents), "<!-- gentle-ai:persona -->") {
+		t.Fatalf("home AGENTS.md missing persona marker")
+	}
+}
+
+func TestRunInstallAntigravityWorkspaceWritesRegularAgentsMD(t *testing.T) {
+	_ = stubAntigravityHome(t, false)
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWd) })
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := RunInstall([]string{"--agent", "antigravity", "--scope", "workspace", "--component", "persona", "--component", "context7"}, macOSDetectionResult())
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false")
+	}
+
+	workspaceAgents := antigravityrules.AgentsMDPath(workspace)
+	info, err := os.Lstat(workspaceAgents)
+	if err != nil {
+		t.Fatalf("Lstat(workspace AGENTS.md) error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("workspace AGENTS.md must be a regular file, got symlink")
+	}
+	content := readString(t, workspaceAgents)
+	if !strings.Contains(content, "<!-- gentle-ai:persona -->") {
+		t.Fatalf("workspace AGENTS.md missing persona marker:\n%s", content)
+	}
+	if !strings.Contains(content, "<!-- gentle-ai:agent-routing -->") {
+		t.Fatalf("workspace AGENTS.md missing agent-routing marker:\n%s", content)
+	}
 }
 
 func TestRunInstallGeminiCLIOnlyLeavesAntigravitySurfacesUntouched(t *testing.T) {
