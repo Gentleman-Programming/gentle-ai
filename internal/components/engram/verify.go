@@ -84,6 +84,7 @@ var runVersionCommand = func(ctx context.Context, command string) ([]byte, error
 	}
 	cmd := execCommandContext(ctx, command, "version")
 	cmd.Stdin = nil
+	cmd.WaitDelay = versionProbeTimeout // Bound pipes a launcher may leave open in a child.
 	return cmd.Output()
 }
 

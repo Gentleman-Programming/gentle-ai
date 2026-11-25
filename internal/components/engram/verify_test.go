@@ -56,6 +56,38 @@ func TestVerifyPiInstanceIdentityBoundsInheritedStdout(t *testing.T) {
 	}
 }
 
+func TestVerifyPiInstanceIdentityBoundsTheVersionLookupPipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX launcher passes the child an inherited pipe")
+	}
+	t.Setenv("ENGRAM_URL", "")
+	t.Setenv(system.EngramBinEnv, "/bin/sh")
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	// Release the child eventually even if the version lookup hangs draining stdout.
+	release := time.AfterFunc(3*versionProbeTimeout, func() { _ = writer.Close() })
+	defer release.Stop()
+	original := execCommandContext
+	t.Cleanup(func() { execCommandContext = original })
+	execCommandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		if len(args) > 0 && args[0] == "version" {
+			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `(read -r line <&3) & echo 'engram 1.20.0'`)
+			cmd.ExtraFiles = []*os.File{reader}
+			return cmd
+		}
+		return exec.CommandContext(ctx, "/bin/sh", "-c", `echo 'unknown command "instance-id"' >&2; exit 1`)
+	}
+	start := time.Now()
+	err = VerifyPiInstanceIdentity(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "does not support instance-id") || time.Since(start) >= 2*versionProbeTimeout {
+		t.Fatalf("probe took %v, error = %v; want the confirmed diagnostic within the version probe bound", time.Since(start), err)
+	}
+}
+
 func TestVerifyVersionCommandUsesTimeoutAndProvidedBinary(t *testing.T) {
 	original := runVersionCommand
 	t.Cleanup(func() { runVersionCommand = original })
