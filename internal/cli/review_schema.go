@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v5/contracts/review-integration/v2/schemas"
 	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
@@ -21,8 +22,9 @@ const reviewResultDryRunResponseSchema = `{"$schema":"https://json-schema.org/dr
 var reviewInputSchemas = map[string]json.RawMessage{
 	"reviewer":               json.RawMessage(reviewReviewerSchema),
 	"capture-result-dry-run": json.RawMessage(reviewResultDryRunResponseSchema),
-	"refuter":                json.RawMessage(reviewerprovider.RefuterResultSchema),
-	"validator":              json.RawMessage(reviewerprovider.TargetedValidatorResultSchema),
+	reviewIntendedUntrackedSelectionSchemaName: json.RawMessage(reviewschemas.IntendedUntrackedSelection()),
+	"refuter":   json.RawMessage(reviewerprovider.RefuterResultSchema),
+	"validator": json.RawMessage(reviewerprovider.TargetedValidatorResultSchema),
 }
 
 // reviewSchemaNames lists the accepted values in a stable order, derived from
