@@ -2395,7 +2395,7 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 }
 
 func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review start", stdout, "Freeze live Git scope and derive the bounded review tier, lenses, and correction budget.\nA candidate that exceeds the lens context budget is refused before asking for consent.")
+	flags := newReviewFlagSet("review start", stdout, "Freeze live Git scope and derive the bounded review tier, lenses, and correction budget.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
