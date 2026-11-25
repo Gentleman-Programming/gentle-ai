@@ -131,8 +131,19 @@ func TestReviewCommittedRangeBoundaryMatrix(t *testing.T) {
 
 				// The acknowledged A..C covers C; the next offer is only C..D,
 				// never B..D, which would send C's reviewed change back.
-				commit("runtime/example/README.md", "# Another sample\n")
+				d := commit("runtime/example/README.md", "# Another sample\n")
 				assertStart(t, status(), c, "runtime/example/README.md")
+
+				// An explicit B..D acknowledgement beside A..C also covers D:
+				// the next offer is D..E, not C..E.
+				bd := status("--base-ref", b, "--committed-only")
+				assertStart(t, bd, b, "prompts/README.md", "runtime/example/README.md")
+				started = grantedDerivedRangeStart(t, repo, bd)
+				started.TargetIdentity = bd.TargetIdentity
+				captureCleanCLIReviewerResult(t, repo, started, 0, &bytes.Buffer{})
+				acknowledge(started.LineageID, bd.TargetIdentity)
+				commit("runtime/follow-up.md", "# Follow-up\n")
+				assertStart(t, status(), d, "runtime/follow-up.md")
 			}
 		})
 	}

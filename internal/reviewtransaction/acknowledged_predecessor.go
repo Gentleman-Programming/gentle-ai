@@ -98,10 +98,11 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 		}
 		// Later slices may have STARTed from this checkpoint, not the
 		// branch point. Only their exact acknowledgements can advance it.
-		// Older selectorless offers kept STARTing from one base (A..B, A..C),
-		// so a descendant is also checked from the base of the last advance:
-		// at most two lookups per commit, never a rescan of earlier ones.
-		from := ancestor
+		// An acknowledged range may start at the newest reached boundary, the
+		// one before it (A..B then B..D), or the base older selectorless offers
+		// kept reusing (A..B, A..C, A..D). Check only those, newest first: at
+		// most three lookups per commit, never a rescan of earlier commits.
+		previous, reused := ancestor, ancestor
 		for next, checked := index-1, ""; ; next-- {
 			// A legacy acknowledgement may cover HEAD from this boundary,
 			// even when a shorter prefix was also consumed. Check once per
@@ -123,22 +124,18 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 			if descendant.tree == ancestor.tree {
 				continue
 			}
-			_, consumed, err := consumedRange(ancestor.tree, descendant.tree)
-			if err != nil {
-				return AcknowledgedBoundary{}, false, err
-			}
-			if consumed {
-				from, ancestor = ancestor, descendant
-				continue
-			}
-			if from.tree == ancestor.tree || from.tree == descendant.tree {
-				continue
-			}
-			if _, consumed, err = consumedRange(from.tree, descendant.tree); err != nil {
-				return AcknowledgedBoundary{}, false, err
-			}
-			if consumed {
-				ancestor = descendant
+			for i, base := range [...]selectorlessCommittedBaseDiffAncestor{ancestor, previous, reused} {
+				if base.tree == descendant.tree || (i > 0 && base.tree == ancestor.tree) || (i == 2 && base.tree == previous.tree) {
+					continue
+				}
+				_, consumed, err := consumedRange(base.tree, descendant.tree)
+				if err != nil {
+					return AcknowledgedBoundary{}, false, err
+				}
+				if consumed {
+					previous, reused, ancestor = ancestor, base, descendant
+					break
+				}
 			}
 		}
 		deltaPaths, err := builder.changedPaths(ctx, ancestor.tree, live.CandidateTree)
