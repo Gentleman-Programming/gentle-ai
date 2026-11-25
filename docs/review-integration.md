@@ -72,7 +72,7 @@ Git ownership refusals retain `git_repository_untrusted`; authority from a newer
 
 ### 1. Selectorless STATUS selects the next step
 
-Selectorless STATUS evaluates only the current candidate in the selected worktree. It normally renders one exact START invocation. A pending acknowledgement or, in v2, a reviewing recovery successor in the exact worktree-and-target START slot takes precedence. STATUS does **not** discover ambient authority, resume another worktree, recover history, or select a stale lineage. The parent runs only the returned `next_transition` and its ordered tokens.
+Selectorless STATUS evaluates only the current candidate in the selected worktree. It normally renders one exact START invocation. A pending acknowledgement or, in v2, a reviewing recovery successor in the exact worktree-and-target START slot takes precedence. STATUS does **not** discover ambient authority, resume another worktree, recover history, or select a stale lineage. After this preflight, the parent runs only the returned `next_transition` and its ordered tokens.
 
 #### START options through STATUS (`start_options_preflight`)
 
@@ -147,7 +147,7 @@ Legacy v1 authority is unsupported, so `capabilities/v2.6` does not announce it:
 
 ### 3. Bound calls drive the transaction
 
-A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. The parent runs that command verbatim, with the repository as process cwd, and satisfies every later STATUS and bound capture call only with the exact tokens each returned transition names. The parent routes only from that transaction's returned `next_transition`:
+A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. Run that command verbatim with the repository as process cwd. Except for the documented [selectorless preflight after recovery](#native-recovery-for-an-explicitly-selected-lineage), use only the exact tokens from returned transitions for later STATUS and bound captures. Route only from the returned `next_transition`:
 
 | Transition | Parent action |
 | --- | --- |
@@ -190,11 +190,12 @@ recorded successor fails closed with a read-only `review inspect-authority`
 diagnostic. Run that diagnostic with the requested repository as process cwd;
 do not invent a new successor to bypass the conflict.
 
-After a successful recovery into `reviewing` under the derived successor name,
-query v2 STATUS for the same target and worktree without a lineage selector.
-It returns the successor's next review step instead of asking for START or
-consent again. A STATUS still bound to the predecessor cannot offer another
-recovery.
+After successful `review recover` into `reviewing` under the derived successor name,
+run the same selectorless v2 STATUS preflight from the same worktree:
+`gentle-ai review status --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition`,
+retaining the target selectors. This documented entry binds the
+successor in that slot; follow only its returned `next_transition`. STATUS
+still bound to the predecessor cannot offer another recovery.
 
 When strict compact-state decoding and historical compatibility both fail,
 `CompactStore.Load` reports the lineage and both failure causes, retaining the
