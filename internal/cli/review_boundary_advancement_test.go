@@ -119,6 +119,24 @@ func TestReviewCommittedRangeBoundaryMatrix(t *testing.T) {
 					assertStart(t, status(), b, "prompts/README.md")
 				}
 			})
+			if !tc.escalate {
+				// Older selectorless offers could also have consumed A..C.
+				// Freeze that exact historical scope through explicit STATUS.
+				overlap := status("--base-ref", a, "--committed-only")
+				assertStart(t, overlap, a, "prompts/README.md", "runtime/README.md")
+				started = grantedDerivedRangeStart(t, repo, overlap)
+				started.TargetIdentity = overlap.TargetIdentity
+				captureCleanCLIReviewerResult(t, repo, started, 0, &bytes.Buffer{})
+				acknowledge(started.LineageID, overlap.TargetIdentity)
+
+				commit("runtime/example/README.md", "# Another sample\n")
+				after := status()
+				if after.Authority != nil || after.NextTransition == nil || after.NextTransition.ReasonCode != "fresh_target_ready" ||
+					after.NextTransition.Execute == nil || after.NextTransition.Execute.Operation != "review.start" ||
+					!slices.Contains(after.Projection.Paths, "runtime/example/README.md") {
+					t.Fatalf("real follow-up missing from review: %v, transition %+v", after.Projection.Paths, after.NextTransition)
+				}
+			}
 		})
 	}
 }

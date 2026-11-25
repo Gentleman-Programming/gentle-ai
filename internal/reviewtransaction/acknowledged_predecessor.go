@@ -18,7 +18,7 @@ import "context"
 // a delivery gate from it, must prefer live authority, and must offer the
 // review whenever this returns an error.
 func AcknowledgedPassivePredecessor(ctx context.Context, repo string, live Snapshot) (bool, error) {
-	boundary, ok, err := AcknowledgedBoundaryCommit(ctx, repo, live)
+	boundary, ok, err := acknowledgedBoundaryCommit(ctx, repo, live, false)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -37,15 +37,15 @@ type AcknowledgedBoundary struct {
 	// candidate tree. Empty only when every commit since the boundary was
 	// empty: the boundary reaches the live content.
 	DeltaPaths []string
-	// Passive reports whether that delta classifies as low risk (the #4739
-	// passive suppression, folded into the same walk).
+	// Passive reports whether that delta can be suppressed as low risk. An
+	// exact consumed range is selected instead, even if its content is passive.
 	Passive bool
 }
 
 // AcknowledgedBoundaryCommit finds the newest consumed range from the
 // candidate's base tree in HEAD's first-parent ancestry. From that checkpoint,
-// it walks forward, advancing only when the exact delta from the current
-// boundary was also consumed. ok is false when the bounded walk finds no
+// it prefers an exact consumed range to the live tree before advancing to
+// any consumed intermediate delta. ok is false when the bounded walk finds no
 // original checkpoint; Git or tombstone faults keep the pre-existing offer.
 //
 // The result may only reshape or withhold a fresh review offer. Terminal
@@ -53,6 +53,10 @@ type AcknowledgedBoundary struct {
 // derive a receipt or a delivery gate from it, must prefer live authority, and
 // must keep a live lineage visible.
 func AcknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot) (AcknowledgedBoundary, bool, error) {
+	return acknowledgedBoundaryCommit(ctx, repo, live, true)
+}
+
+func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot, preferExact bool) (AcknowledgedBoundary, bool, error) {
 	if live.Kind != TargetBaseDiff || len(live.IntendedUntracked) != 0 || len(live.Paths) == 0 {
 		return AcknowledgedBoundary{}, false, nil
 	}
@@ -72,19 +76,20 @@ func AcknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot)
 	if err != nil {
 		return AcknowledgedBoundary{}, false, err
 	}
-	consumedRange := func(baseTree, candidateTree string) (bool, error) {
+	consumedRange := func(baseTree, candidateTree string) ([]string, bool, error) {
 		paths, err := builder.changedPaths(ctx, baseTree, candidateTree)
 		if err != nil {
-			return false, err
+			return nil, false, err
 		}
 		identity := IdentityForComponents(TargetBaseDiff, live.Projection, baseTree, candidateTree, digestPaths(paths))
-		return CompactTargetConsumed(ctx, root, identity)
+		consumed, err := CompactTargetConsumed(ctx, root, identity)
+		return paths, consumed, err
 	}
 	for index, ancestor := range ancestors {
 		if ancestor.tree == live.BaseTree {
 			return AcknowledgedBoundary{}, false, nil
 		}
-		consumed, err := consumedRange(live.BaseTree, ancestor.tree)
+		_, consumed, err := consumedRange(live.BaseTree, ancestor.tree)
 		if err != nil {
 			return AcknowledgedBoundary{}, false, err
 		}
@@ -93,12 +98,28 @@ func AcknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot)
 		}
 		// Later slices may have STARTed from this checkpoint, not the
 		// branch point. Only their exact acknowledgements can advance it.
-		for next := index - 1; next >= 0; next-- {
+		for next, checked := index-1, ""; ; next-- {
+			// A legacy acknowledgement may cover HEAD from this boundary,
+			// even when a shorter prefix was also consumed. Check once per
+			// boundary before advancing, and keep the exact matched base.
+			if preferExact && checked != ancestor.tree && ancestor.tree != live.CandidateTree {
+				checked = ancestor.tree
+				paths, consumed, err := consumedRange(ancestor.tree, live.CandidateTree)
+				if err != nil {
+					return AcknowledgedBoundary{}, false, err
+				}
+				if consumed {
+					return AcknowledgedBoundary{Commit: ancestor.commit, Tree: ancestor.tree, DeltaPaths: paths}, true, nil
+				}
+			}
+			if next < 0 {
+				break
+			}
 			descendant := ancestors[next]
 			if descendant.tree == ancestor.tree {
 				continue
 			}
-			consumed, err := consumedRange(ancestor.tree, descendant.tree)
+			_, consumed, err := consumedRange(ancestor.tree, descendant.tree)
 			if err != nil {
 				return AcknowledgedBoundary{}, false, err
 			}
