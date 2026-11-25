@@ -114,7 +114,7 @@ func reviewOpenCodeRuntimeVersion() (opencode.RuntimeVersion, error) {
 // refusal:by-design world-action: this specific host release does not return a completed foreground Task to the relay
 var errReviewOpenCode241Dispatch = errors.New("OpenCode 2.4.1 does not return completed foreground reviewer Tasks for immutable receipt review. Switch to a compatible OpenCode release (for example, 2.0.19 with the managed V2 relay plugin) and rerun.")
 
-// reviewOpenCodeRuntimeRefusal checks the OpenCode host conditions. The relay
+// reviewOpenCodeDeclaredRuntimeVersion checks runtime identity, not dispatch. The relay
 // declaration and the detected runtime must agree: the V1 plugin declares
 // nothing and runs on V1; the managed V2 plugin declares exactly the V2 relay
 // contract and runs on V2. Any other declaration refuses before the PATH
@@ -122,22 +122,30 @@ var errReviewOpenCode241Dispatch = errors.New("OpenCode 2.4.1 does not return co
 // a coexisting V1 binary (or the reverse) never inherits the other runtime's
 // capability. Neither the declaration nor version evidence alone can enable
 // the transport.
-func reviewOpenCodeRuntimeRefusal() error {
+func reviewOpenCodeDeclaredRuntimeVersion() (opencode.RuntimeVersion, error) {
 	declaration := os.Getenv(openCodeRelayContractEnvironment)
 	if declaration != "" && declaration != openCodeRelayContractV2 {
-		return reviewOpenCodeRuntimeUnproven()
+		return opencode.RuntimeVersion{}, reviewOpenCodeRuntimeUnproven()
 	}
 	version, err := reviewOpenCodeRuntimeVersion()
 	if errors.Is(err, opencode.ErrRuntimeVersionTimeout) {
 		// refusal:by-design world-action: an unproven runtime cannot receive immutable review authority; the exit is re-running once the host answers the probe
-		return errors.New("OpenCode immutable receipt-review eligibility could not be proven because `opencode --version` timed out in this process; nothing was started, so re-run the same command once `opencode --version` answers promptly")
+		return opencode.RuntimeVersion{}, errors.New("OpenCode immutable receipt-review eligibility could not be proven because `opencode --version` timed out in this process; nothing was started, so re-run the same command once `opencode --version` answers promptly")
 	}
 	want := opencode.RuntimeV1
 	if declaration == openCodeRelayContractV2 {
 		want = opencode.RuntimeV2
 	}
 	if err != nil || version.Major != want {
-		return reviewOpenCodeRuntimeUnproven()
+		return opencode.RuntimeVersion{}, reviewOpenCodeRuntimeUnproven()
+	}
+	return version, nil
+}
+
+func reviewOpenCodeRuntimeRefusal() error {
+	version, err := reviewOpenCodeDeclaredRuntimeVersion()
+	if err != nil {
+		return err
 	}
 	if version.Version == "2.4.1" {
 		return errReviewOpenCode241Dispatch
@@ -277,12 +285,16 @@ func reviewTransportRefusalGuidanceFor(agent model.AgentID) string {
 // reviewRuntimeWithImmutableTransport accepts only the exact compiled runtime
 // identities. It never selects a substitute transport for an unsupported one.
 func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
+	return reviewRuntimeWithImmutableTransportChecking(agent, reviewOpenCodeRuntimeRefusal)
+}
+
+func reviewRuntimeWithImmutableTransportChecking(agent string, openCodeRuntimeRefusal func() error) (model.AgentID, error) {
 	if strings.TrimSpace(agent) == "" || strings.TrimSpace(agent) != agent {
 		// refusal:by-design world-action: an unknown runtime cannot safely receive immutable review authority
 		return "", errors.New("the active review runtime is unknown")
 	}
 	identity := model.AgentID(agent)
-	capability := reviewImmutableRuntimeCapability(identity)
+	capability := reviewImmutableRuntimeCapabilityChecking(identity, openCodeRuntimeRefusal)
 	if capability.Refusal != nil {
 		return "", capability.Refusal
 	}
