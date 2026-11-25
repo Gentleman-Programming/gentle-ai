@@ -91,11 +91,14 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 	// The walk starts at the branch point. Later slices may START from any
 	// reached boundary (A..B, A..C, B..E): check every reached boundary newest
 	// first and advance only on its first exact acknowledgement.
+	// A branch point older than the window still starts the walk by its tree.
+	ancestor := selectorlessCommittedBaseDiffAncestor{tree: live.BaseTree}
 	start := slices.IndexFunc(ancestors, func(entry selectorlessCommittedBaseDiffAncestor) bool { return entry.tree == live.BaseTree })
 	if start < 0 {
-		return AcknowledgedBoundary{}, false, nil
+		start = len(ancestors)
+	} else {
+		ancestor = ancestors[start]
 	}
-	ancestor := ancestors[start]
 	reached := []selectorlessCommittedBaseDiffAncestor{ancestor}
 	for next, checked := start-1, live.BaseTree; ; next-- {
 		// A legacy acknowledgement may cover HEAD from this boundary,
