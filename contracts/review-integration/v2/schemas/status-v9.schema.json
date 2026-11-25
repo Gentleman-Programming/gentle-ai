@@ -184,11 +184,11 @@
       "properties": {
         "operation_token": {"const": "capture-result"},
         "argument_tokens": {"type": "array", "minItems": 9, "maxItems": 9, "items": false, "prefixItems": [
-          {"pattern": "^--lineage=\\S+$"},
+          {"pattern": "^--lineage=[a-z0-9]+(?:-[a-z0-9]+)*$"},
           {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"},
           {"pattern": "^--target=sha256:[0-9a-f]{64}$"},
           {"pattern": "^--repository-context=rctx[12]_[0-9a-f]{64}$"},
-          {"pattern": "^--lens=\\S+$"},
+          {"pattern": "^--lens=review-(?:risk|reliability|resilience|readability)$"},
           {"pattern": "^--order=[0-9]+$"},
           {"pattern": "^--subject-hash=sha256:[0-9a-f]{64}$"},
           {"const": "--agent=pi"},

@@ -81,6 +81,8 @@ func TestPiReviewerCollectStatusMatchesPublishedSchema(t *testing.T) {
 		{"legacy substitution index with Pi agent", func(s *ReviewTransitionSubmission) { s.Value.SubstitutionLocation = 7 }},
 		{"input is not a placeholder", func(s *ReviewTransitionSubmission) { s.ArgumentTokens[8] = "--input=result.json" }},
 		{"malformed target binding", func(s *ReviewTransitionSubmission) { s.ArgumentTokens[2] = "--target=unbound" }},
+		{"unsupported submission lens", func(s *ReviewTransitionSubmission) { s.ArgumentTokens[4] = "--lens=bogus" }},
+		{"malformed submission lineage", func(s *ReviewTransitionSubmission) { s.ArgumentTokens[0] = "--lineage=UPPERCASE" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var document ReviewTargetStatusResult
