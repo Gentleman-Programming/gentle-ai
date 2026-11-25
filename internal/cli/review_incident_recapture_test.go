@@ -16,8 +16,8 @@ import (
 )
 
 // envelopelessReviewerPayload is the community-reported failure shape: the
-// reviewer returned findings/evidence but omitted the provider-owned envelope
-// (top-level subject_hash and inspection). Admission must reject it fail-closed.
+// reviewer returned findings/evidence but omitted the inspection envelope.
+// Admission must still reject output that never attests to complete inspection.
 const envelopelessReviewerPayload = `{"findings":[],"evidence":["inspection: reviewed every frozen candidate path"]}`
 
 // failEnvelopelessCapture drives the real capture flow with the malformed
@@ -37,7 +37,7 @@ func failEnvelopelessCapture(t *testing.T, repo string, started ReviewFacadeStar
 		t.Fatal("envelope-less reviewer payload was admitted; the fail-closed rejection was weakened")
 	}
 	if !strings.Contains(err.Error(), "reviewer artifact admission incomplete") ||
-		!strings.Contains(err.Error(), "omitted the provider-owned artifact subject") {
+		!strings.Contains(err.Error(), "reviewer did not report completed candidate inspection") {
 		t.Fatalf("envelope-less rejection lost its classified admission decision: %v", err)
 	}
 	return err
@@ -73,8 +73,8 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 	err := failEnvelopelessCapture(t, repo, started, record)
 	// Discoverability contract: the admission-incomplete rejection must name
 	// the continuation — re-run the lens and capture again with the required
-	// subject_hash/inspection envelope — so the flow is not a dead end.
-	for _, continuation := range []string{"subject_hash", "inspection", "re-run"} {
+	// inspection envelope — so the flow is not a dead end.
+	for _, continuation := range []string{"inspection", "did not consume the lens slot", "re-run", "capture-result"} {
 		if !strings.Contains(err.Error(), continuation) {
 			t.Fatalf("admission-incomplete rejection does not name the continuation %q: %v", continuation, err)
 		}

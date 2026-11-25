@@ -100,17 +100,31 @@ func reviewProviderExtractRoleRaw(role string, raw []byte) ([]byte, error) {
 
 // reviewProviderAdmitLensRaw preserves the native pre-capture semantics while
 // keeping durable capture outside this materialization and admission slice.
-func reviewProviderAdmitLensRaw(ctx context.Context, root string, state reviewtransaction.CompactState, revision string, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, raw []byte) (reviewtransaction.ReviewerResult, error) {
-	admitted, err := reviewProviderAdmitRaw(ctx, root, state, revision, frozen, subject, raw)
+func reviewProviderAdmitLensRaw(ctx context.Context, root string, state reviewtransaction.CompactState, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, raw []byte) (reviewtransaction.ReviewerResult, error) {
+	admitted, err := reviewProviderAdmitRaw(ctx, root, state, frozen, subject, true, raw)
 	if err != nil {
 		return reviewtransaction.ReviewerResult{}, err
 	}
 	return reviewtransaction.ReviewerResult{SubjectHash: admitted.Result.SubjectHash, Inspection: admitted.Result.Inspection, Lens: admitted.NativeResult.Lens, Findings: admitted.NativeResult.Findings, Evidence: admitted.NativeResult.Evidence}, nil
 }
 
+// reviewProviderMatchLegacySubject recognizes a v1 hash only for the same
+// frozen slot, never from the content of a different lineage, lens, or order.
+func reviewProviderMatchLegacySubject(ctx context.Context, root string, state reviewtransaction.CompactState, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, hash string) (reviewtransaction.FrozenCandidateContext, reviewtransaction.ArtifactSubject, bool) {
+	legacyFrozen, err := (reviewtransaction.SnapshotBuilder{Repo: root}).WithLegacyCandidateDiff(ctx, state.InitialSnapshot, frozen)
+	if err == nil {
+		legacy, err := reviewtransaction.NewLegacyArtifactSubject(state, subject.AuthorityRevision, legacyFrozen, subject.Lens, subject.SelectedOrder, subject.CorrectionTargetIdentity)
+		if err == nil && hash == legacy.SubjectHash {
+			return legacyFrozen, legacy, true
+		}
+	}
+	return frozen, subject, false
+}
+
 // reviewProviderAdmitRaw preserves capture-result's strict native admission
-// without publishing bytes or mutating authority.
-func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransaction.CompactState, revision string, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, raw []byte) (reviewProviderAdmittedResult, error) {
+// without publishing bytes or mutating authority. A legacy echo can select
+// the v1 encoding only when the caller did not bind a subject hash itself.
+func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransaction.CompactState, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, allowLegacyEcho bool, raw []byte) (reviewProviderAdmittedResult, error) {
 	payload, err := reviewProviderExtractRoleRaw(reviewProviderRoleLens, raw)
 	if err != nil {
 		return reviewProviderAdmittedResult{}, err
@@ -122,15 +136,10 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 	if result.Findings == nil || result.Evidence == nil {
 		return reviewProviderAdmittedResult{}, errors.New("reviewer result requires explicit findings and evidence arrays") // refusal:by-design operator-knowledge: reviewers must resubmit explicit findings and evidence arrays
 	}
-	if result.SubjectHash != subject.SubjectHash {
-		legacyFrozen, legacyErr := (reviewtransaction.SnapshotBuilder{Repo: root}).WithLegacyCandidateDiff(ctx, state.InitialSnapshot, frozen)
-		if legacyErr == nil {
-			legacySubject, subjectErr := reviewtransaction.NewLegacyArtifactSubject(state, revision, legacyFrozen, subject.Lens, subject.SelectedOrder, "")
-			if subjectErr == nil && result.SubjectHash == legacySubject.SubjectHash {
-				frozen, subject = legacyFrozen, legacySubject
-			}
-		}
+	if allowLegacyEcho && result.SubjectHash != "" && result.SubjectHash != subject.SubjectHash {
+		frozen, subject, _ = reviewProviderMatchLegacySubject(ctx, root, state, frozen, subject, result.SubjectHash)
 	}
+	result.SubjectHash = subject.SubjectHash
 	if _, err := prepareCompactReviewerResults(reviewtransaction.CompactState{SelectedLenses: []string{subject.Lens}}, []facadeReviewerResult{result}, facadeRefuterResult{}); err != nil {
 		return reviewProviderAdmittedResult{}, err
 	}
@@ -138,6 +147,7 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 	if err != nil {
 		return reviewProviderAdmittedResult{}, err
 	}
+	canonical.SubjectHash = subject.SubjectHash
 	canonicalPayload, err := json.Marshal(canonical)
 	if err != nil {
 		return reviewProviderAdmittedResult{}, err
@@ -153,7 +163,7 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 		return reviewProviderAdmittedResult{}, err
 	}
 	_, admission, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
-		ExpectedSubject: subject, FrozenContext: frozen, EchoedSubjectHash: result.SubjectHash,
+		ExpectedSubject: subject, FrozenContext: frozen, CanonicalSubjectHash: canonical.SubjectHash,
 		Inspection: result.Inspection, Result: native, CandidateCausalFindingIDs: candidateCausalIDs,
 		EvidenceDerivation: evidenceDerivation, EvidenceDerivationReason: evidenceDerivationReason,
 		RawPayload: raw, CanonicalPayload: canonicalPayload,

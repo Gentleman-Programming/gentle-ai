@@ -42,13 +42,13 @@ func admittedArtifactFixture(t *testing.T) (ArtifactSubject, FrozenCandidateCont
 		Evidence: []string{"inspection: internal/a.go:7 and internal/b.go:1", "test: go test ./internal/reviewtransaction"},
 	}
 	request := ArtifactAdmissionRequest{
-		ExpectedSubject:   subject,
-		FrozenContext:     context,
-		EchoedSubjectHash: subject.SubjectHash,
-		Inspection:        ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{"internal/a.go", "internal/b.go"}},
-		Result:            result,
-		RawPayload:        []byte("review complete\n{\"subject_hash\":\"" + subject.SubjectHash + "\"}"),
-		CanonicalPayload:  []byte("{\"findings\":[],\"evidence\":[\"inspection\"]}\n"),
+		ExpectedSubject:      subject,
+		FrozenContext:        context,
+		CanonicalSubjectHash: subject.SubjectHash,
+		Inspection:           ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{"internal/a.go", "internal/b.go"}},
+		Result:               result,
+		RawPayload:           []byte("review complete\n{\"subject_hash\":\"" + subject.SubjectHash + "\"}"),
+		CanonicalPayload:     []byte("{\"findings\":[],\"evidence\":[\"inspection\"]}\n"),
 	}
 	return subject, context, request
 }
@@ -92,8 +92,8 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 		mutate   func(*ArtifactAdmissionRequest)
 		decision ArtifactAdmissionDecision
 	}{
-		{name: "legacy subject omitted", mutate: func(r *ArtifactAdmissionRequest) { r.EchoedSubjectHash = "" }, decision: ArtifactAdmissionIncomplete},
-		{name: "binding mismatch", mutate: func(r *ArtifactAdmissionRequest) { r.EchoedSubjectHash = "sha256:" + strings.Repeat("9", 64) }, decision: ArtifactAdmissionBindingMismatch},
+		{name: "canonical subject omitted", mutate: func(r *ArtifactAdmissionRequest) { r.CanonicalSubjectHash = "" }, decision: ArtifactAdmissionIncomplete},
+		{name: "binding mismatch", mutate: func(r *ArtifactAdmissionRequest) { r.CanonicalSubjectHash = "sha256:" + strings.Repeat("9", 64) }, decision: ArtifactAdmissionBindingMismatch},
 		{name: "inspection status unavailable", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Inspection.Status = "unavailable"
 		}, decision: ArtifactAdmissionIncomplete},
@@ -239,7 +239,7 @@ func legacyAdmittedArtifactFixture(t *testing.T) ArtifactAdmissionRequest {
 		t.Fatal(err)
 	}
 	request.ExpectedSubject, request.FrozenContext = subject, frozen
-	request.EchoedSubjectHash = subject.SubjectHash
+	request.CanonicalSubjectHash = subject.SubjectHash
 	return request
 }
 
@@ -693,28 +693,15 @@ func TestAdmitArtifactAdmitsFreeFormEvidenceSocketAddresses(t *testing.T) {
 	})
 }
 
-// TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation pins the
-// discoverability contract for the community-reported dead end (PR #1801): a
-// rejected admission never consumes the lens slot, so the incomplete
-// diagnostic must tell the operator that the lens can be re-run and captured
-// again with the required top-level subject_hash and inspection envelope. The
-// machine-readable decision stays "incomplete"; only the prose is extended.
-func TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation(t *testing.T) {
+// Readback supplies the stored canonical result's subject; it must not
+// accept a canonical result that lacks that provider-owned field.
+func TestAdmitArtifactRefusesOmittedCanonicalSubject(t *testing.T) {
 	_, _, request := admittedArtifactFixture(t)
-	request.EchoedSubjectHash = ""
+	request.CanonicalSubjectHash = ""
 	_, admission, err := AdmitArtifact(t.Context(), request)
-	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
-		t.Fatalf("AdmitArtifact() decision = %q, error = %v; want incomplete", admission.Decision, err)
-	}
-	for _, want := range []string{
-		"omitted the provider-owned artifact subject",
-		"subject_hash",
-		"inspection",
-		"re-run",
-	} {
-		if !strings.Contains(admission.Diagnostic, want) {
-			t.Fatalf("incomplete diagnostic %q does not name %q", admission.Diagnostic, want)
-		}
+	if err == nil || admission.Decision != ArtifactAdmissionIncomplete ||
+		admission.Diagnostic != "canonical reviewer result omitted the provider-owned artifact subject" {
+		t.Fatalf("AdmitArtifact() = %#v, %v; want incomplete canonical result", admission.Decision, err)
 	}
 }
 
@@ -810,10 +797,10 @@ func TestAdmitArtifactResolvesUnambiguousBasenameCitations(t *testing.T) {
 	}
 	newRequest := func(evidence string) ArtifactAdmissionRequest {
 		return ArtifactAdmissionRequest{
-			ExpectedSubject:   subject,
-			FrozenContext:     frozen,
-			EchoedSubjectHash: subject.SubjectHash,
-			Inspection:        ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{"internal/a.go", "internal/deep/dup.go", "other/dup.go"}},
+			ExpectedSubject:      subject,
+			FrozenContext:        frozen,
+			CanonicalSubjectHash: subject.SubjectHash,
+			Inspection:           ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{"internal/a.go", "internal/deep/dup.go", "other/dup.go"}},
 			Result: LensResult{
 				Lens:     LensReliability,
 				Findings: []Finding{},

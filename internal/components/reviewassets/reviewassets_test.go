@@ -43,10 +43,13 @@ func TestRenderedLensAssets(t *testing.T) {
 			if !ok || !strings.HasPrefix(got, source[:strings.Index(source, "\n---\n")+5]) {
 				t.Fatal("review frontmatter changed")
 			}
-			for _, want := range []string{"## Candidate-Causal Admission", "## Scope", "## Output", "subject_hash", "GENTLE_AI_REVIEW_BINDING"} {
+			for _, want := range []string{"## Candidate-Causal Admission", "## Scope", "## Output", "GENTLE_AI_REVIEW_BINDING"} {
 				if !strings.Contains(got, want) {
 					t.Errorf("missing %q", want)
 				}
+			}
+			if strings.Contains(got, "subject_hash") {
+				t.Error("review asset still asks the reviewer to handle the subject hash")
 			}
 		})
 	}
