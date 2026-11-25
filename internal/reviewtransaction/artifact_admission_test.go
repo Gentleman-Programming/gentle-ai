@@ -73,6 +73,26 @@ func TestExtractBoundedSingleJSONObject(t *testing.T) {
 	}
 }
 
+// The preserved #4873 report had a reasoning-tagged prefix with unmatched
+// braces, followed by a complete, subject-bound reviewer result.
+func TestExtractBoundedSingleJSONObjectAdmitsResultAfterReasoning(t *testing.T) {
+	result := `{"subject_hash":"sha256:` + strings.Repeat("2", 64) + `","inspection":{"status":"completed","paths":["internal/a.go"]},"findings":[],"evidence":["inspected the frozen candidate"]}`
+	payload := "<think>\nThe guarded block opens with `if err != nil {` in the diff.\n</think>\n" + result + "\n"
+	extracted, decision, err := ExtractBoundedSingleJSONObject([]byte(payload), 4096)
+	if err != nil || decision != ArtifactAdmissionCompleted || string(extracted) != result {
+		t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %q, %v; want the complete trailing result", extracted, decision, err)
+	}
+}
+
+func TestExtractBoundedSingleJSONObjectDoesNotPromoteNestedResultAfterReasoning(t *testing.T) {
+	payload := "<think>\nThe guarded block opens with `if err != nil {` in the diff.\n</think>\n" + `{"wrapper":!,"result":{"findings":[],"evidence":[]}`
+	extracted, decision, err := ExtractBoundedSingleJSONObject([]byte(payload), 4096)
+	const want = "reviewer payload contains no complete JSON object: 3 objects opened, 1 closed; 2 arrays opened, 2 closed; scan ended at byte 128"
+	if extracted != nil || decision != ArtifactAdmissionIncomplete || err == nil || err.Error() != want {
+		t.Fatalf("ExtractBoundedSingleJSONObject() = %q, %q, %v; want incomplete with %q", extracted, decision, err, want)
+	}
+}
+
 func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 	_, _, request := admittedArtifactFixture(t)
 	canonical, admission, err := AdmitArtifact(t.Context(), request)

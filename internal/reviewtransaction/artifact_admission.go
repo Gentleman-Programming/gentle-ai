@@ -716,8 +716,10 @@ func CanonicalReviewerResultPayload(subjectHash string, inspection ArtifactInspe
 }
 
 // ExtractBoundedSingleJSONObject accepts transport prose around exactly one
-// unambiguous JSON object. Multiple objects, an unterminated object, or a
-// payload outside the caller's bound fail closed with a classified decision.
+// unambiguous JSON object. A leading tagged prose block may leave prose braces
+// open, but the bytes after that block must be one whole object. Multiple
+// objects, an unterminated object, or a payload outside the caller's bound
+// fail closed with a classified decision.
 func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, ArtifactAdmissionDecision, error) {
 	if limit <= 0 || len(payload) == 0 || len(payload) > limit {
 		return nil, ArtifactAdmissionIncomplete, errors.New("reviewer payload is empty or exceeds the native bound")
@@ -774,6 +776,11 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 			}
 		}
 	}
+	if depth != 0 && len(candidates) == 0 {
+		if result := objectAfterTaggedProse(payload, start); result != nil {
+			return bytes.Clone(result), ArtifactAdmissionCompleted, nil
+		}
+	}
 	if depth != 0 || len(candidates) == 0 {
 		return nil, ArtifactAdmissionIncomplete, fmt.Errorf("reviewer payload contains no complete JSON object: %s", census.describe(len(payload))) // refusal:by-design operator-knowledge: only the reviewer runtime can return one complete JSON object; the census names what it left open
 	}
@@ -782,6 +789,29 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 	}
 	match := candidates[0]
 	return append([]byte(nil), bytes.TrimSpace(payload[match.start:match.end])...), ArtifactAdmissionCompleted, nil
+}
+
+// objectAfterTaggedProse handles #4873 without trying interior brace positions.
+// The unmatched opener must be inside the leading prose block; a malformed
+// JSON wrapper after that block must not lend its nested result to admission.
+func objectAfterTaggedProse(payload []byte, openBrace int) []byte {
+	trimmed := bytes.TrimLeft(payload, " \t\r\n")
+	if len(trimmed) == 0 || trimmed[0] != '<' {
+		return nil
+	}
+	tag, body, found := bytes.Cut(trimmed[1:], []byte(">"))
+	if !found || len(tag) == 0 || bytes.IndexFunc(tag, func(r rune) bool { return r < 'a' || r > 'z' }) >= 0 {
+		return nil
+	}
+	prose, tail, closed := bytes.Cut(body, []byte("</"+string(tag)+">"))
+	if !closed || openBrace >= len(payload)-len(body)+len(prose) {
+		return nil
+	}
+	result := bytes.TrimSpace(tail)
+	if len(result) != 0 && result[0] == '{' && json.Valid(result) {
+		return result
+	}
+	return nil
 }
 
 // jsonStructuralCensus counts the structural tokens ExtractBoundedSingleJSONObject
