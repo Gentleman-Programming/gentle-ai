@@ -161,13 +161,13 @@
         "arguments": {"type": "array", "minItems": 9, "maxItems": 9, "items": false,
           "allOf": [{"items": {"$ref": "transition-execution.schema.json#/$defs/executable_transition_argument"}}],
           "prefixItems": [
-            {"properties": {"name": {"const": "lineage"}}},
-            {"properties": {"name": {"const": "expected-revision"}}},
-            {"properties": {"name": {"const": "target"}, "value": {"$ref": "transition-binding.schema.json#/$defs/sha256"}}},
-            {"properties": {"name": {"const": "repository-context"}}},
-            {"properties": {"name": {"const": "lens"}}},
-            {"properties": {"name": {"const": "order"}}},
-            {"properties": {"name": {"const": "subject-hash"}}},
+            {"properties": {"name": {"const": "lineage"}, "value": {"pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"}, "token": {"pattern": "^--lineage=[a-z0-9]+(?:-[a-z0-9]+)*$"}}},
+            {"properties": {"name": {"const": "expected-revision"}, "value": {"pattern": "^sha256:[0-9a-f]{64}$"}, "token": {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}}},
+            {"properties": {"name": {"const": "target"}, "value": {"pattern": "^sha256:[0-9a-f]{64}$"}, "token": {"pattern": "^--target=sha256:[0-9a-f]{64}$"}}},
+            {"properties": {"name": {"const": "repository-context"}, "value": {"pattern": "^rctx[12]_[0-9a-f]{64}$"}, "token": {"pattern": "^--repository-context=rctx[12]_[0-9a-f]{64}$"}}},
+            {"properties": {"name": {"const": "lens"}, "value": {"pattern": "^review-(?:risk|reliability|resilience|readability)$"}, "token": {"pattern": "^--lens=review-(?:risk|reliability|resilience|readability)$"}}},
+            {"properties": {"name": {"const": "order"}, "value": {"pattern": "^[0-9]+$"}, "token": {"pattern": "^--order=[0-9]+$"}}},
+            {"properties": {"name": {"const": "subject-hash"}, "value": {"pattern": "^sha256:[0-9a-f]{64}$"}, "token": {"pattern": "^--subject-hash=sha256:[0-9a-f]{64}$"}}},
             {"properties": {"name": {"const": "agent"}, "value": {"const": "pi"}, "token": {"const": "--agent=pi"}}},
             {"properties": {"name": {"const": "materialize"}, "value": {"const": "true"}, "token": {"const": "--materialize=true"}}}
           ]

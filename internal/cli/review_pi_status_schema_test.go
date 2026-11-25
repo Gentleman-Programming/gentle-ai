@@ -98,6 +98,26 @@ func TestPiReviewerCollectStatusMatchesPublishedSchema(t *testing.T) {
 		})
 	}
 
+	for _, tc := range []struct {
+		name         string
+		index        int
+		value, token string
+	}{
+		{"malformed materialize revision", 1, "unbound", "--expected-revision=unbound"},
+		{"wrong materialize lens token", 4, subject.Lens, "--agent=codex"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var value map[string]any
+			decodeStrictReviewJSON(t, output.Bytes(), &value)
+			input := value["next_transition"].(map[string]any)["collect"].(map[string]any)["inputs"].([]any)[0].(map[string]any)
+			row := input["arguments"].([]any)[tc.index].(map[string]any)
+			row["value"], row["token"] = tc.value, tc.token
+			if current.Validate(value) == nil {
+				t.Fatal("accepted malformed materialization row with a valid submission")
+			}
+		})
+	}
+
 	t.Run("legacy eight-token submission", func(t *testing.T) {
 		var document ReviewTargetStatusResult
 		decodeStrictReviewJSON(t, output.Bytes(), &document)
