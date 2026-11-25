@@ -2395,7 +2395,7 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 }
 
 func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review start", stdout, "Freeze live Git scope and derive the bounded review tier, lenses, and correction budget.")
+	flags := newReviewFlagSet("review start", stdout, "Freeze live Git scope and derive the bounded review tier, lenses, and correction budget.\nA candidate that exceeds the lens context budget is refused before asking for consent.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
@@ -2596,11 +2596,44 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			fmt.Errorf("review start without --contract cannot produce a completable review because its %d selected lens(es) require repository_context, which only the negotiated contract form publishes; rerun with `gentle-ai review start %s` instead",
 				len(lenses), strings.TrimPrefix(reviewNegotiatedStartCommand(snapshot, *runtimeAgent), "gentle-ai review start ")))
 	}
-	// The candidate is frozen and the tier is classified, so this is the one
-	// point where the kill switch can stop a start and consent can name the real
-	// reason. Nothing has been persisted yet, so refusing here leaves no
-	// authority behind.
-	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated, *runtimeAgent); err != nil {
+	// Freeze and check one request before any consent question (#4790). If
+	// START proceeds, the same request is used at the atomic write boundary.
+	var request reviewtransaction.CompactAtomicStartRequest
+	preflight := func() error {
+		var err error
+		request, err = prepareReviewFacadeCompactAtomicStartFor(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, reviewLensSelectionReason(selection), startRuntime)
+		if err != nil {
+			return reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
+		}
+		// Charge the frozen request context against the same evidence budget.
+		if requestContext != "" {
+			if err := request.State.FreezeRequestContext(requestContext); err != nil {
+				return reviewPreflightError(fmt.Errorf("freeze review request context: %w", err))
+			}
+			request.Binding.RequestContextHash = request.State.RequestContextHash
+		}
+		if escalation != nil {
+			if err := request.State.FreezeAgentEscalation(*escalation); err != nil {
+				return reviewPreflightError(fmt.Errorf("freeze review agent escalation: %w", err))
+			}
+			frozen := *escalation
+			request.Binding.AgentEscalation = &frozen
+		}
+		request.Binding.LensSelectionReason = request.State.LensSelectionReason
+		// A resume keeps the lens selection its active lineage froze: an agent
+		// that names another selection while resuming replays that lineage
+		// instead of hitting atomic_start_conflict (gentle-shell#1207).
+		if requestedLineage := strings.TrimSpace(*lineage); requestedLineage != "" {
+			if _, active, loadErr := discoverCompactFacadeReview(ctx, root, requestedLineage, false); loadErr == nil {
+				request.AdoptFrozenLensSelection(active)
+			}
+		}
+		// #1854: the atomic commit reports a requested trace's committed-but-
+		// degraded outcome for both reviewed and zero-lens candidates.
+		request.TracePath = strings.TrimSpace(*tracePath)
+		return reviewLensContextCompactAtomicStartBudgetRefusal(ctx, root, request)
+	}
+	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated, *runtimeAgent, preflight); err != nil {
 		if errors.Is(err, errReviewConsentQuestionRequired) {
 			// The caller declared it can relay a blocking question, so the
 			// typed question IS this start's response. Nothing has been
@@ -2639,42 +2672,6 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// routing; explicit compatibility owners remain responsible for any manual
 	// inspection or disposition.
 	{
-		request, err := prepareReviewFacadeCompactAtomicStartFor(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, reviewLensSelectionReason(selection), startRuntime)
-		if err != nil {
-			return reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
-		}
-		// The request is frozen before the budget probe below, so a request
-		// that cannot fit beside the evidence is refused before authority.
-		if requestContext != "" {
-			if err := request.State.FreezeRequestContext(requestContext); err != nil {
-				return reviewPreflightError(fmt.Errorf("freeze review request context: %w", err))
-			}
-			request.Binding.RequestContextHash = request.State.RequestContextHash
-		}
-		if escalation != nil {
-			if err := request.State.FreezeAgentEscalation(*escalation); err != nil {
-				return reviewPreflightError(fmt.Errorf("freeze review agent escalation: %w", err))
-			}
-			frozen := *escalation
-			request.Binding.AgentEscalation = &frozen
-		}
-		request.Binding.LensSelectionReason = request.State.LensSelectionReason
-		// A resume keeps the lens selection its active lineage froze: an agent
-		// that names another selection while resuming replays that lineage
-		// instead of hitting atomic_start_conflict (gentle-shell#1207).
-		if requestedLineage := strings.TrimSpace(*lineage); requestedLineage != "" {
-			if _, active, loadErr := discoverCompactFacadeReview(ctx, root, requestedLineage, false); loadErr == nil {
-				request.AdoptFrozenLensSelection(active)
-			}
-		}
-		// #1854: threaded through so the exact atomic START commit below can
-		// also report a requested trace's committed-but-degraded outcome,
-		// not only the zero-lens completion commit further down.
-		request.TracePath = strings.TrimSpace(*tracePath)
-		if err := reviewLensContextCompactAtomicStartBudgetRefusal(ctx, root, request); err != nil {
-			return err
-		}
-
 		// Compact budget/context preflight completes before the live snapshot is
 		// revalidated and before the one exact create-or-replay call.
 		var frozenContext *reviewtransaction.FrozenCandidateContext

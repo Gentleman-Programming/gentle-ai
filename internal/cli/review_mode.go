@@ -815,16 +815,16 @@ func reviewConsoleTerminal(file *os.File) bool {
 }
 
 // authorizeReviewStart is the single call site where a new review start meets
-// the user. The kill switch decides whether a start may run at all, and the
-// one-time question is asked here — after the candidate is frozen and the tier
-// is classified — so it can state the real reason instead of a generic warning.
+// the user. The kill switch and asset checks gate the read-only candidate
+// preflight, which in turn gates consent so a question is only asked for a
+// candidate the reviewer can inspect.
 //
 // A consent declaration selects candidate-scoped negotiated semantics: relay
-// always returns the typed question, while granted and declined apply only to
-// the exact frozen candidate and never touch the legacy clone-wide latch. An
-// undeclared plain START keeps the one-time console behavior unchanged; an
-// undeclared negotiated START authorizes silently (see below).
-func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode, negotiated bool, runtimeAgent string) error {
+// returns the typed question for an admitted candidate, while granted and
+// declined apply only to the exact frozen candidate and never touch the legacy
+// clone-wide latch. An undeclared plain START keeps the one-time console
+// behavior; an undeclared negotiated START authorizes silently (see below).
+func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode, negotiated bool, runtimeAgent string, preflight func() error) error {
 	global, err := readGlobalRDDMode()
 	if err != nil {
 		return err
@@ -840,13 +840,18 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		continuation := managedAssetsContinuation(runtimeAgent, provenance.staleAssetIdentities())
 		return reviewPreflightRefusalWithContinuation(reviewPreflightManagedAssetsReason, provenance.refusal(), continuation)
 	}
-	if assessment.Level == reviewtransaction.RiskLow {
-		// Tier 0 is silent structural readback. Asking here would reintroduce
-		// exactly the ceremony the silent readback exists to remove, and a
-		// relayed decline has no question to answer.
-		if consent == reviewConsentModeDeclined {
+	if consent == reviewConsentModeDeclined {
+		// Tier 0 is silent structural readback, with no question to decline.
+		if assessment.Level == reviewtransaction.RiskLow {
 			return errReviewConsentDeclineWithoutQuestion
 		}
+		// An explicit relayed "no" needs no preparation or persisted state.
+		return fmt.Errorf("%w: the next candidate is asked again", errReviewDeclinedForCandidate)
+	}
+	if err := preflight(); err != nil {
+		return err
+	}
+	if assessment.Level == reviewtransaction.RiskLow {
 		return nil
 	}
 	switch consent {
@@ -855,10 +860,6 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		// envelope is the question. Candidate-scoped consent must not be
 		// suppressed by the legacy clone-wide console latch.
 		return errReviewConsentQuestionRequired
-	case reviewConsentModeDeclined:
-		// An explicit relayed "no" is honored exactly like the interactive
-		// answer 2: this candidate only, nothing persisted, never latched.
-		return fmt.Errorf("%w: the next candidate is asked again", errReviewDeclinedForCandidate)
 	case reviewConsentModeGranted:
 		// The exact target binding was revalidated before this call. Authorize
 		// only that candidate; later candidates must receive their own question.
