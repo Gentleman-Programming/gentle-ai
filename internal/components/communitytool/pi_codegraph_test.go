@@ -64,9 +64,12 @@ func TestPiCodeGraphReconcileInjectsOnlyCompatibleToolsAndGuidanceForEveryChild(
 			t.Fatalf("child %s has no owned guidance: %v\n%s", child.Name, err, body)
 		}
 	}
-	compatible, _ := os.ReadFile(result.Children[0].Target)
-	if !strings.Contains(string(compatible), "mcp") || !strings.Contains(string(compatible), piCodeGraphToolMarker) {
-		t.Fatalf("compatible child has no mcp tool block:\n%s", compatible)
+	compatible := string(mustReadPiFile(t, result.Children[0].Target))
+	if !strings.Contains(compatible, "tools: bash, mcp\n") {
+		t.Fatalf("compatible child lacks the mcp allowlist entry:\n%s", compatible)
+	}
+	if !strings.Contains(compatible, piCodeGraphToolMarker+"\nUse `mcp__codegraph__codegraph_explore` via `codemode`.\n"+piCodeGraphEndMarker) {
+		t.Fatalf("compatible child guidance does not name the exposed CodeGraph tool and codemode:\n%s", compatible)
 	}
 	limited, _ := os.ReadFile(result.Children[1].Target)
 	if strings.Contains(string(limited), piCodeGraphToolMarker) {

@@ -432,7 +432,7 @@ func renderPiChild(body string, tools []string, injectTools bool) (string, error
 	}
 	if injectTools {
 		body = replacePiChildTools(body, tools)
-		body += "\n\n" + piCodeGraphToolMarker + "\nUse the Pi MCP proxy tool `mcp` for the read-only CodeGraph server.\n" + piCodeGraphEndMarker
+		body += "\n\n" + piCodeGraphToolMarker + "\nUse `mcp__codegraph__codegraph_explore` via `codemode`.\n" + piCodeGraphEndMarker
 	}
 	return strings.TrimRight(body, "\n") + "\n\n" + piCodeGraphGuidanceMarker + "\n" + CodeGraphGuidanceMarkdown() + "\n" + piCodeGraphEndMarker + "\n", nil
 }
