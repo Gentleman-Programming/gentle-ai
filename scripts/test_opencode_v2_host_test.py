@@ -917,6 +917,29 @@ class ReviewStepCheckTests(unittest.TestCase):
         self.assertIn("refusal reason 'agent_mismatch' was not observed",
                       self.check(step, child_prompts=[], tool_texts=[refusal], after="a"))
 
+    def test_refused_step_accepts_only_documented_output_causes(self):
+        refusal = "opencode_review_transport_relay_refused"
+        cases = (
+            ("output_refused", "", True),
+            ("output_refused", ", cause: reviewer_result_not_admissible", True),
+            ("output_refused", ", cause: validator_result_not_admissible", True),
+            ("output_refused", ", cause: targeted_validation_inconclusive", True),
+            ("output_refused", ", cause: role_capture_failed", True),
+            ("output_refused", ", cause: inspection_coverage", True),
+            ("output_refused", ", cause: invalid_finding_location", True),
+            ("output_refused", ", cause: proof_path_out_of_scope", True),
+            ("output_refused", ", cause: candidate_causality_unclaimed_id", True),
+            ("output_refused", ", cause: candidate_causality_evidence_degraded", True),
+            ("output_refused", ", cause: reviewer_result_not_admissible_extra", False),
+            ("agent_mismatch", ", cause: reviewer_result_not_admissible", False),
+        )
+        for reason, suffix, accepted in cases:
+            with self.subTest(reason=reason, suffix=suffix):
+                step = review_step(expect="refused", child_requests=0, tool_contains=[], reason=reason)
+                message = f"{refusal} (reason: {reason}{suffix})"
+                want = [] if accepted else [f"refusal reason {reason!r} was not observed"]
+                self.assertEqual(self.check(step, child_prompts=[], tool_texts=[message], after="a"), want)
+
 
 class ReviewModeArgumentTests(unittest.TestCase):
     def test_review_mode_requires_existing_absolute_inputs(self):
