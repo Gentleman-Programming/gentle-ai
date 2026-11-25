@@ -103,7 +103,7 @@ func TestReviewCommittedRangeBoundaryMatrix(t *testing.T) {
 				acknowledge(started.LineageID, second.TargetIdentity)
 			}
 
-			commit("prompts/README.md", "# Example prompts\n\nA greeting example.\n")
+			c := commit("prompts/README.md", "# Example prompts\n\nA greeting example.\n")
 			t.Run("explicit branch point", func(t *testing.T) {
 				assertStart(t, status("--base-ref", origin, "--committed-only"), origin, "README.md", "prompts/README.md", "runtime/README.md")
 				assessed := derivedRangeAssess(t, repo, origin)
@@ -129,13 +129,10 @@ func TestReviewCommittedRangeBoundaryMatrix(t *testing.T) {
 				captureCleanCLIReviewerResult(t, repo, started, 0, &bytes.Buffer{})
 				acknowledge(started.LineageID, overlap.TargetIdentity)
 
+				// The acknowledged A..C covers C; the next offer is only C..D,
+				// never B..D, which would send C's reviewed change back.
 				commit("runtime/example/README.md", "# Another sample\n")
-				after := status()
-				if after.Authority != nil || after.NextTransition == nil || after.NextTransition.ReasonCode != "fresh_target_ready" ||
-					after.NextTransition.Execute == nil || after.NextTransition.Execute.Operation != "review.start" ||
-					!slices.Contains(after.Projection.Paths, "runtime/example/README.md") {
-					t.Fatalf("real follow-up missing from review: %v, transition %+v", after.Projection.Paths, after.NextTransition)
-				}
+				assertStart(t, status(), c, "runtime/example/README.md")
 			}
 		})
 	}

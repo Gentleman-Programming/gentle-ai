@@ -98,6 +98,10 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 		}
 		// Later slices may have STARTed from this checkpoint, not the
 		// branch point. Only their exact acknowledgements can advance it.
+		// Older selectorless offers kept STARTing from one base (A..B, A..C),
+		// so a descendant is also checked from the base of the last advance:
+		// at most two lookups per commit, never a rescan of earlier ones.
+		from := ancestor
 		for next, checked := index-1, ""; ; next-- {
 			// A legacy acknowledgement may cover HEAD from this boundary,
 			// even when a shorter prefix was also consumed. Check once per
@@ -121,6 +125,16 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 			}
 			_, consumed, err := consumedRange(ancestor.tree, descendant.tree)
 			if err != nil {
+				return AcknowledgedBoundary{}, false, err
+			}
+			if consumed {
+				from, ancestor = ancestor, descendant
+				continue
+			}
+			if from.tree == ancestor.tree || from.tree == descendant.tree {
+				continue
+			}
+			if _, consumed, err = consumedRange(from.tree, descendant.tree); err != nil {
 				return AcknowledgedBoundary{}, false, err
 			}
 			if consumed {
