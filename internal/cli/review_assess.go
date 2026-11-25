@@ -296,7 +296,7 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 	cwd := flags.String("cwd", ".", "repository path")
 	baseRef := flags.String("base-ref", "", "optional base revision for an immutable base-to-HEAD assessment")
 	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref excludes dirty tracked changes")
-	agent := flags.String("agent", "", "optional generated active runtime identity to carry on the next_transition preflight")
+	agent := flags.String("agent", "", "optional generated runtime identity to carry on next_transition; assessment does not require reviewer dispatch")
 	jsonOutput := flags.Bool("json", false, "print the gentle-ai.review-assessment/v1 envelope as JSON instead of human-readable text")
 	escalateItem := flags.String("escalate-item", "", "raise the risk to high by citing one high-risk item (1-6); never lowers a tier")
 	escalateReason := flags.String("escalate-reason", "", "one-line reason for --escalate-item")
@@ -327,15 +327,15 @@ func RunReviewAssess(args []string, stdout io.Writer) error {
 		failClosedCandidate.BaseRef = trimmedBaseRef
 	}
 
-	// The declared runtime identity is validated exactly as `review status`
-	// validates its own --agent (reviewRuntimeWithImmutableTransport), so an
-	// unsupported transport refuses the same way here before any repository
-	// work: assess is read-only, but the runtime it will hand to
-	// next_transition must still be one review status itself would accept.
+	// Keep the runtime identity and protocol checks, but leave reviewer Task
+	// dispatch readiness to STATUS. Assessment only measures the candidate.
 	var runtimeAgent model.AgentID
 	if strings.TrimSpace(*agent) != "" {
 		var runtimeErr error
-		runtimeAgent, runtimeErr = reviewRuntimeWithImmutableTransport(*agent)
+		runtimeAgent, runtimeErr = reviewRuntimeWithImmutableTransportChecking(*agent, func() error {
+			_, err := reviewOpenCodeDeclaredRuntimeVersion()
+			return err
+		})
 		if runtimeErr != nil {
 			return failClosed(reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, runtimeErr), failClosedCandidate)
 		}

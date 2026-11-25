@@ -1591,7 +1591,7 @@ func TestODDOrchestratorsProjectNativeCheckingWithoutPromptOwnedLenses(t *testin
 			"applicable verifier is unavailable",
 			"preserve the typed unavailable result",
 			"never invent PASS, retry indefinitely, or escalate into extra ceremony",
-			"quick check runs once",
+			"A failed check is diagnosed, fixed and rerun within its limits. An applicable quick check runs once.",
 			"Long or very-long work gets one cost/side-effect forecast",
 			// harness-continuity S3: continuity and missing proof are stated
 			// once, in the ODD Close; checking points at it and never keeps a
@@ -1670,9 +1670,9 @@ func TestOpenCodeGenericAgentsCarryDelegateForReasonDiscipline(t *testing.T) {
 			// existing function, keeping its invariants.
 			"Before you create or change shared state (a record, list entry, file, or setting that other commands also create or read), find the existing function that already does it and reuse it, keeping every invariant it enforces (ordering, uniqueness, validation, normalization). Never re-implement that step inline with a different shape.",
 			"PRESERVE/REFACTOR",
-			// S8: bounded self-correction.
-			"one correction attempt per failing check, and a second only if the same check still fails",
-			"return `status: partial` with the failing command and its output",
+			// Writer self-correction follows progress, not an attempt count.
+			"Never repeat the same change or stop because of an attempt count.",
+			"Return the failing command and its output, the remaining implementation work, the missing proof, and your diagnosed cause with evidence.",
 		},
 		"opencode/agents/gentle-ai-verify.md": {
 			// S7: read-only scope, spec-derived probes, first-launch scratch copy.
