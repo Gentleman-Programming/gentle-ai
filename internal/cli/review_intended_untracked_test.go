@@ -194,6 +194,27 @@ func TestIntendedUntrackedSelectionSubmissionNamesMissingFields(t *testing.T) {
 		}
 	}
 
+	const requiredFields = "--intended-untracked-selection requires non-empty JSON fields: "
+	const schemaHint = "; see 'gentle-ai review schema intended-untracked-selection'"
+	for _, tc := range []struct {
+		name, scope, inventory, field string
+	}{
+		{name: "empty-scope", inventory: digest, field: "untracked_scope"},
+		{name: "empty-inventory", scope: "exclude", field: "expected_untracked_inventory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			answer := reviewIntendedUntrackedSelection{Schema: submission.Value.Schema, UntrackedScope: tc.scope, ExpectedInventory: tc.inventory, Intended: []string{}}
+			raw, err := json.Marshal(answer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			refused(t, requiredFields+tc.field+schemaHint, replay(t, raw)...)
+			if got, stderr, exit := invokeReviewProbe(t, binary, repo, preflight...); exit != 0 || stderr != "" || !bytes.Equal(got, before) {
+				t.Errorf("empty field submission changed preflight: exit=%d stderr=%q\n%s", exit, stderr, got)
+			}
+		})
+	}
+
 	for _, paths := range [][]string{{}, {path}} {
 		mode := "exclude"
 		if len(paths) != 0 {
@@ -205,7 +226,7 @@ func TestIntendedUntrackedSelectionSubmissionNamesMissingFields(t *testing.T) {
 				t.Fatal(err)
 			}
 			pathsOnly := replay(t, raw)
-			refused(t, "--intended-untracked-selection is missing required JSON fields: untracked_scope, expected_untracked_inventory; see 'gentle-ai review schema intended-untracked-selection'", pathsOnly...)
+			refused(t, requiredFields+"untracked_scope, expected_untracked_inventory"+schemaHint, pathsOnly...)
 			refused(t, "--intended-untracked-selection is mutually exclusive with legacy untracked selection flags", append(pathsOnly, "--untracked-scope="+mode)...)
 
 			answer := reviewIntendedUntrackedSelection{Schema: submission.Value.Schema, UntrackedScope: mode, ExpectedInventory: digest, Intended: paths}
