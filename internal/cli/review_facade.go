@@ -3145,17 +3145,18 @@ func (result facadeValidationResult) compact(fixDeltaHash string, findingIDs []s
 	if result.TargetedValidationRequestHash != request.RequestHash || result.CorrectionTargetIdentity != request.CorrectionTargetIdentity {
 		return reviewtransaction.ScopedValidationResult{}, errors.New("targeted validation result does not bind the provider-owned correction request") // refusal:by-design operator-knowledge: the external validator must echo both bindings from the provider-owned request
 	}
-	if result.FollowUps == nil {
-		result.FollowUps = []reviewtransaction.FollowUp{}
-	}
+	// Inspection gates admission above; only the compact check evidence is
+	// retained. Hash that same projection rather than the provider wire shape.
+	evidence := reviewProviderTargetedValidatorEvidence(result)
+	originalDigest, regressionDigest := evidence.CheckDigests()
 	return reviewtransaction.ScopedValidationResult{
-		LedgerIDs: append([]string(nil), findingIDs...), FixCausedFindings: []reviewtransaction.Finding{}, FollowUps: result.FollowUps,
+		LedgerIDs: append([]string(nil), findingIDs...), FixCausedFindings: []reviewtransaction.Finding{}, FollowUps: evidence.FollowUps,
 		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
 		OriginalCriteria: reviewtransaction.ValidationCheck{
-			EvidenceHash: facadeValueHash("original-criteria", result.OriginalCriteria), FixDeltaHash: fixDeltaHash, Passed: result.OriginalCriteria.Passed,
+			EvidenceHash: originalDigest, FixDeltaHash: fixDeltaHash, Passed: evidence.OriginalCriteria.Passed,
 		},
 		CorrectionRegression: reviewtransaction.ValidationCheck{
-			EvidenceHash: facadeValueHash("correction-regression", result.CorrectionRegression), FixDeltaHash: fixDeltaHash, Passed: result.CorrectionRegression.Passed,
+			EvidenceHash: regressionDigest, FixDeltaHash: fixDeltaHash, Passed: evidence.CorrectionRegression.Passed,
 		},
 	}, nil
 }
