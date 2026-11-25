@@ -24,9 +24,11 @@ import (
 )
 
 const (
-	piCodeGraphToolMarker     = "<!-- gentle-ai:pi-codegraph-tool -->"
-	piCodeGraphGuidanceMarker = "<!-- gentle-ai:pi-codegraph-guidance -->"
-	piCodeGraphEndMarker      = "<!-- /gentle-ai:pi-codegraph -->"
+	piCodeGraphToolMarker      = "<!-- gentle-ai:pi-codegraph-tool -->"
+	piCodeGraphGuidanceMarker  = "<!-- gentle-ai:pi-codegraph-guidance -->"
+	piCodeGraphEndMarker       = "<!-- /gentle-ai:pi-codegraph -->"
+	piCodeGraphToolBlock       = piCodeGraphToolMarker + "\nUse `mcp__codegraph__codegraph_explore` via `codemode`.\n" + piCodeGraphEndMarker
+	piCodeGraphLegacyToolBlock = piCodeGraphToolMarker + "\nUse the Pi MCP proxy tool `mcp` for the read-only CodeGraph server.\n" + piCodeGraphEndMarker
 )
 
 var (
@@ -263,9 +265,16 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 		if renderErr != nil {
 			return result, fmt.Errorf("render Pi child %q: %w", child.Name, renderErr)
 		}
+		owned, exists := manifest.Children[discovered.Target]
 		if strings.Contains(string(body), piCodeGraphGuidanceMarker) &&
 			(child.Classification != PiChildCompatible || strings.Contains(string(body), piCodeGraphToolMarker)) {
 			updated = string(body)
+			if exists && !owned.Adopted && owned.AfterHash == hashPiBytes(body) {
+				updated = strings.Replace(updated, piCodeGraphLegacyToolBlock, piCodeGraphToolBlock, 1)
+				if updated != string(body) {
+					manifest.Children[discovered.Target] = owned.withAfter(updated)
+				}
+			}
 		}
 		if updated != string(body) || discovered.PackageOwned {
 			if writeErr := journal.write(discovered.Target, []byte(updated)); writeErr != nil {
@@ -277,7 +286,7 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 		if child.Classification == "" {
 			child.Classification = PiChildGuidanceOnly
 		}
-		if _, exists := manifest.Children[discovered.Target]; !exists {
+		if !exists {
 			adopted := !discovered.PackageOwned && updated == string(body)
 			if adopted {
 				if captureErr := journal.capture(discovered.Target); captureErr != nil {
@@ -432,7 +441,7 @@ func renderPiChild(body string, tools []string, injectTools bool) (string, error
 	}
 	if injectTools {
 		body = replacePiChildTools(body, tools)
-		body += "\n\n" + piCodeGraphToolMarker + "\nUse the Pi MCP proxy tool `mcp` for the read-only CodeGraph server.\n" + piCodeGraphEndMarker
+		body += "\n\n" + piCodeGraphToolBlock
 	}
 	return strings.TrimRight(body, "\n") + "\n\n" + piCodeGraphGuidanceMarker + "\n" + CodeGraphGuidanceMarkdown() + "\n" + piCodeGraphEndMarker + "\n", nil
 }
@@ -1059,7 +1068,11 @@ func (j *piJournal) ownedFile(path, after string, overlay, adopted bool) piCodeG
 	if before != nil {
 		mode = uint32(before.mode)
 	}
-	return piCodeGraphOwnedFile{Before: snapshot, After: after, AfterHash: hashPiBytes([]byte(after)), Overlay: overlay, Adopted: adopted, Mode: mode}
+	return (piCodeGraphOwnedFile{Before: snapshot, Overlay: overlay, Adopted: adopted, Mode: mode}).withAfter(after)
+}
+func (owned piCodeGraphOwnedFile) withAfter(after string) piCodeGraphOwnedFile {
+	owned.After, owned.AfterHash = after, hashPiBytes([]byte(after))
+	return owned
 }
 func (j *piJournal) restore() error {
 	paths := make([]string, 0, len(j.before))

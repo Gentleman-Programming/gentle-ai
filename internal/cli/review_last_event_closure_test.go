@@ -1380,8 +1380,8 @@ func TestRecoverySuccessorContinuation(t *testing.T) {
 		t.Fatalf("predecessor STATUS did not retain its no-fork refusal: %v\n%s", predecessorErr, predecessorOutput)
 	}
 
-	// Only the frozen lens pair can resume selectorless STATUS. Test each
-	// option independently so ignoring either one cannot pass unnoticed.
+	// When lens flags are supplied, only the frozen pair is accepted. Test
+	// each option independently so ignoring either one cannot pass unnoticed.
 	for _, tt := range []struct {
 		name, prefix, replacement string
 	}{
@@ -1422,11 +1422,23 @@ func TestRecoverySuccessorContinuation(t *testing.T) {
 	if after := continuationProbeMustRun(t, inspectArgs); !bytes.Equal(before, after) {
 		t.Fatalf("STATUS mutated the recovery edge:\nbefore=%s\nafter=%s", before, after)
 	}
-	var artifact reviewResultArtifact
-	decodeStrictReviewJSON(t, continuationProbeCapture(t, status.NextTransition.Collect.Inputs[0], []string{"candidate.go", "correction.go"}, []facadeFinding{}), &artifact)
-	if artifact.LineageID != recovered.LineageID || artifact.TargetIdentity != recovered.TargetIdentity || artifact.Lens != reviewtransaction.LensRisk {
-		t.Fatalf("offered capture did not admit a result for the successor: %+v", artifact)
-	}
+	t.Run("without START lens flags", func(t *testing.T) {
+		args := slices.DeleteFunc(slices.Clone(selectors), func(arg string) bool {
+			return strings.HasPrefix(arg, "--lenses=") || strings.HasPrefix(arg, "--lenses-reason=")
+		})
+		withoutLenses := continuationProbeStatus(t, args)
+		if withoutLenses.TargetIdentity != recovered.TargetIdentity || !reflect.DeepEqual(withoutLenses.Authority, status.Authority) || !reflect.DeepEqual(withoutLenses.NextTransition, status.NextTransition) {
+			t.Fatalf("STATUS without lens flags did not offer the same successor captures: target=%s authority=%+v next_transition=%+v", withoutLenses.TargetIdentity, withoutLenses.Authority, withoutLenses.NextTransition)
+		}
+		if after := continuationProbeMustRun(t, inspectArgs); !bytes.Equal(before, after) {
+			t.Fatalf("STATUS without lens flags mutated the recovery edge:\nbefore=%s\nafter=%s", before, after)
+		}
+		var artifact reviewResultArtifact
+		decodeStrictReviewJSON(t, continuationProbeCapture(t, withoutLenses.NextTransition.Collect.Inputs[0], []string{"candidate.go", "correction.go"}, []facadeFinding{}), &artifact)
+		if artifact.LineageID != recovered.LineageID || artifact.TargetIdentity != recovered.TargetIdentity || artifact.Lens != reviewtransaction.LensRisk {
+			t.Fatalf("offered capture did not admit a result for the successor: %+v", artifact)
+		}
+	})
 }
 
 func continuationProbeSelectors() []string {
