@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1377,6 +1378,40 @@ func TestRecoverySuccessorContinuation(t *testing.T) {
 	want := "recovery predecessor already has successor " + recovered.LineageID + "; inspect the existing authority with the requested repository as the working directory; re-run: gentle-ai review inspect-authority"
 	if predecessorErr == nil || predecessorFailure.Code != "invalid_request" || predecessorFailure.Phase != "preflight" || predecessorFailure.MutationOutcome != "not_started" || predecessorFailure.Cause != want {
 		t.Fatalf("predecessor STATUS did not retain its no-fork refusal: %v\n%s", predecessorErr, predecessorOutput)
+	}
+
+	// Only the frozen lens pair can resume selectorless STATUS. Test each
+	// option independently so ignoring either one cannot pass unnoticed.
+	for _, tt := range []struct {
+		name, prefix, replacement string
+	}{
+		{name: "different lens set", prefix: "--lenses=", replacement: "review-risk"},
+		{name: "different lens reason", prefix: "--lenses-reason=", replacement: "a different reason for the same lenses"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := slices.Clone(selectors)
+			index := slices.IndexFunc(args, func(arg string) bool { return strings.HasPrefix(arg, tt.prefix) })
+			if index < 0 {
+				t.Fatalf("selector fixture is missing %s", tt.prefix)
+			}
+			args[index] = tt.prefix + tt.replacement
+			output, err := continuationProbeRun(t, args)
+			if after := continuationProbeMustRun(t, inspectArgs); !bytes.Equal(before, after) {
+				t.Fatalf("mismatched selector STATUS mutated authority:\nbefore=%s\nafter=%s", before, after)
+			}
+			if err == nil || !json.Valid(output) {
+				t.Fatalf("mismatched selector STATUS did not return one failure envelope: %v\n%s", err, output)
+			}
+			// The strict failure decoder rejects any next_transition/capture
+			// fields; the refusal must not carry a continuation either.
+			failure := decodeReviewIntegrationFailure(t, output)
+			cause := "review status --request-context, --escalate-item, and --escalate-reason only preflight a fresh START, but the next transition is collect \"reviewer_results_required\"; " +
+				"rerun `gentle-ai review status --contract " + ReviewIntegrationContractV2 + " --next-transition` without them and follow its transition, then pass them again to the STATUS that offers review.start"
+			if failure.Operation != "review.status" || failure.Phase != "preflight" || failure.Code != "invalid_request" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || failure.NextAction != "correct_request" || failure.Cause != cause || failure.Continuation != nil {
+				t.Fatalf("mismatched selector STATUS returned the wrong refusal:\n%s", output)
+			}
+		})
 	}
 
 	// The same target selector must no longer offer a conflicting START.
