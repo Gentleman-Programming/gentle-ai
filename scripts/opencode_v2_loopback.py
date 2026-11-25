@@ -11,7 +11,7 @@ import time
 MATERIALIZATION_HEADER = "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION"
 RELAY_REFUSED = "opencode_review_transport_relay_refused"
 RELAY_REFUSED_TOKEN = re.compile(r"(?<!\w)" + re.escape(RELAY_REFUSED) + r"(?!\w)")
-REFUSAL_CAUSE_SUFFIX = re.compile(r" \(reason: (\w+), cause: (\w+)\)")
+REFUSAL_CAUSE_SUFFIX = re.compile(r" \(reason: (\w+), cause: ([^)]*)\)")
 # Exact parent-visible causes documented in docs/opencode-compatibility.md.
 OUTPUT_REFUSAL_CAUSES = (
     "reviewer_result_not_admissible",

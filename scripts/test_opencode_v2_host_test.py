@@ -964,6 +964,7 @@ class ReviewStepCheckTests(unittest.TestCase):
         self.assertEqual(self.check(bare, child_prompts=[], tool_texts=[refusal], after="a"), [])
         self.assertEqual(self.check(bare, child_prompts=[], tool_texts=[message], after="a"), [])
         for bad in (f"{refusal} (reason: output_refused, cause: unknown_cause)",
+                    f"{refusal} (reason: output_refused, cause: unknown-cause)",
                     f"{refusal} (reason: agent_mismatch, cause: role_capture_failed)"):
             with self.subTest(bad=bad, source="tool text"):
                 self.assertEqual(self.check(bare, child_prompts=[], tool_texts=[bad], after="a"),
