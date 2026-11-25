@@ -48,8 +48,12 @@ func TestRenderedLensAssets(t *testing.T) {
 					t.Errorf("missing %q", want)
 				}
 			}
-			if strings.Contains(got, "subject_hash") {
-				t.Error("review asset still asks the reviewer to handle the subject hash")
+			input, output, _ := strings.Cut(got, "## Output")
+			if strings.HasPrefix(path, "claude/agents/") && !strings.Contains(input, "require the binding subject_hash to equal artifact_subject.subject_hash") {
+				t.Error("review input lost the provider binding/context consistency check")
+			}
+			if strings.Contains(output, "subject_hash") {
+				t.Error("review asset still asks the reviewer to copy the subject hash into output")
 			}
 		})
 	}

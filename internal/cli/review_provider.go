@@ -122,9 +122,9 @@ func reviewProviderMatchLegacySubject(ctx context.Context, root string, state re
 }
 
 // reviewProviderAdmitRaw preserves capture-result's strict native admission
-// without publishing bytes or mutating authority. A legacy echo can select
-// the v1 encoding only when the caller did not bind a subject hash itself.
-func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransaction.CompactState, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, allowLegacyEcho bool, raw []byte) (reviewProviderAdmittedResult, error) {
+// without publishing bytes or mutating authority. Without a host-bound hash,
+// an optional echo must match this slot's current or legacy provider subject.
+func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransaction.CompactState, frozen reviewtransaction.FrozenCandidateContext, subject reviewtransaction.ArtifactSubject, checkEcho bool, raw []byte) (reviewProviderAdmittedResult, error) {
 	payload, err := reviewProviderExtractRoleRaw(reviewProviderRoleLens, raw)
 	if err != nil {
 		return reviewProviderAdmittedResult{}, err
@@ -136,10 +136,6 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 	if result.Findings == nil || result.Evidence == nil {
 		return reviewProviderAdmittedResult{}, errors.New("reviewer result requires explicit findings and evidence arrays") // refusal:by-design operator-knowledge: reviewers must resubmit explicit findings and evidence arrays
 	}
-	if allowLegacyEcho && result.SubjectHash != "" && result.SubjectHash != subject.SubjectHash {
-		frozen, subject, _ = reviewProviderMatchLegacySubject(ctx, root, state, frozen, subject, result.SubjectHash)
-	}
-	result.SubjectHash = subject.SubjectHash
 	if _, err := prepareCompactReviewerResults(reviewtransaction.CompactState{SelectedLenses: []string{subject.Lens}}, []facadeReviewerResult{result}, facadeRefuterResult{}); err != nil {
 		return reviewProviderAdmittedResult{}, err
 	}
@@ -147,6 +143,37 @@ func reviewProviderAdmitRaw(ctx context.Context, root string, state reviewtransa
 	if err != nil {
 		return reviewProviderAdmittedResult{}, err
 	}
+	if checkEcho && result.SubjectHash != subject.SubjectHash {
+		var decision reviewtransaction.ArtifactAdmissionDecision
+		var diagnostic string
+		if result.SubjectHash == "" {
+			// The typed result decodes absent, null, and empty to the same
+			// value. Only an absent field opts out of the manual echo check.
+			var fields struct {
+				SubjectHash json.RawMessage `json:"subject_hash"`
+			}
+			if err := json.Unmarshal(payload, &fields); err != nil {
+				return reviewProviderAdmittedResult{}, fmt.Errorf("decode reviewer result: %w", err)
+			}
+			if fields.SubjectHash != nil {
+				decision = reviewtransaction.ArtifactAdmissionIncomplete
+				diagnostic = "reviewer result omitted the provider-owned artifact subject"
+			}
+		} else {
+			var matched bool
+			frozen, subject, matched = reviewProviderMatchLegacySubject(ctx, root, state, frozen, subject, result.SubjectHash)
+			if !matched {
+				decision = reviewtransaction.ArtifactAdmissionBindingMismatch
+				diagnostic = "reviewer result echoed a different artifact subject: expected " + subject.SubjectHash
+			}
+		}
+		if decision != "" {
+			return reviewProviderAdmittedResult{}, &reviewtransaction.ArtifactAdmissionError{Admission: reviewtransaction.ArtifactAdmission{
+				Decision: decision, Diagnostic: diagnostic,
+			}}
+		}
+	}
+	result.SubjectHash = subject.SubjectHash
 	canonical.SubjectHash = subject.SubjectHash
 	canonicalPayload, err := json.Marshal(canonical)
 	if err != nil {
