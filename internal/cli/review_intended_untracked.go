@@ -14,6 +14,7 @@ import (
 )
 
 const reviewIntendedUntrackedSelectionSchema = "gentle-ai.review-intended-untracked-selection/v1"
+const reviewIntendedUntrackedSelectionSchemaName = "intended-untracked-selection"
 const reviewBoundSelectionContractEnv = "GENTLE_AI_BOUND_SELECTION_CONTRACT"
 const reviewBoundSelectionContract = "gentle-ai.review-bound-selection/v1"
 
@@ -70,6 +71,16 @@ func decodeReviewIntendedUntrackedSelection(raw string) (reviewSingleValueFlag, 
 	if err := decoder.Decode(&value); err != nil || decoder.Decode(&struct{}{}) != io.EOF || value.Schema != reviewIntendedUntrackedSelectionSchema || value.Intended == nil {
 		// refusal:by-design operator-knowledge: only the caller can supply the exact provider-owned intended-untracked selection JSON.
 		return reviewSingleValueFlag{}, nil, reviewSingleValueFlag{}, errors.New("--intended-untracked-selection must be exact gentle-ai.review-intended-untracked-selection/v1 JSON")
+	}
+	var missing []string
+	if value.UntrackedScope == "" {
+		missing = append(missing, "untracked_scope")
+	}
+	if value.ExpectedInventory == "" {
+		missing = append(missing, "expected_untracked_inventory")
+	}
+	if len(missing) > 0 {
+		return reviewSingleValueFlag{}, nil, reviewSingleValueFlag{}, fmt.Errorf("--intended-untracked-selection is missing required JSON fields: %s; see 'gentle-ai review schema %s'", strings.Join(missing, ", "), reviewIntendedUntrackedSelectionSchemaName)
 	}
 	return reviewSingleValueFlag{value: value.UntrackedScope, set: true}, reviewRepeatedPathFlag(value.Intended), reviewSingleValueFlag{value: value.ExpectedInventory, set: true}, nil
 }
