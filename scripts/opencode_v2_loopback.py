@@ -10,6 +10,18 @@ import time
 
 MATERIALIZATION_HEADER = "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION"
 RELAY_REFUSED = "opencode_review_transport_relay_refused"
+# Exact parent-visible causes documented in docs/opencode-compatibility.md.
+OUTPUT_REFUSAL_CAUSES = (
+    "reviewer_result_not_admissible",
+    "validator_result_not_admissible",
+    "targeted_validation_inconclusive",
+    "role_capture_failed",
+    "inspection_coverage",
+    "invalid_finding_location",
+    "proof_path_out_of_scope",
+    "candidate_causality_unclaimed_id",
+    "candidate_causality_evidence_degraded",
+)
 REVIEW_AGENTS = ("review-risk", "review-resilience", "review-readability", "review-reliability",
                  "review-refuter", "review-validator")
 REVIEW_STEP = re.compile(r"REVIEW_STEP ([0-9]+)")
@@ -276,11 +288,14 @@ def check_review_step(step, child_prompts, tool_texts, observed_texts, before, a
         if not any(RELAY_REFUSED in text for text in tool_texts + observed_texts):
             problems.append("refusal was not observed")
         reason = step.get("reason")
-        # The parent sees "<code> (reason: <reason>)"; the after hook records the
-        # structured {"code", "reason"} result, so either proves the bounded cause.
-        if reason and not any(f"(reason: {reason})" in text or f'"reason": "{reason}"' in text
-                              for text in tool_texts + observed_texts):
-            problems.append(f"refusal reason {reason!r} was not observed")
+        if reason:
+            # The parent sees the refusal message; the after hook can record the structured reason.
+            prefix = f"{RELAY_REFUSED} (reason: {reason}"
+            expected = [f"{prefix})", f'"reason": "{reason}"']
+            if reason == "output_refused":
+                expected.extend(f"{prefix}, cause: {cause})" for cause in OUTPUT_REFUSAL_CAUSES)
+            if not any(fragment in text for text in tool_texts + observed_texts for fragment in expected):
+                problems.append(f"refusal reason {reason!r} was not observed")
         if before != after:
             problems.append("authority changed by a refused step")
     return problems
