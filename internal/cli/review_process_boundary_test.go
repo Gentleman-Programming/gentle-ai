@@ -54,6 +54,62 @@ func TestReviewStartSelectsCanonicalFourRForSubprocessWrapper(t *testing.T) {
 	}
 }
 
+func TestReviewAssessExtensionlessShebang(t *testing.T) {
+	const bash = "#!/usr/bin/env bash\n"
+	for _, fixture := range []struct {
+		name, path, base, added string
+		risk, dueReason         string
+		codes                   []reviewtransaction.RiskReasonCode
+	}{
+		{"command", "bin/deploy", bash, "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"comment", "bin/deploy", bash, "# deployment note\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"ash", "bin/deploy", "#!/bin/ash\n", "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"env-split", "bin/deploy", "#!/usr/bin/env -S MODE=prod bash -e\n", "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"python", "bin/deploy", "#!/usr/bin/env python3\n", "print('ready')\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"large-data", "data/catalog", strings.Repeat("x", 9<<20) + "\n", "ordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"shell-source", "bin/deploy.sh", bash, "# deployment note\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary, reviewtransaction.RiskReasonShellSource}},
+		{"ordinary-go", "value.go", "package value\n", "const ready = true\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			writeReviewStartCandidate(t, repo, fixture.path, fixture.base, 0o644)
+			runReviewCLIGit(t, repo, "add", "--", fixture.path)
+			runReviewCLIGit(t, repo, "commit", "-qm", "base candidate")
+			writeReviewStartCandidate(t, repo, fixture.path, fixture.base+fixture.added, 0o644)
+			before := runReviewCLIGit(t, repo, "status", "--porcelain=v1")
+
+			var output bytes.Buffer
+			if err := RunReview([]string{"assess", "--cwd", repo, "--json"}, &output); err != nil {
+				t.Fatalf("review assess: %v\n%s", err, output.String())
+			}
+			var result ReviewAssessmentResult
+			decodeStrictReviewJSON(t, output.Bytes(), &result)
+			var wantReasons []ReviewAssessmentReason
+			for _, code := range fixture.codes {
+				reason := ReviewAssessmentReason{Code: string(code), Path: fixture.path}
+				if code != reviewtransaction.RiskReasonExecutableChange {
+					reason.Detail = "signal: shell_process"
+				}
+				wantReasons = append(wantReasons, reason)
+			}
+			wantDue := fixture.risk == "high"
+			if result.Schema != ReviewAssessmentSchema || result.Risk != fixture.risk || !reflect.DeepEqual(result.Reasons, wantReasons) ||
+				result.ChangedPaths != 1 || result.ChangedLines != 1 || result.ReviewDue != wantDue || result.ReviewDueReason != fixture.dueReason ||
+				result.Candidate != (ReviewAssessmentCandidate{Kind: string(reviewtransaction.TargetCurrentChanges)}) {
+				t.Errorf("review assess wanted %s, reasons %#v, 1 path/line, review due %t/%s, and fresh candidate; got %s", fixture.risk, wantReasons, wantDue, fixture.dueReason, output.String())
+			}
+			if wantDue && result.ReviewDue {
+				assertReviewAssessNextTransition(t, result.NextTransition, repo, "", "")
+			} else if !wantDue && result.NextTransition != nil {
+				t.Errorf("review assess published an unexpected next transition: %#v", result.NextTransition)
+			}
+			if after := runReviewCLIGit(t, repo, "status", "--porcelain=v1"); before != after {
+				t.Errorf("review assess changed git status: %q -> %q", before, after)
+			}
+		})
+	}
+}
+
 func issue1438WrapperModule(lines int) string {
 	return paddedReviewCLIModule([]string{
 		`"""Executable module wrapping subprocess.run with argv/cwd/timeout/env policy."""`,

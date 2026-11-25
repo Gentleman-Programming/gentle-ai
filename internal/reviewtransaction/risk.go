@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path"
 	"regexp"
 	"sort"
@@ -22,9 +23,9 @@ import (
 const LargeChangeLines = 400
 const MaxCorrectionChangedLines = 200
 
-// processBoundaryScanByteLimit caps every content readback this classifier
-// performs, so neither process-boundary detection nor passive-content proof can
-// be turned into an unbounded repository read by a large candidate.
+// processBoundaryScanByteLimit caps the full-content reads used for process
+// boundary detection and passive-content proof. Extensionless shebang probes
+// read only the two-byte prefix of each candidate blob.
 var processBoundaryScanByteLimit int64 = 8 << 20
 
 var semanticSourceExtensions = map[string]struct{}{
@@ -646,18 +647,58 @@ const processBoundaryPattern = `((^|[^[:alnum:]_.])(subprocess|child_process|exe
 
 var processSpawnLine = regexp.MustCompile(`(?i)` + processBoundaryPattern)
 
+// probeShebang reads only the bytes that identify a first-line shebang.
+// cat-file --batch emits whole blobs, so stop this read at the prefix rather
+// than transferring the rest of the blob to find the next batch record.
+func probeShebang(ctx context.Context, repo, oid string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, LocalGitCommandTimeout)
+	defer cancel()
+	command := gitCommandContext(ctx, "git", "--no-replace-objects", "-C", repo, "cat-file", "blob", oid)
+	command.Cancel = nil
+	command.Env = sanitizedGitEnvironmentForRun(command.Environ(), []string{"GIT_NO_LAZY_FETCH=1"}, true)
+	command.WaitDelay = gitCommandWaitDelay
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return false, err
+	}
+	defer stdout.Close()
+	release, err := gitProcessTreeStarter(command)
+	if err != nil {
+		if command.Process != nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+		return false, err
+	}
+	released := make(chan struct{})
+	context.AfterFunc(ctx, func() { _ = release(); close(released) })
+	var prefix [2]byte
+	_, readErr := io.ReadFull(stdout, prefix[:])
+	cause := ctx.Err()
+	cancel()
+	<-released
+	_ = command.Wait()
+	if readErr != nil {
+		return false, errors.Join(readErr, cause)
+	}
+	return prefix == [2]byte{'#', '!'}, nil
+}
+
 func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, snapshot Snapshot, stats []DiffStat) ([]RiskReason, error) {
 	repo, err := builder.repositoryRoot(ctx)
 	if err != nil {
 		return nil, err
 	}
 	paths := make([]string, 0, len(stats))
+	var extensionlessPaths []string
 	for _, stat := range stats {
 		if isContentScanEligible(stat) && !isTestRiskPath(stat.Path) {
 			paths = append(paths, stat.Path)
+		} else if path.Ext(stat.Path) == "" && (stat.NewMode == "100644" || stat.NewMode == "100755") {
+			extensionlessPaths = append(extensionlessPaths, stat.Path)
 		}
 	}
-	if len(paths) == 0 {
+	if len(paths) == 0 && len(extensionlessPaths) == 0 {
 		return nil, nil
 	}
 	reasons, scanned := make([]RiskReason, 0), int64(0)
@@ -758,6 +799,22 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 					sinkSeen = true
 				}
 			}
+		}
+	}
+	blobs, err := treeBlobSizes(ctx, repo, snapshot.CandidateTree, extensionlessPaths)
+	if err != nil {
+		return nil, err
+	}
+	for _, blob := range blobs {
+		if blob.size < 2 {
+			continue
+		}
+		shebang, err := probeShebang(ctx, repo, blob.oid)
+		if err != nil {
+			return nil, fmt.Errorf("probe interpreter directive for %q: %w", blob.path, err)
+		}
+		if shebang {
+			reasons = append(reasons, RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: blob.path})
 		}
 	}
 	return canonicalRiskReasons(reasons), nil
