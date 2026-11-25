@@ -301,14 +301,17 @@ func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error)
 	return base, nil
 }
 
-// narrowCommittedRangeBase considers only tips of same-named remote-tracking
-// branches. Each replacement must lie strictly between the current base and
-// HEAD: a shorter commit count alone could substitute an incomparable base.
+// narrowCommittedRangeBase picks the tip with the fewest changed paths among
+// same-named remote-tracking branches strictly between base and HEAD whose
+// nonempty diff to HEAD introduces no paths absent from the original diff.
 func narrowCommittedRangeBase(ctx context.Context, repo, head, base, defaultName string) string {
 	remotes, err := runGit(ctx, repo, nil, nil, "remote")
 	if err != nil {
 		return base
 	}
+	builder := SnapshotBuilder{Repo: repo}
+	var basePaths []string
+	best, fewest := base, 0
 	for _, remote := range strings.Fields(string(remotes)) {
 		if remote == "origin" {
 			continue
@@ -320,11 +323,22 @@ func narrowCommittedRangeBase(ctx context.Context, repo, head, base, defaultName
 		if _, err := runGit(ctx, repo, nil, nil, "merge-base", "--is-ancestor", base, tip); err != nil {
 			continue
 		}
-		if _, err := runGit(ctx, repo, nil, nil, "merge-base", "--is-ancestor", tip, head); err == nil {
-			base = tip
+		if _, err := runGit(ctx, repo, nil, nil, "merge-base", "--is-ancestor", tip, head); err != nil {
+			continue
+		}
+		if basePaths == nil {
+			basePaths, err = builder.changedPaths(ctx, base, head)
+			if err != nil {
+				return base
+			}
+			fewest = len(basePaths) + 1
+		}
+		paths, err := builder.changedPaths(ctx, tip, head)
+		if err == nil && len(paths) > 0 && len(paths) < fewest && sliceIsSubset(paths, basePaths) {
+			best, fewest = tip, len(paths)
 		}
 	}
-	return base
+	return best
 }
 
 func resolveCommittedRangeBaseFromUpstream(ctx context.Context, repo string) (string, bool) {

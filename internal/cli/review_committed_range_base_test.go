@@ -157,7 +157,7 @@ func TestNextTransitionCommittedRangeBaseCrissCrossUpstreamKeepsDefaultBranch(t 
 }
 
 func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
-	for _, name := range []string{"fresh_upstream", "shorter_incomparable_range", "upstream_not_in_head"} {
+	for _, name := range []string{"fresh_upstream", "shorter_incomparable_range", "upstream_not_in_head", "reverted_upstream_format", "fewest_paths"} {
 		t.Run(name, func(t *testing.T) {
 			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
@@ -172,6 +172,9 @@ func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
 			rev := func(ref string) string {
 				return strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", ref))
 			}
+			if name == "reverted_upstream_format" {
+				commitFile("format.txt", "base\n")
+			}
 			root := rev("HEAD")
 			if name == "shorter_incomparable_range" {
 				commitFile("fork-default.txt", "fork-only default work\n")
@@ -184,6 +187,12 @@ func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
 			runReviewCLIGit(t, repo, "switch", "-qc", "upstream-default", root)
 			for i := 1; i <= 12; i++ {
 				commitFile("upstream.txt", fmt.Sprintf("upstream change %d\n", i))
+			}
+			if name == "reverted_upstream_format" {
+				commitFile("tracked.txt", "    base\n")
+				commitFile("format.txt", "    base\n")
+			} else if name == "fewest_paths" {
+				commitFile("upstream-extra.txt", "extra upstream path\n")
 			}
 			upstream := rev("HEAD")
 			runReviewCLIGit(t, repo, "update-ref", upstreamRef, upstream)
@@ -210,6 +219,18 @@ func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
 				runReviewCLIGit(t, repo, "update-ref", upstreamRef, "HEAD")
 				runReviewCLIGit(t, repo, "switch", "-q", "feature")
 				want = origin
+			case "reverted_upstream_format":
+				runReviewCLIGit(t, repo, "revert", "--no-commit", origin+".."+upstream)
+				runReviewCLIGit(t, repo, "commit", "-qm", "revert upstream changes")
+				want = origin
+			case "fewest_paths":
+				// The mirror sorts first but excludes only one path, versus upstream's two.
+				runReviewCLIGit(t, repo, "switch", "-qc", "mirror-default", origin)
+				commitFile("mirror.txt", "independent mirror path\n")
+				runReviewCLIGit(t, repo, "remote", "add", "mirror", "mirror.git")
+				runReviewCLIGit(t, repo, "update-ref", "refs/remotes/mirror/main", "HEAD")
+				runReviewCLIGit(t, repo, "switch", "-q", "feature")
+				runReviewCLIGit(t, repo, "merge", "--no-ff", "-qm", "merge mirror default", "mirror-default")
 			}
 			// A fully pushed feature has no unpushed range against its tracking ref.
 			runReviewCLIGit(t, repo, "update-ref", "refs/remotes/origin/feature", "HEAD")
@@ -224,6 +245,9 @@ func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
 			}
 			if got := startTransitionArgumentValue(t, status, "base-ref"); got != want {
 				t.Errorf("offered START base-ref = %q, want %q (origin %q, upstream fork point %q)", got, want, origin, upstream)
+			}
+			if paths := status.Projection.Paths; name == "reverted_upstream_format" && (len(paths) != 1 || paths[0] != "feature.txt") {
+				t.Errorf("offered START changes %q, want only feature.txt", paths)
 			}
 			if name == "fresh_upstream" {
 				explicit := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--base-ref", originRef, "--committed-only")
