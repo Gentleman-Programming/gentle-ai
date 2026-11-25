@@ -262,7 +262,9 @@ The role submission descriptor is a negotiated status contract change, so the ne
 
 Native Go alone selects lenses, classifies candidate causality, performs refutation, derives repository evidence, and permits at most one bounded correction. A validator that cannot inspect its immutable trees has no verdict; report that block rather than submitting a failed validation.
 
-A committed-range correction re-entered with the exact selector the final capture returned (`--base-ref <frozen tree> --committed-only`), or with the commit START was pinned to, keeps its frozen empty intended-untracked exclusion. Unrelated untracked files do not reopen that decision or require a new `--untracked-scope` declaration. A different base tree names a different target and never inherits the frozen decision.
+Bound STATUS keeps the workspace correction's frozen intended-untracked scope. An empty scope stays empty whether START explicitly excluded untracked files or found none. A file that first appears during correction does not reopen selection. To include it, track it with `git add`; the ordinary correction scope and budget rules then apply to it as a tracked change.
+
+A committed-range correction also keeps its exclusion when re-entered with the exact selector the final capture returned (`--base-ref <frozen tree> --committed-only`) or with the commit START was pinned to. A different base tree names a different target and never inherits the frozen decision.
 
 After a targeted validator rejects that correction, bound STATUS with the same committed-only range and unchanged rejected candidate still reports `native_stop_required`, even if unrelated untracked files now exist. This does not authorize recovery. A changed committed candidate or a fresh lineage does not inherit the exclusion.
 
