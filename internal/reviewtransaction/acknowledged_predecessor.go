@@ -98,11 +98,9 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 		}
 		// Later slices may have STARTed from this checkpoint, not the
 		// branch point. Only their exact acknowledgements can advance it.
-		// An acknowledged range may start at the newest reached boundary, the
-		// one before it (A..B then B..D), or the base older selectorless offers
-		// kept reusing (A..B, A..C, A..D). Check only those, newest first: at
-		// most three lookups per commit, never a rescan of earlier commits.
-		previous, reused := ancestor, ancestor
+		// An acknowledged range may start at any reached boundary (A..B, A..C,
+		// B..E). Check them newest first and stop at the first exact match.
+		reached := []selectorlessCommittedBaseDiffAncestor{ancestor}
 		for next, checked := index-1, ""; ; next-- {
 			// A legacy acknowledgement may cover HEAD from this boundary,
 			// even when a shorter prefix was also consumed. Check once per
@@ -124,16 +122,16 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 			if descendant.tree == ancestor.tree {
 				continue
 			}
-			for i, base := range [...]selectorlessCommittedBaseDiffAncestor{ancestor, previous, reused} {
-				if base.tree == descendant.tree || (i > 0 && base.tree == ancestor.tree) || (i == 2 && base.tree == previous.tree) {
+			for i := len(reached) - 1; i >= 0; i-- {
+				if base := reached[i]; base.tree == descendant.tree {
 					continue
 				}
-				_, consumed, err := consumedRange(base.tree, descendant.tree)
+				_, consumed, err := consumedRange(reached[i].tree, descendant.tree)
 				if err != nil {
 					return AcknowledgedBoundary{}, false, err
 				}
 				if consumed {
-					previous, reused, ancestor = ancestor, base, descendant
+					reached, ancestor = append(reached, descendant), descendant
 					break
 				}
 			}
