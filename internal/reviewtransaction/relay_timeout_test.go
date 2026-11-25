@@ -32,3 +32,19 @@ func TestGetRelayTimeoutInvalidFallback(t *testing.T) {
 		t.Errorf("GetRelayTimeout() = %v, want %v (fallback)", got, 10*time.Minute)
 	}
 }
+
+func TestGetRelayTimeoutZeroFallback(t *testing.T) {
+	// zero duration falls back to default
+	os.Setenv("GENTLE_AI_RELAY_TIMEOUT", "0s")
+	if got := GetRelayTimeout(); got != 10*time.Minute {
+		t.Errorf("GetRelayTimeout() = %v, want %v (zero fallback)", got, 10*time.Minute)
+	}
+}
+
+func TestGetRelayTimeoutNegativeFallback(t *testing.T) {
+	// negative duration falls back to default
+	os.Setenv("GENTLE_AI_RELAY_TIMEOUT", "-1s")
+	if got := GetRelayTimeout(); got != 10*time.Minute {
+		t.Errorf("GetRelayTimeout() = %v, want %v (negative fallback)", got, 10*time.Minute)
+	}
+}

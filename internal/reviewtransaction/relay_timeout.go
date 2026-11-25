@@ -10,6 +10,9 @@ import (
 func GetRelayTimeout() time.Duration {
 	if v := os.Getenv("GENTLE_AI_RELAY_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
+			if d <= 0 {
+				return 10 * time.Minute
+			}
 			return d
 		}
 	}

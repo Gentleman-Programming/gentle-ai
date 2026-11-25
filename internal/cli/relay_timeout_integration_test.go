@@ -3,13 +3,12 @@ package cli
 import (
 	"context"
 	"errors"
-	"os"
-	"testing"
+		"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // TestRelayTimeoutIntegration_DeadlineExceeded tests that when the Pi host relay
@@ -17,15 +16,7 @@ import (
 // DeadlineExceeded. This mimics a slow Pi process that exceeds the relay timeout.
 func TestRelayTimeoutIntegration_DeadlineExceeded(t *testing.T) {
 	// Set a very short relay timeout (10ms)
-	originalEnv := os.Getenv("GENTLE_AI_RELAY_TIMEOUT")
-	os.Setenv("GENTLE_AI_RELAY_TIMEOUT", "10ms")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("GENTLE_AI_RELAY_TIMEOUT", originalEnv)
-		} else {
-			os.Unsetenv("GENTLE_AI_RELAY_TIMEOUT")
-		}
-	}()
+	t.Setenv("GENTLE_AI_RELAY_TIMEOUT", "10ms")
 
 	// Mock the Pi adapter to sleep for 100ms (longer than 10ms timeout)
 	previous := reviewProviderAdapterFor
@@ -84,15 +75,7 @@ func TestRelayTimeoutIntegration_DeadlineExceeded(t *testing.T) {
 // they finish within the configured timeout.
 func TestRelayTimeoutIntegration_ConfigurableSuccess(t *testing.T) {
 	// Set a longer relay timeout (1 second)
-	originalEnv := os.Getenv("GENTLE_AI_RELAY_TIMEOUT")
-	os.Setenv("GENTLE_AI_RELAY_TIMEOUT", "1s")
-	defer func() {
-		if originalEnv != "" {
-			os.Setenv("GENTLE_AI_RELAY_TIMEOUT", originalEnv)
-		} else {
-			os.Unsetenv("GENTLE_AI_RELAY_TIMEOUT")
-		}
-	}()
+	t.Setenv("GENTLE_AI_RELAY_TIMEOUT", "1s")
 
 	// Mock the Pi adapter to sleep for 100ms (shorter than 1s timeout)
 	previous := reviewProviderAdapterFor
