@@ -281,3 +281,63 @@ func TestNextTransitionAcknowledgedBoundaryReachesHead(t *testing.T) {
 		t.Fatalf("stop hook reminded for a boundary that reaches HEAD: %s", hookOut.String())
 	}
 }
+
+// TestReviewCommittedRangeBoundaryOverlapsFromBranchPoint covers acknowledged
+// ranges that overlap at the branch point itself: origin..a and origin..b both
+// start there, and a..c starts at a boundary the longest prefix skips.
+func TestReviewCommittedRangeBoundaryOverlapsFromBranchPoint(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	runReviewCLIGit(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	runReviewCLIGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	commit := func(path string) string {
+		writeReviewStartCandidate(t, repo, path, "# "+path+"\n", 0o644)
+		runReviewCLIGit(t, repo, "add", "--", path)
+		runReviewCLIGit(t, repo, "commit", "-qm", "update "+path)
+		return strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	}
+	status := func(selectors ...string) ReviewTargetStatusResult {
+		var output bytes.Buffer
+		if err := RunReview(append([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition"}, selectors...), &output); err != nil {
+			t.Fatalf("STATUS %v: %v\n%s", selectors, err, output.String())
+		}
+		var result ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &result)
+		return result
+	}
+	acknowledgeRange := func(base string) {
+		t.Helper()
+		offered := status("--base-ref", base, "--committed-only")
+		started := grantedDerivedRangeStart(t, repo, offered)
+		started.TargetIdentity = offered.TargetIdentity
+		captureCleanCLIReviewerResult(t, repo, started, 0, &bytes.Buffer{})
+		pending := status("--lineage", started.LineageID)
+		if pending.NextTransition == nil || pending.NextTransition.Execute == nil || pending.NextTransition.ReasonCode != "approved_acknowledgement_required" {
+			t.Fatalf("no acknowledgement for %s..HEAD: %+v", base, pending.NextTransition)
+		}
+		args := []string{"acknowledge-approved"}
+		for _, row := range pending.NextTransition.Execute.Arguments {
+			args = append(args, row.Token)
+		}
+		var output bytes.Buffer
+		if err := RunReview(args, &output); err != nil {
+			t.Fatalf("acknowledge approved: %v\n%s", err, output.String())
+		}
+	}
+
+	origin := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	a := commit("runtime/README.md")
+	acknowledgeRange(origin)
+	commit("prompts/README.md")
+	acknowledgeRange(origin)
+	c := commit("runtime/example/README.md")
+	acknowledgeRange(a)
+	commit("runtime/follow-up.md")
+	offered := status()
+	if offered.NextTransition == nil || offered.NextTransition.Execute == nil || offered.NextTransition.ReasonCode != "fresh_target_ready" {
+		t.Fatalf("expected a fresh START: %+v", offered.NextTransition)
+	}
+	if base := startTransitionArgumentValue(t, offered, "base-ref"); base != c || !slices.Equal(offered.Projection.Paths, []string{"runtime/follow-up.md"}) {
+		t.Fatalf("START base-ref=%s paths=%v; want base-ref=%s paths=[runtime/follow-up.md]", base, offered.Projection.Paths, c)
+	}
+}

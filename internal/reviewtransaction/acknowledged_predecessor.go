@@ -1,6 +1,9 @@
 package reviewtransaction
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 // AcknowledgedPassivePredecessor reports whether a live committed base-diff
 // candidate only adds passive content to a candidate that was already
@@ -85,81 +88,75 @@ func acknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot,
 		consumed, err := CompactTargetConsumed(ctx, root, identity)
 		return paths, consumed, err
 	}
-	for index, ancestor := range ancestors {
-		if ancestor.tree == live.BaseTree {
-			return AcknowledgedBoundary{}, false, nil
+	// The walk starts at the branch point. Later slices may START from any
+	// reached boundary (A..B, A..C, B..E): check every reached boundary newest
+	// first and advance only on its first exact acknowledgement.
+	start := slices.IndexFunc(ancestors, func(entry selectorlessCommittedBaseDiffAncestor) bool { return entry.tree == live.BaseTree })
+	if start < 0 {
+		return AcknowledgedBoundary{}, false, nil
+	}
+	ancestor := ancestors[start]
+	reached := []selectorlessCommittedBaseDiffAncestor{ancestor}
+	for next, checked := start-1, live.BaseTree; ; next-- {
+		// A legacy acknowledgement may cover HEAD from this boundary,
+		// even when a shorter prefix was also consumed. Check once per
+		// boundary before advancing, and keep the exact matched base.
+		if preferExact && checked != ancestor.tree && ancestor.tree != live.CandidateTree {
+			checked = ancestor.tree
+			paths, consumed, err := consumedRange(ancestor.tree, live.CandidateTree)
+			if err != nil {
+				return AcknowledgedBoundary{}, false, err
+			}
+			if consumed {
+				return AcknowledgedBoundary{Commit: ancestor.commit, Tree: ancestor.tree, DeltaPaths: paths}, true, nil
+			}
 		}
-		_, consumed, err := consumedRange(live.BaseTree, ancestor.tree)
-		if err != nil {
-			return AcknowledgedBoundary{}, false, err
+		if next < 0 {
+			break
 		}
-		if !consumed {
+		descendant := ancestors[next]
+		if descendant.tree == ancestor.tree {
 			continue
 		}
-		// Later slices may have STARTed from this checkpoint, not the
-		// branch point. Only their exact acknowledgements can advance it.
-		// An acknowledged range may start at any reached boundary (A..B, A..C,
-		// B..E). Check them newest first and stop at the first exact match.
-		reached := []selectorlessCommittedBaseDiffAncestor{ancestor}
-		for next, checked := index-1, ""; ; next-- {
-			// A legacy acknowledgement may cover HEAD from this boundary,
-			// even when a shorter prefix was also consumed. Check once per
-			// boundary before advancing, and keep the exact matched base.
-			if preferExact && checked != ancestor.tree && ancestor.tree != live.CandidateTree {
-				checked = ancestor.tree
-				paths, consumed, err := consumedRange(ancestor.tree, live.CandidateTree)
-				if err != nil {
-					return AcknowledgedBoundary{}, false, err
-				}
-				if consumed {
-					return AcknowledgedBoundary{Commit: ancestor.commit, Tree: ancestor.tree, DeltaPaths: paths}, true, nil
-				}
-			}
-			if next < 0 {
-				break
-			}
-			descendant := ancestors[next]
-			if descendant.tree == ancestor.tree {
+		for i := len(reached) - 1; i >= 0; i-- {
+			if base := reached[i]; base.tree == descendant.tree {
 				continue
 			}
-			for i := len(reached) - 1; i >= 0; i-- {
-				if base := reached[i]; base.tree == descendant.tree {
-					continue
-				}
-				_, consumed, err := consumedRange(reached[i].tree, descendant.tree)
-				if err != nil {
-					return AcknowledgedBoundary{}, false, err
-				}
-				if consumed {
-					reached, ancestor = append(reached, descendant), descendant
-					break
-				}
+			_, consumed, err := consumedRange(reached[i].tree, descendant.tree)
+			if err != nil {
+				return AcknowledgedBoundary{}, false, err
+			}
+			if consumed {
+				reached, ancestor = append(reached, descendant), descendant
+				break
 			}
 		}
-		deltaPaths, err := builder.changedPaths(ctx, ancestor.tree, live.CandidateTree)
-		if err != nil {
-			return AcknowledgedBoundary{}, false, err
-		}
-		if len(deltaPaths) == 0 {
-			// Every commit since the boundary was empty: the boundary reaches
-			// the live content, so there is no delta to classify.
-			return AcknowledgedBoundary{Commit: ancestor.commit, Tree: ancestor.tree}, true, nil
-		}
-		delta := Snapshot{
-			Kind: TargetBaseDiff, Projection: live.Projection,
-			BaseTree: ancestor.tree, CandidateTree: live.CandidateTree,
-			GeneratedPathInterpretation: live.GeneratedPathInterpretation,
-			Paths:                       deltaPaths, PathsDigest: digestPaths(deltaPaths),
-		}
-		assessment, err := builder.AssessSnapshotRisk(ctx, delta)
-		if err != nil {
-			return AcknowledgedBoundary{}, false, err
-		}
-		// guard:population acknowledged-passive-delta too-loose: only a committed HEAD base-diff whose first-parent boundary is reached by contiguous, exact consumed identities from the same base tree is reported; the shared risk assessor classifies the remaining delta, and lookup failures keep the offer
-		return AcknowledgedBoundary{
-			Commit: ancestor.commit, Tree: ancestor.tree,
-			DeltaPaths: deltaPaths, Passive: assessment.Level == RiskLow,
-		}, true, nil
 	}
-	return AcknowledgedBoundary{}, false, nil
+	if ancestor.tree == live.BaseTree {
+		return AcknowledgedBoundary{}, false, nil
+	}
+	deltaPaths, err := builder.changedPaths(ctx, ancestor.tree, live.CandidateTree)
+	if err != nil {
+		return AcknowledgedBoundary{}, false, err
+	}
+	if len(deltaPaths) == 0 {
+		// Every commit since the boundary was empty: the boundary reaches
+		// the live content, so there is no delta to classify.
+		return AcknowledgedBoundary{Commit: ancestor.commit, Tree: ancestor.tree}, true, nil
+	}
+	delta := Snapshot{
+		Kind: TargetBaseDiff, Projection: live.Projection,
+		BaseTree: ancestor.tree, CandidateTree: live.CandidateTree,
+		GeneratedPathInterpretation: live.GeneratedPathInterpretation,
+		Paths:                       deltaPaths, PathsDigest: digestPaths(deltaPaths),
+	}
+	assessment, err := builder.AssessSnapshotRisk(ctx, delta)
+	if err != nil {
+		return AcknowledgedBoundary{}, false, err
+	}
+	// guard:population acknowledged-passive-delta too-loose: only a committed HEAD base-diff whose first-parent boundary is reached by contiguous, exact consumed identities from the same base tree is reported; the shared risk assessor classifies the remaining delta, and lookup failures keep the offer
+	return AcknowledgedBoundary{
+		Commit: ancestor.commit, Tree: ancestor.tree,
+		DeltaPaths: deltaPaths, Passive: assessment.Level == RiskLow,
+	}, true, nil
 }
