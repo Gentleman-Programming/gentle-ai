@@ -2222,8 +2222,7 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 			if rollback.Err != nil {
 				persistErr = errors.Join(persistErr, rollback.Err)
 			}
-			verificationErr = verificationErrorAfterPersistenceRollback("post-sync", &result.Verify)
-			return result, errors.Join(persistErr, verificationErr)
+			return result, persistErr
 		}
 	}
 

@@ -397,23 +397,13 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		if rollback.Err != nil {
 			persistErr = errors.Join(persistErr, rollback.Err)
 		}
-		verificationErr = verificationErrorAfterPersistenceRollback("post-apply", &result.Verify)
-		return result, errors.Join(persistErr, verificationErr)
+		return result, persistErr
 	}
 
 	if verificationErr == nil {
 		TelemetryTrigger(homeDir)
 	}
 	return result, verificationErr
-}
-
-func verificationErrorAfterPersistenceRollback(stage string, report *verify.Report) error {
-	if report.Ready {
-		return nil
-	}
-	report.FinalNote = ""
-	// refusal:by-design world-action: the rendered report names each failed check and its remedy, such as upgrading the core
-	return fmt.Errorf("%s verification failed:\n%s", stage, strings.TrimSuffix(verify.RenderReport(*report), "\n"))
 }
 
 func rollbackPostApplyError(orchestrator *pipeline.Orchestrator, execution pipeline.ExecutionResult, cause error) error {

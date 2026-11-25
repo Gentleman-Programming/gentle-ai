@@ -26,7 +26,6 @@ func TestPiEngramCompatibility(t *testing.T) {
 			override     string
 			external     bool
 			incompatible bool
-			persistFails bool
 		}{
 			{name: "old PATH core", incompatible: true},
 			{name: "compatible core", pathSupports: true},
@@ -34,7 +33,6 @@ func TestPiEngramCompatibility(t *testing.T) {
 			{name: "compatible isolated core", override: system.EngramBinEnv},
 			{name: "old isolated core", pathSupports: true, override: system.EngramBinEnv, incompatible: true},
 			{name: "external server", external: true},
-			{name: "old core and persistence failure", incompatible: true, persistFails: true},
 		} {
 			t.Run(verb+"/"+tc.name, func(t *testing.T) {
 				home := setupPiSyncHost(t)
@@ -49,12 +47,6 @@ func TestPiEngramCompatibility(t *testing.T) {
 				t.Setenv(system.EngramBinEnv, "")
 				settings := filepath.Join(agentDir, "settings.json")
 				mustWriteFile(t, settings, []byte(`{"packages":["npm:gentle-engram","npm:pi-mcp-adapter"]}`))
-				if tc.persistFails {
-					mustWriteFile(t, filepath.Join(agentDir, "mcp-adapter.json"), []byte(`{"mcpServers":{"context7":{"command":"npx","args":["context7-mcp"]}}}`))
-					if err := os.MkdirAll(mustInstallStateLockPath(t, home), 0o755); err != nil {
-						t.Fatal(err)
-					}
-				}
 				store := filepath.Join(home, ".engram", "store")
 				mustWriteFile(t, store, []byte("existing memories"))
 				t.Setenv("ENGRAM_DATA_DIR", filepath.Dir(store))
@@ -115,20 +107,10 @@ func TestPiEngramCompatibility(t *testing.T) {
 						prefix, retry = "post-apply", "gentle-ai install --agent pi"
 					}
 					want := prefix + " verification failed:\n" + reportPrefix + "1 failed, 0 warnings, 0 skipped\n" + passed +
-						fmt.Sprintf("[!!] verify:pi:engram:instance-id (Engram %q (engram 1.20.0) does not support instance-id, which the Pi companion requires. Upgrade that core before retrying)\n", bin)
-					footer := "Installation completed with verification issues. Run `" + retry + "` to retry the failed checks.\n"
-					if tc.persistFails {
-						persist := "persist install state"
-						if verb == "sync" {
-							persist = "persist sync managed asset state"
-						}
-						got := err.Error()
-						if !strings.HasPrefix(got, persist+": acquire install state lock:") || !strings.HasSuffix(got, "\n"+want) ||
-							strings.Contains(got, "Installation completed with verification issues") || strings.Contains(got, "to retry the failed checks.") {
-							t.Fatalf("want both persistence and verification failures without the completion or retry footer, got %v", err)
-						}
-					} else if err.Error() != want+footer || report.RollbackRequired {
-						t.Fatalf("error = %q, rollback = %t; want %q without rollback", err, report.RollbackRequired, want+footer)
+						fmt.Sprintf("[!!] verify:pi:engram:instance-id (Engram %q (engram 1.20.0) does not support instance-id, which the Pi companion requires. Upgrade that core before retrying)\n", bin) +
+						"Installation completed with verification issues. Run `" + retry + "` to retry the failed checks.\n"
+					if err.Error() != want || report.RollbackRequired {
+						t.Fatalf("error = %q, rollback = %t; want %q without rollback", err, report.RollbackRequired, want)
 					}
 				} else {
 					want := reportPrefix + "0 failed, 0 warnings, 0 skipped\n" + passed + "You're ready. Start building.\n"
@@ -136,13 +118,7 @@ func TestPiEngramCompatibility(t *testing.T) {
 						t.Fatalf("gentle-ai %s: error = %v, report = %q, want success with %q", verb, err, verify.RenderReport(report), want)
 					}
 				}
-				if tc.persistFails {
-					if _, err := os.Stat(filepath.Join(agentDir, "mcp.json")); !os.IsNotExist(err) {
-						t.Fatalf("stat migrated mcp.json after persistence rollback = %v, want IsNotExist", err)
-					}
-				} else {
-					assertFileNotContains(t, settings, "pi-mcp-adapter")
-				}
+				assertFileNotContains(t, settings, "pi-mcp-adapter")
 				assertFileContains(t, settings, "npm:gentle-engram")
 				if content, err := os.ReadFile(store); err != nil || string(content) != "existing memories" {
 					t.Fatalf("Engram store = %q, %v; want original bytes", content, err)
