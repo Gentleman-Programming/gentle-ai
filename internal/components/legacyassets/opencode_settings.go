@@ -332,6 +332,7 @@ func isDanglingSDDPromptRef(prompt, settingsPath, homeDir string) bool {
 		}
 		target := filepath.Join(homeDir, raw[2:])
 		cleaned := filepath.Clean(target)
+		cleaned = filepath.ToSlash(cleaned)
 		return strings.HasSuffix(cleaned, "/prompts/sdd/") || strings.Contains(cleaned, "/prompts/sdd/")
 	}
 	var target string
@@ -345,6 +346,8 @@ func isDanglingSDDPromptRef(prompt, settingsPath, homeDir string) bool {
 		return false
 	}
 	cleaned := filepath.Clean(target)
+	// Normalize to slash separators for consistent cross-platform matching
+	cleaned = filepath.ToSlash(cleaned)
 	// Check if the resolved path is inside a prompts/sdd/ directory
 	// The retired prompts are under <hermes_dir>/prompts/sdd/
 	// We check if the path contains "/prompts/sdd/" anywhere
@@ -402,7 +405,7 @@ func RetireOpenCodeSDDSettings(settingsPath, homeDir string, agentDirs ...string
 				// If the preserved entry has a dangling SDD prompt reference,
 				// track it for removal after the first pass.
 				if promptVal, ok := entry["prompt"].(string); ok && isDanglingSDDPromptRef(promptVal, settingsPath, homeDir) {
-				danglingPrompts[section+"."+name] = promptVal
+					danglingPrompts[section+"."+name] = promptVal
 				}
 			default:
 				remaining[name] = true
@@ -545,7 +548,7 @@ func (r OpenCodeSettingsResult) ManualActions() []string {
 		actions = append(actions, fmt.Sprintf("Retired SDD agent %s in %s was kept because comments are attached to it: Gentle AI wrote this entry, but removing it would discard your notes. SDD was retired in v4.0.0: move your comments and then move or delete it, or rerun `gentle-ai sync` to retire it.", entry, r.Path))
 	}
 	for _, entry := range r.DanglingPromptKept {
-		actions = append(actions, fmt.Sprintf("Retired SDD agent %s in %s had a dangling prompt reference to the retired prompts/sdd/ directory that was not removed because a comment is attached to the prompt member. SDD was retired in v4.0.0: remove the comment and rerun `gentle-ai sync` to clean up the prompt reference.", entry, r.Path))
+		actions = append(actions, fmt.Sprintf("Retired SDD agent %s in %s had a dangling prompt reference to the retired prompts/sdd/ directory that was not removed. SDD was retired in v4.0.0: remove the prompt member and rerun `gentle-ai sync`, or correct the prompt reference to point to an existing file.", entry, r.Path))
 	}
 	return actions
 }

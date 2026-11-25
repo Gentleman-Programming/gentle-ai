@@ -251,7 +251,6 @@ func TestRetireOpenCodeSDDSettingsKeepsCommentedOwnedEntry(t *testing.T) {
 	}
 }
 
-
 func TestRetireOpenCodeSDDSettingsMissingAndNonRegular(t *testing.T) {
 	dir := t.TempDir()
 	if result, err := RetireOpenCodeSDDSettings(filepath.Join(dir, "absent.json"), ""); err != nil || result.Changed || len(result.ManualActions()) != 0 {
