@@ -31,9 +31,12 @@ func VerifyPiInstanceIdentity(ctx context.Context) error {
 	if strings.TrimSpace(os.Getenv("ENGRAM_URL")) != "" {
 		return nil
 	}
-	command := strings.TrimSpace(os.Getenv("ENGRAM_BIN"))
-	if command == "" {
-		command = "engram"
+	command, explicit := CallerBinary()
+	if !explicit {
+		command = strings.TrimSpace(os.Getenv("ENGRAM_BIN"))
+		if command == "" {
+			command = "engram"
+		}
 	}
 	binary, err := lookPath(command)
 	if err != nil {

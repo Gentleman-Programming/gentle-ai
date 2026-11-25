@@ -23,13 +23,15 @@ func TestPiEngramCompatibility(t *testing.T) {
 		for _, tc := range []struct {
 			name         string
 			pathSupports bool
-			override     bool
+			override     string
 			external     bool
 			incompatible bool
 		}{
 			{name: "old PATH core", incompatible: true},
 			{name: "compatible core", pathSupports: true},
-			{name: "old explicit companion core", pathSupports: true, override: true, incompatible: true},
+			{name: "old explicit companion core", pathSupports: true, override: "ENGRAM_BIN", incompatible: true},
+			{name: "compatible isolated core", override: system.EngramBinEnv},
+			{name: "old isolated core", pathSupports: true, override: system.EngramBinEnv, incompatible: true},
 			{name: "external server", external: true},
 		} {
 			t.Run(verb+"/"+tc.name, func(t *testing.T) {
@@ -56,10 +58,10 @@ func TestPiEngramCompatibility(t *testing.T) {
 				t.Setenv("ENGRAM_FIXTURE_PROBE_LOG", log)
 				bin := filepath.Join(binDir, "engram")
 				writePiEngramCompatibilityCore(t, bin, tc.pathSupports)
-				if tc.override {
+				if tc.override != "" {
 					bin = filepath.Join(t.TempDir(), "engram")
-					writePiEngramCompatibilityCore(t, bin, false)
-					t.Setenv("ENGRAM_BIN", bin)
+					writePiEngramCompatibilityCore(t, bin, !tc.incompatible)
+					t.Setenv(tc.override, bin)
 				}
 				if tc.external {
 					t.Setenv("ENGRAM_URL", "http://engram.invalid")
