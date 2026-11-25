@@ -340,13 +340,12 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 	if backgroundActivation != nil {
 		result.Background.Activation = backgroundActivation.Report()
 	}
+	var verificationErr error
 	if !result.Verify.Ready {
-		verificationErr := fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
-		rollback := orchestrator.Rollback(result.Execution)
-		if rollback.Err != nil {
-			verificationErr = errors.Join(verificationErr, rollback.Err)
+		verificationErr = fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
+		if result.Verify.RollbackRequired {
+			return result, rollbackPostApplyError(orchestrator, result.Execution, verificationErr)
 		}
-		return result, verificationErr
 	}
 
 	// Persist the user's agent selection and model assignments so that future
@@ -401,8 +400,10 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		return result, persistErr
 	}
 
-	TelemetryTrigger(homeDir)
-	return result, nil
+	if verificationErr == nil {
+		TelemetryTrigger(homeDir)
+	}
+	return result, verificationErr
 }
 
 func rollbackPostApplyError(orchestrator *pipeline.Orchestrator, execution pipeline.ExecutionResult, cause error) error {
@@ -4899,7 +4900,22 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	checks = append(checks, antigravityCollisionCheck(input.Resolved.Agents)...)
 	checks = append(checks, openCodeConfigChecks(input.HomeDir, input.WorkspaceDir, input.Resolved.Agents)...)
 
-	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
+	results := verify.RunChecks(context.Background(), checks)
+	return verify.BuildReport(withPiEngramCompatibility(results, input.Resolved.Agents, input.Resolved.OrderedComponents))
+}
+
+// Only add a result for a confirmed incompatibility, keeping the normal
+// verification output unchanged. Existing hard failures still roll back.
+func withPiEngramCompatibility(results []verify.CheckResult, agents []model.AgentID, components []model.ComponentID) []verify.CheckResult {
+	if !containsAgent(agents, model.AgentPi) || !hasComponent(components, model.ComponentEngram) {
+		return results
+	}
+	if err := engram.VerifyPiInstanceIdentity(context.Background()); err != nil {
+		return append(results, verify.CheckResult{
+			ID: "verify:pi:engram:instance-id", Status: verify.CheckStatusFailed, Error: err.Error(), NoRollback: true,
+		})
+	}
+	return results
 }
 
 func openCodeConfigChecks(homeDir, workspaceDir string, agentIDs []model.AgentID) []verify.Check {

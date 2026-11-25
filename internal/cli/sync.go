@@ -260,6 +260,10 @@ FLAGS
   --dry-run                          Preview plan without executing
   --help, -h                         Show this help
 
+PI ENGRAM
+  If the local Engram core lacks instance-id, sync keeps the managed files
+  but exits with a verification error. Upgrade the named core before retrying.
+
 OPENCODE REFERENCES
   Prompt files still referenced by remaining settings entries are kept.
   Missing {file:...} targets fail sync and roll back managed changes.
@@ -2193,13 +2197,12 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 		result.Background.Activation = background.Activation
 	}
 	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, rt.runtimeReady, agentIDs)
+	var verificationErr error
 	if !result.Verify.Ready {
-		verificationErr := fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
-		rollback := orchestrator.Rollback(result.Execution)
-		if rollback.Err != nil {
-			verificationErr = errors.Join(verificationErr, rollback.Err)
+		verificationErr = fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
+		if result.Verify.RollbackRequired {
+			return result, rollbackPostApplyError(orchestrator, result.Execution, verificationErr)
 		}
-		return result, verificationErr
 	}
 	writer, err := deriveManagedAssetWriter()
 	if err != nil {
@@ -2223,7 +2226,7 @@ func runSyncWithSelectionScope(homeDir string, selection model.Selection, scope 
 		}
 	}
 
-	return result, nil
+	return result, verificationErr
 }
 
 func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.Selection, writer string, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent) error {
@@ -2866,5 +2869,6 @@ func runPostSyncVerificationWithState(homeDir, workspaceDir string, scope Instal
 		}
 	}
 
-	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
+	results := verify.RunChecks(context.Background(), checks)
+	return verify.BuildReport(withPiEngramCompatibility(results, selection.Agents, selection.Components))
 }
