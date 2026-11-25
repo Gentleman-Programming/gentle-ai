@@ -164,6 +164,115 @@ func TestRejectedCommittedCorrectionStatusFromLinkedWorktree(t *testing.T) {
 	}
 }
 
+// The base-diff kind denotes HEAD (plus explicitly selected untracked paths),
+// not a workspace overlay. Omitting --committed-only in STATUS does not
+// change what it projects or authorize a different kind of START.
+func TestBaseRefWithoutCommittedOnlyCannotFreezeTrackedWorkspace(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	binary := buildReviewProbeBinary(t)
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	writeReviewStartCandidate(t, repo, "docs/committed.md", "# Committed\n", 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qm", "committed range")
+	head := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD^{tree}"))
+	writeReviewStartCandidate(t, repo, "tracked.txt", "staged workspace content\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	writeReviewStartCandidate(t, repo, "tracked.txt", "unstaged workspace content\n", 0o644)
+
+	run := func(args ...string) []byte {
+		t.Helper()
+		stdout, stderr, exit := invokeReviewProbe(t, binary, repo, args...)
+		if exit != 0 || stderr != "" {
+			t.Fatalf("review %q: exit=%d stderr=%q\n%s", args, exit, stderr, stdout)
+		}
+		return stdout
+	}
+	before := run("status")
+	args := []string{"status", "--contract=" + ReviewIntegrationContractV2, "--next-transition=true", "--agent=pi", "--base-ref=" + base}
+	without := run(args...)
+	if with := run(append(args, "--committed-only=true")...); !bytes.Equal(without, with) {
+		t.Fatalf("omitting --committed-only changed the response:\nwithout: %s\nwith: %s", without, with)
+	}
+	var committed ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, without, &committed)
+	if committed.Authority != nil || committed.Projection.Kind != reviewtransaction.TargetBaseDiff ||
+		committed.Projection.CurrentCandidateTree != head || !reflect.DeepEqual(committed.Projection.Paths, []string{"docs/committed.md"}) ||
+		committed.NextTransition == nil || committed.NextTransition.ReasonCode != "fresh_target_ready" ||
+		committed.NextTransition.Execute == nil || committed.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("base-ref STATUS did not offer a committed-only START: %s", without)
+	}
+	t.Log("STATUS with --base-ref, with or without --committed-only: exit=0 base-diff at HEAD, execute/fresh_target_ready")
+
+	start := invocationArgs(t, committed.NextTransition.Execute.Command)
+	withoutAcknowledgement := []string{start[0]}
+	for _, token := range start[1:] {
+		if token != "--committed-only" && token != "--committed-only=true" {
+			withoutAcknowledgement = append(withoutAcknowledgement, token)
+		}
+	}
+	if len(withoutAcknowledgement) != len(start)-1 {
+		t.Fatalf("base-ref STATUS did not render exactly one --committed-only option: %q", start)
+	}
+	stdout, stderr, exit := invokeReviewProbe(t, binary, repo, withoutAcknowledgement...)
+	failure := decodeReviewIntegrationFailure(t, stdout)
+	if exit != 1 || stderr != "Error: The negotiated review request is invalid. [invalid_request]\n" ||
+		failure.Code != "invalid_request" || failure.MutationOutcome != ReviewMutationNotStarted ||
+		failure.Cause != "negotiated base-diff START requires exactly --base-ref and --committed-only" {
+		t.Fatalf("negotiated START without --committed-only: exit=%d stderr=%q\n%s", exit, stderr, stdout)
+	}
+	t.Logf("negotiated START with --base-ref alone: exit=%d %s: %s", exit, failure.Code, failure.Cause)
+
+	stdout, stderr, exit = invokeReviewProbe(t, binary, repo, "start", "--base-ref="+base)
+	// The plain dispatcher may append the path of a local diagnostic report.
+	cause, _, _ := strings.Cut(strings.TrimSuffix(stderr, "\n"), " A defect report was saved at ")
+	if exit != 1 || len(stdout) != 0 || cause != "Error: review start with --base-ref omits dirty tracked changes; rerun with --committed-only to acknowledge committed-only review scope" {
+		t.Fatalf("plain START without --committed-only: exit=%d stderr=%q stdout=%s", exit, stderr, stdout)
+	}
+	t.Logf("plain START with --base-ref alone on a dirty worktree: exit=%d %s", exit, cause)
+
+	var overlay ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, run(append(args, "--workspace-overlay=true")...), &overlay)
+	if overlay.Authority != nil || overlay.Projection.Kind != reviewtransaction.TargetBaseWorkspaceOverlay ||
+		overlay.Projection.CurrentCandidateTree == head || !reflect.DeepEqual(overlay.Projection.Paths, []string{"docs/committed.md", "tracked.txt"}) {
+		t.Fatalf("explicit overlay did not project tracked workspace content: %+v", overlay.Projection)
+	}
+	t.Log("STATUS with --workspace-overlay: exit=0 base-workspace-overlay including the dirty tracked file")
+	if after := run("status"); !bytes.Equal(after, before) {
+		t.Errorf("scope probes changed the authority inventory:\nbefore: %s\nafter: %s", before, after)
+	}
+
+	// A plain zero-lens START can omit the acknowledgement on a clean
+	// worktree. The resulting lineage still freezes only the committed range.
+	clean := initReviewCLIRepo(t)
+	cleanBase := strings.TrimSpace(runReviewCLIGit(t, clean, "rev-parse", "HEAD"))
+	writeReviewStartCandidate(t, clean, "docs/committed.md", "# Committed\n", 0o644)
+	runReviewCLIGit(t, clean, "commit", "-qm", "clean committed range")
+	cleanHead := strings.TrimSpace(runReviewCLIGit(t, clean, "rev-parse", "HEAD^{tree}"))
+	stdout, stderr, exit = invokeReviewProbe(t, binary, clean, "start", "--base-ref="+cleanBase)
+	if exit != 0 || stderr != "" {
+		t.Fatalf("plain START on a clean worktree: exit=%d stderr=%q\n%s", exit, stderr, stdout)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, stdout, &started)
+	if started.LineageID == "" || started.State != reviewtransaction.StateApproved {
+		t.Fatalf("plain START without --committed-only did not approve the clean committed range: %s", stdout)
+	}
+	stdout, stderr, exit = invokeReviewProbe(t, binary, clean, "status", "--contract="+ReviewIntegrationContractV2, "--next-transition=true", "--agent=pi",
+		"--base-ref="+cleanBase, "--lineage="+started.LineageID)
+	if exit != 0 || stderr != "" {
+		t.Fatalf("bound STATUS after plain START: exit=%d stderr=%q\n%s", exit, stderr, stdout)
+	}
+	var frozen ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, stdout, &frozen)
+	if frozen.Authority == nil || frozen.Authority.LineageID != started.LineageID || frozen.Authority.State != reviewtransaction.StateApproved ||
+		frozen.TargetIdentity != started.TargetIdentity || frozen.Projection.InitialSnapshotIdentity != started.TargetIdentity ||
+		frozen.Projection.Kind != reviewtransaction.TargetBaseDiff || frozen.Projection.CurrentCandidateTree != cleanHead {
+		t.Fatalf("plain START without --committed-only did not freeze a base-diff at HEAD: %s", stdout)
+	}
+	t.Logf("plain START with --base-ref alone on a clean worktree and bound STATUS: exit=0 %s/%s at HEAD", frozen.Projection.Kind, started.State)
+}
+
 // A rejected correction does not reopen the committed range's frozen empty
 // untracked selection, even when the live workspace has untracked material.
 func TestBoundEscalatedCommittedStatusPreservesFrozenUntrackedExclusion(t *testing.T) {
