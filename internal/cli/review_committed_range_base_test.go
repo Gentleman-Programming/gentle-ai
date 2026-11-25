@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -152,5 +154,125 @@ func TestNextTransitionCommittedRangeBaseCrissCrossUpstreamKeepsDefaultBranch(t 
 	status := derivedRangeTerminalStatus(t, repo)
 	if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
 		t.Fatalf("criss-cross upstream lost the derived committed-range START (must keep the default-branch derivation): %#v", status.NextTransition)
+	}
+}
+
+func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
+	for _, name := range []string{"fresh_upstream", "shorter_incomparable_range", "upstream_not_in_head", "reverted_upstream_format", "chained_tips", "incomparable_tips"} {
+		t.Run(name, func(t *testing.T) {
+			reviewEnabledHome(t)
+			repo := initReviewCLIRepo(t)
+			runReviewCLIGit(t, repo, "branch", "-M", "main")
+			const originRef = "refs/remotes/origin/main"
+			const upstreamRef = "refs/remotes/upstream/main"
+			commitFile := func(name, content string) {
+				writeReviewStartCandidate(t, repo, name, content, 0o644)
+				runReviewCLIGit(t, repo, "add", name)
+				runReviewCLIGit(t, repo, "commit", "-qm", name)
+			}
+			rev := func(ref string) string {
+				return strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", ref))
+			}
+			if name == "reverted_upstream_format" {
+				commitFile("format.txt", "base\n")
+			}
+			root := rev("HEAD")
+			if name == "shorter_incomparable_range" {
+				commitFile("fork-default.txt", "fork-only default work\n")
+			}
+			origin := rev("HEAD")
+			runReviewCLIGit(t, repo, "remote", "add", "origin", "origin.git")
+			runReviewCLIGit(t, repo, "remote", "add", "upstream", "upstream.git")
+			runReviewCLIGit(t, repo, "update-ref", originRef, origin)
+			runReviewCLIGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", originRef)
+			runReviewCLIGit(t, repo, "switch", "-qc", "upstream-default", root)
+			for i := 1; i <= 12; i++ {
+				commitFile("upstream.txt", fmt.Sprintf("upstream change %d\n", i))
+			}
+			switch name {
+			case "reverted_upstream_format":
+				commitFile("tracked.txt", "    base\n")
+				commitFile("format.txt", "    base\n")
+			case "chained_tips":
+				// The earlier tip sorts first. Both tips differ from the feature in tracked.txt only.
+				commitFile("tracked.txt", "    base\n")
+				runReviewCLIGit(t, repo, "remote", "add", "mirror", "mirror.git")
+				runReviewCLIGit(t, repo, "update-ref", "refs/remotes/mirror/main", "HEAD")
+				commitFile("tracked.txt", "base\n")
+			case "incomparable_tips":
+				commitFile("upstream-extra.txt", "extra upstream path\n")
+			}
+			upstream := rev("HEAD")
+			runReviewCLIGit(t, repo, "update-ref", upstreamRef, upstream)
+			runReviewCLIGit(t, repo, "switch", "-qc", "feature", "--no-track", upstreamRef)
+			if name == "chained_tips" {
+				commitFile("tracked.txt", "base\nthe change under review\n")
+			} else {
+				commitFile("feature.txt", "the change under review\n")
+			}
+			want := upstream
+			switch name {
+			case "shorter_incomparable_range":
+				// Both tips are in HEAD's history, but neither contains the other.
+				runReviewCLIGit(t, repo, "merge", "--no-ff", "-qm", "merge fork default", origin)
+				if got := strings.TrimSpace(runReviewCLIGit(t, repo, "merge-base", origin, upstream)); got != root {
+					t.Fatalf("fixture merge-base = %q, want common root %q", got, root)
+				}
+				count := func(ref string) int {
+					return len(strings.Fields(runReviewCLIGit(t, repo, "rev-list", ref+"..HEAD")))
+				}
+				if other, original := count(upstream), count(origin); other >= original {
+					t.Fatalf("fixture upstream has %d commits to review, want fewer than origin's %d", other, original)
+				}
+				want = origin
+			case "upstream_not_in_head":
+				runReviewCLIGit(t, repo, "switch", "-q", "upstream-default")
+				commitFile("upstream.txt", "upstream moved after the fork point\n")
+				runReviewCLIGit(t, repo, "update-ref", upstreamRef, "HEAD")
+				runReviewCLIGit(t, repo, "switch", "-q", "feature")
+				want = origin
+			case "reverted_upstream_format":
+				runReviewCLIGit(t, repo, "revert", "--no-commit", origin+".."+upstream)
+				runReviewCLIGit(t, repo, "commit", "-qm", "revert upstream changes")
+			case "incomparable_tips":
+				// Neither tip subsumes the other, even though upstream leaves fewer changed paths.
+				// The remote name holds an ideographic space Git accepts; it must not be split.
+				mirror := "mirror　copy"
+				runReviewCLIGit(t, repo, "switch", "-qc", "mirror-default", origin)
+				commitFile("mirror.txt", "independent mirror path\n")
+				runReviewCLIGit(t, repo, "remote", "add", mirror, "mirror.git")
+				runReviewCLIGit(t, repo, "update-ref", "refs/remotes/"+mirror+"/main", "HEAD")
+				runReviewCLIGit(t, repo, "switch", "-q", "feature")
+				runReviewCLIGit(t, repo, "merge", "--no-ff", "-qm", "merge mirror default", "mirror-default")
+				want = origin
+			}
+			// A fully pushed feature has no unpushed range against its tracking ref.
+			runReviewCLIGit(t, repo, "update-ref", "refs/remotes/origin/feature", "HEAD")
+			runReviewCLIGit(t, repo, "branch", "--set-upstream-to=origin/feature")
+
+			status := derivedRangeTerminalStatus(t, repo)
+			if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+				t.Fatalf("selectorless STATUS did not offer START: %#v", status.NextTransition)
+			}
+			if got := startTransitionArgumentValue(t, status, "committed-only"); got != "true" {
+				t.Errorf("offered START committed-only = %q, want true", got)
+			}
+			if got := startTransitionArgumentValue(t, status, "base-ref"); got != want {
+				t.Errorf("offered START base-ref = %q, want %q (origin %q, upstream fork point %q)", got, want, origin, upstream)
+			}
+			if name == "reverted_upstream_format" {
+				// The reversal was authored on the feature branch and must stay visible, even though it expands the diff.
+				if paths, want := status.Projection.Paths, []string{"feature.txt", "format.txt", "tracked.txt", "upstream.txt"}; !slices.Equal(paths, want) {
+					t.Errorf("offered START changes %q, want %q", paths, want)
+				}
+			}
+			if name == "fresh_upstream" {
+				explicit := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--base-ref", originRef, "--committed-only")
+				// Explicit STATUS already freezes the caller's base as a tree in START.
+				if got, want := startTransitionArgumentValue(t, explicit, "base-ref"), rev(originRef+"^{tree}"); got != want {
+					t.Errorf("START base-ref after explicit STATUS = %q, want the explicitly selected tree %q", got, want)
+				}
+			}
+		})
 	}
 }
