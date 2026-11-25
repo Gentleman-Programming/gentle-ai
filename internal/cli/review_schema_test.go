@@ -18,10 +18,13 @@ func TestReviewerSchemaMatchesProviderAdmissionEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	required := schemaStringArray(t, schema["required"])
-	for _, field := range []string{"subject_hash", "inspection", "findings", "evidence"} {
+	for _, field := range []string{"inspection", "findings", "evidence"} {
 		if !containsString(required, field) {
 			t.Fatalf("reviewer schema required fields = %v, missing %q", required, field)
 		}
+	}
+	if containsString(required, "subject_hash") {
+		t.Fatalf("reviewer schema still requires a subject echo: %v", required)
 	}
 	properties := schema["properties"].(map[string]any)
 	if properties["subject_hash"].(map[string]any)["pattern"] != "^sha256:[0-9a-f]{64}$" {

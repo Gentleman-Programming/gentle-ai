@@ -135,6 +135,129 @@ func TestNegotiatedStatusUnbornUntrackedRequiresSelectionBeforeSnapshot(t *testi
 	assertNoUntrackedSelectionAuthority(t, repo)
 }
 
+func TestIntendedUntrackedSelectionSubmissionNamesMissingFields(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	binary := buildReviewProbeBinary(t)
+	repo := initReviewCLIRepo(t)
+	const path = "docs/chosen, file.md"
+	writeUndeclaredWorkspaceFile(t, repo, path, "# Chosen\n", 0o644)
+	writeReviewStartCandidate(t, repo, "docs/tracked.md", "# Tracked\n", 0o644)
+
+	t.Run("schema", func(t *testing.T) {
+		stdout, stderr, exit := invokeReviewProbe(t, binary, repo, "schema", "intended-untracked-selection")
+		if exit != 0 || stderr != "" {
+			t.Fatalf("review schema intended-untracked-selection: exit=%d stderr=%q\n%s", exit, stderr, stdout)
+		}
+		var served map[string]any
+		decodeStrictReviewJSON(t, stdout, &served)
+		if want := readReviewV2SchemaDocument(t, reviewV2SchemaDirectory(t), "intended-untracked-selection.schema.json"); !reflect.DeepEqual(served, want) {
+			t.Fatalf("review schema intended-untracked-selection did not return the published schema:\n%s", stdout)
+		}
+	})
+
+	preflight := []string{"status", "--contract=" + ReviewIntegrationContractV2, "--next-transition=true", "--agent=pi"}
+	before, stderr, exit := invokeReviewProbe(t, binary, repo, preflight...)
+	if exit != 0 || stderr != "" {
+		t.Fatalf("review %q: exit=%d stderr=%q\n%s", preflight, exit, stderr, before)
+	}
+	var offer ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, before, &offer)
+	digest, eligible := intendedUntrackedSelection(t, offer)
+	if offer.Action != reviewtransaction.TargetStatusActionStart || offer.NextTransition.ReasonCode != "intended_untracked_selection_required" ||
+		offer.Authority != nil || !reflect.DeepEqual(eligible, []string{path}) {
+		t.Fatalf("unexpected selection offer: %s", before)
+	}
+	submission := offer.NextTransition.Collect.Inputs[0].Submission
+	if submission == nil || submission.Value == nil || submission.OperationToken != "status" {
+		t.Fatalf("missing selected STATUS descriptor: %+v", submission)
+	}
+	replay := func(t *testing.T, answer []byte) []string {
+		t.Helper()
+		args := append([]string{submission.OperationToken}, submission.ArgumentTokens...)
+		index := 1 + submission.Value.SubstitutionLocation
+		if index >= len(args) || args[index] != "--intended-untracked-selection={{value}}" {
+			t.Fatalf("invalid substitution: %q", args)
+		}
+		args[index] = strings.Replace(args[index], "{{value}}", string(answer), 1)
+		return args
+	}
+	refused := func(t *testing.T, cause string, args ...string) {
+		t.Helper()
+		stdout, stderr, exit := invokeReviewProbe(t, binary, repo, args...)
+		var failure ReviewIntegrationFailure
+		decodeStrictReviewJSON(t, stdout, &failure)
+		if exit != 1 || stderr != "Error: The negotiated review request is invalid. [invalid_request]\n" ||
+			failure.Code != "invalid_request" || failure.Phase != "preflight" ||
+			failure.MutationOutcome != ReviewMutationNotStarted || failure.Cause != cause {
+			t.Errorf("review %q: exit=%d stderr=%q cause=%q\nwant cause=%q\n%s", args, exit, stderr, failure.Cause, cause, stdout)
+		}
+	}
+
+	const requiredFields = "--intended-untracked-selection requires non-empty JSON fields: "
+	const schemaHint = "; see 'gentle-ai review schema intended-untracked-selection'"
+	for _, tc := range []struct {
+		name, scope, inventory, field string
+	}{
+		{name: "empty-scope", inventory: digest, field: "untracked_scope"},
+		{name: "empty-inventory", scope: "exclude", field: "expected_untracked_inventory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			answer := reviewIntendedUntrackedSelection{Schema: submission.Value.Schema, UntrackedScope: tc.scope, ExpectedInventory: tc.inventory, Intended: []string{}}
+			raw, err := json.Marshal(answer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			refused(t, requiredFields+tc.field+schemaHint, replay(t, raw)...)
+			if got, stderr, exit := invokeReviewProbe(t, binary, repo, preflight...); exit != 0 || stderr != "" || !bytes.Equal(got, before) {
+				t.Errorf("empty field submission changed preflight: exit=%d stderr=%q\n%s", exit, stderr, got)
+			}
+		})
+	}
+
+	for _, paths := range [][]string{{}, {path}} {
+		mode := "exclude"
+		if len(paths) != 0 {
+			mode = "select"
+		}
+		t.Run(mode, func(t *testing.T) {
+			raw, err := json.Marshal(map[string]any{"schema": submission.Value.Schema, "intended_untracked": paths})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pathsOnly := replay(t, raw)
+			refused(t, requiredFields+"untracked_scope, expected_untracked_inventory"+schemaHint, pathsOnly...)
+			refused(t, "--intended-untracked-selection is mutually exclusive with legacy untracked selection flags", append(pathsOnly, "--untracked-scope="+mode)...)
+
+			answer := reviewIntendedUntrackedSelection{Schema: submission.Value.Schema, UntrackedScope: mode, ExpectedInventory: digest, Intended: paths}
+			raw, err = json.Marshal(answer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			full := replay(t, raw)
+			stdout, stderr, exit := invokeReviewProbe(t, binary, repo, full...)
+			if exit != 0 || stderr != "" {
+				t.Fatalf("complete published envelope %q: exit=%d stderr=%q\n%s", full, exit, stderr, stdout)
+			}
+			var resolved ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, stdout, &resolved)
+			if resolved.Authority != nil || !reflect.DeepEqual(resolved.Projection.IntendedUntracked, paths) ||
+				resolved.NextTransition == nil || resolved.NextTransition.Kind != reviewNextTransitionExecute || resolved.NextTransition.ReasonCode != "fresh_target_ready" ||
+				resolved.NextTransition.Execute == nil || resolved.NextTransition.Execute.Operation != "review.start" {
+				t.Fatalf("unexpected status for complete published envelope: %s", stdout)
+			}
+			t.Logf("complete %s envelope: exit=0 next_transition=%s/%s", mode, resolved.NextTransition.Kind, resolved.NextTransition.ReasonCode)
+			if mode == "select" {
+				stale := bytes.Replace(raw, []byte(digest), []byte("sha256:"+strings.Repeat("0", 64)), 1)
+				refused(t, "untracked inventory changed; rerun `"+reviewIntendedUntrackedInventoryCommand+"` before selecting paths", replay(t, stale)...)
+			}
+			if got, stderr, exit := invokeReviewProbe(t, binary, repo, preflight...); exit != 0 || stderr != "" || !bytes.Equal(got, before) {
+				t.Errorf("selection submissions changed preflight: exit=%d stderr=%q\n%s", exit, stderr, got)
+			}
+		})
+	}
+}
+
 func TestIntendedUntrackedSelectionSubmissionExecutesSelectedStatusThenPrintedStart(t *testing.T) {
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	reviewEnabledHome(t)

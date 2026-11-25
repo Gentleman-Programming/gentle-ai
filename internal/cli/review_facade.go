@@ -828,8 +828,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	requestContextSource := flags.String("request-context", "", "preflight review start --request-context: validate the request file without creating authority and render it into the fresh START next transition")
 	escalateItem := flags.String("escalate-item", "", "preflight review start --escalate-item (1-6) and render it into the fresh START next transition")
 	escalateReason := flags.String("escalate-reason", "", "preflight review start --escalate-reason and render it into the fresh START next transition")
-	lensSelection := flags.String("lenses", "", "preflight review start --lenses and render it into the fresh START next transition")
-	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason and render it into the fresh START next transition")
+	lensSelection := flags.String("lenses", "", "preflight review start --lenses; an exact reviewing recovery may resume its matching frozen selection")
+	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason; a resumed recovery keeps its matching frozen reason")
 	phaseTimings := flags.Bool("phase-timings", false, "emit opt-in native STATUS phase timing diagnostics")
 	nonBlockingFindings := flags.Bool("non-blocking-findings", false, "include the optional non_blocking_findings (with claims) of a correction_required or escalated authority in negotiated output; requires --contract "+ReviewIntegrationContractV2)
 	if err := parseReviewFlags(flags, args); err != nil {
@@ -970,67 +970,50 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// committed-range projection instead of silently defaulting to
 		// current-changes (gentle-pi#569, gentle-shell#2379).
 		var pendingApprovedTerminalTarget *reviewtransaction.Snapshot
-		// frozenCommittedCorrectionTarget carries the frozen committed-range
-		// target of a correction_required lineage whose untracked selection is
-		// empty, so an explicit re-entry naming that same base can keep the
-		// frozen exclusion instead of demanding a fresh live declaration
-		// (#6058).
-		var frozenCommittedCorrectionTarget *reviewtransaction.Snapshot
+		// An empty selection is already frozen for the correction. Wait for
+		// native STATUS to confirm that re-entry names that same target.
+		var frozenEmptyCorrectionTarget *reviewtransaction.Snapshot
 		var frozenCommittedEscalation *reviewtransaction.CompactRecord
+		untrackedDeclared := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
+		committedRange := *committedOnly
 		if selectedProjection == reviewtransaction.ProjectionStaged {
-			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
+			if untrackedDeclared {
 				return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review status --projection staged`"))
 			}
 		} else {
-			if !reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) && requestedLineageOccupied {
+			selectorless := !committedOnlyProvided && !reviewFlagWasProvided(flags, "base-ref") &&
+				!reviewFlagWasProvided(flags, "workspace-overlay") && !reviewFlagWasProvided(flags, "projection")
+			if requestedLineageOccupied && (!untrackedDeclared || selectorless) {
 				store, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, root, requestedLineage)
 				if storeErr != nil {
 					return fmt.Errorf("open explicit review lineage: %w", storeErr)
 				}
 				record, loadErr := store.LoadContext(ctx)
-				if loadErr == nil {
-					// Only an approved compact authority that still owns its
-					// acknowledgement can resume its immutable terminal target. A
-					// correction-required authority that already froze a non-empty
-					// intended-untracked SELECTION resumes it too while every selected
-					// path remains eligible. Additional unselected paths stay outside
-					// the immutable target and cannot expand a bounded correction: the
-					// exact bound STATUS continuation
-					// `review.capture-correction-plan` itself returns carries no
-					// untracked-scope flags, so demanding a fresh declaration on that
-					// plain re-entry dead-ended the correction lineage and bound the
-					// resulting collect input to a different (live, declaration-less)
-					// target identity than the one the authority is bound to (issue
-					// #3849 and #4435). For a workspace-scoped (current-changes or
-					// overlay) target a frozen EXCLUDE declaration (empty selection) is
-					// left alone here because it is indistinguishable on its own from
-					// "nothing was ever declared"; that path still requires a fresh live
-					// declaration when eligible untracked files exist. A committed-range
-					// (base-diff) target has no such ambiguity: its candidate is the
-					// frozen commit range plus the frozen selection, so even an empty
-					// selection is the immutable decision and resumes as-is
-					// (gentle-shell#2379, #1596).
+				if loadErr == nil && selectorless && record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff {
+					if escalation := record.State.EscalationEvidence(); escalation != nil && escalation.Cause == reviewRejectedValidatorCause {
+						// Re-enter the original committed range, not the validator's fix diff.
+						// STATUS still assesses live HEAD against the rejected candidate.
+						selectedBaseRef, committedRange = record.State.InitialSnapshot.BaseTree, true
+					}
+				}
+				if loadErr == nil && !untrackedDeclared {
 					_, pendingApproval := reviewtransaction.PendingApprovedCompactAcknowledgement(record)
 					resumeCorrectionUntracked := false
 					declaredUntracked := record.State.InitialSnapshot.IntendedUntracked
-					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) == 0 &&
-						record.State.CurrentSnapshot.Kind == reviewtransaction.TargetBaseDiff && !*workspaceOverlay {
-						// The frozen empty selection is the immutable committed-range
-						// decision. A selectorless re-entry resumes it through the
-						// frozen base tree; an explicit re-entry must first prove it
-						// names that same tree (the assessment below does).
-						terminal := record.State.CurrentSnapshot
-						frozenCommittedCorrectionTarget = &terminal
-						if selectedBaseRef == "" {
-							resumeCorrectionUntracked = true
-						}
+					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) == 0 {
+						frozenEmptyCorrectionTarget = &record.State.CurrentSnapshot
+						// A selectorless committed-range re-entry first needs its
+						// frozen base tree to rebuild the correct projection.
+						resumeCorrectionUntracked = frozenEmptyCorrectionTarget.Kind == reviewtransaction.TargetBaseDiff &&
+							selectedBaseRef == "" && !*workspaceOverlay
 					} else if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) != 0 {
+						// Nonempty selections still require every frozen path to remain eligible.
 						inventory, _, inventoryErr := builder.IntendedUntrackedInventory(ctx)
 						if inventoryErr != nil {
 							return reviewPreflightError(inventoryErr)
 						}
 						resumeCorrectionUntracked = reviewUntrackedInventoryContainsSelection(inventory, declaredUntracked)
-					} else if record.State.State == reviewtransaction.StateEscalated && *committedOnly &&
+					} else if record.State.State == reviewtransaction.StateEscalated && committedRange &&
 						record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff && len(declaredUntracked) == 0 {
 						// Wait for native STATUS to confirm that this selector still
 						// reaches the rejected candidate's terminal stop.
@@ -1164,25 +1147,30 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					}
 				}
 			}
-			// #3900: a zero-lens START closes approved with a pending
-			// acknowledgement in the same call, and the canonical selectorless
-			// STATUS is the only continuation the orchestrator holds. The one
-			// lineage that START derives for this exact live identity admits, so
-			// STATUS replays its acknowledgement instead of reoffering a START
-			// the store refuses. No sibling authority is read.
-			pendingLineage := ""
+			// An existing continuation in the exact derived START slot takes
+			// precedence over a fresh START. Do not look at unrelated lineages.
+			var continuing reviewtransaction.CompactRecord
 			if requestedLineage == "" {
-				pendingLineage, err = reviewPendingAcknowledgementLineage(ctx, root, liveSnapshot.Identity)
+				continuing, err = reviewStatusContinuationAuthority(ctx, root, liveSnapshot.Identity, *contract)
 				if err != nil {
 					return fmt.Errorf("load pending acknowledgement for negotiated review target: %w", err)
 				}
 			}
-			if pendingLineage != "" {
+			if continuing.State.LineageID != "" {
 				native, liveSnapshot, err = reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
-					Target: target, LineageID: pendingLineage, PrePR: prePR,
+					Target: target, LineageID: continuing.State.LineageID, PrePR: prePR,
 				})
 				if err != nil {
 					return fmt.Errorf("assess negotiated review target: %w", err)
+				}
+				// Replaying the selector STATUS can carry exactly the lens
+				// options recovery inherited. They are already frozen, not new
+				// START options to apply. Leave nonmatching options to the guard.
+				if selection := startOptions.LensSelection; selection != nil && continuing.State.Recovery != nil &&
+					native.State == reviewtransaction.StateReviewing && native.Revision == continuing.Revision &&
+					liveSnapshot.Identity == continuing.State.InitialSnapshot.Identity &&
+					selection.Reason == continuing.State.LensSelectionReason && slices.Equal(selection.Lenses, continuing.State.SelectedLenses) {
+					startOptions.LensSelection = nil
 				}
 			} else {
 				native = reviewFreshAtomicTargetStatus(target, liveSnapshot)
@@ -1261,32 +1249,26 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				return fmt.Errorf("reassess negotiated review target: %w", err)
 			}
 		}
-		// #6058: the exact bound continuation spells the frozen committed range
-		// as `--base-ref <frozen tree> --committed-only`, and an operator may
-		// replay the commit START was pinned to instead. Once the assessed live
-		// target resolves to that same frozen base tree and projection, it is
-		// the same committed range, so the frozen EXCLUDE remains the
-		// authority's immutable decision: an unrelated untracked file must not
-		// replace it with a fresh live declaration. A different base tree stays
-		// a different target and never inherits this decision.
-		var frozenCommittedTarget *reviewtransaction.Snapshot
+		// For the same bound correction, the frozen empty selection is the
+		// decision, not a missing live declaration (#6058, #6225).
+		var frozenEmptyTarget *reviewtransaction.Snapshot
 		if native.State == reviewtransaction.StateCorrectionRequired {
-			frozenCommittedTarget = frozenCommittedCorrectionTarget
+			frozenEmptyTarget = frozenEmptyCorrectionTarget
 		} else if frozenCommittedEscalation != nil && intendedScope.NeedsSelection &&
 			native.State == reviewtransaction.StateEscalated && native.Revision == frozenCommittedEscalation.Revision &&
 			native.Escalation != nil && native.Escalation.Cause == reviewRejectedValidatorCause &&
 			liveSnapshot.CandidateTree == frozenCommittedEscalation.State.CurrentSnapshot.CandidateTree {
 			// The rejected snapshot is the fix diff: its tree identifies the
 			// rejected candidate, but only the initial snapshot names the range.
-			frozenCommittedTarget = &frozenCommittedEscalation.State.InitialSnapshot
+			frozenEmptyTarget = &frozenCommittedEscalation.State.InitialSnapshot
 		}
-		// guard:population committed-correction-frozen-exclusion too-loose: only a current, stop-routed base-diff of the bound lineage with the same frozen base, projection, and empty selection can reuse the correction's exclusion. After validator rejection this additionally requires the same authority revision and rejected candidate tree; a changed candidate's recovery still follows the ordinary selection rules.
-		if frozenCommittedTarget != nil && !intendedScope.Declared &&
+		// guard:population committed-correction-frozen-exclusion too-loose: only a current, stop-routed target of the bound lineage with the same kind, base, projection, and empty selection can reuse the exclusion. Validator rejection still requires the exact committed candidate above; recovery does not inherit the exclusion.
+		if frozenEmptyTarget != nil && !intendedScope.Declared &&
 			native.Applicability == reviewtransaction.TargetApplicabilityCurrent &&
 			native.LineageID == requestedLineage && native.Action == reviewtransaction.TargetStatusActionStop &&
-			native.Projection.Kind == reviewtransaction.TargetBaseDiff &&
-			native.Projection.BaseTree == frozenCommittedTarget.BaseTree &&
-			native.Projection.Projection == frozenCommittedTarget.Projection &&
+			native.Projection.Kind == frozenEmptyTarget.Kind &&
+			native.Projection.BaseTree == frozenEmptyTarget.BaseTree &&
+			native.Projection.Projection == frozenEmptyTarget.Projection &&
 			len(native.Projection.IntendedUntracked) == 0 {
 			intendedScope.Declared = true
 			intendedScope.NeedsSelection = false
@@ -2596,11 +2578,46 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			fmt.Errorf("review start without --contract cannot produce a completable review because its %d selected lens(es) require repository_context, which only the negotiated contract form publishes; rerun with `gentle-ai review start %s` instead",
 				len(lenses), strings.TrimPrefix(reviewNegotiatedStartCommand(snapshot, *runtimeAgent), "gentle-ai review start ")))
 	}
-	// The candidate is frozen and the tier is classified, so this is the one
-	// point where the kill switch can stop a start and consent can name the real
-	// reason. Nothing has been persisted yet, so refusing here leaves no
-	// authority behind.
-	if err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated, *runtimeAgent); err != nil {
+	// Freeze and check one request before any consent question (#4790). If
+	// START proceeds, the same request is used at the atomic write boundary.
+	prepare := func() (reviewtransaction.CompactAtomicStartRequest, error) {
+		request, err := prepareReviewFacadeCompactAtomicStartFor(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, reviewLensSelectionReason(selection), startRuntime)
+		if err != nil {
+			return reviewtransaction.CompactAtomicStartRequest{}, reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
+		}
+		// Charge the frozen request context against the same evidence budget.
+		if requestContext != "" {
+			if err := request.State.FreezeRequestContext(requestContext); err != nil {
+				return reviewtransaction.CompactAtomicStartRequest{}, reviewPreflightError(fmt.Errorf("freeze review request context: %w", err))
+			}
+			request.Binding.RequestContextHash = request.State.RequestContextHash
+		}
+		if escalation != nil {
+			if err := request.State.FreezeAgentEscalation(*escalation); err != nil {
+				return reviewtransaction.CompactAtomicStartRequest{}, reviewPreflightError(fmt.Errorf("freeze review agent escalation: %w", err))
+			}
+			frozen := *escalation
+			request.Binding.AgentEscalation = &frozen
+		}
+		request.Binding.LensSelectionReason = request.State.LensSelectionReason
+		// A resume keeps the lens selection its active lineage froze: an agent
+		// that names another selection while resuming replays that lineage
+		// instead of hitting atomic_start_conflict (gentle-shell#1207).
+		if requestedLineage := strings.TrimSpace(*lineage); requestedLineage != "" {
+			if _, active, loadErr := discoverCompactFacadeReview(ctx, root, requestedLineage, false); loadErr == nil {
+				request.AdoptFrozenLensSelection(active)
+			}
+		}
+		// #1854: the atomic commit reports a requested trace's committed-but-
+		// degraded outcome for both reviewed and zero-lens candidates.
+		request.TracePath = strings.TrimSpace(*tracePath)
+		if err := reviewLensContextCompactAtomicStartBudgetRefusal(ctx, root, request); err != nil {
+			return reviewtransaction.CompactAtomicStartRequest{}, err
+		}
+		return request, nil
+	}
+	request, err := authorizeReviewStart(ctx, root, assessment, consentMode, negotiated, *runtimeAgent, prepare)
+	if err != nil {
 		if errors.Is(err, errReviewConsentQuestionRequired) {
 			// The caller declared it can relay a blocking question, so the
 			// typed question IS this start's response. Nothing has been
@@ -2639,42 +2656,6 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// routing; explicit compatibility owners remain responsible for any manual
 	// inspection or disposition.
 	{
-		request, err := prepareReviewFacadeCompactAtomicStartFor(ctx, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), target, snapshot, assessment, changedLines, lenses, reviewLensSelectionReason(selection), startRuntime)
-		if err != nil {
-			return reviewPreflightError(fmt.Errorf("prepare compact atomic facade review: %w", err))
-		}
-		// The request is frozen before the budget probe below, so a request
-		// that cannot fit beside the evidence is refused before authority.
-		if requestContext != "" {
-			if err := request.State.FreezeRequestContext(requestContext); err != nil {
-				return reviewPreflightError(fmt.Errorf("freeze review request context: %w", err))
-			}
-			request.Binding.RequestContextHash = request.State.RequestContextHash
-		}
-		if escalation != nil {
-			if err := request.State.FreezeAgentEscalation(*escalation); err != nil {
-				return reviewPreflightError(fmt.Errorf("freeze review agent escalation: %w", err))
-			}
-			frozen := *escalation
-			request.Binding.AgentEscalation = &frozen
-		}
-		request.Binding.LensSelectionReason = request.State.LensSelectionReason
-		// A resume keeps the lens selection its active lineage froze: an agent
-		// that names another selection while resuming replays that lineage
-		// instead of hitting atomic_start_conflict (gentle-shell#1207).
-		if requestedLineage := strings.TrimSpace(*lineage); requestedLineage != "" {
-			if _, active, loadErr := discoverCompactFacadeReview(ctx, root, requestedLineage, false); loadErr == nil {
-				request.AdoptFrozenLensSelection(active)
-			}
-		}
-		// #1854: threaded through so the exact atomic START commit below can
-		// also report a requested trace's committed-but-degraded outcome,
-		// not only the zero-lens completion commit further down.
-		request.TracePath = strings.TrimSpace(*tracePath)
-		if err := reviewLensContextCompactAtomicStartBudgetRefusal(ctx, root, request); err != nil {
-			return err
-		}
-
 		// Compact budget/context preflight completes before the live snapshot is
 		// revalidated and before the one exact create-or-replay call.
 		var frozenContext *reviewtransaction.FrozenCandidateContext

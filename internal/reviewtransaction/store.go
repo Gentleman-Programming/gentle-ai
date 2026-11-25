@@ -160,8 +160,11 @@ func reviewAuthorityRoot(ctx context.Context, repo string) (string, string, erro
 	if err != nil {
 		return "", "", fmt.Errorf("resolve repository Git identity: %w", err)
 	}
-	authorityRoot := filepath.Join(identity.GitCommonDir, "gentle-ai", "review-transactions")
-	return authorityRoot, identity.RepositoryRoot, nil
+	return reviewAuthorityRootIn(identity.GitCommonDir), identity.RepositoryRoot, nil
+}
+
+func reviewAuthorityRootIn(gitCommonDir string) string {
+	return filepath.Join(gitCommonDir, "gentle-ai", "review-transactions")
 }
 
 func validateLineageID(lineageID string) error {
