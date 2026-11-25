@@ -254,8 +254,7 @@ func reconcileAgentsMDContent(original string, staging string) string {
 		updated = filemerge.InjectMarkdownSection(updated, sec.ID, sec.Body)
 	}
 
-	// 2. Identify sections present in original that should be removed:
-	// Any managed section that is NOT in staging.
+	// 2. Remove any managed section present in original that is NOT in staging.
 	for _, sec := range Sections(original) {
 		if _, inStaging := stagedMap[sec.ID]; inStaging {
 			continue
@@ -263,10 +262,36 @@ func reconcileAgentsMDContent(original string, staging string) string {
 		if !managedSectionIDs[sec.ID] {
 			continue
 		}
-		updated = filemerge.InjectMarkdownSection(updated, sec.ID, "")
+		updated = removeMarkdownSection(updated, sec.ID)
 	}
 
 	return updated
+}
+
+// removeMarkdownSection strips a marker-bounded Gentle AI section while
+// preserving every byte outside the markers, including surrounding spacing.
+func removeMarkdownSection(content, sectionID string) string {
+	open := "<!-- gentle-ai:" + sectionID + " -->"
+	close := "<!-- /gentle-ai:" + sectionID + " -->"
+	for {
+		openIdx := strings.Index(content, open)
+		if openIdx < 0 {
+			return content
+		}
+		bodyStart := openIdx + len(open)
+		closeOffset := strings.Index(content[bodyStart:], close)
+		if closeOffset < 0 {
+			return content
+		}
+		endIdx := bodyStart + closeOffset + len(close)
+		if endIdx < len(content) && content[endIdx] == '\r' {
+			endIdx++
+		}
+		if endIdx < len(content) && content[endIdx] == '\n' {
+			endIdx++
+		}
+		content = content[:openIdx] + content[endIdx:]
+	}
 }
 
 func replaceSymlink(symlinkPath string, target string) error {

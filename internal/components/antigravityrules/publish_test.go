@@ -303,4 +303,14 @@ func TestPublishPreservesRegularAgentsMDUserContent(t *testing.T) {
 	if !strings.Contains(afterContent, "Run tests before commit.") {
 		t.Fatalf("user content was lost after retirement in regular AGENTS.md:\n%s", afterContent)
 	}
+
+	// Retiring a section between two user paragraphs preserves surrounding spacing.
+	betweenParagraphs := "First paragraph.\n\n<!-- gentle-ai:persona -->\nPersona text.\n<!-- /gentle-ai:persona -->\nSecond paragraph.\n"
+	writeFile(t, agentsPath, betweenParagraphs)
+	if _, err := antigravityrules.Publish(home); err != nil {
+		t.Fatalf("Publish(between paragraphs) error = %v", err)
+	}
+	if got, want := readFile(t, agentsPath), "First paragraph.\n\nSecond paragraph.\n"; got != want {
+		t.Fatalf("retired between paragraphs = %q, want %q", got, want)
+	}
 }
