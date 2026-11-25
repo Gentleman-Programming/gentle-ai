@@ -55,27 +55,37 @@ func TestReviewStartSelectsCanonicalFourRForSubprocessWrapper(t *testing.T) {
 }
 
 func TestReviewAssessExtensionlessShebang(t *testing.T) {
-	const bash = "#!/usr/bin/env bash\n"
+	const (
+		bash     = "#!/usr/bin/env bash\n"
+		ash      = "#!/bin/ash\n"
+		envSplit = "#!/usr/bin/env -S MODE=prod bash -e\n"
+		python   = "#!/usr/bin/env python3\n"
+	)
+	largeData := strings.Repeat("x", 9<<20) + "\n"
 	for _, fixture := range []struct {
-		name, path, base, added string
+		name, path, base, after string
 		risk, dueReason         string
 		codes                   []reviewtransaction.RiskReasonCode
 	}{
-		{"command", "bin/deploy", bash, "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
-		{"comment", "bin/deploy", bash, "# deployment note\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
-		{"ash", "bin/deploy", "#!/bin/ash\n", "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
-		{"env-split", "bin/deploy", "#!/usr/bin/env -S MODE=prod bash -e\n", "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
-		{"python", "bin/deploy", "#!/usr/bin/env python3\n", "print('ready')\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
-		{"large-data", "data/catalog", strings.Repeat("x", 9<<20) + "\n", "ordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
-		{"shell-source", "bin/deploy.sh", bash, "# deployment note\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary, reviewtransaction.RiskReasonShellSource}},
-		{"ordinary-go", "value.go", "package value\n", "const ready = true\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"command", "bin/deploy", bash, bash + "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"comment", "bin/deploy", bash, bash + "# deployment note\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"ash", "bin/deploy", ash, ash + "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"env-split", "bin/deploy", envSplit, envSplit + "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"python", "bin/deploy", python, python + "print('ready')\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"bare-marker", "data/catalog", "#!\n", "#!\nordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"spaces-only", "data/catalog", "#!   \n", "#!   \nordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"test-fixture", "__tests__/deploy", bash, bash + "echo ready\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"removed-shebang", "bin/deploy", bash + "echo ready\n", "echo ready\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"large-data", "data/catalog", largeData, largeData + "ordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"shell-source", "bin/deploy.sh", bash, bash + "# deployment note\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary, reviewtransaction.RiskReasonShellSource}},
+		{"ordinary-go", "value.go", "package value\n", "package value\nconst ready = true\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeReviewStartCandidate(t, repo, fixture.path, fixture.base, 0o644)
 			runReviewCLIGit(t, repo, "add", "--", fixture.path)
 			runReviewCLIGit(t, repo, "commit", "-qm", "base candidate")
-			writeReviewStartCandidate(t, repo, fixture.path, fixture.base+fixture.added, 0o644)
+			writeReviewStartCandidate(t, repo, fixture.path, fixture.after, 0o644)
 			before := runReviewCLIGit(t, repo, "status", "--porcelain=v1")
 
 			var output bytes.Buffer
