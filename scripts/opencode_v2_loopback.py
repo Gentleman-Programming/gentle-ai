@@ -11,6 +11,7 @@ import time
 MATERIALIZATION_HEADER = "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION"
 RELAY_REFUSED = "opencode_review_transport_relay_refused"
 RELAY_REFUSED_TOKEN = re.compile(r"(?<!\w)" + re.escape(RELAY_REFUSED) + r"(?!\w)")
+REFUSAL_CAUSE_SUFFIX = re.compile(r" \(reason: (\w+), cause: (\w+)\)")
 # Exact parent-visible causes documented in docs/opencode-compatibility.md.
 OUTPUT_REFUSAL_CAUSES = (
     "reviewer_result_not_admissible",
@@ -315,6 +316,14 @@ def check_review_step(step, child_prompts, tool_texts, after_hooks, before, afte
                                  ("cause" not in output or output["cause"] in causes) for output in structured)
             if not has_text and not has_structured:
                 problems.append(f"refusal reason {reason!r} was not observed")
+        else:
+            # Without an expected reason, any cause present must still be a documented output_refused cause.
+            observed = [(output.get("reason"), output["cause"]) for output in structured if "cause" in output]
+            observed += [(found.group(1), found.group(2)) for match in text_refusals
+                         if (found := REFUSAL_CAUSE_SUFFIX.match(match.string, match.end()))]
+            if any(found_reason != "output_refused" or cause not in OUTPUT_REFUSAL_CAUSES
+                   for found_reason, cause in observed):
+                problems.append("refusal cause is not documented")
         if before != after:
             problems.append("authority changed by a refused step")
     return problems

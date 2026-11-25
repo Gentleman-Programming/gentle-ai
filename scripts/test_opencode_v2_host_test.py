@@ -962,6 +962,18 @@ class ReviewStepCheckTests(unittest.TestCase):
 
         bare = review_step(expect="refused", child_requests=0, tool_contains=[])
         self.assertEqual(self.check(bare, child_prompts=[], tool_texts=[refusal], after="a"), [])
+        self.assertEqual(self.check(bare, child_prompts=[], tool_texts=[message], after="a"), [])
+        for bad in (f"{refusal} (reason: output_refused, cause: unknown_cause)",
+                    f"{refusal} (reason: agent_mismatch, cause: role_capture_failed)"):
+            with self.subTest(bad=bad, source="tool text"):
+                self.assertEqual(self.check(bare, child_prompts=[], tool_texts=[bad], after="a"),
+                                 ["refusal cause is not documented"])
+        for structured in ({"code": refusal, "reason": "output_refused", "cause": "unknown_cause"},
+                           {"code": refusal, "reason": "agent_mismatch", "cause": "role_capture_failed"}):
+            hook = {"type": "after", "status": "error", "error": structured}
+            with self.subTest(structured=structured):
+                self.assertEqual(self.check(bare, child_prompts=[], tool_texts=[], after_hooks=[hook], after="a"),
+                                 ["refusal cause is not documented"])
         self.assertEqual(self.check(bare, child_prompts=[], tool_texts=[refusal + "_extra"], after="a"),
                          ["refusal was not observed"])
 
