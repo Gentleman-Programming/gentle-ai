@@ -142,8 +142,19 @@ func TestReviewCommittedRangeBoundaryMatrix(t *testing.T) {
 				started.TargetIdentity = bd.TargetIdentity
 				captureCleanCLIReviewerResult(t, repo, started, 0, &bytes.Buffer{})
 				acknowledge(started.LineageID, bd.TargetIdentity)
-				commit("runtime/follow-up.md", "# Follow-up\n")
+				e := commit("runtime/follow-up.md", "# Follow-up\n")
 				assertStart(t, status(), d, "runtime/follow-up.md")
+
+				// Any reached boundary may start the next acknowledgement, not
+				// only the latest few: A..E also covers E, so F is offered alone.
+				ae := status("--base-ref", a, "--committed-only")
+				assertStart(t, ae, a, "prompts/README.md", "runtime/README.md", "runtime/example/README.md", "runtime/follow-up.md")
+				started = grantedDerivedRangeStart(t, repo, ae)
+				started.TargetIdentity = ae.TargetIdentity
+				captureCleanCLIReviewerResult(t, repo, started, 0, &bytes.Buffer{})
+				acknowledge(started.LineageID, ae.TargetIdentity)
+				commit("runtime/later.md", "# Later\n")
+				assertStart(t, status(), e, "runtime/later.md")
 			}
 		})
 	}
