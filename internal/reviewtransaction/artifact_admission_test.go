@@ -701,7 +701,7 @@ func TestAdmitArtifactRefusesOmittedCanonicalSubject(t *testing.T) {
 	_, admission, err := AdmitArtifact(t.Context(), request)
 	if err == nil || admission.Decision != ArtifactAdmissionIncomplete ||
 		admission.Diagnostic != "canonical reviewer result omitted the provider-owned artifact subject" {
-		t.Fatalf("AdmitArtifact() = %#v, %v; want incomplete canonical result", admission.Decision, err)
+		t.Fatalf("AdmitArtifact() = %#v, %v; want incomplete canonical result", admission, err)
 	}
 }
 
