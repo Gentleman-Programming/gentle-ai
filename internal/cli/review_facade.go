@@ -1170,7 +1170,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if requestedLineage == "" {
 				continuing, err = reviewStatusContinuationAuthority(ctx, root, liveSnapshot.Identity, *contract)
 				if err != nil {
-					return fmt.Errorf("load continuation authority for negotiated review target: %w", err)
+					return fmt.Errorf("load pending acknowledgement for negotiated review target: %w", err)
 				}
 			}
 			if continuing.State.LineageID != "" {
