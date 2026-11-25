@@ -159,11 +159,11 @@ const (
 )
 
 type ArtifactAdmissionRequest struct {
-	ExpectedSubject   ArtifactSubject
-	FrozenContext     FrozenCandidateContext
-	EchoedSubjectHash string
-	Inspection        ArtifactInspection
-	Result            LensResult
+	ExpectedSubject      ArtifactSubject
+	FrozenContext        FrozenCandidateContext
+	CanonicalSubjectHash string
+	Inspection           ArtifactInspection
+	Result               LensResult
 	// CandidateCausalFindingIDs is the canonical set whose claimed candidate
 	// causality the provider verified against repository-derived changed-line
 	// evidence before admission.
@@ -387,20 +387,13 @@ func (admission ArtifactAdmission) Validate(subject ArtifactSubject, canonicalPa
 	return ValidateArtifactSubject(subject)
 }
 
-// artifactRecaptureContinuation is the continuation shared by the two subject
-// echo rejections. Both are raised before AdmitArtifact returns any canonical
-// lens result, and the capture command appends to the store only after
-// admission succeeds, so a rejected admission leaves the immutable lens slot
-// unconsumed and the store revision unmoved. Stating that once, in one place,
-// is what keeps the two messages from drifting into promising different
-// recoveries for the same recoverable state.
+// Rejected admission does not consume the immutable lens slot.
 const artifactRecaptureContinuation = "the rejected admission did not consume the lens slot, " +
-	"so re-run the lens and invoke gentle-ai review capture-result again on the same lineage " +
-	"with a result that echoes the binding's top-level subject_hash"
+	"so re-run the lens and invoke gentle-ai review capture-result again on the same lineage"
 
 // AdmitArtifact performs the single provider-owned admission decision. It
-// validates subject echo, completed full-manifest inspection, result shape,
-// and candidate scope before returning a canonical lens result.
+// validates the canonical result's subject, completed full-manifest
+// inspection, result shape, and candidate scope.
 func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensResult, ArtifactAdmission, error) {
 	admission := ArtifactAdmission{
 		Schema: ArtifactAdmissionSchema, SubjectHash: request.ExpectedSubject.SubjectHash,
@@ -420,29 +413,13 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	if len(request.RawPayload) == 0 || len(request.CanonicalPayload) == 0 {
 		return fail(ArtifactAdmissionIncomplete, "raw and canonical reviewer payloads are required")
 	}
-	if request.EchoedSubjectHash == "" {
-		// Name the continuation explicitly: a rejected admission never consumes
-		// the immutable lens slot, so without this guidance an operator holding
-		// only the preserved incident payload has no discoverable way forward
-		// (community report, PR #1801). The decision stays "incomplete" so the
-		// machine-readable shape is extended, never reshaped.
-		return fail(ArtifactAdmissionIncomplete,
-			"reviewer result omitted the provider-owned artifact subject: "+artifactRecaptureContinuation+
-				" and a completed inspection envelope")
+	// At capture this is provider-owned; readback supplies the stored
+	// canonical result's hash so corrupt envelopes are still rejected.
+	if request.CanonicalSubjectHash == "" {
+		return fail(ArtifactAdmissionIncomplete, "canonical reviewer result omitted the provider-owned artifact subject")
 	}
-	if request.EchoedSubjectHash != request.ExpectedSubject.SubjectHash {
-		// The omitted-subject sibling immediately above is the SAME block with
-		// the same way out. Both are raised here, before any store append, so
-		// neither consumes the immutable slot -- yet only the omission said so,
-		// leaving an echoed-but-wrong subject naming the fault and no way
-		// forward. The expected subject hash is handed back because it is the
-		// one value the reviewer cannot derive from the failure alone; every
-		// other binding_mismatch below is a frozen-context or finding-shape
-		// fault whose fix is not "echo this hash", so none of them borrows this
-		// wording.
-		return fail(ArtifactAdmissionBindingMismatch,
-			"reviewer result echoed a different artifact subject: "+artifactRecaptureContinuation+
-				", which is "+request.ExpectedSubject.SubjectHash)
+	if request.CanonicalSubjectHash != request.ExpectedSubject.SubjectHash {
+		return fail(ArtifactAdmissionBindingMismatch, "canonical reviewer result carries a different artifact subject: expected "+request.ExpectedSubject.SubjectHash)
 	}
 	// Bind the candidate the way the negotiated subject schema binds it.
 	// ValidateArtifactSubject above already rejected every other schema, and it
@@ -671,7 +648,7 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 			}
 		}
 		canonical.ResultHash = LensResultHash(canonical)
-		canonicalPayload, payloadErr := CanonicalReviewerResultPayload(request.EchoedSubjectHash, request.Inspection, canonical)
+		canonicalPayload, payloadErr := CanonicalReviewerResultPayload(request.CanonicalSubjectHash, request.Inspection, canonical)
 		if payloadErr != nil {
 			return fail(ArtifactAdmissionIncomplete, payloadErr.Error())
 		}

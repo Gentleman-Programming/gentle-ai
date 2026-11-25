@@ -443,7 +443,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 	admitted, admission, err := AdmitArtifact(ctx, ArtifactAdmissionRequest{
 		ExpectedSubject:           expected,
 		FrozenContext:             nativeContext,
-		EchoedSubjectHash:         providerResult.SubjectHash,
+		CanonicalSubjectHash:      providerResult.SubjectHash,
 		Inspection:                canonicalInspection,
 		Result:                    canonicalResult,
 		CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,

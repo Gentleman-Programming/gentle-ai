@@ -2,111 +2,138 @@ package cli
 
 import (
 	"bytes"
-	"encoding/json"
-	"io"
-	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
-// mismatchedSubjectReviewerPayload returns a fully well-formed reviewer result
-// for this lineage's live lens slot whose ONLY defect is the echoed subject: it
-// carries a syntactically valid subject hash that is not the binding's.
-func mismatchedSubjectReviewerPayload(t *testing.T, repo string, record reviewtransaction.CompactRecord, lens string, order int) []byte {
-	t.Helper()
-	result := admittedReviewerResultForTest(t, repo, record, lens, order)
-	result.SubjectHash = "sha256:" + strings.Repeat("b", 64)
-	payload, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return payload
-}
-
-// TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch is the sibling
-// guard of TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission.
-//
-// The omitted-subject rejection already names its continuation: the rejected
-// admission never consumed the lens slot, so the lens can be re-run and
-// captured again on the same lineage. The binding_mismatch rejection --
-// "reviewer result echoed a different artifact subject" -- said nothing
-// equivalent, even though it is raised from the immediately adjacent branch of
-// the same AdmitArtifact validation, strictly before any store append.
-//
-// This test proves the recovery is the SAME one, rather than assuming it: it
-// asserts the slot is unconsumed and authority unmoved after the mismatch, then
-// re-captures on the same lineage and lens and requires terminal capture
-// closure. It also requires the rejection to hand back the subject hash the
-// binding actually expects, because that is the one value the operator cannot
-// derive from the failure alone.
-func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T) {
+func TestReviewCaptureResultRecapturesSameLensAfterForeignEcho(t *testing.T) {
 	reviewEnabledHome(t)
-	repo, started, store, record := newArtifactReview(t, false)
+	repo, started, _, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
-
-	frozen, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).FrozenCandidateContext(t.Context(), record.State.InitialSnapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.State.CapturePhaseRevision, frozen, lens, 0, "")
-	if err != nil {
-		t.Fatal(err)
+	result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	foreign := writeReviewerOutputWithOptionalEcho(t, result, "sha256:"+strings.Repeat("b", 64))
+	args := []string{
+		"capture-result", "--cwd", repo, "--lineage", started.LineageID, "--target", started.TargetIdentity,
+		"--lens", lens, "--order", "0", "--input",
 	}
 
-	mismatched := filepath.Join(t.TempDir(), "mismatched.json")
-	if err := os.WriteFile(mismatched, mismatchedSubjectReviewerPayload(t, repo, record, lens, 0), 0o600); err != nil {
-		t.Fatal(err)
+	before := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	var refused bytes.Buffer
+	err := RunReview(append(args, foreign), &refused)
+	after := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	if !reflect.DeepEqual(before, after) {
+		t.Error("foreign echo changed STATUS authority or slot offers")
 	}
-	captureArgs := []string{
-		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
-		"--lens", lens, "--order", "0", "--input", mismatched,
-	}
-	rejected := RunReviewCaptureResult(captureArgs, io.Discard)
-	if rejected == nil {
-		t.Fatal("a reviewer result echoing a different artifact subject was admitted; the fail-closed rejection was weakened")
-	}
-	// The classified admission decision must not change: this stays a
-	// binding_mismatch, message-only.
-	if !strings.Contains(rejected.Error(), "reviewer artifact admission binding_mismatch") ||
-		!strings.Contains(rejected.Error(), "echoed a different artifact subject") {
-		t.Fatalf("binding mismatch lost its classified admission decision: %v", rejected)
-	}
-	// Discoverability contract: the rejection must name the same continuation
-	// its omitted-subject sibling names, and the subject hash to echo.
-	for _, continuation := range []string{"did not consume the lens slot", "re-run", "capture-result", "subject_hash"} {
-		if !strings.Contains(rejected.Error(), continuation) {
-			t.Fatalf("binding_mismatch rejection does not name the continuation %q: %v", continuation, rejected)
-		}
-	}
-	if !strings.Contains(rejected.Error(), subject.SubjectHash) {
-		t.Fatalf("binding_mismatch rejection does not hand back the expected subject hash %q: %v", subject.SubjectHash, rejected)
+	failure := decodeCaptureRefusalEnvelope(t, err, refused.Bytes())
+	want := "reviewer artifact admission binding_mismatch: reviewer result echoed a different artifact subject: " +
+		"the rejected admission did not consume the lens slot, so re-run the lens and invoke gentle-ai review capture-result again " +
+		"on the same lineage with a result that echoes the binding's top-level subject_hash, which is " + result.SubjectHash
+	const preserved = "; the rejected reviewer payload was preserved at "
+	cause, path, _ := strings.Cut(strings.TrimSuffix(err.Error(), " [invalid_request]"), preserved)
+	if failure.Cause != want+preserved+"<redacted>" || cause != want || !filepath.IsAbs(path) ||
+		!strings.HasSuffix(err.Error(), " [invalid_request]") || failure.Code != "invalid_request" ||
+		failure.Phase != "preflight" || failure.MutationOutcome != ReviewMutationNotStarted {
+		t.Fatalf("manual foreign echo refusal = %#v; error = %v; want cause %q", failure, err, want)
 	}
 
-	// The claim the message makes must be true: the rejection consumed no slot
-	// and moved no authority.
-	assertNoAdmittedReviewerResults(t, store)
-	assertArtifactRevision(t, store, record.Revision)
-
-	// Run EXACTLY the continuation the message names: capture again on the same
-	// lineage and lens with a result that echoes the binding's subject hash.
-	corrected := filepath.Join(t.TempDir(), "corrected.json")
-	if err := os.WriteFile(corrected, admittedReviewerPayloadForTest(t, repo, record, lens, 0), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	correctedArgs := append(append([]string{}, captureArgs[:len(captureArgs)-1]...), corrected)
 	var captured bytes.Buffer
-	if err := RunReviewCaptureResult(correctedArgs, &captured); err != nil {
-		t.Fatalf("recapture after binding_mismatch was refused (named continuation dead-ends): %v", err)
+	corrected := writeReviewerOutputWithOptionalEcho(t, result, result.SubjectHash)
+	if err := RunReview(append(args, corrected), &captured); err != nil {
+		t.Fatalf("recapture on the same lineage and lens: %v", err)
 	}
 	var terminal reviewLastEventClosureResult
 	decodeStrictReviewJSON(t, captured.Bytes(), &terminal)
 	if terminal.Schema != reviewLastEventClosureSchema || terminal.Operation != "review/capture-result" ||
 		terminal.LineageID != started.LineageID || terminal.State != reviewtransaction.StateApproved {
-		t.Fatalf("binding_mismatch recapture terminal result = %#v", terminal)
+		t.Fatalf("manual echo recapture terminal result = %#v", terminal)
 	}
-	assertApprovedAcknowledgementTransition(t, terminal.Acknowledgement, repo, started.LineageID, started.TargetIdentity, terminal.StoreRevision)
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+}
+
+func TestReviewCaptureResultRecapturesSameLensAfterBindingMismatch(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, started, _, record := newArtifactReview(t, true)
+	lens := record.State.SelectedLenses[0]
+	result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	otherSubjectHash := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[1], 1).SubjectHash
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+
+	before := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	captureArgs := []string{
+		"capture-result", "--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", lens, "--order", "0", "--input", input, "--subject-hash",
+	}
+	var refused bytes.Buffer
+	rejected := RunReview(append(captureArgs, otherSubjectHash), &refused)
+	after := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("cross-slot subject changed STATUS: before = %#v; after = %#v", before, after)
+	}
+	failure := decodeCaptureRefusalEnvelope(t, rejected, refused.Bytes())
+	if failure.Code != "capture_binding_mismatch" || failure.Phase != "preflight" ||
+		failure.NextAction != "review.status" || failure.MutationOutcome != ReviewMutationNotStarted ||
+		!failure.RetrySafe || failure.LineageID != started.LineageID {
+		t.Fatalf("cross-slot capture refusal = %#v", failure)
+	}
+	const wantRefusal = "review capture subject hash does not match the provider-owned authority; refresh the binding with gentle-ai review status --cwd <repo> --contract <same-contract> --next-transition"
+	if !strings.Contains(rejected.Error(), wantRefusal) {
+		t.Fatalf("cross-slot capture error = %q, want %q", rejected, wantRefusal)
+	}
+
+	var captured bytes.Buffer
+	if err := RunReview(append(captureArgs, result.SubjectHash), &captured); err != nil {
+		t.Fatalf("recapture with the proper host subject was refused: %v", err)
+	}
+	var artifact reviewResultArtifact
+	decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
+	if artifact.Schema != reviewResultArtifactSchema || artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted ||
+		artifact.LineageID != started.LineageID || artifact.Lens != lens || artifact.SelectedOrder != 0 || artifact.SubjectHash != result.SubjectHash {
+		t.Fatalf("recapture artifact = %#v", artifact)
+	}
+}
+
+func TestReviewCaptureResultRecapturesSameLensAfterEmptyEcho(t *testing.T) {
+	for name, echo := range map[string]any{"empty echo": "", "null echo": nil} {
+		t.Run(name, func(t *testing.T) {
+			reviewEnabledHome(t)
+			repo, started, _, record := newArtifactReview(t, false)
+			lens := record.State.SelectedLenses[0]
+			result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+			empty := filepath.Join(t.TempDir(), "result.json")
+			writeReviewCLIJSON(t, empty, map[string]any{
+				"inspection": result.Inspection, "findings": result.Findings, "evidence": result.Evidence, "subject_hash": echo,
+			})
+			args := []string{
+				"capture-result", "--cwd", repo, "--lineage", started.LineageID, "--target", started.TargetIdentity,
+				"--lens", lens, "--order", "0", "--input",
+			}
+
+			before := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+			var refused bytes.Buffer
+			err := RunReview(append(args, empty), &refused)
+			after := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+			if !reflect.DeepEqual(before, after) {
+				t.Error("empty echo changed STATUS authority or slot offers")
+			}
+			failure := decodeCaptureRefusalEnvelope(t, err, refused.Bytes())
+			want := "reviewer artifact admission incomplete: reviewer result omitted the provider-owned artifact subject: " +
+				"the rejected admission did not consume the lens slot, so re-run the lens and invoke gentle-ai review capture-result again " +
+				"on the same lineage with a result that echoes the binding's top-level subject_hash, which is " + result.SubjectHash
+			const preserved = "; the rejected reviewer payload was preserved at "
+			cause, _, _ := strings.Cut(strings.TrimSuffix(err.Error(), " [invalid_request]"), preserved)
+			if cause != want || failure.Code != "invalid_request" || failure.MutationOutcome != ReviewMutationNotStarted {
+				t.Fatalf("manual empty echo refusal = %#v; error = %v; want cause %q", failure, err, want)
+			}
+
+			var captured bytes.Buffer
+			corrected := writeReviewerOutputWithOptionalEcho(t, result, result.SubjectHash)
+			if err := RunReview(append(args, corrected), &captured); err != nil {
+				t.Fatalf("recapture on the same lineage and lens: %v", err)
+			}
+		})
+	}
 }

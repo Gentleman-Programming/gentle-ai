@@ -149,7 +149,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	lens := flags.String("lens", "", "exact selected lens")
 	order := flags.Int("order", -1, "zero-based selected lens order")
 	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
-	subjectHash := flags.String("subject-hash", "", "provider-issued artifact subject hash for native-Git context")
+	subjectHash := flags.String("subject-hash", "", "exact provider-issued artifact subject hash from the collect binding (optional for in-process capture or manual input; do not copy it into reviewer output)")
 	runtimeAgent := flags.String("agent", "", "compiled reviewer runtime that invokes the provider-owned request; may be combined with --input only for compiled host-relay submissions and remains mutually exclusive with --preflight")
 	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin; `gentle-ai review schema reviewer` emits the schema and a working example")
 	preflight := flags.Bool("preflight", false, "validate the capture binding and, when --input is supplied, the result admission without persisting anything")
@@ -160,6 +160,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if reviewHelpRequested(args) {
 		return nil
 	}
+	subjectHashProvided := reviewFlagWasProvided(flags, "subject-hash")
 	providerRuntime := model.AgentID(strings.TrimSpace(*runtimeAgent))
 	providerRuntimeSupplied := providerRuntime != ""
 	rawInputSupplied := strings.TrimSpace(*input) != ""
@@ -276,18 +277,21 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("derive reviewer artifact subject: %w", err))
 	}
-	if *preflight && strings.TrimSpace(*input) == "" {
-		if *subjectHash != "" && *subjectHash != subject.SubjectHash {
-			legacyFrozen, legacyErr := (reviewtransaction.SnapshotBuilder{Repo: root}).WithLegacyCandidateDiff(ctx, state.InitialSnapshot, frozen)
-			if legacyErr != nil {
-				return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, errors.New("review capture preflight subject hash does not match the provider-owned authority; refresh the binding with gentle-ai review status --cwd <repo> --contract <same-contract> --next-transition"))
-			}
-			legacySubject, legacyErr := reviewtransaction.NewLegacyArtifactSubject(state, state.CapturePhaseRevision, legacyFrozen, *lens, *order, "")
-			if legacyErr != nil || *subjectHash != legacySubject.SubjectHash {
-				return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, errors.New("review capture preflight subject hash does not match the provider-owned authority; refresh the binding with gentle-ai review status --cwd <repo> --contract <same-contract> --next-transition"))
-			}
-			frozen, subject = legacyFrozen, legacySubject
+	currentSubject := subject
+	if !*materialize && subjectHashProvided && *subjectHash != currentSubject.SubjectHash {
+		var matched bool
+		if providerSHA256(*subjectHash) {
+			frozen, subject, matched = reviewProviderMatchLegacySubject(ctx, root, state, frozen, currentSubject, *subjectHash)
 		}
+		if !matched {
+			operation := "review capture"
+			if *preflight {
+				operation += " preflight"
+			}
+			return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, fmt.Errorf("%s subject hash does not match the provider-owned authority; refresh the binding with gentle-ai review status --cwd <repo> --contract <same-contract> --next-transition", operation))
+		}
+	}
+	if *preflight && !rawInputSupplied {
 		publicRoot := root
 		if contextHandle != "" {
 			publicRoot = ""
@@ -308,11 +312,11 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		if materializeErr != nil {
 			return reviewPreflightError(materializeErr)
 		}
-		if request.Binding.Lineage != state.LineageID || request.Binding.Target != state.InitialSnapshot.Identity || request.Binding.Revision != state.CapturePhaseRevision || request.Binding.Lens != *lens || request.Binding.Order != *order || request.Subject != subject {
+		if request.Binding.Lineage != state.LineageID || request.Binding.Target != state.InitialSnapshot.Identity || request.Binding.Revision != state.CapturePhaseRevision || request.Binding.Lens != *lens || request.Binding.Order != *order || request.Subject != currentSubject {
 			return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, errors.New("provider reviewer invocation no longer matches the current reviewing authority")) // refusal:by-design world-action: only a fresh negotiated collection binding may invoke a provider runtime
 		}
 		if *materialize {
-			if *subjectHash != "" && *subjectHash != subject.SubjectHash {
+			if subjectHashProvided && *subjectHash != subject.SubjectHash {
 				return reviewPreflightRefusal(reviewPreflightCaptureBindingMismatchReason, errors.New("materialize subject hash does not match the provider-owned authority; refresh the binding with gentle-ai review status --cwd <repo> --contract <same-contract> --next-transition"))
 			}
 			// The host relay pipes these exact bytes verbatim into its fresh
@@ -333,7 +337,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		// never runs under preflight and its preservation needs no guard.
 		admitted, rawPayload, err = reviewProviderCaptureWithOneCorrection(ctx, reviewProviderCapture{
 			root: root, runtime: providerRuntime, adapter: adapter, state: state, frozen: frozen, subject: subject,
-		}, request.Invocation)
+		}, request.Invocation, subjectHashProvided)
 		if err != nil {
 			return reviewPreflightError(err)
 		}
@@ -342,7 +346,11 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("read reviewer result: %w", err))
 		}
-		admitted, err = reviewProviderAdmitRaw(ctx, root, state, state.CapturePhaseRevision, frozen, subject, rawPayload)
+		echo := reviewProviderIgnoreEcho
+		if !subjectHashProvided {
+			echo = reviewProviderRequireInputEcho
+		}
+		admitted, err = reviewProviderAdmitRaw(ctx, root, state, frozen, subject, echo, rawPayload)
 		if err != nil {
 			// A host-submitted result gets no corrective re-invocation, since
 			// the host owns the reviewer, but its rejected bytes are preserved
@@ -543,7 +551,7 @@ func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected 
 	native := envelope.Result.nativeLensResult()
 	native.Lens = expected.Lens
 	result, revalidated, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
-		ExpectedSubject: expected, FrozenContext: frozen, EchoedSubjectHash: envelope.Result.SubjectHash,
+		ExpectedSubject: expected, FrozenContext: frozen, CanonicalSubjectHash: envelope.Result.SubjectHash,
 		Inspection: envelope.Result.Inspection, Result: native,
 		CandidateCausalFindingIDs: envelope.Admission.CandidateCausalFindingIDs,
 		RawPayload:                canonical, CanonicalPayload: canonical,

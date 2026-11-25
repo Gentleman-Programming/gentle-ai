@@ -16,10 +16,8 @@ func TestReviewerResultEnvelopeMatchesAdmission(t *testing.T) {
 	if envelope.CompletedInspectionStatus != string(ArtifactInspectionCompleted) {
 		t.Fatalf("CompletedInspectionStatus = %q, want %q", envelope.CompletedInspectionStatus, ArtifactInspectionCompleted)
 	}
-	for _, want := range []string{"subject_hash", "inspection", "findings", "evidence"} {
-		if !contains(envelope.RequiredTopLevelFields, want) {
-			t.Fatalf("required fields %v omit %q", envelope.RequiredTopLevelFields, want)
-		}
+	if want := []string{"inspection", "findings", "evidence"}; !reflect.DeepEqual(envelope.RequiredTopLevelFields, want) {
+		t.Fatalf("required fields = %v, want %v", envelope.RequiredTopLevelFields, want)
 	}
 	for _, lens := range supportedLenses {
 		if !contains(envelope.LensAgentNames, lens) {
@@ -58,9 +56,8 @@ func TestReviewerResultSchemaPublishesBothFindingLensForms(t *testing.T) {
 
 // TestSchemaExampleShapedResultIsAdmitted builds a payload the way a reader
 // following only the published schema would build it — its own example, with
-// the placeholder subject and paths replaced by the real binding — and proves
-// the real admission path accepts it. The mirror case proves the refusal for a
-// missing subject_hash still names the way out.
+// the paths replaced by the real manifest — and proves the provider can
+// admit this output without a model-supplied subject.
 func TestSchemaExampleShapedResultIsAdmitted(t *testing.T) {
 	subject, frozen, request := admittedArtifactFixture(t)
 
@@ -71,6 +68,9 @@ func TestSchemaExampleShapedResultIsAdmitted(t *testing.T) {
 		t.Fatalf("published schema carries no worked example: %v", err)
 	}
 	example := document.Examples[0]
+	if _, present := example["subject_hash"]; present {
+		t.Fatal("the reviewer schema example still asks for a subject echo")
+	}
 
 	var inspection ArtifactInspection
 	if err := json.Unmarshal(example["inspection"], &inspection); err != nil {
@@ -90,25 +90,27 @@ func TestSchemaExampleShapedResultIsAdmitted(t *testing.T) {
 	for _, entry := range frozen.ChangedPathManifest {
 		inspection.Paths = append(inspection.Paths, entry.Path)
 	}
-	request.EchoedSubjectHash = subject.SubjectHash
+	inspectionJSON, err := json.Marshal(inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	example["inspection"] = inspectionJSON
+	request.RawPayload, err = json.Marshal(example)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.CanonicalSubjectHash = subject.SubjectHash
 	request.Inspection = inspection
 	request.Result = LensResult{Lens: LensReliability, Findings: []Finding{}, Evidence: evidence}
 	request.CandidateCausalFindingIDs = nil
+	request.CanonicalPayload, err = CanonicalReviewerResultPayload(subject.SubjectHash, inspection, request.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	_, admission, err := AdmitArtifact(t.Context(), request)
 	if err != nil || admission.Decision != ArtifactAdmissionCompleted {
 		t.Fatalf("AdmitArtifact(schema-shaped result) decision = %q, error = %v; want completed", admission.Decision, err)
-	}
-
-	request.EchoedSubjectHash = ""
-	_, admission, err = AdmitArtifact(t.Context(), request)
-	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
-		t.Fatalf("AdmitArtifact(no subject_hash) decision = %q, error = %v; want incomplete", admission.Decision, err)
-	}
-	for _, want := range []string{"subject_hash", "inspection", "re-run"} {
-		if !strings.Contains(admission.Diagnostic, want) {
-			t.Fatalf("refusal %q does not name %q", admission.Diagnostic, want)
-		}
 	}
 }
 

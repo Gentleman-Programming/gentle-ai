@@ -950,7 +950,7 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 			// its span entirely within candidate-changed lines, since one
 			// unchanged context line in the span rejects the result too.
 			for _, required := range []string{
-				"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end",
+				"complete and only", "working tree", "complete unique unordered set", "path:line or path:start-end",
 				"exactly as it appears in the changed-path manifest", "host:port", "validated against the frozen repository",
 				"entirely within lines this candidate changed", "one unchanged context line in the span",
 				"never reproduce that token", "describe it in words and cite the manifest file and line",
@@ -958,6 +958,9 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 				if !strings.Contains(instruction, required) {
 					t.Fatalf("instruction omits %q:\n%s", required, instruction)
 				}
+			}
+			if strings.Contains(instruction, "subject_hash") {
+				t.Fatalf("instruction still asks the reviewer to handle the subject hash:\n%s", instruction)
 			}
 			schema, found := lensContextSection(block, "GENTLE_AI_REVIEW_RESULT_SCHEMA")
 			if !found {
