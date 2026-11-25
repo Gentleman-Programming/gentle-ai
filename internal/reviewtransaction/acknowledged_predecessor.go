@@ -9,11 +9,9 @@ import "context"
 // full base-diff would otherwise be offered for review again although every
 // reviewable byte in it was just approved.
 //
-// The walk follows HEAD's first-parent ancestry back to the candidate's base
-// tree, recomputes each ancestor's base-diff identity against that same base,
-// and stops at the nearest ancestor with terminal consumption evidence. Only
-// a delta from that ancestor that classifies as low risk (passive content
-// only) qualifies.
+// The walk finds the reviewed boundary through exact terminal consumption
+// evidence. Only a delta from that boundary that classifies as low risk
+// (passive content only) qualifies.
 //
 // The result may only suppress a fresh review offer. Terminal consumption is
 // a deduplication fact, never authority: callers must not derive a receipt or
@@ -27,8 +25,8 @@ func AcknowledgedPassivePredecessor(ctx context.Context, repo string, live Snaps
 	return boundary.Passive, nil
 }
 
-// AcknowledgedBoundary reports the nearest acknowledged first-parent ancestor
-// of a live committed base-diff candidate: the reviewed boundary (issue #5638).
+// AcknowledgedBoundary reports the latest first-parent ancestor covered by
+// contiguous acknowledgements from the candidate's base: the reviewed boundary.
 type AcknowledgedBoundary struct {
 	// Commit and Tree name the boundary commit and its tree: the base a
 	// delta-scoped candidate derives from, and the --base-ref a START for it
@@ -44,12 +42,11 @@ type AcknowledgedBoundary struct {
 	Passive bool
 }
 
-// AcknowledgedBoundaryCommit walks HEAD's first-parent ancestry back to the
-// candidate's base tree, recomputes each ancestor's base-diff identity against
-// that same base, and stops at the nearest ancestor with terminal consumption
-// evidence: the reviewed boundary. ok is false when no ancestor in the window
-// was acknowledged (or the walk reaches the base first); err is non-nil for
-// any Git or tombstone fault, and callers must keep the pre-existing offer.
+// AcknowledgedBoundaryCommit finds the newest consumed range from the
+// candidate's base tree in HEAD's first-parent ancestry. From that checkpoint,
+// it walks forward, advancing only when the exact delta from the current
+// boundary was also consumed. ok is false when the bounded walk finds no
+// original checkpoint; Git or tombstone faults keep the pre-existing offer.
 //
 // The result may only reshape or withhold a fresh review offer. Terminal
 // consumption is a deduplication fact, never authority: callers must not
@@ -75,21 +72,39 @@ func AcknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot)
 	if err != nil {
 		return AcknowledgedBoundary{}, false, err
 	}
-	for _, ancestor := range ancestors {
+	consumedRange := func(baseTree, candidateTree string) (bool, error) {
+		paths, err := builder.changedPaths(ctx, baseTree, candidateTree)
+		if err != nil {
+			return false, err
+		}
+		identity := IdentityForComponents(TargetBaseDiff, live.Projection, baseTree, candidateTree, digestPaths(paths))
+		return CompactTargetConsumed(ctx, root, identity)
+	}
+	for index, ancestor := range ancestors {
 		if ancestor.tree == live.BaseTree {
 			return AcknowledgedBoundary{}, false, nil
 		}
-		paths, err := builder.changedPaths(ctx, live.BaseTree, ancestor.tree)
-		if err != nil {
-			return AcknowledgedBoundary{}, false, err
-		}
-		identity := IdentityForComponents(TargetBaseDiff, live.Projection, live.BaseTree, ancestor.tree, digestPaths(paths))
-		consumed, err := CompactTargetConsumed(ctx, root, identity)
+		consumed, err := consumedRange(live.BaseTree, ancestor.tree)
 		if err != nil {
 			return AcknowledgedBoundary{}, false, err
 		}
 		if !consumed {
 			continue
+		}
+		// Later slices may have STARTed from this checkpoint, not the
+		// branch point. Only their exact acknowledgements can advance it.
+		for next := index - 1; next >= 0; next-- {
+			descendant := ancestors[next]
+			if descendant.tree == ancestor.tree {
+				continue
+			}
+			consumed, err := consumedRange(ancestor.tree, descendant.tree)
+			if err != nil {
+				return AcknowledgedBoundary{}, false, err
+			}
+			if consumed {
+				ancestor = descendant
+			}
 		}
 		deltaPaths, err := builder.changedPaths(ctx, ancestor.tree, live.CandidateTree)
 		if err != nil {
@@ -110,7 +125,7 @@ func AcknowledgedBoundaryCommit(ctx context.Context, repo string, live Snapshot)
 		if err != nil {
 			return AcknowledgedBoundary{}, false, err
 		}
-		// guard:population acknowledged-passive-delta too-loose: only a committed HEAD base-diff whose nearest acknowledged first-parent ancestor (same base tree, exact recomputed identity) is reported, with the delta to the live candidate classified by the shared risk assessor; code, tests, configuration, operational markdown, and any lookup failure keep the review offer
+		// guard:population acknowledged-passive-delta too-loose: only a committed HEAD base-diff whose first-parent boundary is reached by contiguous, exact consumed identities from the same base tree is reported; the shared risk assessor classifies the remaining delta, and lookup failures keep the offer
 		return AcknowledgedBoundary{
 			Commit: ancestor.commit, Tree: ancestor.tree,
 			DeltaPaths: deltaPaths, Passive: assessment.Level == RiskLow,

@@ -2,11 +2,126 @@ package cli
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
+
+// TestReviewCommittedRangeBoundaryMatrix distinguishes an explicit range from
+// the provider's automatic range across successive real acknowledgements.
+func TestReviewCommittedRangeBoundaryMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		escalate bool
+	}{
+		{name: "successive acknowledgements"},
+		{name: "unresolved escalation", escalate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reviewEnabledHome(t)
+			repo := initReviewCLIRepo(t)
+			runReviewCLIGit(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+			runReviewCLIGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+			commit := func(path, text string) string {
+				writeReviewStartCandidate(t, repo, path, text, 0o644)
+				runReviewCLIGit(t, repo, "add", "--", path)
+				runReviewCLIGit(t, repo, "commit", "-qm", "update "+path)
+				return strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+			}
+			status := func(selectors ...string) ReviewTargetStatusResult {
+				var output bytes.Buffer
+				if err := RunReview(append([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition"}, selectors...), &output); err != nil {
+					t.Fatalf("STATUS %v: %v\n%s", selectors, err, output.String())
+				}
+				var result ReviewTargetStatusResult
+				decodeStrictReviewJSON(t, output.Bytes(), &result)
+				return result
+			}
+			assertStart := func(t *testing.T, result ReviewTargetStatusResult, base string, paths ...string) {
+				t.Helper()
+				if result.Authority != nil || result.NextTransition == nil || result.NextTransition.ReasonCode != "fresh_target_ready" ||
+					result.NextTransition.Execute == nil || result.NextTransition.Execute.Operation != "review.start" {
+					t.Fatalf("expected a fresh START without authority for %v; got action %s, transition %+v, authority %+v", paths, result.Action, result.NextTransition, result.Authority)
+				}
+				if actual := startTransitionArgumentValue(t, result, "base-ref"); actual != base || !slices.Equal(result.Projection.Paths, paths) {
+					t.Errorf("START base-ref=%s paths=%v; want base-ref=%s paths=%v", actual, result.Projection.Paths, base, paths)
+				}
+				if actual := startTransitionArgumentValue(t, result, "committed-only"); actual != "true" {
+					t.Errorf("START committed-only=%s; want true", actual)
+				}
+			}
+			acknowledge := func(lineage, target string) {
+				t.Helper()
+				pending := status("--lineage", lineage)
+				if pending.TargetIdentity != target || pending.NextTransition == nil || pending.NextTransition.ReasonCode != "approved_acknowledgement_required" || pending.NextTransition.Execute == nil {
+					t.Fatalf("no acknowledgement for %s: %+v", target, pending.NextTransition)
+				}
+				args := []string{"acknowledge-approved"}
+				for _, row := range pending.NextTransition.Execute.Arguments {
+					args = append(args, row.Token)
+				}
+				var output bytes.Buffer
+				if err := RunReview(args, &output); err != nil {
+					t.Fatalf("acknowledge approved: %v\n%s", err, output.String())
+				}
+				after := status()
+				if after.TargetIdentity != target || after.Authority != nil || after.NextTransition == nil || after.NextTransition.ReasonCode != "target_already_acknowledged" {
+					t.Fatalf("acknowledged target %s not terminal: %+v", target, after.NextTransition)
+				}
+			}
+
+			origin := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+			a := commit("README.md", "# Fixture\n\nA sample project.\n")
+			first := status()
+			assertStart(t, first, origin, "README.md")
+			started := grantedDerivedRangeStart(t, repo, first)
+			acknowledge(started.LineageID, first.TargetIdentity)
+
+			// Operational README paths are non-passive even though their contents
+			// are just text, so each slice can produce an observable START.
+			b := commit("runtime/README.md", "# Example runtime\n\nThe sample uses mode A.\n")
+			second := status()
+			assertStart(t, second, a, "runtime/README.md")
+			started = grantedDerivedRangeStart(t, repo, second)
+			started.TargetIdentity = second.TargetIdentity
+			var closureOutput bytes.Buffer
+			if tc.escalate {
+				captureCLIReviewerResultWithFindings(t, repo, started, 0, []facadeFinding{{
+					Location: "runtime/README.md:3", Severity: "CRITICAL", Claim: "Sample mode could be documented incorrectly; attribution is unresolved",
+					ProofRefs:     []string{"runtime/README.md:3 does not establish which revision changed the mode"},
+					EvidenceClass: reviewtransaction.EvidenceInsufficient, CausalDisposition: reviewtransaction.CausalUnknown,
+				}}, &closureOutput)
+				var closure reviewLastEventClosureResult
+				decodeStrictReviewJSON(t, closureOutput.Bytes(), &closure)
+				if closure.State != reviewtransaction.StateEscalated || closure.Acknowledgement != nil {
+					t.Fatalf("unresolved reviewer verdict = %s, want escalated without acknowledgement: %s", closure.State, closureOutput.String())
+				}
+			} else {
+				captureCleanCLIReviewerResult(t, repo, started, 0, &closureOutput)
+				acknowledge(started.LineageID, second.TargetIdentity)
+			}
+
+			commit("prompts/README.md", "# Example prompts\n\nA greeting example.\n")
+			t.Run("explicit branch point", func(t *testing.T) {
+				assertStart(t, status("--base-ref", origin, "--committed-only"), origin, "README.md", "prompts/README.md", "runtime/README.md")
+				assessed := derivedRangeAssess(t, repo, origin)
+				if assessed.Candidate.BaseRef != origin || assessed.ChangedPaths != 3 || assessed.Candidate.Consumed ||
+					assessed.ReviewDue || assessed.ReviewDueReason != "under_budget" || assessed.NextTransition != nil {
+					t.Fatalf("explicit ASSESS did not classify the full unconsumed range: %+v", assessed)
+				}
+			})
+			t.Run("selectorless", func(t *testing.T) {
+				if tc.escalate {
+					assertStart(t, status(), a, "prompts/README.md", "runtime/README.md")
+				} else {
+					assertStart(t, status(), b, "prompts/README.md")
+				}
+			})
+		})
+	}
+}
 
 // TestNextTransitionDerivedRangeAdvancesAcknowledgedBoundary reproduces the
 // #4815 expected-behavior half tracked in #5638: once a committed candidate is
