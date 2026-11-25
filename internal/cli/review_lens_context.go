@@ -123,7 +123,7 @@ const (
 	reviewLensContextBudgetAction = "immutable candidate evidence is never truncated and retrying this candidate cannot succeed; " +
 		"split the candidate into a chained sequence of smaller reviewable commits, each under the budget, then refresh the exact native next transition by running " +
 		reviewNextTransitionRefreshCommandV21 + " and execute the returned transition for the reduced scope"
-	reviewLensContextStartBudgetRefreshCommand = "gentle-ai review status --contract " + ReviewIntegrationContractV2 + " --next-transition --base-ref HEAD^ --committed-only"
+	reviewLensContextStartBudgetRefreshCommand = "gentle-ai review status --contract " + ReviewIntegrationContractV2 + " --next-transition --base-ref HEAD~1 --committed-only"
 	reviewLensContextStartBudgetAction         = "no review authority was created, so nothing has to be abandoned or repaired; " +
 		"immutable candidate evidence is never truncated and retrying this exact candidate cannot succeed, so split it into a chained sequence of smaller reviewable commits, each under the budget; " +
 		"from the repository with a smaller commit checked out, refresh the exact native next transition by running `" + reviewLensContextStartBudgetRefreshCommand +

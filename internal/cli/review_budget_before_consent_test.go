@@ -52,11 +52,11 @@ func TestCommittedStartChecksLensBudgetBeforeConsent(t *testing.T) {
 			envelope := requireStartLensBudgetRefusal(t, err, stdout.Bytes())
 
 			if mode == "relay" {
-				// HEAD^ is already a narrower base in this fixture. Run the
+				// HEAD~1 is already a narrower base in this fixture. Run the
 				// printed command, then the fresh START it offers for that commit.
 				_, tail, found := strings.Cut(envelope.Cause, "by running `")
 				command, _, closed := strings.Cut(tail, "`")
-				if !found || !closed || command != "gentle-ai review status --contract "+ReviewIntegrationContractV2+" --next-transition --base-ref HEAD^ --committed-only" {
+				if !found || !closed || command != "gentle-ai review status --contract "+ReviewIntegrationContractV2+" --next-transition --base-ref HEAD~1 --committed-only" {
 					t.Fatalf("budget refusal did not name the runnable smaller-commit STATUS: %q", envelope.Cause)
 				}
 				t.Chdir(repo)
