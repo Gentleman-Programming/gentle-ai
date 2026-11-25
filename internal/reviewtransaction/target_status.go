@@ -301,17 +301,15 @@ func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error)
 	return base, nil
 }
 
-// narrowCommittedRangeBase picks the tip with the fewest changed paths among
-// same-named remote-tracking branches strictly between base and HEAD whose
-// nonempty diff to HEAD introduces no paths absent from the original diff.
+// narrowCommittedRangeBase narrows only to a same-named remote tip strictly
+// between base and HEAD that contains every other eligible tip. A smaller diff
+// is not a safer base: it can hide changes made on the feature branch.
 func narrowCommittedRangeBase(ctx context.Context, repo, head, base, defaultName string) string {
 	remotes, err := runGit(ctx, repo, nil, nil, "remote")
 	if err != nil {
 		return base
 	}
-	builder := SnapshotBuilder{Repo: repo}
-	var basePaths []string
-	best, fewest := base, 0
+	var tips []string
 	for _, remote := range strings.Fields(string(remotes)) {
 		if remote == "origin" {
 			continue
@@ -326,19 +324,21 @@ func narrowCommittedRangeBase(ctx context.Context, repo, head, base, defaultName
 		if _, err := runGit(ctx, repo, nil, nil, "merge-base", "--is-ancestor", tip, head); err != nil {
 			continue
 		}
-		if basePaths == nil {
-			basePaths, err = builder.changedPaths(ctx, base, head)
-			if err != nil {
-				return base
-			}
-			fewest = len(basePaths) + 1
-		}
-		paths, err := builder.changedPaths(ctx, tip, head)
-		if err == nil && len(paths) > 0 && len(paths) < fewest && sliceIsSubset(paths, basePaths) {
-			best, fewest = tip, len(paths)
-		}
+		tips = append(tips, tip)
 	}
-	return best
+	switch len(tips) {
+	case 0:
+		return base
+	case 1:
+		return tips[0]
+	}
+	// --independent removes tips reachable from another supplied tip. One
+	// remaining tip dominates all the others; multiple tips are incomparable.
+	output, err := runGit(ctx, repo, nil, nil, append([]string{"merge-base", "--independent"}, tips...)...)
+	if remaining := strings.Fields(string(output)); err == nil && len(remaining) == 1 {
+		return remaining[0]
+	}
+	return base
 }
 
 func resolveCommittedRangeBaseFromUpstream(ctx context.Context, repo string) (string, bool) {

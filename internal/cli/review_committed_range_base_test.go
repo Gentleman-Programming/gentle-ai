@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -157,7 +158,7 @@ func TestNextTransitionCommittedRangeBaseCrissCrossUpstreamKeepsDefaultBranch(t 
 }
 
 func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
-	for _, name := range []string{"fresh_upstream", "shorter_incomparable_range", "upstream_not_in_head", "reverted_upstream_format", "fewest_paths"} {
+	for _, name := range []string{"fresh_upstream", "shorter_incomparable_range", "upstream_not_in_head", "reverted_upstream_format", "chained_tips", "incomparable_tips"} {
 		t.Run(name, func(t *testing.T) {
 			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
@@ -188,16 +189,27 @@ func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
 			for i := 1; i <= 12; i++ {
 				commitFile("upstream.txt", fmt.Sprintf("upstream change %d\n", i))
 			}
-			if name == "reverted_upstream_format" {
+			switch name {
+			case "reverted_upstream_format":
 				commitFile("tracked.txt", "    base\n")
 				commitFile("format.txt", "    base\n")
-			} else if name == "fewest_paths" {
+			case "chained_tips":
+				// The earlier tip sorts first. Both tips differ from the feature in tracked.txt only.
+				commitFile("tracked.txt", "    base\n")
+				runReviewCLIGit(t, repo, "remote", "add", "mirror", "mirror.git")
+				runReviewCLIGit(t, repo, "update-ref", "refs/remotes/mirror/main", "HEAD")
+				commitFile("tracked.txt", "base\n")
+			case "incomparable_tips":
 				commitFile("upstream-extra.txt", "extra upstream path\n")
 			}
 			upstream := rev("HEAD")
 			runReviewCLIGit(t, repo, "update-ref", upstreamRef, upstream)
 			runReviewCLIGit(t, repo, "switch", "-qc", "feature", "--no-track", upstreamRef)
-			commitFile("feature.txt", "the change under review\n")
+			if name == "chained_tips" {
+				commitFile("tracked.txt", "base\nthe change under review\n")
+			} else {
+				commitFile("feature.txt", "the change under review\n")
+			}
 			want := upstream
 			switch name {
 			case "shorter_incomparable_range":
@@ -222,15 +234,15 @@ func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
 			case "reverted_upstream_format":
 				runReviewCLIGit(t, repo, "revert", "--no-commit", origin+".."+upstream)
 				runReviewCLIGit(t, repo, "commit", "-qm", "revert upstream changes")
-				want = origin
-			case "fewest_paths":
-				// The mirror sorts first but excludes only one path, versus upstream's two.
+			case "incomparable_tips":
+				// Neither tip subsumes the other, even though upstream leaves fewer changed paths.
 				runReviewCLIGit(t, repo, "switch", "-qc", "mirror-default", origin)
 				commitFile("mirror.txt", "independent mirror path\n")
 				runReviewCLIGit(t, repo, "remote", "add", "mirror", "mirror.git")
 				runReviewCLIGit(t, repo, "update-ref", "refs/remotes/mirror/main", "HEAD")
 				runReviewCLIGit(t, repo, "switch", "-q", "feature")
 				runReviewCLIGit(t, repo, "merge", "--no-ff", "-qm", "merge mirror default", "mirror-default")
+				want = origin
 			}
 			// A fully pushed feature has no unpushed range against its tracking ref.
 			runReviewCLIGit(t, repo, "update-ref", "refs/remotes/origin/feature", "HEAD")
@@ -246,8 +258,11 @@ func TestNextTransitionCommittedRangeBaseStaleFork(t *testing.T) {
 			if got := startTransitionArgumentValue(t, status, "base-ref"); got != want {
 				t.Errorf("offered START base-ref = %q, want %q (origin %q, upstream fork point %q)", got, want, origin, upstream)
 			}
-			if paths := status.Projection.Paths; name == "reverted_upstream_format" && (len(paths) != 1 || paths[0] != "feature.txt") {
-				t.Errorf("offered START changes %q, want only feature.txt", paths)
+			if name == "reverted_upstream_format" {
+				// The reversal was authored on the feature branch and must stay visible, even though it expands the diff.
+				if paths, want := status.Projection.Paths, []string{"feature.txt", "format.txt", "tracked.txt", "upstream.txt"}; !slices.Equal(paths, want) {
+					t.Errorf("offered START changes %q, want %q", paths, want)
+				}
 			}
 			if name == "fresh_upstream" {
 				explicit := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--base-ref", originRef, "--committed-only")
