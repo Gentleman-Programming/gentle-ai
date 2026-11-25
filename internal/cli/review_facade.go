@@ -970,12 +970,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// committed-range projection instead of silently defaulting to
 		// current-changes (gentle-pi#569, gentle-shell#2379).
 		var pendingApprovedTerminalTarget *reviewtransaction.Snapshot
-		// frozenCommittedCorrectionTarget carries the frozen committed-range
-		// target of a correction_required lineage whose untracked selection is
-		// empty, so an explicit re-entry naming that same base can keep the
-		// frozen exclusion instead of demanding a fresh live declaration
-		// (#6058).
-		var frozenCommittedCorrectionTarget *reviewtransaction.Snapshot
+		// An empty selection is already frozen for the correction. Wait for
+		// native STATUS to confirm that re-entry names that same target.
+		var frozenEmptyCorrectionTarget *reviewtransaction.Snapshot
 		var frozenCommittedEscalation *reviewtransaction.CompactRecord
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
@@ -989,42 +986,17 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				}
 				record, loadErr := store.LoadContext(ctx)
 				if loadErr == nil {
-					// Only an approved compact authority that still owns its
-					// acknowledgement can resume its immutable terminal target. A
-					// correction-required authority that already froze a non-empty
-					// intended-untracked SELECTION resumes it too while every selected
-					// path remains eligible. Additional unselected paths stay outside
-					// the immutable target and cannot expand a bounded correction: the
-					// exact bound STATUS continuation
-					// `review.capture-correction-plan` itself returns carries no
-					// untracked-scope flags, so demanding a fresh declaration on that
-					// plain re-entry dead-ended the correction lineage and bound the
-					// resulting collect input to a different (live, declaration-less)
-					// target identity than the one the authority is bound to (issue
-					// #3849 and #4435). For a workspace-scoped (current-changes or
-					// overlay) target a frozen EXCLUDE declaration (empty selection) is
-					// left alone here because it is indistinguishable on its own from
-					// "nothing was ever declared"; that path still requires a fresh live
-					// declaration when eligible untracked files exist. A committed-range
-					// (base-diff) target has no such ambiguity: its candidate is the
-					// frozen commit range plus the frozen selection, so even an empty
-					// selection is the immutable decision and resumes as-is
-					// (gentle-shell#2379, #1596).
 					_, pendingApproval := reviewtransaction.PendingApprovedCompactAcknowledgement(record)
 					resumeCorrectionUntracked := false
 					declaredUntracked := record.State.InitialSnapshot.IntendedUntracked
-					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) == 0 &&
-						record.State.CurrentSnapshot.Kind == reviewtransaction.TargetBaseDiff && !*workspaceOverlay {
-						// The frozen empty selection is the immutable committed-range
-						// decision. A selectorless re-entry resumes it through the
-						// frozen base tree; an explicit re-entry must first prove it
-						// names that same tree (the assessment below does).
-						terminal := record.State.CurrentSnapshot
-						frozenCommittedCorrectionTarget = &terminal
-						if selectedBaseRef == "" {
-							resumeCorrectionUntracked = true
-						}
+					if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) == 0 {
+						frozenEmptyCorrectionTarget = &record.State.CurrentSnapshot
+						// A selectorless committed-range re-entry first needs its
+						// frozen base tree to rebuild the correct projection.
+						resumeCorrectionUntracked = frozenEmptyCorrectionTarget.Kind == reviewtransaction.TargetBaseDiff &&
+							selectedBaseRef == "" && !*workspaceOverlay
 					} else if record.State.State == reviewtransaction.StateCorrectionRequired && len(declaredUntracked) != 0 {
+						// Nonempty selections still require every frozen path to remain eligible.
 						inventory, _, inventoryErr := builder.IntendedUntrackedInventory(ctx)
 						if inventoryErr != nil {
 							return reviewPreflightError(inventoryErr)
@@ -1261,32 +1233,26 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				return fmt.Errorf("reassess negotiated review target: %w", err)
 			}
 		}
-		// #6058: the exact bound continuation spells the frozen committed range
-		// as `--base-ref <frozen tree> --committed-only`, and an operator may
-		// replay the commit START was pinned to instead. Once the assessed live
-		// target resolves to that same frozen base tree and projection, it is
-		// the same committed range, so the frozen EXCLUDE remains the
-		// authority's immutable decision: an unrelated untracked file must not
-		// replace it with a fresh live declaration. A different base tree stays
-		// a different target and never inherits this decision.
-		var frozenCommittedTarget *reviewtransaction.Snapshot
+		// For the same bound correction, the frozen empty selection is the
+		// decision, not a missing live declaration (#6058, #6225).
+		var frozenEmptyTarget *reviewtransaction.Snapshot
 		if native.State == reviewtransaction.StateCorrectionRequired {
-			frozenCommittedTarget = frozenCommittedCorrectionTarget
+			frozenEmptyTarget = frozenEmptyCorrectionTarget
 		} else if frozenCommittedEscalation != nil && intendedScope.NeedsSelection &&
 			native.State == reviewtransaction.StateEscalated && native.Revision == frozenCommittedEscalation.Revision &&
 			native.Escalation != nil && native.Escalation.Cause == reviewRejectedValidatorCause &&
 			liveSnapshot.CandidateTree == frozenCommittedEscalation.State.CurrentSnapshot.CandidateTree {
 			// The rejected snapshot is the fix diff: its tree identifies the
 			// rejected candidate, but only the initial snapshot names the range.
-			frozenCommittedTarget = &frozenCommittedEscalation.State.InitialSnapshot
+			frozenEmptyTarget = &frozenCommittedEscalation.State.InitialSnapshot
 		}
-		// guard:population committed-correction-frozen-exclusion too-loose: only a current, stop-routed base-diff of the bound lineage with the same frozen base, projection, and empty selection can reuse the correction's exclusion. After validator rejection this additionally requires the same authority revision and rejected candidate tree; a changed candidate's recovery still follows the ordinary selection rules.
-		if frozenCommittedTarget != nil && !intendedScope.Declared &&
+		// guard:population committed-correction-frozen-exclusion too-loose: only a current, stop-routed target of the bound lineage with the same kind, base, projection, and empty selection can reuse the exclusion. Validator rejection still requires the exact committed candidate above; recovery does not inherit the exclusion.
+		if frozenEmptyTarget != nil && !intendedScope.Declared &&
 			native.Applicability == reviewtransaction.TargetApplicabilityCurrent &&
 			native.LineageID == requestedLineage && native.Action == reviewtransaction.TargetStatusActionStop &&
-			native.Projection.Kind == reviewtransaction.TargetBaseDiff &&
-			native.Projection.BaseTree == frozenCommittedTarget.BaseTree &&
-			native.Projection.Projection == frozenCommittedTarget.Projection &&
+			native.Projection.Kind == frozenEmptyTarget.Kind &&
+			native.Projection.BaseTree == frozenEmptyTarget.BaseTree &&
+			native.Projection.Projection == frozenEmptyTarget.Projection &&
 			len(native.Projection.IntendedUntracked) == 0 {
 			intendedScope.Declared = true
 			intendedScope.NeedsSelection = false

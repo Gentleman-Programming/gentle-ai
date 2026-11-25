@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,184 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
+
+func TestWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t *testing.T) {
+	testWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t, reviewtransaction.TargetCurrentChanges)
+}
+
+func TestWorkspaceOverlayCorrectionKeepsFrozenEmptyUntrackedExclusion(t *testing.T) {
+	testWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t, reviewtransaction.TargetBaseWorkspaceOverlay)
+}
+
+func testWorkspaceCorrectionKeepsFrozenEmptyUntrackedExclusion(t *testing.T, kind reviewtransaction.TargetKind) {
+	t.Helper()
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	repo := initReviewCLIRepo(t)
+	const lineage = "frozen-empty-untracked-6225"
+	const candidate = "candidate.go"
+	const excluded = "local-only.txt"
+	baseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD^{tree}"))
+	bound := []string{"--agent=pi", "--lineage=" + lineage}
+	if kind == reviewtransaction.TargetBaseWorkspaceOverlay {
+		baseCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+		bound = append(bound, "--base-ref="+baseCommit, "--workspace-overlay")
+		// Make the overlay base differ from HEAD so falling back to current
+		// changes could not return the same projection.
+		writeReviewStartCandidate(t, repo, candidate, "package candidate\n\nfunc value() int { return 0 }\n", 0o644)
+		runReviewCLIGit(t, repo, "commit", "-qm", "advance past the overlay base")
+	}
+	writeReviewStartCandidate(t, repo, candidate, "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, excluded, "unrelated workspace file\n", 0o644)
+
+	run := func(args []string) []byte {
+		t.Helper()
+		var output bytes.Buffer
+		if err := RunReview(args, &output); err != nil {
+			t.Fatalf("review %q: %v\n%s", args, err, output.String())
+		}
+		return output.Bytes()
+	}
+	submit := func(input ReviewTransitionInput, value string) []byte {
+		t.Helper()
+		if input.Submission == nil || input.Submission.Value == nil {
+			t.Fatalf("no single-value submission for %s", input.Name)
+		}
+		submission := input.Submission
+		args := append([]string{submission.OperationToken, "--cwd=" + repo}, submission.ArgumentTokens...)
+		index := 2 + submission.Value.SubstitutionLocation
+		args[index] = strings.ReplaceAll(args[index], reviewSubmissionValuePlaceholder, value)
+		return run(args)
+	}
+	encode := func(value any) []byte {
+		t.Helper()
+		payload, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	digest, paths := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo, bound...))
+	if len(paths) != 1 || paths[0] != excluded {
+		t.Fatalf("eligible untracked paths = %q, want only %q", paths, excluded)
+	}
+	exclusion := []string{"--untracked-scope=exclude", "--expected-untracked-inventory=" + digest}
+	ready := intendedUntrackedStatus(t, repo, append(bound, exclusion...)...)
+	if ready.NextTransition == nil || ready.NextTransition.Execute == nil || ready.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("explicit exclusion did not yield START: %#v", ready.NextTransition)
+	}
+	startArgs := invocationArgs(t, ready.NextTransition.Execute.Command)
+	started := decodeNegotiatedReviewStart(t, []byte(runReviewStartFollowingConsent(t, startArgs[1:])))
+	manifest := startedChangedPathManifest(t, started)
+	frozenTarget := ready.TargetIdentity
+	if started.LineageID != lineage || started.Projection != reviewtransaction.ProjectionWorkspace ||
+		ready.Projection.Kind != kind || started.BaseTree != baseTree || started.State != reviewtransaction.StateReviewing ||
+		started.RepositoryContext == nil || started.RepositoryContext.TargetIdentity != frozenTarget ||
+		len(manifest) != 1 || manifest[0].Path != candidate || manifest[0].IntendedUntracked {
+		t.Fatalf("START did not freeze the tracked-only %s candidate with base %q: %#v", kind, baseTree, started)
+	}
+
+	collect := func(status ReviewTargetStatusResult, reason string) []ReviewTransitionInput {
+		t.Helper()
+		transition := status.NextTransition
+		if transition == nil || transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != reason || transition.Collect == nil || len(transition.Collect.Inputs) == 0 {
+			t.Fatalf("STATUS transition = %#v, want collect/%s", transition, reason)
+		}
+		return transition.Collect.Inputs
+	}
+	reviewing := intendedUntrackedStatus(t, repo, bound...)
+	for i, input := range collect(reviewing, "reviewer_results_required") {
+		findings := []facadeFinding{}
+		if i == 0 {
+			findings = append(findings, facadeFinding{
+				ID: "R3-001", Location: candidate + ":3", Severity: "CRITICAL", Claim: "candidate is wrong",
+				ProofRefs: []string{candidate + ":3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+				CausalDisposition: reviewtransaction.CausalIntroduced,
+			})
+		}
+		if input.ArtifactSubject == nil {
+			t.Fatal("reviewer slot omitted the frozen subject")
+		}
+		result := facadeReviewerResult{
+			SubjectHash: input.ArtifactSubject.SubjectHash,
+			Inspection:  reviewtransaction.ArtifactInspection{Status: reviewtransaction.ArtifactInspectionCompleted, Paths: []string{candidate}},
+			Findings:    findings, Evidence: []string{"inspected the frozen candidate"},
+		}
+		submit(input, writeReviewCLIRawInput(t, encode(result)))
+	}
+	refuter := collect(intendedUntrackedStatus(t, repo, bound...), "provider_refuter_required")[0]
+	prompt := run(append([]string{"capture-refuter"}, reviewTransitionInputTokens(t, repo, refuter)...))
+	refutation := facadeRefuterResult{
+		RequestHash: reviewProviderRequestHashForTest(t, prompt),
+		Results: []facadeRefuterOutcome{{
+			FindingID: "R3-001", Outcome: reviewtransaction.OutcomeCorroborated, ProofRefs: []string{"independent reproduction"},
+		}},
+	}
+	var closure reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, submit(refuter, writeReviewCLIRawInput(t, encode(refutation))), &closure)
+	continuation := closure.StatusContinuation
+	if closure.LineageID != lineage || closure.State != reviewtransaction.StateCorrectionRequired ||
+		continuation == nil || continuation.Operation != "review.status" || continuation.Binding.TargetIdentity != frozenTarget {
+		t.Fatalf("expected correction_required with a bound STATUS continuation: %#v", closure)
+	}
+	if kind == reviewtransaction.TargetBaseWorkspaceOverlay {
+		args, err := reviewTransitionArgumentMap(continuation.Arguments)
+		if err != nil || args["base-ref"] != baseTree || args["workspace-overlay"] != "true" {
+			t.Fatalf("correction continuation lost the overlay selector for base %q: %#v (%v)", baseTree, continuation.Arguments, err)
+		}
+	}
+	statusArgs := []string{strings.TrimPrefix(continuation.Operation, "review.")}
+	for _, argument := range continuation.Arguments {
+		statusArgs = append(statusArgs, argument.Token)
+	}
+	boundStatus := func(phase string) ReviewTargetStatusResult {
+		t.Helper()
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, run(statusArgs), &status)
+		if err := status.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if status.Projection.Kind != kind || status.Projection.Projection != reviewtransaction.ProjectionWorkspace || status.Projection.BaseTree != baseTree {
+			t.Fatalf("%s: bound STATUS changed the %s workspace projection with base %q: %#v", phase, kind, baseTree, status.Projection)
+		}
+		if status.NextTransition != nil {
+			t.Logf("%s: bound STATUS = %s/%s, authority=%+v", phase, status.NextTransition.Kind, status.NextTransition.ReasonCode, status.Authority)
+		}
+		return status
+	}
+	planStatus := boundStatus("before correction")
+	if planStatus.Authority == nil || planStatus.Authority.LineageID != lineage ||
+		planStatus.Authority.State != reviewtransaction.StateCorrectionRequired || planStatus.TargetIdentity != frozenTarget ||
+		planStatus.Authority.Revision != continuation.Binding.Revision {
+		t.Fatalf("correction-plan STATUS lost the frozen binding: authority=%+v, target=%q", planStatus.Authority, planStatus.TargetIdentity)
+	}
+	plan := collect(planStatus, "correction_plan_required")[0]
+	planArgs := append(reviewTransitionInputTokens(t, repo, plan), "--correction-lines=2")
+	var forecast reviewCorrectionPlanCaptureResult
+	decodeStrictReviewJSON(t, run(append([]string{"capture-correction-plan"}, planArgs...)), &forecast)
+	if forecast.LineageID != lineage || forecast.TargetIdentity != frozenTarget || forecast.CorrectionLines != 2 {
+		t.Fatalf("accepted correction plan lost the frozen binding: %#v", forecast)
+	}
+	writeReviewStartCandidate(t, repo, candidate, "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
+
+	corrected := boundStatus("after correction")
+	if corrected.Authority == nil || corrected.Authority.LineageID != lineage ||
+		corrected.Authority.State != reviewtransaction.StateCorrectionRequired || corrected.Authority.Revision != forecast.StoreRevision ||
+		corrected.AuthorityTargetIdentity != frozenTarget || len(corrected.Projection.IntendedUntracked) != 0 ||
+		len(corrected.Projection.Paths) != 1 || corrected.Projection.Paths[0] != candidate {
+		t.Fatalf("corrected STATUS lost the frozen binding or scope: authority=%+v, authority target=%q, projection=%+v",
+			corrected.Authority, corrected.AuthorityTargetIdentity, corrected.Projection)
+	}
+	if corrected.EligibleUntrackedInventory != digest {
+		t.Fatalf("bound STATUS live inventory = %q, want %q", corrected.EligibleUntrackedInventory, digest)
+	}
+	validation := collect(corrected, "targeted_validation_required")[0]
+	args, err := reviewTransitionArgumentMap(validation.Arguments)
+	if err != nil || validation.CaptureOperation != reviewCaptureValidationCaptureOperation || validation.ValidationRequest == nil ||
+		args["lineage"] != lineage || args["target"] != validation.ValidationRequest.CorrectionTargetIdentity || args["target"] == frozenTarget {
+		t.Fatalf("corrected STATUS validation input = %#v (%v), want the corrected candidate bound to %q", validation, err, lineage)
+	}
+}
 
 // TestNegotiatedStatusPreservesUntrackedBindingThroughCorrectionLineage pins
 // issue #3849: a correction_required lineage whose frozen candidate carries
