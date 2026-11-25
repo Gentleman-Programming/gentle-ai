@@ -253,14 +253,11 @@ func selectorlessCommittedBaseDiffAncestors(ctx context.Context, repo string) ([
 // whole releases behind, making the derived candidate span unrelated merged
 // work until preflight refuses it. Every other upstream outcome -- no
 // upstream, a criss-cross history, a level branch, an empty range, or any Git
-// fault -- keeps the remote-default-branch derivation unchanged, because for
-// a fully pushed branch `@{upstream}` names the last pushed commit, whose
-// range is empty, and that derivation is what replaces the unroutable
-// zero-path candidate collect (issue #4412). The default branch derivation
-// itself only answers when refs/remotes/origin/HEAD names an unambiguous
-// nonempty range; every other outcome -- no origin/HEAD, a criss-cross
-// history, an empty range, or any Git fault -- is returned as an error so the
-// caller keeps the truthful fallback.
+// fault -- falls back to the remote default branch. For a fully pushed branch,
+// `@{upstream}` names the last pushed commit and its range is empty (#4412).
+// The fallback requires a single nonempty range from refs/remotes/origin/HEAD;
+// another remote's same-named branch may narrow that range, but cannot replace
+// an absent or ambiguous origin base (#5910).
 func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error) {
 	defer StartStatusPhase(ctx, StatusPhaseImplicitBaseRangeDerivation)()
 	if base, ok := resolveCommittedRangeBaseFromUpstream(ctx, repo); ok {
@@ -298,7 +295,36 @@ func ResolveCommittedRangeBase(ctx context.Context, repo string) (string, error)
 	if err != nil || count <= 0 {
 		return "", fmt.Errorf("committed range between the merge-base and HEAD is empty") // refusal:by-design world-action: an empty committed range has no candidate to review, so the caller falls back to collecting a base_ref
 	}
+	if defaultName, ok := strings.CutPrefix(ref, "refs/remotes/origin/"); ok {
+		base = narrowCommittedRangeBase(ctx, repo, head, base, defaultName)
+	}
 	return base, nil
+}
+
+// narrowCommittedRangeBase considers only tips of same-named remote-tracking
+// branches. Each replacement must lie strictly between the current base and
+// HEAD: a shorter commit count alone could substitute an incomparable base.
+func narrowCommittedRangeBase(ctx context.Context, repo, head, base, defaultName string) string {
+	remotes, err := runGit(ctx, repo, nil, nil, "remote")
+	if err != nil {
+		return base
+	}
+	for _, remote := range strings.Fields(string(remotes)) {
+		if remote == "origin" {
+			continue
+		}
+		tip, err := resolveCommit(ctx, repo, "refs/remotes/"+remote+"/"+defaultName)
+		if err != nil || tip == base || tip == head {
+			continue
+		}
+		if _, err := runGit(ctx, repo, nil, nil, "merge-base", "--is-ancestor", base, tip); err != nil {
+			continue
+		}
+		if _, err := runGit(ctx, repo, nil, nil, "merge-base", "--is-ancestor", tip, head); err == nil {
+			base = tip
+		}
+	}
+	return base
 }
 
 func resolveCommittedRangeBaseFromUpstream(ctx context.Context, repo string) (string, bool) {
