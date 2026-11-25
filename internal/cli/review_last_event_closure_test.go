@@ -1333,3 +1333,236 @@ func TestLineageEscalationPublishesEscalationCauseInClosureAndStatusEnvelopes(t 
 		t.Fatal("status-v7 schema accepted escalated authority without escalation")
 	}
 }
+
+func TestRecoverySuccessorContinuation(t *testing.T) {
+	reviewEnabledHome(t)
+	repo := initReviewCLIRepo(t)
+	t.Chdir(repo)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	const candidate = "package candidate\n\nfunc Value() int { return 1 }\n\nfunc Name() string { return \"candidate\" }\n\nfunc Enabled() bool { return true }\n"
+	writeReviewStartCandidate(t, repo, "candidate.go", candidate, 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
+	selectors := append(continuationProbeSelectors(), "--base-ref="+base, "--committed-only=true")
+	started := continuationProbeStart(t, selectors)
+	closure := continuationProbeReviewerCaptures(t, started, "candidate.go:3")
+	continuationProbeCorrectionPlan(t, closure, 4)
+	writeReviewStartCandidate(t, repo, "candidate.go", strings.Replace(candidate, "return 1", "return 2", 1), 0o644)
+	writeReviewStartCandidate(t, repo, "correction.go", "package candidate\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "candidate.go")
+	runReviewCLIGit(t, repo, "commit", "-qm", "bounded correction expands the committed review scope")
+
+	predecessorArgs := continuationProbeExecutionArgs(t, closure.StatusContinuation, "review.status")
+	recovery := continuationProbeStatus(t, predecessorArgs)
+	if recovery.ActionDisposition != reviewtransaction.RecoveryScopeChanged || recovery.NextTransition == nil || recovery.NextTransition.ReasonCode != "recovery_authorized" {
+		t.Fatalf("predecessor STATUS did not offer scope_changed recovery: %+v", recovery.NextTransition)
+	}
+	recoveredOutput := continuationProbeMustRun(t, continuationProbeExecutionArgs(t, recovery.NextTransition.Execute, "review.recover"))
+	var recovered ReviewRecoverResult
+	decodeStrictReviewJSON(t, recoveredOutput, &recovered)
+	if recovered.State != reviewtransaction.StateReviewing || recovered.LineageID == started.LineageID || recovered.Recovery.PredecessorLineageID != started.LineageID {
+		t.Fatalf("RECOVER did not create a reviewing successor: %s", recoveredOutput)
+	}
+	inspectArgs := []string{"inspect-authority"}
+	before := continuationProbeMustRun(t, inspectArgs)
+	var inspection ReviewInspectAuthorityResult
+	decodeStrictReviewJSON(t, before, &inspection)
+	if !inspection.Complete || !inspection.Valid || inspection.Totals.CompactEntries != 2 || len(inspection.Edges) != 1 || !inspection.Edges[0].Valid || inspection.Edges[0].SuccessorLineageID != recovered.LineageID || len(inspection.SanctionedExits) != 0 {
+		t.Fatalf("expected a complete, valid recovery edge: %s", before)
+	}
+
+	// The existing no-fork guard still applies to an exact predecessor query.
+	predecessorOutput, predecessorErr := continuationProbeRun(t, predecessorArgs)
+	var predecessorFailure ReviewIntegrationFailure
+	decodeStrictReviewJSON(t, predecessorOutput, &predecessorFailure)
+	want := "recovery predecessor already has successor " + recovered.LineageID + "; inspect the existing authority with the requested repository as the working directory; re-run: gentle-ai review inspect-authority"
+	if predecessorErr == nil || predecessorFailure.Code != "invalid_request" || predecessorFailure.Phase != "preflight" || predecessorFailure.MutationOutcome != "not_started" || predecessorFailure.Cause != want {
+		t.Fatalf("predecessor STATUS did not retain its no-fork refusal: %v\n%s", predecessorErr, predecessorOutput)
+	}
+
+	// The same target selector must no longer offer a conflicting START.
+	status := continuationProbeStatus(t, selectors)
+	if status.Authority == nil || status.Authority.LineageID != recovered.LineageID || status.Authority.State != reviewtransaction.StateReviewing || status.TargetIdentity != recovered.TargetIdentity || status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 2 {
+		t.Fatalf("selector STATUS did not resume the recovered reviewer batch: authority=%+v next_transition=%+v", status.Authority, status.NextTransition)
+	}
+	if after := continuationProbeMustRun(t, inspectArgs); !bytes.Equal(before, after) {
+		t.Fatalf("STATUS mutated the recovery edge:\nbefore=%s\nafter=%s", before, after)
+	}
+	var artifact reviewResultArtifact
+	decodeStrictReviewJSON(t, continuationProbeCapture(t, status.NextTransition.Collect.Inputs[0], []string{"candidate.go", "correction.go"}, []facadeFinding{}), &artifact)
+	if artifact.LineageID != recovered.LineageID || artifact.TargetIdentity != recovered.TargetIdentity || artifact.Lens != reviewtransaction.LensRisk {
+		t.Fatalf("offered capture did not admit a result for the successor: %+v", artifact)
+	}
+}
+
+func continuationProbeSelectors() []string {
+	return []string{"status", "--contract=" + ReviewIntegrationContractV2, "--agent=claude-code", "--next-transition=true", "--lenses=review-risk,review-reliability", "--lenses-reason=exercise correction lifecycle for a behavioral candidate"}
+}
+
+func continuationProbeStart(t *testing.T, selectors []string) ReviewIntegrationStartResult {
+	t.Helper()
+	status := continuationProbeStatus(t, selectors)
+	if status.NextTransition == nil || status.NextTransition.ReasonCode != "fresh_target_ready" {
+		t.Fatalf("selector STATUS did not offer a fresh START: %+v", status.NextTransition)
+	}
+	args := continuationProbeExecutionArgs(t, status.NextTransition.Execute, "review.start")
+	grantArgs := continuationProbeGrantArgs(t, continuationProbeMustRun(t, args))
+	started := decodeNegotiatedReviewStart(t, continuationProbeMustRun(t, grantArgs))
+	if started.State != reviewtransaction.StateReviewing || !reflect.DeepEqual(started.SelectedLenses, []string{reviewtransaction.LensRisk, reviewtransaction.LensReliability}) || started.RepositoryContext == nil {
+		t.Fatalf("START did not create the requested reviewing authority: %+v", started)
+	}
+	return started
+}
+
+func continuationProbeGrantArgs(t *testing.T, output []byte) []string {
+	t.Helper()
+	consent := decodeConsentQuestion(t, output)
+	if consent.Schema != ReviewIntegrationConsentSchemaV3 {
+		t.Fatalf("expected consent relay: %s", output)
+	}
+	for _, choice := range consent.Choices {
+		if choice.Answer == "granted" {
+			return invocationArgs(t, choice.Invocation)
+		}
+	}
+	t.Fatalf("consent relay did not offer a grant: %s", output)
+	return nil
+}
+
+func continuationProbeReviewerCaptures(t *testing.T, started ReviewIntegrationStartResult, location string) reviewLastEventClosureResult {
+	t.Helper()
+	status := continuationProbeStatus(t, continuationProbeExecutionArgs(t, started.NextTransition.Execute, "review.status"))
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 2 || started.ChangedPathManifest == nil {
+		t.Fatalf("STATUS did not supply both reviewer captures: %+v", status.NextTransition)
+	}
+	paths := make([]string, 0, len(*started.ChangedPathManifest))
+	for _, entry := range *started.ChangedPathManifest {
+		paths = append(paths, entry.Path)
+	}
+	inputs := status.NextTransition.Collect.Inputs
+	if inputs[0].ArtifactSubject == nil || inputs[0].ArtifactSubject.Lens != reviewtransaction.LensRisk {
+		t.Fatalf("expected the risk lens first: %+v", inputs[0])
+	}
+	continuationProbeCapture(t, inputs[0], paths, []facadeFinding{{
+		ID: "R1-001", Location: location, Severity: "CRITICAL", Claim: "candidate introduces a deterministic failure",
+		ProofRefs: []string{location + " changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+	}})
+	output := continuationProbeCapture(t, inputs[1], paths, []facadeFinding{})
+	var closure reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, output, &closure)
+	if closure.LineageID != started.LineageID || closure.State != reviewtransaction.StateCorrectionRequired || closure.StatusContinuation == nil || closure.StatusContinuation.Binding.LineageID != started.LineageID || closure.StatusContinuation.Binding.TargetIdentity != started.RepositoryContext.TargetIdentity {
+		t.Fatalf("final capture did not offer correction STATUS bound to this lineage: %s", output)
+	}
+	return closure
+}
+
+func continuationProbeCapture(t *testing.T, input ReviewTransitionInput, paths []string, findings []facadeFinding) []byte {
+	t.Helper()
+	if input.CaptureOperation != "review.capture-result" || input.ArtifactSubject == nil {
+		t.Fatalf("unexpected reviewer input: %+v", input)
+	}
+	raw, err := json.Marshal(facadeReviewerResult{
+		SubjectHash: input.ArtifactSubject.SubjectHash,
+		Inspection:  reviewtransaction.ArtifactInspection{Status: reviewtransaction.ArtifactInspectionCompleted, Paths: paths},
+		Findings:    findings,
+		Evidence:    []string{"inspected the complete frozen candidate"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := reviewProviderAdapterFor
+	reviewProviderAdapterFor = func(_ reviewerprovider.Contract, agent model.AgentID) (reviewerprovider.Adapter, error) {
+		if agent != model.AgentClaudeCode {
+			return nil, fmt.Errorf("unexpected reviewer runtime %q", agent)
+		}
+		return providerTestAdapterFunc(func(_ context.Context, invocation reviewerprovider.Invocation) ([]byte, error) {
+			if bytes.Contains(invocation.Prompt(), []byte(`"claims"`)) {
+				return json.Marshal(facadeRefuterResult{
+					RequestHash: reviewProviderRequestHashForTest(t, invocation.Prompt()),
+					Results:     []facadeRefuterOutcome{{FindingID: "R1-001", Outcome: reviewtransaction.OutcomeCorroborated, ProofRefs: []string{"independent reproduction"}}},
+				})
+			}
+			return raw, nil
+		}), nil
+	}
+	defer func() { reviewProviderAdapterFor = previous }()
+	return continuationProbeMustRun(t, continuationProbeArgs(t, "capture-result", input.Arguments))
+}
+
+func continuationProbeCorrectionPlan(t *testing.T, closure reviewLastEventClosureResult, lines int) {
+	t.Helper()
+	status := continuationProbeStatus(t, continuationProbeExecutionArgs(t, closure.StatusContinuation, "review.status"))
+	transition := status.NextTransition
+	if transition == nil || transition.ReasonCode != "correction_plan_required" || transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
+		t.Fatalf("closure STATUS did not offer a correction plan: %+v", transition)
+	}
+	submission := transition.Collect.Inputs[0].Submission
+	if submission == nil || submission.OperationToken != "capture-correction-plan" || submission.Value == nil {
+		t.Fatalf("correction plan did not offer an exact submission: %+v", submission)
+	}
+	args := append([]string{submission.OperationToken}, submission.ArgumentTokens...)
+	index := submission.Value.SubstitutionLocation + 1
+	if args[index] != "--correction-lines="+reviewSubmissionValuePlaceholder {
+		t.Fatalf("correction plan substitution: %q", args[index])
+	}
+	args[index] = strings.Replace(args[index], reviewSubmissionValuePlaceholder, strconv.Itoa(lines), 1)
+	continuationProbeMustRun(t, args)
+}
+
+func continuationProbeExecutionArgs(t *testing.T, execution *ReviewTransitionExecution, operation string) []string {
+	t.Helper()
+	if execution == nil || execution.Operation != operation {
+		t.Fatalf("expected %s execution, got %+v", operation, execution)
+	}
+	return continuationProbeArgs(t, strings.TrimPrefix(operation, "review."), execution.Arguments)
+}
+
+func continuationProbeArgs(t *testing.T, verb string, arguments []ReviewTransitionArgument) []string {
+	t.Helper()
+	args := []string{verb}
+	for _, argument := range arguments {
+		if argument.Token == "" {
+			t.Fatalf("missing exact token for %s argument %q", verb, argument.Name)
+		}
+		args = append(args, argument.Token)
+	}
+	return args
+}
+
+func continuationProbeStatus(t *testing.T, args []string) ReviewTargetStatusResult {
+	t.Helper()
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, continuationProbeMustRun(t, args), &status)
+	// START options are private to the STATUS producer and are not restored
+	// by JSON decoding. Test the offered START by running its exact tokens.
+	if status.NextTransition == nil || status.NextTransition.ReasonCode != "fresh_target_ready" {
+		if err := status.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return status
+}
+
+func continuationProbeMustRun(t *testing.T, args []string) []byte {
+	t.Helper()
+	output, err := continuationProbeRun(t, args)
+	if err != nil {
+		t.Fatalf("review %q: %v\n%s", args, err, output)
+	}
+	return output
+}
+
+func continuationProbeRun(t *testing.T, args []string) ([]byte, error) {
+	t.Helper()
+	stopStderr := captureReviewProcessStderr(t)
+	var stdout bytes.Buffer
+	err := RunReview(args, &stdout)
+	if stderr := stopStderr(); stderr != "" {
+		t.Fatalf("review %q wrote unexpected stderr %q\nstdout=%s", args, stderr, stdout.Bytes())
+	}
+	exit := 0
+	if err != nil {
+		exit = 1
+	}
+	t.Logf("gentle-ai review %q: CLI exit %d", args, exit)
+	return stdout.Bytes(), err
+}

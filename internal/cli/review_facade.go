@@ -828,8 +828,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	requestContextSource := flags.String("request-context", "", "preflight review start --request-context: validate the request file without creating authority and render it into the fresh START next transition")
 	escalateItem := flags.String("escalate-item", "", "preflight review start --escalate-item (1-6) and render it into the fresh START next transition")
 	escalateReason := flags.String("escalate-reason", "", "preflight review start --escalate-reason and render it into the fresh START next transition")
-	lensSelection := flags.String("lenses", "", "preflight review start --lenses and render it into the fresh START next transition")
-	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason and render it into the fresh START next transition")
+	lensSelection := flags.String("lenses", "", "preflight review start --lenses; an exact reviewing recovery may resume its matching frozen selection")
+	lensSelectionReason := flags.String("lenses-reason", "", "preflight review start --lenses-reason; a resumed recovery keeps its matching frozen reason")
 	phaseTimings := flags.Bool("phase-timings", false, "emit opt-in native STATUS phase timing diagnostics")
 	nonBlockingFindings := flags.Bool("non-blocking-findings", false, "include the optional non_blocking_findings (with claims) of a correction_required or escalated authority in negotiated output; requires --contract "+ReviewIntegrationContractV2)
 	if err := parseReviewFlags(flags, args); err != nil {
@@ -1164,25 +1164,30 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					}
 				}
 			}
-			// #3900: a zero-lens START closes approved with a pending
-			// acknowledgement in the same call, and the canonical selectorless
-			// STATUS is the only continuation the orchestrator holds. The one
-			// lineage that START derives for this exact live identity admits, so
-			// STATUS replays its acknowledgement instead of reoffering a START
-			// the store refuses. No sibling authority is read.
-			pendingLineage := ""
+			// An existing continuation in the exact derived START slot takes
+			// precedence over a fresh START. Do not look at unrelated lineages.
+			var continuing reviewtransaction.CompactRecord
 			if requestedLineage == "" {
-				pendingLineage, err = reviewPendingAcknowledgementLineage(ctx, root, liveSnapshot.Identity)
+				continuing, err = reviewStatusContinuationAuthority(ctx, root, liveSnapshot.Identity, *contract)
 				if err != nil {
-					return fmt.Errorf("load pending acknowledgement for negotiated review target: %w", err)
+					return fmt.Errorf("load continuation authority for negotiated review target: %w", err)
 				}
 			}
-			if pendingLineage != "" {
+			if continuing.State.LineageID != "" {
 				native, liveSnapshot, err = reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
-					Target: target, LineageID: pendingLineage, PrePR: prePR,
+					Target: target, LineageID: continuing.State.LineageID, PrePR: prePR,
 				})
 				if err != nil {
 					return fmt.Errorf("assess negotiated review target: %w", err)
+				}
+				// Replaying the selector STATUS can carry exactly the lens
+				// options recovery inherited. They are already frozen, not new
+				// START options to apply. Leave nonmatching options to the guard.
+				if selection := startOptions.LensSelection; selection != nil && continuing.State.Recovery != nil &&
+					native.State == reviewtransaction.StateReviewing && native.Revision == continuing.Revision &&
+					liveSnapshot.Identity == continuing.State.InitialSnapshot.Identity &&
+					selection.Reason == continuing.State.LensSelectionReason && slices.Equal(selection.Lenses, continuing.State.SelectedLenses) {
+					startOptions.LensSelection = nil
 				}
 			} else {
 				native = reviewFreshAtomicTargetStatus(target, liveSnapshot)
