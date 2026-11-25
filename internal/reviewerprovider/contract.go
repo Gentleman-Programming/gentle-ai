@@ -102,6 +102,7 @@ const targetedValidatorPromptInstruction = "You are the read-only targeted fix v
 	"Return exactly one JSON object with no prose. " +
 	"Validate your result against the supplied output schema. " +
 	"Echo targeted_validation_request_hash and correction_target_identity from the input. " +
+	"Copy `validation_request.request_hash` to `targeted_validation_request_hash` and `validation_request.correction_target_identity` to `correction_target_identity` verbatim; never copy the schema example hashes. " +
 	"Include original_criteria and correction_regression, each with a boolean passed and non-empty evidence. " +
 	"Set `original_criteria.passed` to true only when every original criterion is met in the corrected candidate; set it to false when any original criterion remains unmet. " +
 	"Set `correction_regression.passed` to true only when the correction caused no regression; set it to false when you observe a regression. " +

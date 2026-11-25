@@ -75,7 +75,7 @@ These are parent-orchestrator routing boundaries. Each trigger holds only when i
 - A passive ordinary document or image needs structural readback, not an artificial semantic-verification subagent. Active, mixed, operational, executable, mode-changing, or unknown content fails closed into the applicable native plan.
 - For a trivial passive documentation-only edit, structural readback is the complete proportional check; do not open a separate semantic-verification or heavy review ceremony.
 - If an applicable verifier is unavailable, preserve the typed unavailable result; never invent PASS, retry indefinitely, or escalate into extra ceremony.
-- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Continuity and missing proof follow the ODD Close (step 7).
+- A failed check is diagnosed, fixed and rerun within its limits. An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Continuity and missing proof follow the ODD Close (step 7).
 - Functional proof and adversarial review both project as **Checking**. One immutable candidate permits at most one scoped correction; there is no loop-until-clean behavior.
 - Commit, push, PR, direct-main, emergency, and release gates are informational and unmanaged; ordinary repository policy decides delivery and they never reopen review for unchanged content.
 
@@ -109,7 +109,7 @@ Interpret short replies such as "yes", "go ahead", or "eso mismo" against the im
 
 Resolving an incident or subdecision does not complete or cancel the original authorized objective; resume safe, necessary in-scope steps automatically, using judgment for proportionate recovery and respecting explicit user dispositions. Investigate pending technical uncertainty rather than treating it alone as a new human decision.
 
-An open human decision, missing consent, a denial, an exhausted limit, or an explicit stop halts only the work it names; independent authorized work continues. Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule. Report a concrete blocker and the exact decision needed rather than requesting a generic "continue".
+An open human decision, missing consent, a denial, an exhausted limit, an explicit stop, or a failure with no permitted route left halts only the work it names; independent authorized work continues. Do not infer permission for publishing, destructive actions, unrelated scope or native consent from this continuity rule. Report a concrete blocker and the exact decision needed rather than requesting a generic "continue".
 
 For background work, launch the bounded action and end the turn when no independent in-scope work remains. Retain its identity and resume the already-authorized continuation automatically on its completion event; do not ask the human to say "continue", poll, or claim completion while checks remain pending.
 

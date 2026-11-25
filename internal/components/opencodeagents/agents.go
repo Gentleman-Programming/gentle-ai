@@ -111,6 +111,16 @@ func Entry(spec Spec) (map[string]any, error) {
 	return map[string]any{"mode": "subagent", "hidden": true, "description": spec.Description, "prompt": prompt, "permission": spec.Permission}, nil
 }
 
+// The worker's v5.0.0 and v4.5.0 prompts had different handoffs after the
+// same counted correction rule. Recognize both without matching partial prompts.
+const (
+	workerProgressRule = "\n\nA failing check is an obstacle: keep correcting while each attempt names a cause from the output and makes a change to address it. Never repeat the same change or stop because of an attempt count. RED construction is separate from fix correction: harness or setup errors get one self-fix; if the test still cannot reproduce the failure, return `status: partial` with the reproduction blocker and its evidence." +
+		"\n\nStop correcting and return `status: partial` only if the same cause fails again after a real fix and no new hypothesis exists, passing would require weakening, skipping or rewriting the check, or the fix needs work outside the allowed surfaces or crosses an explicit limit." +
+		"\n\nReturn the failing command and its output, the remaining implementation work, the missing proof, and your diagnosed cause with evidence. Name the cause in `summary`. That ends your cycle, not the unit: the parent decides the next step from your evidence. Do not start a fresh correction cycle or treat a new session as a reset."
+	workerCountedRule = " Make one correction attempt per failing check, and a second only if the same check still fails after a real fix; then stop and return `status: partial` with the failing command and its output, never looping."
+	workerV5Handoff   = " Name in `summary` the loop's diagnosed cause (for example a wrong test, a wrong hypothesis, missing context, a setup or environment error, or a real blocker). Exhaustion ends this cycle, not the unit: the parent decides the next step from your evidence. Making a new test fail for the expected reason is RED construction, not a fix correction: its own harness or setup errors get the setup bound (one self-fix), separate from the fix's limit; if the test still cannot reproduce the failure, return `status: partial` naming a reproduction blocker, not exhausted corrections."
+)
+
 // releasedPromptEdits reverse, per agent, every asset edit made since v4.5.0
 // (f2f7d7b16), current text first and released text second, so the exact
 // prompt v4.5.0 installed is derived from the current one. An upgrading user's
@@ -130,7 +140,7 @@ var releasedPromptEdits = map[string][][2]string{
 		{"decision owner can approve, decline, or select from, and never ask anyone", "human can approve, decline, or select from, and never ask the human"},
 		{"each with its reason, and ask the parent to approve that list, narrow it, or route it to the human.", "and ask the human to approve that list or name which entries to drop."},
 		{"text, or unchanged file contents.", "text, or unchanged file contents. Any requested `## Key Learnings` block follows it."},
-		{"never looping. Name in `summary` the loop's diagnosed cause (for example a wrong test, a wrong hypothesis, missing context, a setup or environment error, or a real blocker). Exhaustion ends this cycle, not the unit: the parent decides the next step from your evidence. Making a new test fail for the expected reason is RED construction, not a fix correction: its own harness or setup errors get the setup bound (one self-fix), separate from the fix's limit; if the test still cannot reproduce the failure, return `status: partial` naming a reproduction blocker, not exhausted corrections.", "never looping."},
+		{workerProgressRule, workerCountedRule},
 	},
 	"gentle-ai-verify": {
 		{"probe regression tests follow it.", "probe regression tests, then any requested `## Key Learnings` block, follow it."},
@@ -266,6 +276,10 @@ func Shape(name string, entry map[string]any) (bool, error) {
 		return false, nil
 	}
 	priors := []string{released}
+	currentPrompt := want["prompt"].(string)
+	if name == "gentle-ai-worker" && strings.Count(currentPrompt, workerProgressRule) == 1 {
+		priors = append(priors, strings.Replace(currentPrompt, workerProgressRule, workerCountedRule+workerV5Handoff, 1))
+	}
 	if name == "gentle-ai-verify" {
 		legacy, err := legacyVerifyPrompt(released)
 		if err != nil {

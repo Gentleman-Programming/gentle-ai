@@ -5,31 +5,33 @@ reported blocker never converts authorized work into a question for the human:
 the agent continues the runnable in-scope work and reports what is actually
 outstanding.
 
-This page describes the rule the ODD close of every runtime states. Each
-installed orchestrator states its first sentence under Authorized work
-continuity, and its Native Checking Contract points at the close instead of
+This page describes the rule the ODD Close of every runtime states. Close only
+when no runnable authorized step remains, then report the outcome. Each capable
+orchestrator states the continue rule under Authorized work continuity; its
+Native Checking Contract points at the Close instead of
 restating it, because the close is installed beside it. It is shipped
 policy text, not a claim about model behavior; the rule is not enforced by a
 runtime watchdog.
 
 ## The rule
 
-> Authorized work continues: runnable in-scope steps run, a pending child
-> is a wait event whose completion resumes the turn without asking the
-> human, and only a real human decision, the user's explicit stop, a
-> denial, missing consent, or an exhausted limit stops the work it applies
-> to, never independent authorized work. A tracked task ends the turn
-> pending only while it waits on already-launched work, for the affected
-> work a denial, missing consent, the user's explicit stop, or an
-> exhausted limit applies to, or for a genuine human decision still
-> outstanding; independent authorized work continues, and it never
-> abandons runnable work or presents an unverified outcome as final.
-> Missing, partial, unavailable, or declined proof forbids claiming
-> completion of the affected work, never an independently authorized next
-> step, while a required authorized check the existing budget still allows
-> keeps running; stop checking only inside an exhausted or denied
-> boundary, report that exact blocker and the decision that is genuinely
-> the human's, and never invent a pass. Never turn a report into a blind
+> Run authorized in-scope steps. Work through failures with a permitted
+> route. A pending child is a wait: completion resumes the turn without
+> asking. Only a real human decision, explicit user stop, denial,
+> missing consent, exhausted limit, or failure without a permitted route
+> stops only affected work.
+>
+> A tracked task ends the turn pending only for launched work still running,
+> a real human decision, denial, missing consent, explicit stop, or exhausted
+> limit. Report failures without a permitted route as incomplete. Continue
+> independent authorized work; never abandon runnable work or present an
+> unverified outcome as final.
+>
+> Missing, partial, unavailable, or declined proof bars claiming completion
+> of affected work, not independent authorized work or required authorized
+> checks in budget. Stop checks only at an exhausted or denied boundary or
+> with no permitted route. Report the exact blocker and any genuine human
+> decision; never invent a pass. Never turn a report into a blind
 > self-reprompt loop.
 
 ## Quick path
@@ -44,9 +46,10 @@ runtime watchdog.
 4. Missing proof blocks the completion claim for the affected work; it never
    blocks an independently authorized next step, and it never cancels a required
    authorized check the existing budget still allows.
-5. Stop checking only inside an exhausted or denied boundary. Report the exact
-   failed, skipped, or unavailable check with the concrete decision the human
-   still owns; do not repeat the whole check.
+5. Diagnose, fix and rerun a failed check within its limits. Stop checking
+   only at an exhausted or denied boundary or when no permitted route remains.
+   Report the exact failed, skipped, or unavailable check and any concrete
+   decision the human still owns.
 
 ## What stays a stop
 
@@ -56,15 +59,14 @@ runtime watchdog.
 | Explicit user stop, including a quoted "stop", tracked or not | The human owns the objective. |
 | Denied action or missing consent | The prohibition binds the work it applies to. |
 | Exhausted correction, native, or user limit | The budget for that work is spent. |
+| A failure with no permitted route left | Only the affected work ends incomplete; independent authorized work continues. |
 | Destructive action, publishing, another repository | Separate authorization is still required. |
 
-A tracked task may end the turn pending for exactly these boundaries, including
-a decided denial or an exhausted limit that already covers the affected work; a
-decided boundary is never reopened by the continuity rule, and it never holds
-back independent authorized work. Everything else inside the current
-authorization continues. A pending child, an inapplicable check, a partial
-result, or a check the existing budget still allows are states to run or report,
-not decisions to delegate back. Waiting on launched work never licenses
+A tracked task may end the turn pending while launched work is still running,
+for a real human decision, or for the affected work stopped by denial, missing
+consent, explicit user stop, or an exhausted limit. A failure without a
+permitted route is reported as incomplete, not pending. These boundaries never
+hold back independent authorized work. Waiting on launched work never licenses
 abandoning runnable work or presenting an unverified outcome as final.
 
 ## Where the rule ships
@@ -97,18 +99,21 @@ abandoning runnable work or presenting an unverified outcome as final.
   authorized work continues.
 - Worker, setup, recheck, native, and user budgets stay separate; changed state
   earns a fresh check, not a budget reset.
-- A worker keeps its two-attempt correction limit. Its exhaustion returns
-  `status: partial` with the evidence and the loop's diagnosed cause, and ends
-  that worker's cycle, not the unit. The orchestrator then decides the next
-  step without asking the user: it names the cause and acts on it, fixing it
-  inline only when the fix is small and understood, otherwise launching a new
-  bounded writer whose handoff carries the diagnosis and the new evidence with
-  a new hypothesis. It never repeats the same attempt; the same cause again, or no
-  new hypothesis, leaves the unit blocked while independent work continues.
-  The user is asked only for a genuinely human decision.
-- Making a new test fail for the expected reason is RED construction, not a fix
-  correction: its setup errors use the setup bound, and a test that still
-  cannot reproduce the failure is a reproduction blocker.
+- A worker keeps correcting a failing check while each attempt names a cause
+  from the output and makes a change to address it. It stops with `status: partial`
+  when the same cause fails again after a real fix and there is no new hypothesis,
+  when passing would require weakening, skipping, or rewriting the check, or
+  when the fix crosses an edit surface or an explicit limit. It returns the
+  failing command and output, remaining work, missing proof, and diagnosed cause.
+- That worker-local stop ends the cycle, not the unit. The orchestrator owns
+  the next step: fix inline only when the fix is small and understood;
+  otherwise give a new bounded writer the diagnosis and a new hypothesis.
+  Never repeat the attempt or reset the cycle in a new session. If no route
+  remains, the unit is blocked while independent work continues. Ask the user
+  only for a genuine human decision.
+- RED construction is separate from fixing. A harness or setup error gets one
+  self-fix; if the test still cannot reproduce the failure, return `status: partial`
+  with the reproduction blocker and its evidence.
 
 ## Checklist
 

@@ -18,12 +18,12 @@ Native providers own verification, review mechanics, and lifecycle authority; or
 1. Describe the outcome in natural language.
 2. Gentle AI uses the smallest useful implementation route: direct inline or
    delegated direct.
-3. The normal interaction reports **Working**, **Checking**, and **Ready**, and
-   surfaces a blocker only for a real human decision, the user's explicit stop, a
-   denial, missing consent, or an exhausted limit: never to ask permission to
-   continue work the request already authorizes. A tracked task may end the turn
-   pending for exactly that boundary, and never for the independent work beside
-   it.
+3. The normal interaction reports **Working**, **Checking**, and **Ready**.
+   Work through failures with a permitted route left; report failures without
+   one as incomplete. Close only when no runnable authorized step remains.
+   A tracked task may end the turn pending for launched work still running, a
+   real human decision, explicit user stop, denial, missing consent, or an
+   exhausted limit. These boundaries do not stop independent authorized work.
 
 The user does not choose review internals, hashes, receipts, or lifecycle
 transitions. A question is necessary only when the answer changes requested
