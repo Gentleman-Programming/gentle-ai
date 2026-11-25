@@ -10,6 +10,7 @@ import time
 
 MATERIALIZATION_HEADER = "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION"
 RELAY_REFUSED = "opencode_review_transport_relay_refused"
+RELAY_REFUSED_TOKEN = re.compile(r"(?<!\w)" + re.escape(RELAY_REFUSED))
 # Exact parent-visible causes documented in docs/opencode-compatibility.md.
 OUTPUT_REFUSAL_CAUSES = (
     "reviewer_result_not_admissible",
@@ -300,14 +301,16 @@ def check_review_step(step, child_prompts, tool_texts, after_hooks, before, afte
                     structured.append(output)
             elif isinstance(text, str):
                 texts.append(text)
-        if not structured and not any(RELAY_REFUSED in text for text in texts):
+        text_refusals = [match for text in texts for match in RELAY_REFUSED_TOKEN.finditer(text)]
+        if not structured and not text_refusals:
             problems.append("refusal was not observed")
         reason = step.get("reason")
         if reason:
             causes = OUTPUT_REFUSAL_CAUSES if reason == "output_refused" else ()
-            prefix = f"{RELAY_REFUSED} (reason: {reason}"
+            prefix = f" (reason: {reason}"
             expected = [f"{prefix})", *(f"{prefix}, cause: {cause})" for cause in causes)]
-            has_text = any(fragment in text for text in texts for fragment in expected)
+            has_text = any(match.string.startswith(fragment, match.end())
+                           for match in text_refusals for fragment in expected)
             has_structured = any(output.get("reason") == reason and
                                  ("cause" not in output or output["cause"] in causes) for output in structured)
             if not has_text and not has_structured:

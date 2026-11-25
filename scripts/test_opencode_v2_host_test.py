@@ -954,6 +954,12 @@ class ReviewStepCheckTests(unittest.TestCase):
                 with self.subTest(reason=reason, cause=cause, source=hook["status"]):
                     self.assertEqual(self.check(step, child_prompts=[], tool_texts=[], after_hooks=[hook], after="a"), want)
 
+        step = review_step(expect="refused", child_requests=0, tool_contains=[], reason="output_refused")
+        message = f"{refusal} (reason: output_refused, cause: role_capture_failed)"
+        self.assertEqual(self.check(step, child_prompts=[], tool_texts=[message], after="a"), [])
+        self.assertEqual(self.check(step, child_prompts=[], tool_texts=["other_" + message], after="a"),
+                         ["refusal was not observed", "refusal reason 'output_refused' was not observed"])
+
     def test_structured_refusal_requires_the_code_on_the_same_record_as_the_reason(self):
         step = review_step(expect="refused", child_requests=0, tool_contains=[], reason="output_refused")
         hook = {"type": "after", "status": "error", "error": {"code": "other", "reason": "output_refused",
