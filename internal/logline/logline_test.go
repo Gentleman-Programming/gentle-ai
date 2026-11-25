@@ -72,6 +72,11 @@ func TestParse(t *testing.T) {
 			wantErr: `unterminated quoted value at offset 0`,
 		},
 		{
+			name:    "adjacent quoted field without separator is rejected",
+			line:    `msg="hello"next=world`,
+			wantErr: `quoted value not followed by separator at offset 0`,
+		},
+		{
 			name: "blank line yields an empty entry",
 			line: "   ",
 			want: nil,

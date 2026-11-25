@@ -100,6 +100,11 @@ func parseField(line string, start int) (Field, int, error) {
 		if err != nil {
 			return Field{}, 0, err
 		}
+		// After a quoted value, require EOF or a space/tab separator.
+		// Adjacent fields without a separator are invalid (e.g., msg="a"next=1).
+		if i < len(line) && !isSpace(line[i]) {
+			return Field{}, 0, parseErrorf(start, "quoted value not followed by separator")
+		}
 	} else {
 		valueStart := i
 		for i < len(line) && !isSpace(line[i]) {
