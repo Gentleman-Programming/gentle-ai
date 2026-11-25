@@ -17,7 +17,7 @@ import (
 // closure so callers can replay its exact bound STATUS continuation. The
 // lineage is left sitting in correction_required with no correction plan
 // captured yet.
-func closeCommittedBaseDiffLineageIntoCorrectionRequired(t *testing.T, repo, lineage string) *reviewLastEventClosureResult {
+func closeCommittedBaseDiffLineageIntoCorrectionRequired(t *testing.T, repo, lineage string, scope ...string) *reviewLastEventClosureResult {
 	t.Helper()
 	const baseRef = "frozen-base"
 	runReviewCLIGit(t, repo, "branch", baseRef, "HEAD")
@@ -25,9 +25,9 @@ func closeCommittedBaseDiffLineageIntoCorrectionRequired(t *testing.T, repo, lin
 	runReviewCLIGit(t, repo, "add", "candidate.go")
 	runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
 
-	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, append([]string{
 		"--cwd", repo, "--lineage", lineage, "--base-ref", baseRef, "--committed-only",
-	})
+	}, scope...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,15 +186,39 @@ func TestSelectorlessStatusResumesCommittedRangeCorrectionRequired(t *testing.T)
 		}
 	})
 
-	t.Run("current-changes correction lineage keeps requiring a live untracked declaration", func(t *testing.T) {
+	t.Run("current-changes correction admits a new companion only once tracked", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		lineage := closeReviewLineageIntoCorrectionRequired(t, repo, "current-changes-correction-selectorless")
-		writeUndeclaredWorkspaceFile(t, repo, "scratch.txt", "local-only notes\n", 0o644)
+		const companion = "candidate_test.go"
+		writeUndeclaredWorkspaceFile(t, repo, companion, "package candidate\n", 0o644)
 
+		// S2 / L3: START froze an empty selection even though the inventory was
+		// empty then. A new file stays out until tracked, when the ordinary
+		// correction scope rules can admit it as a companion test.
 		status := negotiatedReviewStatusForLineage(t, repo, lineage)
-		if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
-			status.NextTransition.ReasonCode != "intended_untracked_selection_required" {
-			t.Fatalf("current-changes correction transition = %#v, want collect/intended_untracked_selection_required", status.NextTransition)
+		plan := status.NextTransition
+		if status.Authority == nil || status.Authority.LineageID != lineage || status.Authority.State != reviewtransaction.StateCorrectionRequired ||
+			plan == nil || plan.Kind != reviewNextTransitionCollect || plan.ReasonCode != "correction_plan_required" ||
+			plan.Collect == nil || len(plan.Collect.Inputs) != 1 {
+			t.Fatalf("STATUS with the untracked companion = authority %#v, transition %#v; want the same correction plan", status.Authority, plan)
+		}
+		if len(status.Projection.Paths) != 1 || status.Projection.Paths[0] != "candidate.go" || len(status.Projection.IntendedUntracked) != 0 {
+			t.Fatalf("untracked companion entered the frozen scope: %#v", status.Projection)
+		}
+		captureArgs := append(reviewTransitionInputTokens(t, repo, plan.Collect.Inputs[0]), "--correction-lines=1")
+		if err := RunReviewCaptureCorrectionPlan(captureArgs, &bytes.Buffer{}); err != nil {
+			t.Fatalf("capture correction plan: %v", err)
+		}
+
+		runReviewCLIGit(t, repo, "add", "--", companion)
+		tracked := intendedUntrackedStatus(t, repo, "--lineage="+lineage, "--agent=claude-code")
+		request := tracked.ValidationRequest
+		if tracked.Authority == nil || tracked.Authority.LineageID != lineage || tracked.Authority.State != reviewtransaction.StateCorrectionRequired ||
+			tracked.NextTransition == nil || tracked.NextTransition.ReasonCode != "targeted_validation_required" ||
+			request == nil || request.LineageID != lineage || len(request.CorrectionPaths) != 1 || request.CorrectionPaths[0] != companion ||
+			len(tracked.Projection.IntendedUntracked) != 0 {
+			t.Fatalf("tracking the companion did not bring it into this correction: authority %#v, transition %#v, validation %#v",
+				tracked.Authority, tracked.NextTransition, request)
 		}
 	})
 }

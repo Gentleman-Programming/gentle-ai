@@ -330,7 +330,7 @@ func reAdmitCompactReviewerResult(ctx context.Context, envelope compactAdmittedR
 	}
 	canonicalPayload = append(canonicalPayload, '\n')
 	result, admission, err := AdmitArtifact(ctx, ArtifactAdmissionRequest{
-		ExpectedSubject: expected, FrozenContext: frozen, EchoedSubjectHash: provider.SubjectHash,
+		ExpectedSubject: expected, FrozenContext: frozen, CanonicalSubjectHash: provider.SubjectHash,
 		Inspection: provider.Inspection, Result: LensResult{Lens: expected.Lens, Findings: provider.Findings, Evidence: provider.Evidence},
 		CandidateCausalFindingIDs: envelope.Admission.CandidateCausalFindingIDs,
 		RawPayload:                canonicalPayload, CanonicalPayload: canonicalPayload,

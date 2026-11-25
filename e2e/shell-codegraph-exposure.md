@@ -2,7 +2,17 @@
 
 The selected CodeGraph library now gets an owned command using the same authenticated Shell Node and direct pinned platform JS; omitted bundled Node is unnecessary. Stage command binds the final selected destination before publication. Manifest admission derives/verifies its exact bytes/mode alongside the authenticated original library. Ordinary Separate ON launch PATH exposes it with downloads/telemetry disabled, and settled owned launch rechecks retained integrity, preserving errors/uncertain roots. OFF/absent/Shared do not expose private CodeGraph. Public flags remain gated; private preparation admits only explicit Linux amd64 Separate choices without clearing the profile. No compatibility/refusal is counted as installed delivery.
 
-Original source046 qualification history (not rerun in this recovery):
+## Current discovery check
+
+`shell-codegraph-sdk-discovery.mjs` uses Pi's built-in `pi mcp list --json`
+with the same `mcp.json` entry as the optional Gentle AI install. Pi must
+connect over stdio and discover `codegraph_explore` without loading gentle-pi.
+The fixture still requires the pinned command version, an uninitialized project
+and a null last index. The tagged Go caller still checks retained-library
+integrity and that discovery did not create a project index. This is MCP
+discovery, not a tool call or a test of Gentle AI's installer.
+
+## Original source046 qualification history (not rerun in this recovery)
 
 Behavioral RED: exact ON manifest never exposed CodeGraph in the ordinary launch plan. Functional GREEN stages complete frozen sources plus authentic fixed Shell Node (existing native-bootstrap custody ABI; no personal/helper/bundled-Node copy), runs the real private command/version/status using that plan's environment, and loads the original published Gentle Pi4 package through actual public SDK package discovery. Tool registration, version1.4.1/uninitialized/null index and unchanged library/no project index are observed. No model/tool-permission/compliance or native installed-manager proof.
 

@@ -43,10 +43,17 @@ func TestRenderedLensAssets(t *testing.T) {
 			if !ok || !strings.HasPrefix(got, source[:strings.Index(source, "\n---\n")+5]) {
 				t.Fatal("review frontmatter changed")
 			}
-			for _, want := range []string{"## Candidate-Causal Admission", "## Scope", "## Output", "subject_hash", "GENTLE_AI_REVIEW_BINDING"} {
+			for _, want := range []string{"## Candidate-Causal Admission", "## Scope", "## Output", "GENTLE_AI_REVIEW_BINDING"} {
 				if !strings.Contains(got, want) {
 					t.Errorf("missing %q", want)
 				}
+			}
+			input, output, _ := strings.Cut(got, "## Output")
+			if strings.HasPrefix(path, "claude/agents/") && !strings.Contains(input, "require the binding subject_hash to equal artifact_subject.subject_hash") {
+				t.Error("review input lost the provider binding/context consistency check")
+			}
+			if strings.Contains(output, "subject_hash") {
+				t.Error("review asset still asks the reviewer to copy the subject hash into output")
 			}
 		})
 	}
