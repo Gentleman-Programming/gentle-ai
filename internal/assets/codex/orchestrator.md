@@ -81,7 +81,7 @@ These are parent-orchestrator routing boundaries. Each trigger holds only when i
 - A passive ordinary document or image needs structural readback, not an artificial semantic-verification subagent. Active, mixed, operational, executable, mode-changing, or unknown content fails closed into the applicable native plan.
 - For a trivial passive documentation-only edit, structural readback is the complete proportional check; do not open a separate semantic-verification or heavy review ceremony.
 - If an applicable verifier is unavailable, preserve the typed unavailable result; never invent PASS, retry indefinitely, or escalate into extra ceremony.
-- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Continuity and missing proof follow the ODD Close (step 7).
+- A failed check is diagnosed, fixed and rerun within its limits. An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Continuity and missing proof follow the ODD Close (step 7).
 - Functional proof and adversarial review both project as **Checking**. One immutable candidate permits at most one scoped correction; there is no loop-until-clean behavior.
 - Commit, push, PR, direct-main, emergency, and release gates are informational and unmanaged; ordinary repository policy decides delivery and they never reopen review for unchanged content.
 

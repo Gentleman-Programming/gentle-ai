@@ -752,7 +752,7 @@ func TestRenderRoutingOpensWithTheODDProtocol(t *testing.T) {
 				"4. **Classify.**",
 				"5. **Track before the first write.**",
 				"6. **Implement task by task.**",
-				"7. **Close.**",
+				"7. **Close.** Close only when no runnable authorized step remains. Then report the verified outcome, every failed, skipped, or pending check, and the next step.",
 				"**Direct inline:**",
 			}
 			previous := -1
@@ -1019,20 +1019,18 @@ func TestRenderRoutingDelegatesForReason(t *testing.T) {
 			// child is a wait event that resumes on completion, never a synthetic
 			// human decision, and waiting on launched work never licenses
 			// abandonment or a fake final delivery.
-			"a pending child is a wait event whose completion resumes the turn without asking the human",
-			"A tracked task ends the turn pending only while it waits on already-launched work",
-			// A decided denial or an exhausted limit is not "still outstanding",
-			// so the rule names it as its own pending state of the affected work.
-			"for the affected work a denial, missing consent, the user's explicit stop, or an exhausted limit applies to",
-			"independent authorized work continues",
-			"never abandons runnable work or presents an unverified outcome as final",
-			// S3: an explicit stop bounds the work it applies to even when the
-			// task is small or untracked, beside denial, consent, exhaustion.
-			"only a real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit stops the work it applies to, never independent authorized work",
-			// S3: missing proof forbids the completion claim, not a required
-			// authorized check the existing budget still allows.
-			"a required authorized check the existing budget still allows keeps running",
-			"stop checking only inside an exhausted or denied boundary",
+			"A pending child is a wait: completion resumes the turn without asking.",
+			"A tracked task ends the turn pending only for launched work still running",
+			// A decided denial or an exhausted limit is its own boundary;
+			// neither stops independent work.
+			"denial, missing consent, explicit stop, or exhausted limit",
+			"Continue independent authorized work",
+			"never abandon runnable work or present an unverified outcome as final",
+			// An explicit stop bounds the affected work even when untracked.
+			"Only a real human decision, explicit user stop, denial, missing consent, exhausted limit, or failure without a permitted route stops only affected work.",
+			// Missing proof does not stop required checks still within budget.
+			"not independent authorized work or required authorized checks in budget",
+			"Stop checks only at an exhausted or denied boundary or with no permitted route.",
 		}, []string{
 			"**Needs your decision**",
 			"never more verification",

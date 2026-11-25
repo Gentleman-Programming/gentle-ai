@@ -19,9 +19,10 @@ import (
 // shipped-policy checks through the public render, not model-compliance or
 // runtime-telemetry proof.
 const (
-	continueAuthorizedWorkRule = "Authorized work continues: runnable in-scope steps run, a pending child is a wait event whose completion resumes the turn without asking the human, and only a real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit stops the work it applies to, never independent authorized work."
-	trackedTaskRule            = "A tracked task ends the turn pending only while it waits on already-launched work, for the affected work a denial, missing consent, the user's explicit stop, or an exhausted limit applies to, or for a genuine human decision still outstanding; independent authorized work continues, and it never abandons runnable work or presents an unverified outcome as final."
-	missingProofRule           = "Missing, partial, unavailable, or declined proof forbids claiming completion of the affected work, never an independently authorized next step, while a required authorized check the existing budget still allows keeps running; stop checking only inside an exhausted or denied boundary, report that exact blocker and the decision that is genuinely the human's, and never invent a pass."
+	continueAuthorizedWorkRule = "Run authorized in-scope steps. Work through failures with a permitted route. A pending child is a wait: completion resumes the turn without asking. Only a real human decision, explicit user stop, denial, missing consent, exhausted limit, or failure without a permitted route stops only affected work."
+	trackedTaskRule            = "A tracked task ends the turn pending only for launched work still running, a real human decision, denial, missing consent, explicit stop, or exhausted limit. Report failures without a permitted route as incomplete. Continue independent authorized work; never abandon runnable work or present an unverified outcome as final."
+	missingProofRule           = "Missing, partial, unavailable, or declined proof bars claiming completion of affected work, not independent authorized work or required authorized checks in budget. Stop checks only at an exhausted or denied boundary or with no permitted route. Report the exact blocker and any genuine human decision; never invent a pass."
+	failedCheckRule            = "A failed check is diagnosed, fixed and rerun within its limits. An applicable quick check runs once"
 	noSelfRepromptRule         = "Never turn a report into a blind self-reprompt loop."
 
 	// The retired wording: a universal "never more verification" and the
@@ -45,15 +46,15 @@ var continuitySpecs = []continuitySpec{
 	{
 		name: "S3 pending child resumes without the human",
 		required: []string{
-			"a pending child is a wait event whose completion resumes the turn without asking the human",
-			"while it waits on already-launched work",
+			"A pending child is a wait: completion resumes the turn without asking.",
+			"launched work still running",
 		},
 	},
 	{
 		name: "S3 tracked task may wait, never abandon or fake delivery",
 		required: []string{
 			trackedTaskRule,
-			"never abandons runnable work or presents an unverified outcome as final",
+			"never abandon runnable work or present an unverified outcome as final",
 		},
 	},
 	{
@@ -61,22 +62,23 @@ var continuitySpecs = []continuitySpec{
 		// the tracked rule has to allow it as a pending state of its own.
 		name: "S3 tracked task includes decided denial and exhausted boundaries",
 		required: []string{
-			"for the affected work a denial, missing consent, the user's explicit stop, or an exhausted limit applies to",
-			"independent authorized work continues",
+			"denial, missing consent, explicit stop, or exhausted limit",
+			"Continue independent authorized work",
 		},
 	},
 	{
 		// A partial explicit stop bounds only the work it covers.
 		name: "S3 partial explicit stop is scoped to the work it covers",
 		required: []string{
-			"the user's explicit stop",
-			"stops the work it applies to, never independent authorized work",
+			"explicit user stop",
+			"stops only affected work",
 		},
 	},
 	{
-		name: "S3 explicit stop bounds work even when untracked",
+		name: "S10 only listed reasons stop work and only the affected work",
 		required: []string{
-			"only a real human decision, the user's explicit stop, a denial, missing consent, or an exhausted limit stops the work it applies to, never independent authorized work",
+			"Work through failures with a permitted route.",
+			"Only a real human decision, explicit user stop, denial, missing consent, exhausted limit, or failure without a permitted route stops only affected work.",
 		},
 	},
 	{
@@ -90,8 +92,8 @@ var continuitySpecs = []continuitySpec{
 	{
 		name: "S3 required authorized checks keep running in budget",
 		required: []string{
-			"a required authorized check the existing budget still allows keeps running",
-			"stop checking only inside an exhausted or denied boundary",
+			"required authorized checks in budget",
+			"Stop checks only at an exhausted or denied boundary or with no permitted route.",
 		},
 	},
 }
@@ -134,14 +136,15 @@ func TestRenderRoutingTrackedPendingRuleKeepsEveryLegalPendingState(t *testing.T
 		name string
 		want []string
 	}{
-		{"denied destructive migration keeps the tracked task pending without retry", []string{"denial", "affected work", "never abandons runnable work"}},
-		{"exhausted verifier or correction limit does not resume the blocked task", []string{"exhausted limit", "affected work"}},
-		{"missing consent keeps only the unconsented work pending", []string{"missing consent", "affected work"}},
-		{"partial explicit stop bounds only the work it covers", []string{"the user's explicit stop", "affected work"}},
-		{"unrelated runnable task continues beside the pending one", []string{"independent authorized work continues"}},
-		{"waiting on launched work still permits the pending turn", []string{"waits on already-launched work"}},
-		{"an outstanding human decision stays its own boundary", []string{"genuine human decision still outstanding"}},
-		{"no abandonment and no fake final delivery", []string{"never abandons runnable work", "presents an unverified outcome as final"}},
+		{"denied destructive migration keeps the tracked task pending without retry", []string{"denial", "Continue independent authorized work", "never abandon runnable work"}},
+		{"exhausted verifier or correction limit does not resume the blocked task", []string{"exhausted limit", "Continue independent authorized work"}},
+		{"missing consent keeps only the unconsented work pending", []string{"missing consent", "Continue independent authorized work"}},
+		{"partial explicit stop bounds only the work it covers", []string{"explicit stop", "Continue independent authorized work"}},
+		{"unrelated runnable task continues beside the pending one", []string{"Continue independent authorized work"}},
+		{"waiting on launched work still permits the pending turn", []string{"launched work still running"}},
+		{"an outstanding human decision stays its own boundary", []string{"a real human decision"}},
+		{"a failure without a permitted route is reported incomplete", []string{"Report failures without a permitted route as incomplete."}},
+		{"no abandonment and no fake final delivery", []string{"never abandon runnable work", "present an unverified outcome as final"}},
 	}
 
 	for _, agent := range catalog.AllAgents() {
@@ -196,8 +199,8 @@ func TestRenderRoutingContinuesAuthorizedWork(t *testing.T) {
 			}
 			// PRESERVE: an unavailable verifier is still reported unavailable on
 			// the runtime that names it, never retried into ceremony.
-			if agent.ID == model.AgentPi && !strings.Contains(rendered, "an unavailable verifier or subagent is reported as unavailable") {
-				t.Errorf("RenderRouting(%q) lost the unavailable-verifier report", agent.ID)
+			if agent.ID == model.AgentPi && !strings.Contains(rendered, failedCheckRule+"; an unavailable verifier or subagent is reported as unavailable, never retried") {
+				t.Errorf("RenderRouting(%q) does not distinguish failed checks from unavailable capabilities", agent.ID)
 			}
 		})
 	}
@@ -246,7 +249,7 @@ func TestInstalledNativeCheckingContinuesAuthorizedWork(t *testing.T) {
 				trackedTaskRule,
 				missingProofRule,
 				noSelfRepromptRule,
-				"stop checking only inside an exhausted or denied boundary",
+				"Stop checks only at an exhausted or denied boundary or with no permitted route.",
 				"never invent a pass",
 			} {
 				if !strings.Contains(routing, want) {
@@ -258,7 +261,7 @@ func TestInstalledNativeCheckingContinuesAuthorizedWork(t *testing.T) {
 			}
 			// PRESERVE: an unavailable verifier is still reported unavailable,
 			// never retried into extra ceremony, and never invented as a pass.
-			for _, want := range []string{"an applicable verifier is unavailable", "retry indefinitely, or escalate into extra ceremony"} {
+			for _, want := range []string{failedCheckRule, "an applicable verifier is unavailable", "retry indefinitely, or escalate into extra ceremony"} {
 				if !strings.Contains(section, want) {
 					t.Errorf("installed %q Native Checking Contract lost %q", agent.ID, want)
 				}
