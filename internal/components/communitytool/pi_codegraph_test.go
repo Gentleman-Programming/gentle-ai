@@ -64,9 +64,12 @@ func TestPiCodeGraphReconcileInjectsOnlyCompatibleToolsAndGuidanceForEveryChild(
 			t.Fatalf("child %s has no owned guidance: %v\n%s", child.Name, err, body)
 		}
 	}
-	compatible, _ := os.ReadFile(result.Children[0].Target)
-	if !strings.Contains(string(compatible), "mcp") || !strings.Contains(string(compatible), piCodeGraphToolMarker) {
-		t.Fatalf("compatible child has no mcp tool block:\n%s", compatible)
+	compatible := string(mustReadPiFile(t, result.Children[0].Target))
+	if !strings.Contains(compatible, "tools: bash, mcp\n") {
+		t.Fatalf("compatible child lacks the mcp allowlist entry:\n%s", compatible)
+	}
+	if !strings.Contains(compatible, piCodeGraphToolMarker+"\nUse `mcp__codegraph__codegraph_explore` via `codemode`.\n"+piCodeGraphEndMarker) {
+		t.Fatalf("compatible child guidance does not name the exposed CodeGraph tool and codemode:\n%s", compatible)
 	}
 	limited, _ := os.ReadFile(result.Children[1].Target)
 	if strings.Contains(string(limited), piCodeGraphToolMarker) {
@@ -315,6 +318,85 @@ func TestPiCodeGraphRefreshDoesNotRecreateMissingChild(t *testing.T) {
 	}
 	if _, exists := readPiManifestForTest(t, home).Children[childPath]; exists {
 		t.Fatal("manifest still owns a removed child")
+	}
+}
+
+func TestPiCodeGraphRefreshMigratesOnlyUnchangedOwnedLegacyGuidance(t *testing.T) {
+	home := t.TempDir()
+	previousProbe := piCodeGraphEffectiveMCPProbe
+	piCodeGraphEffectiveMCPProbe = piProbeForTest
+	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previousProbe })
+	paths := piagent.CodeGraphPaths(home)
+	children := filepath.Join(paths.AgentDir, "subagents")
+	owned := filepath.Join(children, "owned.md")
+	edited := filepath.Join(children, "edited.md")
+	adopted := filepath.Join(children, "adopted.md")
+	const original = "---\ntools: bash\n---\nwork\n"
+	const oldInstruction = "Use the Pi MCP proxy tool `mcp` for the read-only CodeGraph server."
+	const newInstruction = "Use `mcp__codegraph__codegraph_explore` via `codemode`."
+	legacy := "---\ntools: bash, mcp\n---\nwork\n\n\n" +
+		piCodeGraphToolMarker + "\n" + oldInstruction + "\n" + piCodeGraphEndMarker + "\n\n" +
+		piCodeGraphGuidanceMarker + "\n" + CodeGraphGuidanceMarkdown() + "\n" + piCodeGraphEndMarker + "\n"
+	writePiFile(t, owned, original)
+	writePiFile(t, edited, original)
+	writePiFile(t, adopted, legacy)
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Model a pre-upgrade installation: sync recorded the legacy bytes, then
+	// the user edited the guidance block of one child but not its tool block.
+	manifest := readPiManifestForTest(t, home)
+	for _, path := range []string{owned, edited} {
+		entry := manifest.Children[path]
+		entry.After, entry.AfterHash = legacy, hashPiBytes([]byte(legacy))
+		manifest.Children[path] = entry
+	}
+	encoded, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Manifest, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writePiFile(t, owned, legacy)
+	editedBody := strings.Replace(legacy, piCodeGraphGuidanceMarker+"\n", piCodeGraphGuidanceMarker+"\nUser-edited guidance.\n", 1)
+	writePiFile(t, edited, editedBody)
+
+	result, handled, err := RefreshPiCodeGraphIfConfigured(home, "")
+	if err != nil || !handled {
+		t.Fatalf("RefreshPiCodeGraphIfConfigured() = %#v, %v, %v", result, handled, err)
+	}
+	wantFiles := []string{paths.Manifest, owned}
+	slices.Sort(wantFiles)
+	if !result.Changed || !slices.Equal(result.Files, wantFiles) {
+		t.Errorf("changed files = %v, want %v", result.Files, wantFiles)
+	}
+	after := readPiManifestForTest(t, home)
+	t.Run("owned", func(t *testing.T) {
+		want := strings.Replace(legacy, oldInstruction, newInstruction, 1)
+		if got := string(mustReadPiFile(t, owned)); got != want {
+			t.Errorf("sync did not replace the owned legacy guidance; old instruction remains: %v", strings.Contains(got, oldInstruction))
+		}
+		if entry := after.Children[owned]; entry.After != want || entry.AfterHash != hashPiBytes([]byte(want)) {
+			t.Errorf("sync did not record the migrated child bytes and hash")
+		}
+	})
+	t.Run("user edited", func(t *testing.T) {
+		if got := string(mustReadPiFile(t, edited)); got != editedBody || after.Children[edited].AfterHash != manifest.Children[edited].AfterHash {
+			t.Fatal("sync rewrote the edited child or changed its recorded hash")
+		}
+	})
+	t.Run("adopted", func(t *testing.T) {
+		if got := string(mustReadPiFile(t, adopted)); got != legacy || !after.Children[adopted].Adopted || after.Children[adopted].AfterHash != manifest.Children[adopted].AfterHash {
+			t.Fatal("sync rewrote or took ownership of the adopted child")
+		}
+	})
+	if _, err := UninstallPiCodeGraph(home); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustReadPiFile(t, owned)); got != original {
+		t.Fatalf("uninstall restored %q, want original before-image %q", got, original)
 	}
 }
 

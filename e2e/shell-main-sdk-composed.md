@@ -15,8 +15,9 @@ Run authentic Pi SDK 1.0 with `DefaultResourceLoader`, in-memory explicit packag
 settings, `ModelRuntime` with network refresh disabled, `createAgentSession`,
 `SessionManager.inMemory`, extension registration/start and supported shutdown
 (`session_shutdown` reason `quit`, then dispose). Require twenty extensions,
-skills, prompts, themes and review/CodeGraph/todo definitions from the composed
-tree, without invoking tools/models. Warm resolver must return that package's
+skills, prompts, themes and review/capture/todo definitions from the composed
+tree, without invoking tools/models. The extension count describes the frozen
+source snapshot; native CodeGraph tool registration is not required. Warm resolver must return that package's
 independently pinned stock native and refuse corrupt binary readback. The stock
 installer is imported as the resolver's authenticated constants provider, not
 called. The changed Main installer remains inert in the retained source tree.

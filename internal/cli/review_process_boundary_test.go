@@ -54,6 +54,72 @@ func TestReviewStartSelectsCanonicalFourRForSubprocessWrapper(t *testing.T) {
 	}
 }
 
+func TestReviewAssessExtensionlessShebang(t *testing.T) {
+	const (
+		bash     = "#!/usr/bin/env bash\n"
+		ash      = "#!/bin/ash\n"
+		envSplit = "#!/usr/bin/env -S MODE=prod bash -e\n"
+		python   = "#!/usr/bin/env python3\n"
+	)
+	largeData := strings.Repeat("x", 9<<20) + "\n"
+	for _, fixture := range []struct {
+		name, path, base, after string
+		risk, dueReason         string
+		codes                   []reviewtransaction.RiskReasonCode
+	}{
+		{"command", "bin/deploy", bash, bash + "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"comment", "bin/deploy", bash, bash + "# deployment note\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"ash", "bin/deploy", ash, ash + "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"env-split", "bin/deploy", envSplit, envSplit + "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"python", "bin/deploy", python, python + "print('ready')\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"bare-marker", "data/catalog", "#!\n", "#!\nordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"spaces-only", "data/catalog", "#!   \n", "#!   \nordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"test-fixture", "__tests__/deploy", bash, bash + "echo ready\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary}},
+		{"removed-shebang", "bin/deploy", bash + "echo ready\n", "echo ready\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"large-data", "data/catalog", largeData, largeData + "ordinary data\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+		{"shell-source", "bin/deploy.sh", bash, bash + "# deployment note\n", "high", "high_risk", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonProcessBoundary, reviewtransaction.RiskReasonShellSource}},
+		{"ordinary-go", "value.go", "package value\n", "package value\nconst ready = true\n", "medium", "under_budget", []reviewtransaction.RiskReasonCode{reviewtransaction.RiskReasonExecutableChange}},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			writeReviewStartCandidate(t, repo, fixture.path, fixture.base, 0o644)
+			runReviewCLIGit(t, repo, "add", "--", fixture.path)
+			runReviewCLIGit(t, repo, "commit", "-qm", "base candidate")
+			writeReviewStartCandidate(t, repo, fixture.path, fixture.after, 0o644)
+			before := runReviewCLIGit(t, repo, "status", "--porcelain=v1")
+
+			var output bytes.Buffer
+			if err := RunReview([]string{"assess", "--cwd", repo, "--json"}, &output); err != nil {
+				t.Fatalf("review assess: %v\n%s", err, output.String())
+			}
+			var result ReviewAssessmentResult
+			decodeStrictReviewJSON(t, output.Bytes(), &result)
+			var wantReasons []ReviewAssessmentReason
+			for _, code := range fixture.codes {
+				reason := ReviewAssessmentReason{Code: string(code), Path: fixture.path}
+				if code != reviewtransaction.RiskReasonExecutableChange {
+					reason.Detail = "signal: shell_process"
+				}
+				wantReasons = append(wantReasons, reason)
+			}
+			wantDue := fixture.risk == "high"
+			if result.Schema != ReviewAssessmentSchema || result.Risk != fixture.risk || !reflect.DeepEqual(result.Reasons, wantReasons) ||
+				result.ChangedPaths != 1 || result.ChangedLines != 1 || result.ReviewDue != wantDue || result.ReviewDueReason != fixture.dueReason ||
+				result.Candidate != (ReviewAssessmentCandidate{Kind: string(reviewtransaction.TargetCurrentChanges)}) {
+				t.Errorf("review assess wanted %s, reasons %#v, 1 path/line, review due %t/%s, and fresh candidate; got %s", fixture.risk, wantReasons, wantDue, fixture.dueReason, output.String())
+			}
+			if wantDue && result.ReviewDue {
+				assertReviewAssessNextTransition(t, result.NextTransition, repo, "", "")
+			} else if !wantDue && result.NextTransition != nil {
+				t.Errorf("review assess published an unexpected next transition: %#v", result.NextTransition)
+			}
+			if after := runReviewCLIGit(t, repo, "status", "--porcelain=v1"); before != after {
+				t.Errorf("review assess changed git status: %q -> %q", before, after)
+			}
+		})
+	}
+}
+
 func issue1438WrapperModule(lines int) string {
 	return paddedReviewCLIModule([]string{
 		`"""Executable module wrapping subprocess.run with argv/cwd/timeout/env policy."""`,

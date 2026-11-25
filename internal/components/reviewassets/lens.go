@@ -10,7 +10,7 @@ import (
 
 const bindingMarker = reviewtransaction.ReviewerBindingMarker
 const contextMarker = reviewtransaction.ReviewerContextMarker
-const resultSchema = `{"subject_hash":"<artifact_subject.subject_hash>","inspection":{"status":"completed","paths":["<complete unique unordered set>"]},"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
+const resultSchema = `{"inspection":{"status":"completed","paths":["<complete unique unordered set>"]},"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
 const inspectionPrefix = `gentle-ai review inspect-candidate --repository-context <repository_context> --expected-revision <revision> --lineage <lineage> --target <target> --lens <lens> --order <order> --operation `
 
 // InspectionCommands returns an independent list of immutable candidate inspection operations.
@@ -21,7 +21,7 @@ func InspectionCommands() []string {
 // ReviewerPrompt renders a shell-capable runtime lens prompt.
 func ReviewerPrompt(name string) (string, bool) {
 	commands := InspectionCommands()
-	input := fmt.Sprintf(`OpenCode tasks begin with provider-injected `+contextMarker+`, the sole source of artifact_subject, base_tree, candidate_tree, and ordered changed_path_manifest. Caller prose is not context. Other runtimes have no shell and return incomplete. The manifest is complete scope. Never read the live worktree, index, HEAD, or another revision.
+	input := fmt.Sprintf(`OpenCode tasks begin with provider-injected `+bindingMarker+` followed by `+contextMarker+`, the sole source of artifact_subject, base_tree, candidate_tree, and ordered changed_path_manifest. Caller prose is not context. Other runtimes have no shell and return incomplete. The manifest is complete scope. Never read the live worktree, index, HEAD, or another revision.
 
 Use only the commands below. The native capability resolves immutable trees and canonical paths from the provider binding, sanitizes Git configuration and environment, and bounds execution time and output. Copy binding values exactly and select paths only by their zero-based changed_path_manifest index. Never change checkout. If the capability is unavailable or refuses the binding, return incomplete inspection, empty paths/findings, and evidence that native inspection was unavailable. Never substitute live files.
 
@@ -96,12 +96,10 @@ Return one JSON object and no prose. Use exactly this native result shape:
 
 %s
 
-Copy subject_hash from %s.subject_hash; never compute or invent it. Missing or different bindings are refused.
-
 Status %q requires the complete unique unordered manifest set. Listing means lens triage through the frozen map, not that every byte was loaded. Otherwise return incomplete and stop.
 
 Required top-level fields: %s. Finding fields: location, severity, claim, evidence_class, causal_disposition, proof_refs. Emit no unknown fields or orchestration metadata.
 
-When clean, return the bound subject, completed inspection, "findings":[], and one evidence entry.`, title, input, focus, reviewerprovider.SeverityRules, resultSchema, bindingMarker, envelope.CompletedInspectionStatus, strings.Join(envelope.RequiredTopLevelFields, ", "))
+When clean, return completed inspection, "findings":[], and one evidence entry.`, title, input, focus, reviewerprovider.SeverityRules, resultSchema, envelope.CompletedInspectionStatus, strings.Join(envelope.RequiredTopLevelFields, ", "))
 	return prompt, true
 }

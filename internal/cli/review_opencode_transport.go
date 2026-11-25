@@ -537,7 +537,7 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 		output := openCodeProviderRoleResultEnvelope(session.binding.Role)
 		return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
 	}
-	admitted, err := reviewProviderAdmitRaw(ctx, session.root, record.State, record.State.CapturePhaseRevision, session.lensRequest.Frozen, session.lensRequest.Subject, hostOutput)
+	admitted, err := reviewProviderAdmitRaw(ctx, session.root, record.State, session.lensRequest.Frozen, session.lensRequest.Subject, reviewProviderRequireEcho, hostOutput)
 	if err != nil {
 		// The host relay owns its reviewer and gets no corrective
 		// re-invocation, but the refused bytes are preserved for the report.
