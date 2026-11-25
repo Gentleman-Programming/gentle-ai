@@ -974,18 +974,29 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		// native STATUS to confirm that re-entry names that same target.
 		var frozenEmptyCorrectionTarget *reviewtransaction.Snapshot
 		var frozenCommittedEscalation *reviewtransaction.CompactRecord
+		untrackedDeclared := reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory)
+		committedRange := *committedOnly
 		if selectedProjection == reviewtransaction.ProjectionStaged {
-			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
+			if untrackedDeclared {
 				return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review status --projection staged`"))
 			}
 		} else {
-			if !reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) && requestedLineageOccupied {
+			selectorless := !committedOnlyProvided && !reviewFlagWasProvided(flags, "base-ref") &&
+				!reviewFlagWasProvided(flags, "workspace-overlay") && !reviewFlagWasProvided(flags, "projection")
+			if requestedLineageOccupied && (!untrackedDeclared || selectorless) {
 				store, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, root, requestedLineage)
 				if storeErr != nil {
 					return fmt.Errorf("open explicit review lineage: %w", storeErr)
 				}
 				record, loadErr := store.LoadContext(ctx)
-				if loadErr == nil {
+				if loadErr == nil && selectorless && record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff {
+					if escalation := record.State.EscalationEvidence(); escalation != nil && escalation.Cause == reviewRejectedValidatorCause {
+						// Re-enter the original committed range, not the validator's fix diff.
+						// STATUS still assesses live HEAD against the rejected candidate.
+						selectedBaseRef, committedRange = record.State.InitialSnapshot.BaseTree, true
+					}
+				}
+				if loadErr == nil && !untrackedDeclared {
 					_, pendingApproval := reviewtransaction.PendingApprovedCompactAcknowledgement(record)
 					resumeCorrectionUntracked := false
 					declaredUntracked := record.State.InitialSnapshot.IntendedUntracked
@@ -1002,7 +1013,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							return reviewPreflightError(inventoryErr)
 						}
 						resumeCorrectionUntracked = reviewUntrackedInventoryContainsSelection(inventory, declaredUntracked)
-					} else if record.State.State == reviewtransaction.StateEscalated && *committedOnly &&
+					} else if record.State.State == reviewtransaction.StateEscalated && committedRange &&
 						record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff && len(declaredUntracked) == 0 {
 						// Wait for native STATUS to confirm that this selector still
 						// reaches the rejected candidate's terminal stop.

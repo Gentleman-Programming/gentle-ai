@@ -4,13 +4,165 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
+
+func buildReviewProbeBinary(t *testing.T) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "gentle-ai")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.CommandContext(t.Context(), "go", "build", "-buildvcs=false", "-o", binary, "./cmd/gentle-ai")
+	build.Dir = filepath.Join("..", "..")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build CLI: %v\n%s", err, out)
+	}
+	return binary
+}
+
+func invokeReviewProbe(t *testing.T, binary, repo string, args ...string) ([]byte, string, int) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), binary, append([]string{"review"}, args...)...)
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "DO_NOT_TRACK=1", "GENTLE_AI_TELEMETRY=0", "GENTLE_AI_NO_SELF_UPDATE=1")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); cmd.ProcessState == nil {
+		t.Fatalf("run review %q: %v", args, err)
+	}
+	return stdout.Bytes(), stderr.String(), cmd.ProcessState.ExitCode()
+}
+
+func TestRejectedCommittedCorrectionStatusFromLinkedWorktree(t *testing.T) {
+	reviewEnabledHome(t)
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GENTLE_AI_BOUND_SELECTION_CONTRACT", "")
+	binary := buildReviewProbeBinary(t)
+	main := initReviewCLIRepo(t)
+	repo := filepath.Join(t.TempDir(), "linked")
+	runReviewCLIGit(t, main, "worktree", "add", "-qb", "probe-linked", repo)
+	const lineage = "rejected-committed-probe"
+	writeUndeclaredWorkspaceFile(t, repo, "scratch.txt", "unrelated\n", 0o644)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD^{tree}"))
+	digest, _ := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo))
+	closure := closeCommittedBaseDiffLineageIntoCorrectionRequired(t, repo, lineage,
+		"--untracked-scope=exclude", "--expected-untracked-inventory="+digest)
+	if closure == nil || closure.StatusContinuation == nil {
+		t.Fatal("reviewer closure did not issue a bound STATUS")
+	}
+	statusArgs := []string{"status"}
+	for _, arg := range closure.StatusContinuation.Arguments {
+		statusArgs = append(statusArgs, arg.Token)
+	}
+	run := func(args ...string) []byte {
+		t.Helper()
+		stdout, stderr, exit := invokeReviewProbe(t, binary, repo, args...)
+		if exit != 0 || stderr != "" {
+			t.Fatalf("review %q: exit=%d stderr=%q\n%s", args, exit, stderr, stdout)
+		}
+		return stdout
+	}
+	status := func(args ...string) ReviewTargetStatusResult {
+		t.Helper()
+		var result ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, run(args...), &result)
+		if result.NextTransition == nil {
+			t.Fatalf("review %q did not return a transition: %+v", args, result)
+		}
+		t.Logf("review %q: exit=0 scope=%s/%s action=%s/%s next_transition=%s/%s", args,
+			result.Projection.Kind, result.Projection.Projection, result.Action, result.ActionDisposition, result.NextTransition.Kind, result.NextTransition.ReasonCode)
+		return result
+	}
+	plan := status(statusArgs...).NextTransition
+	if plan.ReasonCode != "correction_plan_required" || plan.Collect == nil || len(plan.Collect.Inputs) != 1 {
+		t.Fatalf("want correction plan, got %+v", plan)
+	}
+	run(append([]string{"capture-correction-plan", "--correction-lines=2"}, reviewTransitionInputTokens(t, repo, plan.Collect.Inputs[0])...)...)
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qm", "correct candidate", "--", "candidate.go")
+
+	validation := status(append(statusArgs, "--agent=pi")...)
+	if validation.ValidationRequest == nil || validation.NextTransition.ReasonCode != "targeted_validation_required" ||
+		validation.NextTransition.Collect == nil || len(validation.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("want a targeted validation request: %+v", validation.NextTransition)
+	}
+	submission := validation.NextTransition.Collect.Inputs[0].Submission
+	if submission == nil || submission.Value == nil {
+		t.Fatalf("want a validator submission: %+v", submission)
+	}
+	request := validation.ValidationRequest
+	payload, err := json.Marshal(facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+		OriginalCriteria: facadeValidationCheck{Passed: true, Evidence: []string{"original criterion passed"}},
+		CorrectionRegression: facadeValidationCheck{Evidence: []string{"correction introduced a regression"}, Regressions: []reviewtransaction.Regression{{
+			Location: "candidate.go:3", Claim: "caller still needs the previous value", ProofRefs: []string{"frozen candidate.go diff"},
+		}}}, FollowUps: []reviewtransaction.FollowUp{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := append([]string{submission.OperationToken}, submission.ArgumentTokens...)
+	index := 1 + submission.Value.SubstitutionLocation
+	args[index] = strings.Replace(args[index], "{{value}}", writeReviewCLIRawInput(t, payload), 1)
+	var rejected reviewLastEventClosureResult
+	decodeStrictReviewJSON(t, run(args...), &rejected)
+	if rejected.State != reviewtransaction.StateEscalated || rejected.Escalation == nil || rejected.Escalation.Cause != "targeted_validator_rejected" {
+		t.Fatalf("expected validator rejection: %+v", rejected)
+	}
+	t.Logf("review %q: exit=0 state=%s cause=%s", args, rejected.State, rejected.Escalation.Cause)
+
+	preflight := []string{"status", "--contract=" + ReviewIntegrationContractV2, "--agent=pi", "--next-transition=true"}
+	bound := append(append([]string(nil), preflight...), "--lineage="+lineage)
+	withRange := append(append([]string(nil), bound...), "--base-ref="+base, "--committed-only=true")
+	before := run("status")
+	explicit := status(withRange...)
+	for _, args := range [][]string{withRange, bound} {
+		got := status(args...)
+		if got.NextTransition.ReasonCode == "intended_untracked_selection_required" {
+			input := got.NextTransition.Collect.Inputs[0]
+			if input.Submission == nil || input.Submission.Value == nil {
+				t.Fatalf("selection has no submission: %+v", input)
+			}
+			digest, _ := intendedUntrackedSelection(t, got)
+			answer := `{"schema":"` + input.Schema + `","untracked_scope":"exclude","expected_untracked_inventory":"` + digest + `","intended_untracked":[]}`
+			submissionArgs := append([]string{input.Submission.OperationToken}, input.Submission.ArgumentTokens...)
+			index := 1 + input.Submission.Value.SubstitutionLocation
+			submissionArgs[index] = strings.Replace(submissionArgs[index], "{{value}}", answer, 1)
+			status(submissionArgs...)
+		}
+		if got.NextTransition.Kind != reviewNextTransitionStop || got.NextTransition.ReasonCode != "native_stop_required" ||
+			got.Projection.Kind != reviewtransaction.TargetBaseDiff || got.Projection.BaseTree != base || got.Authority == nil ||
+			got.Authority.Revision != rejected.StoreRevision || !reflect.DeepEqual(got.Escalation, rejected.Escalation) ||
+			!reflect.DeepEqual(got, explicit) {
+			t.Errorf("review %q did not retain the same terminal committed correction as explicit STATUS", args)
+		}
+	}
+	if fresh := status(preflight...); fresh.Authority != nil || fresh.Projection.Kind != reviewtransaction.TargetCurrentChanges ||
+		fresh.NextTransition.Kind != reviewNextTransitionCollect || fresh.NextTransition.ReasonCode != "intended_untracked_selection_required" {
+		t.Error("fresh selectorless STATUS must still collect an untracked selection without borrowing the rejected lineage")
+	}
+
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 3 }\n", 0o644)
+	runReviewCLIGit(t, repo, "commit", "-qm", "change rejected candidate", "--", "candidate.go")
+	changed := status(bound...)
+	if !reflect.DeepEqual(changed, status(withRange...)) || changed.TargetIdentity == explicit.TargetIdentity ||
+		changed.NextTransition.ReasonCode == "native_stop_required" {
+		t.Error("selectorless STATUS must assess changed HEAD against the frozen range, not stop on the rejected candidate")
+	}
+	if after := run("status"); !bytes.Equal(before, after) {
+		t.Errorf("STATUS changed the authority inventory:\nbefore: %s\nafter: %s", before, after)
+	}
+}
 
 // A rejected correction does not reopen the committed range's frozen empty
 // untracked selection, even when the live workspace has untracked material.

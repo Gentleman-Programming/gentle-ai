@@ -17,7 +17,7 @@ import (
 // closure so callers can replay its exact bound STATUS continuation. The
 // lineage is left sitting in correction_required with no correction plan
 // captured yet.
-func closeCommittedBaseDiffLineageIntoCorrectionRequired(t *testing.T, repo, lineage string) *reviewLastEventClosureResult {
+func closeCommittedBaseDiffLineageIntoCorrectionRequired(t *testing.T, repo, lineage string, scope ...string) *reviewLastEventClosureResult {
 	t.Helper()
 	const baseRef = "frozen-base"
 	runReviewCLIGit(t, repo, "branch", baseRef, "HEAD")
@@ -25,9 +25,9 @@ func closeCommittedBaseDiffLineageIntoCorrectionRequired(t *testing.T, repo, lin
 	runReviewCLIGit(t, repo, "add", "candidate.go")
 	runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
 
-	startedBytes, err := runLegacyFacadeStartForTestBytes(t, []string{
+	startedBytes, err := runLegacyFacadeStartForTestBytes(t, append([]string{
 		"--cwd", repo, "--lineage", lineage, "--base-ref", baseRef, "--committed-only",
-	})
+	}, scope...))
 	if err != nil {
 		t.Fatal(err)
 	}
