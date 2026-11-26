@@ -196,6 +196,7 @@ export default Plugin.define({
     const owner = Symbol("review-relay")
     const relays = registry()
     const deferred = new Map<string, RelayRegistration>()
+    const pendingLookups = new Map<string, Set<AbortController>>()
     const refused = new Map<string, RefusalReason>()
     const registrations: Array<{ dispose(): Promise<void> }> = []
     const abort = new AbortController()
@@ -267,18 +268,30 @@ export default Plugin.define({
         const suppliedPrompt = input.prompt
         // The host may remove background from the executable input. Inspect
         // the exact calling message/tool while its original input is running.
-        const lookup = AbortSignal.any([abort.signal, AbortSignal.timeout(15_000)])
+        const pending = pendingLookups.get(call.sessionID) ?? new Set<AbortController>()
+        pendingLookups.set(call.sessionID, pending)
+        const cancelLookup = new AbortController()
+        pending.add(cancelLookup)
+        const lookup = AbortSignal.any([abort.signal, cancelLookup.signal, AbortSignal.timeout(15_000)])
         let onAbort = () => {}
         const unavailable = new Promise<never>((_, reject) => {
           onAbort = () => reject(new RelayRefusal(REFUSAL_REASON.RelayUnavailable))
           if (lookup.aborted) onAbort()
           else lookup.addEventListener("abort", onAbort, { once: true })
         })
-        const messages = await Promise.race([
-          unavailable, ctx.session.context({ sessionID: call.sessionID }, { signal: lookup }),
-        ]).catch(() => refuse(REFUSAL_REASON.RelayUnavailable))
-          .finally(() => lookup.removeEventListener("abort", onAbort))
-        if (disposed) return refuse(REFUSAL_REASON.RelayUnavailable)
+        let messages: Awaited<ReturnType<typeof ctx.session.context>>
+        try {
+          messages = await Promise.race([
+            unavailable, ctx.session.context({ sessionID: call.sessionID }, { signal: lookup }),
+          ])
+        } catch {
+          return refuse(REFUSAL_REASON.RelayUnavailable)
+        } finally {
+          lookup.removeEventListener("abort", onAbort)
+          pending.delete(cancelLookup)
+          if (pending.size === 0) pendingLookups.delete(call.sessionID)
+        }
+        if (lookup.aborted) return refuse(REFUSAL_REASON.RelayUnavailable)
         const matches = messages.filter(message => message.id === call.messageID)
         const [message] = matches
         if (matches.length !== 1 || message?.type !== "assistant" || message.agent !== call.agent) return refuse(REFUSAL_REASON.DispatchRefused)
@@ -301,6 +314,7 @@ export default Plugin.define({
         }
         if (original.prompt !== suppliedPrompt) return refuse(REFUSAL_REASON.DispatchRefused)
         try {
+          lookup.throwIfAborted()
           const relay = startRelay(ctx.location.directory, suppliedPrompt, input.agent as string)
           relays.set(key, { owner, relay, originalPrompt: suppliedPrompt, completing: false })
           const { prompt } = await relay.prompt
@@ -356,6 +370,7 @@ export default Plugin.define({
         try {
           for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
             if (event.type !== "session.deleted" || event.location?.directory !== location[0] || (event.location?.workspaceID ?? "") !== location[1]) continue
+            for (const lookup of pendingLookups.get(event.data.sessionID) ?? []) lookup.abort()
             const sessionPrefix = JSON.stringify([prefix, event.data.sessionID]).slice(0, -1) + ","
             for (const [key, registration] of relays) if (key.startsWith(sessionPrefix) || registration.childID === event.data.sessionID) clearOwned(key)
             for (const key of deferred.keys()) if (key.startsWith(sessionPrefix)) deferred.delete(key)

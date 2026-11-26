@@ -20,8 +20,8 @@ var (
 // slot. The resolved store path supplies the repository and lineage; the
 // remaining key is the capture phase, target and selected lens. An empty
 // directory is enough: atomic creation is the claim, not a PID or a lease.
-// There is no release operation. Only native authority can prove capture or
-// move to a different slot. A stale relay can never release another claim.
+// There is no release after dispatch authorization. Only native authority can
+// prove capture or move to a different slot.
 func (store CompactStore) ReserveOpenCodeLensDispatch(ctx context.Context, subject ArtifactSubject) error {
 	if store.repo == "" || store.maintenanceLockPath == "" || subject.LineageID != store.lineageID ||
 		validateLineageID(store.lineageID) != nil {
@@ -59,8 +59,8 @@ func (store CompactStore) ReserveOpenCodeLensDispatch(ctx context.Context, subje
 		return ErrOpenCodeLensDispatchStale
 	}
 
-	// Both mutations are relative to directory handles verified by a no-follow
-	// walk. A symlink substituted into an ancestor must not redirect mkdir.
+	// Mutations are relative to directory handles verified by a no-follow
+	// walk. A symlink substituted into an ancestor must not redirect them.
 	lineageRoot, err := openOpenCodeLensDispatchRoot(store.Dir, false)
 	if err != nil {
 		return err
@@ -81,17 +81,26 @@ func (store CompactStore) ReserveOpenCodeLensDispatch(ctx context.Context, subje
 	defer root.Close()
 
 	key := sha256.Sum256([]byte(subject.AuthorityRevision + "\x00" + subject.TargetIdentity + "\x00" + subject.Lens))
-	if err := root.Mkdir(hex.EncodeToString(key[:]), 0o700); errors.Is(err, os.ErrExist) {
+	slot := hex.EncodeToString(key[:])
+	if err := root.Mkdir(slot, 0o700); errors.Is(err, os.ErrExist) {
 		return ErrOpenCodeLensDispatchReserved
 	} else if err != nil {
 		return err
 	}
 	// Sync both entries, including when another dispatcher created the
 	// reservation directory but has not yet synced its parent.
-	if err := SyncReviewDirectory(dir); err != nil {
-		return err
+	for _, path := range []string{dir, store.Dir} {
+		if err := SyncReviewDirectory(path); err != nil {
+			// Nothing has been authorized for dispatch. This caller alone won
+			// mkdir, and maintenance cannot remove the lineage under our lease.
+			// Remove once: a later caller may claim the slot as soon as it is gone.
+			if removeErr := root.Remove(slot); removeErr != nil {
+				return errors.Join(err, removeErr)
+			}
+			return errors.Join(err, SyncReviewDirectory(dir))
+		}
 	}
-	return SyncReviewDirectory(store.Dir)
+	return nil
 }
 
 func openOpenCodeLensDispatchRoot(dir string, private bool) (*os.Root, error) {
