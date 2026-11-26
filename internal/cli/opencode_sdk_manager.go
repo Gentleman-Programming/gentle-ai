@@ -25,10 +25,10 @@ func openCodeRuntimeMajorForManagedAssets() (opencodeactivation.RuntimeMajor, er
 	return version.Major, err
 }
 
-func openCodeRuntimeVersionForManagedAssets() (opencodeactivation.RuntimeVersion, error) {
-	version, err := opencodeactivation.DetectRuntimeVersion(context.Background())
+func openCodeRuntimeVersionForManagedAssets() (opencodeactivation.RuntimeEvidence, error) {
+	version, err := opencodeactivation.DetectRuntimeEvidence(context.Background())
 	if err != nil {
-		return opencodeactivation.RuntimeVersion{}, fmt.Errorf("%w; Gentle AI could not choose V1 or V2 managed OpenCode plugins and telemetry; make sure `opencode --version` succeeds in this shell (install, update, or add OpenCode to PATH), or deselect OpenCode, then retry", err)
+		return opencodeactivation.RuntimeEvidence{}, fmt.Errorf("%w; Gentle AI could not choose V1 or V2 managed OpenCode plugins and telemetry; make sure `opencode --version` succeeds in this shell (install, update, or add OpenCode to PATH), or deselect OpenCode, then retry", err)
 	}
 	return version, nil
 }
@@ -41,7 +41,7 @@ func openCodeNeedsLocalPluginSDK() (bool, error) {
 		return false, err
 	}
 	return version.Major == opencodeactivation.RuntimeV2 &&
-		!opencodeactivation.RuntimeProvidesPluginSDK(version.Version), nil
+		!version.ProvidesPluginSDK(), nil
 }
 
 // openCodeSDKIsolatedPathDirs is the only PATH the credential-isolated npm
