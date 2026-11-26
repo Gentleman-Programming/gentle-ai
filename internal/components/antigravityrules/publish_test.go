@@ -432,6 +432,7 @@ func TestPublishRemovesRetiredAntigravitySectionsFromWorkspaceAGENTS(t *testing.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv(state.HomeEnv, "")
 	agentsPath := antigravityrules.AgentsMDPath(workspace)
 
 	initialContent := filemerge.InjectMarkdownSection("", "persona", "Active persona.\n")
