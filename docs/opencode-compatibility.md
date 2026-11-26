@@ -268,25 +268,3 @@ the foreground child returned the expected raw output, hook ordering and
 instruction inheritance matched expectations, and the deny-all child exposed
 no tools. External network access was blocked. This does not prove the TUI
 installation path or positive native review admission.
-
-For an opt-in **no-local-SDK activation check**, use an existing disposable root
-with `config/opencode/opencode.json`, the four managed `plugins/*.ts` assets,
-an existing empty `config/opencode/node_modules`, and isolated `home`, `workspace`,
-`data`, `state`, `cache`, `tmp`, and `run` directories (no real user configuration):
-
-```sh
-python3 -B scripts/test-opencode-v2-host.py /path/to/opencode "$ROOT/config/opencode/node_modules" \
-  --host-version 2.3.0 --temp-root "$ROOT" --installed-activation-only \
-  --installed-root "$ROOT" --installed-config "$ROOT/config/opencode" \
-  --installed-workspace "$ROOT/workspace" --installed-host-sdk
-```
-
-`ROOT` must be an approved existing writable absolute fixture directory. This
-mode requires the local SDK to be absent, checks all four plugins' activation and
-installed-source provenance on initial launch and restart, and checks unchanged
-installed settings/assets. The mandatory Darwin network/write sandbox, bounded
-process cleanup and GET-only inventory remain in force; no provider is called.
-Without this flag, installed activation still requires SDK 2.0.4;
-`--installed-sdk-missing` remains the mutually exclusive failure control.
-A passing run names the actual host version and no-SDK scope, not multiplatform
-certification or native review admission.
