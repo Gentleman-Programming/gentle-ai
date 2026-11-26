@@ -240,6 +240,8 @@ func TestPublishWritesConfigAgentsMDAndSymlink(t *testing.T) {
 
 func TestPublishMigratesLegacyGeminiSymlink(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	legacyLink := antigravityrules.AgentsMDPath(home)
 	if err := os.Symlink(filepath.Join(".gemini", "GEMINI.md"), legacyLink); err != nil {
 		t.Fatal(err)
@@ -263,6 +265,24 @@ func TestPublishMigratesLegacyGeminiSymlink(t *testing.T) {
 	wantTarget := filepath.Join(".gemini", "config", "AGENTS.md")
 	if target != wantTarget {
 		t.Fatalf("migrated symlink target = %q, want %q", target, wantTarget)
+	}
+
+	// When legacy GEMINI.md contains user instructions, AGENTS.md keeps them reachable.
+	homeWithUser := t.TempDir()
+	t.Setenv("HOME", homeWithUser)
+	t.Setenv("USERPROFILE", homeWithUser)
+	writeFile(t, antigravityrules.LegacyPromptPath(homeWithUser), "# Custom Gemini Rules\n")
+	userLink := antigravityrules.AgentsMDPath(homeWithUser)
+	if err := os.Symlink(filepath.Join(".gemini", "GEMINI.md"), userLink); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, antigravityrules.StagingPath(homeWithUser), staging)
+	if _, err := antigravityrules.Publish(homeWithUser); err != nil {
+		t.Fatalf("Publish(legacy with user content) error = %v", err)
+	}
+	gotUserLink := readFile(t, userLink)
+	if !strings.Contains(gotUserLink, "# Custom Gemini Rules") || !strings.Contains(gotUserLink, "Persona text.") {
+		t.Fatalf("expected legacy user content and staging reachable through AGENTS.md, got:\n%s", gotUserLink)
 	}
 }
 
