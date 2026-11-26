@@ -149,6 +149,9 @@ func TestPartialUninstallAntigravityKeepsRetainedGuidanceWithoutManualNote(t *te
 func TestPartialUninstallAntigravityCleansUpWorkspaceGuidanceAndPreservesUserContent(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("GENTLE_AI_HOME", "")
 
 	restore := gemini.LookPathOverride
 	gemini.LookPathOverride = func(string) (string, error) { return "", exec.ErrNotFound }

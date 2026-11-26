@@ -242,6 +242,7 @@ func TestPublishMigratesLegacyGeminiSymlink(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv(state.HomeEnv, "")
 	legacyLink := antigravityrules.AgentsMDPath(home)
 	if err := os.Symlink(filepath.Join(".gemini", "GEMINI.md"), legacyLink); err != nil {
 		t.Fatal(err)
