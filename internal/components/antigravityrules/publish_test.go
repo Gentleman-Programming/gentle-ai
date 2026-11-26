@@ -497,6 +497,9 @@ func TestPublishWorkspaceReplacesOwnedSymlinkWithRegularFile(t *testing.T) {
 		t.Fatalf("expected workspace AGENTS.md to be regular file, mode=%v", info.Mode())
 	}
 	content := readFile(t, agentsPath)
+	if !strings.Contains(content, "# Config AGENTS") {
+		t.Fatalf("expected original config target content preserved, got:\n%s", content)
+	}
 	if !strings.Contains(content, "Workspace persona.") {
 		t.Fatalf("expected workspace content written, got:\n%s", content)
 	}
@@ -532,6 +535,27 @@ func TestPublishPreservesOpenClawSectionsWhenOpenClawIsManaged(t *testing.T) {
 	}
 	if !strings.Contains(content, "<!-- gentle-ai:agent-routing -->") {
 		t.Fatalf("expected OpenClaw agent-routing preserved, got:\n%s", content)
+	}
+
+	// An owned symlink whose target holds OpenClaw sections converts to a regular file on retirement.
+	linkHome := t.TempDir()
+	legacyTarget := antigravityrules.LegacyPromptPath(linkHome)
+	writeFile(t, legacyTarget, initialContent)
+	linkAgents := antigravityrules.AgentsMDPath(linkHome)
+	if err := os.Symlink(filepath.Join(".gemini", "GEMINI.md"), linkAgents); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, antigravityrules.StagingPath(linkHome), "")
+	if _, err := antigravityrules.Publish(linkHome, antigravityrules.WithActiveAgents([]model.AgentID{model.AgentOpenClaw})); err != nil {
+		t.Fatalf("Publish(symlink with OpenClaw) error = %v", err)
+	}
+	linkInfo, err := os.Lstat(linkAgents)
+	if err != nil || !linkInfo.Mode().IsRegular() {
+		t.Fatalf("expected owned symlink converted to regular file for OpenClaw, err=%v", err)
+	}
+	linkContent := readFile(t, linkAgents)
+	if strings.Contains(linkContent, "<!-- gentle-ai:persona -->") || !strings.Contains(linkContent, "<!-- gentle-ai:engram-protocol -->") {
+		t.Fatalf("unexpected reconciled OpenClaw symlink content:\n%s", linkContent)
 	}
 }
 

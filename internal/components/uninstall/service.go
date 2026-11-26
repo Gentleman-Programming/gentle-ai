@@ -882,16 +882,18 @@ func isPathWithinDir(dir, path string) bool {
 // older releases appended to GEMINI.md.
 func (s *Service) publishAntigravityRules(result *Result, retireLegacy bool) error {
 	published, err := antigravityrules.Publish(s.homeDir, antigravityrules.WithWorkspaceScope(false))
+	files := published.Files
 	if err != nil {
+		reportPublishedFiles(result, files)
 		return err
 	}
-	files := published.Files
 	if s.workspaceDir != "" && s.workspaceDir != s.homeDir {
 		wsPublished, err := antigravityrules.Publish(s.workspaceDir, antigravityrules.WithWorkspaceScope(true))
+		files = append(files, wsPublished.Files...)
 		if err != nil {
+			reportPublishedFiles(result, files)
 			return err
 		}
-		files = append(files, wsPublished.Files...)
 		if retireLegacy {
 			wsStagingDir := filepath.Dir(antigravityrules.StagingPath(s.workspaceDir))
 			if err := os.Remove(wsStagingDir); err == nil {
@@ -901,10 +903,11 @@ func (s *Service) publishAntigravityRules(result *Result, retireLegacy bool) err
 	}
 	if retireLegacy {
 		migrated, err := antigravityrules.MigrateLegacyPrompt(s.homeDir, antigravityrules.GeminiCLIManaged(s.homeDir, nil))
+		files = append(files, migrated.Files...)
 		if err != nil {
+			reportPublishedFiles(result, files)
 			return err
 		}
-		files = append(files, migrated.Files...)
 		// The staging directory is Gentle AI's own; it stays only while it
 		// holds guidance uninstall retains (routing), which is no leftover.
 		stagingDir := filepath.Dir(antigravityrules.StagingPath(s.homeDir))
