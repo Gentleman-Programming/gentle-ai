@@ -175,10 +175,13 @@ func TestClaudeODDOnlyOrchestrator(t *testing.T) {
 
 func TestClaudeOrchestratorPassesODDModelAndEffortToAgentTool(t *testing.T) {
 	content := MustRead("claude/orchestrator.md")
-	for _, want := range []string{"worker classes, not installed named agents", "Claude ODD worker assignments", "Agent tool `model` and `effort` parameters", "the Agent tool offers no `effort` parameter (Claude Code before 2.1.292)"} {
+	for _, want := range []string{"worker classes, not installed named agents", "Claude ODD worker assignments", "Agent tool `model` and `effort` parameters", "following the rules stated with that table"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("Claude orchestrator missing %q", want)
 		}
+	}
+	if strings.Contains(content, "2.1.292") {
+		t.Error("Claude orchestrator must reference the routing rule for omitting effort, not restate it")
 	}
 }
 

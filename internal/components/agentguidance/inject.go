@@ -126,7 +126,7 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 			model.RenderCodexODDAssignments(options.CodexPhaseModelAssignments, options.CodexModelAssignments, options.CodexCarrilModelAssignments)
 	}
 	if agent == model.AgentClaudeCode {
-		rendered += "\n\n### Claude ODD worker assignments\n\nPass the exact model and effort for the selected worker class as the Agent tool `model` and `effort` parameters. The `effort` parameter needs Claude Code 2.1.292 or later: omit `effort` when the table says `default` or when the Agent tool offers no `effort` parameter, and Claude Code applies its own default effort for that worker. These assignments apply to ODD delegation, not native RDD review.\n\n" +
+		rendered += "\n\n### Claude ODD worker assignments\n\nPass the exact model and effort for the selected worker class as the Agent tool `model` and `effort` parameters. The `effort` parameter needs Claude Code 2.1.292 or later: omit `effort` when the table says `default` or when the Agent tool offers no `effort` parameter, and Claude Code applies its own default effort for that worker. The General delegation row fills only a worker class with no assignment of its own: with General delegation `opus`/`low`, an unassigned `odd-verify` gets `opus`/`low`, while an `odd-explorer` assigned `haiku` with effort `default` keeps `haiku` and omits `effort`. These assignments apply to ODD delegation, not native RDD review.\n\n" +
 			model.RenderClaudeODDAssignments(options.ClaudeModelAssignments, options.ClaudePhaseAssignments)
 	}
 

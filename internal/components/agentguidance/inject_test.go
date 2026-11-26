@@ -91,6 +91,7 @@ func TestClaudeODDRoutingRendersRoleModelTable(t *testing.T) {
 		"omit `effort` when the table says `default`",
 		"Claude Code 2.1.292 or later",
 		"when the Agent tool offers no `effort` parameter",
+		"The General delegation row fills only a worker class with no assignment of its own",
 		"| `odd-explorer` | `sonnet` | `default` |",
 		"| `odd-worker` | `opus` | `high` |",
 		"| `odd-verify` | `sonnet` | `default` |",

@@ -118,14 +118,11 @@ var claudeODDRoles = []string{"odd-explorer", "odd-worker", "odd-verify"}
 // RenderClaudeODDAssignments provides Agent tool `model` and `effort`
 // arguments for ODD work. Resolution mirrors native agent installation: the
 // role, then "default", then sonnet, with phase assignments overriding legacy
-// model-only assignments. An effort the resolved model does not support
-// renders as default, which tells the orchestrator to omit `effort`.
+// model-only assignments. An invalid assignment is skipped, as sync restore
+// skips it, so the role falls back.
 func RenderClaudeODDAssignments(legacy map[string]ClaudeModelAlias, phases map[string]ClaudePhaseAssignment) string {
 	resolve := func(role string) (ClaudePhaseAssignment, bool) {
-		if value, ok := phases[role]; ok && value.Model.Valid() {
-			if !ClaudeEffortAllowedForModel(value.Model, value.Effort) {
-				value.Effort = ClaudeEffortDefault
-			}
+		if value, ok := phases[role]; ok && value.Valid() {
 			return value, true
 		}
 		if value, ok := legacy[role]; ok && value.Valid() {

@@ -145,9 +145,20 @@ func TestRenderClaudeODDAssignmentsResolvesRoleModelsAndEfforts(t *testing.T) {
 			want: []string{"| `odd-explorer` | `sonnet` | `low` |", "| `odd-worker` | `opus` | `xhigh` |", "| `odd-verify` | `opus` | `xhigh` |"},
 		},
 		{
-			name:   "effort the model does not support renders default",
-			phases: map[string]model.ClaudePhaseAssignment{"odd-verify": {Model: model.ClaudeModelHaiku, Effort: model.ClaudeEffortHigh}},
-			want:   []string{"| `odd-verify` | `haiku` | `default` |"},
+			name: "role with default effort keeps its own model",
+			phases: map[string]model.ClaudePhaseAssignment{
+				"default":      {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortLow},
+				"odd-explorer": {Model: model.ClaudeModelHaiku},
+			},
+			want: []string{"| `odd-explorer` | `haiku` | `default` |"},
+		},
+		{
+			name: "invalid assignment falls back like sync restore",
+			phases: map[string]model.ClaudePhaseAssignment{
+				"default":    {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortLow},
+				"odd-verify": {Model: model.ClaudeModelHaiku, Effort: model.ClaudeEffortHigh},
+			},
+			want: []string{"| `odd-verify` | `opus` | `low` |"},
 		},
 		{
 			name:   "invalid phase model falls back",
