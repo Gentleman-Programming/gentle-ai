@@ -577,6 +577,22 @@ func TestPublishPreservesOpenClawSectionsWhenOpenClawIsManaged(t *testing.T) {
 	if strings.Contains(linkContent, "<!-- gentle-ai:persona -->") || !strings.Contains(linkContent, "<!-- gentle-ai:engram-protocol -->") {
 		t.Fatalf("unexpected reconciled OpenClaw symlink content:\n%s", linkContent)
 	}
+
+	// A home config symlink whose prior config holds OpenClaw sections preserves them when staging is non-empty.
+	configLinkHome := t.TempDir()
+	writeFile(t, antigravityrules.ConfigAgentsMDPath(configLinkHome), initialContent)
+	configLinkAgents := antigravityrules.AgentsMDPath(configLinkHome)
+	if err := os.Symlink(filepath.Join(".gemini", "config", "AGENTS.md"), configLinkAgents); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, antigravityrules.StagingPath(configLinkHome), filemerge.InjectMarkdownSection("", "persona", "Updated persona.\n"))
+	if _, err := antigravityrules.Publish(configLinkHome, antigravityrules.WithActiveAgents([]model.AgentID{model.AgentOpenClaw})); err != nil {
+		t.Fatalf("Publish(config symlink with OpenClaw) error = %v", err)
+	}
+	gotConfigLink := readFile(t, configLinkAgents)
+	if !strings.Contains(gotConfigLink, "Updated persona.") || !strings.Contains(gotConfigLink, "<!-- gentle-ai:engram-protocol -->") {
+		t.Fatalf("expected updated persona and OpenClaw engram-protocol in home AGENTS.md, got:\n%s", gotConfigLink)
+	}
 }
 
 func TestPublishWorkspaceSymlinkReadErrorPropagates(t *testing.T) {
