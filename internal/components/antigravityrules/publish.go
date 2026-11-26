@@ -175,6 +175,7 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 	agentsPath := AgentsMDPath(baseDir)
 
 	hasStaging := strings.TrimSpace(staging) != ""
+	priorConfigRaw, priorConfigErr := os.ReadFile(configAgentsPath)
 
 	// 1. Manage .gemini/config/AGENTS.md
 	if hasStaging {
@@ -222,36 +223,25 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 		isManagedConfigLink := resolvedTarget == filepath.Clean(configAgentsPath)
 		isLegacyGeminiLink := resolvedTarget == filepath.Clean(LegacyPromptPath(baseDir))
 
-		if !hasStaging {
+		if !hasStaging || isWorkspace {
 			if isManagedConfigLink || isLegacyGeminiLink {
-				if err := os.Remove(agentsPath); err == nil {
-					result.Changed = true
-					result.Files = append(result.Files, agentsPath)
-				} else if !os.IsNotExist(err) {
-					return fmt.Errorf("remove AGENTS.md symlink: %w", err)
+				raw, err := priorConfigRaw, priorConfigErr
+				if !isManagedConfigLink {
+					raw, err = os.ReadFile(agentsPath)
 				}
-			}
-			return nil
-		}
-
-		if isWorkspace {
-			if isManagedConfigLink || isLegacyGeminiLink {
-				raw, err := os.ReadFile(agentsPath)
 				if err != nil && !os.IsNotExist(err) {
 					return fmt.Errorf("read %q: %w", agentsPath, err)
 				}
-				original := string(raw)
-
-				updated := reconcileAgentsMDContent(original, staging, baseDir, options)
+				updated := reconcileAgentsMDContent(string(raw), staging, baseDir, options)
 				if strings.TrimSpace(updated) == "" {
-					if err := os.Remove(agentsPath); err != nil && !os.IsNotExist(err) {
-						return fmt.Errorf("remove emptied %q: %w", agentsPath, err)
+					if err := os.Remove(agentsPath); err == nil {
+						result.Changed = true
+						result.Files = append(result.Files, agentsPath)
+					} else if !os.IsNotExist(err) {
+						return fmt.Errorf("remove AGENTS.md symlink: %w", err)
 					}
-					result.Changed = true
-					result.Files = append(result.Files, agentsPath)
 					return nil
 				}
-
 				if err := replaceSymlinkWithRegularFile(agentsPath, []byte(updated), 0o644); err != nil {
 					return err
 				}
