@@ -179,6 +179,7 @@ func TestPublishWritesConfigAgentsMDAndSymlink(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv(state.HomeEnv, "")
 	staging := filemerge.InjectMarkdownSection("", "persona", "Persona text.\n")
 	staging = filemerge.InjectMarkdownSection(staging, "engram-protocol", "Engram protocol.\n")
 	writeFile(t, antigravityrules.StagingPath(home), staging)

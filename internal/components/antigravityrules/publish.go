@@ -245,9 +245,8 @@ func reconcileProjectAgentsMD(baseDir, staging string, hasStaging bool, options 
 			return fmt.Errorf("read %q: %w", agentsPath, err)
 		}
 
-		hasRetainedContent := strings.TrimSpace(reconcileAgentsMDContent(string(raw), "", baseDir, options)) != ""
-		if !hasStaging || isWorkspace || hasRetainedContent {
-			updated := reconcileAgentsMDContent(string(raw), staging, baseDir, options)
+		updated := reconcileAgentsMDContent(string(raw), staging, baseDir, options)
+		if !hasStaging || isWorkspace || updated != staging {
 			if strings.TrimSpace(updated) == "" {
 				if err := os.Remove(agentsPath); err == nil {
 					result.Changed = true
