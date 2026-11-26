@@ -12,6 +12,7 @@ import (
 func TestOpenCodeHostSDKMatrix(t *testing.T) {
 	for _, tc := range []struct {
 		name, version, manifest, lock, sdk string
+		refusal                            string
 		localRequired, unsupported         bool
 	}{
 		{name: "older host missing SDK", version: "2.0.24", localRequired: true},
@@ -20,10 +21,10 @@ func TestOpenCodeHostSDKMatrix(t *testing.T) {
 		{name: "current Bun manifest", version: "2.3.0", manifest: `{"packageManager":"bun@1.3.2"}`},
 		{name: "current Bun text lock", version: "2.3.0", lock: "bun.lock"},
 		{name: "current Bun binary lock", version: "2.3.0", lock: "bun.lockb"},
-		{name: "older Bun owner", version: "2.0.24", manifest: `{"packageManager":"bun@1.3.2"}`, localRequired: true},
+		{name: "older Bun owner", version: "2.0.24", manifest: `{"packageManager":"bun@1.3.2"}`, localRequired: true, refusal: "package.json"},
 		{name: "older compatible SDK", version: "2.0.24", sdk: "2.0.4"},
 		{name: "older newer compatible SDK", version: "2.0.24", sdk: "2.3.0"},
-		{name: "older incompatible SDK", version: "2.0.24", sdk: "2.0.3", localRequired: true},
+		{name: "older incompatible SDK", version: "2.0.24", sdk: "2.0.3", localRequired: true, refusal: "node_modules"},
 		{name: "V1 unchanged", version: "1.18.30"},
 		{name: "unknown host", version: "not-a-version", unsupported: true},
 		{name: "unsupported major", version: "3.0.0", unsupported: true},
@@ -43,6 +44,8 @@ func TestOpenCodeHostSDKMatrix(t *testing.T) {
 			if tc.lock != "" {
 				writeSDKRangeFile(t, filepath.Join(config, tc.lock), "user-owned lock marker")
 			}
+			// Proposal approval pins a real file, but never executes npm.
+			writeSDKRangeFile(t, filepath.Join(home, "bin", "npm"), "#!/bin/sh\nexit 0\n")
 			writeSDKRangeFile(t, filepath.Join(config, "plugins", "user plugin.ts"), "// preserve user plugin\n")
 			before := hostSDKTree(t, home)
 
@@ -60,8 +63,13 @@ func TestOpenCodeHostSDKMatrix(t *testing.T) {
 					t.Errorf("missing unsupported-runtime refusal: %s", RenderSyncReport(result))
 				}
 			case tc.localRequired:
-				if proposal == nil && proposalErr == nil {
-					t.Error("older host no longer requires a local SDK")
+				if tc.refusal != "" {
+					want := "automatic OpenCode SDK install refused: " + tc.refusal + " is present in the OpenCode package directory, including symlinks;"
+					if proposal != nil || proposalErr == nil || !strings.HasPrefix(proposalErr.Error(), want) || !strings.Contains(proposalErr.Error(), "bun add --exact @opencode/plugin@2.0.4") {
+						t.Errorf("existing package SDK refusal: proposal = %v, error = %v", proposal, proposalErr)
+					}
+				} else if proposal == nil || proposalErr != nil {
+					t.Errorf("older host SDK install proposal = %v, error = %v", proposal, proposalErr)
 				}
 				if syncErr != nil {
 					t.Fatalf("dry-run error = %v", syncErr)

@@ -31,18 +31,30 @@ type RuntimeVersion struct {
 	Version string
 }
 
-var stableRuntimeVersion = regexp.MustCompile(`^(?:opencode |OpenCode )?v?(([12])\.[0-9]+\.[0-9]+)$`)
+var stableRuntimeVersion = regexp.MustCompile(`^(?:opencode |OpenCode )?v?(([12])\.([0-9]+)\.([0-9]+))$`)
 
-func parseRuntimeVersion(version string) RuntimeVersion {
+type parsedRuntimeVersion struct {
+	RuntimeVersion
+	minor, patch    uint64
+	componentsValid bool
+}
+
+func parseRuntimeVersion(version string) parsedRuntimeVersion {
 	match := stableRuntimeVersion.FindStringSubmatch(strings.TrimSpace(version))
 	if match == nil {
-		return RuntimeVersion{}
+		return parsedRuntimeVersion{}
 	}
 	major := RuntimeV1
 	if match[2] == "2" {
 		major = RuntimeV2
 	}
-	return RuntimeVersion{Major: major, Version: match[1]}
+	minor, minorErr := strconv.ParseUint(match[3], 10, 64)
+	patch, patchErr := strconv.ParseUint(match[4], 10, 64)
+	// Numeric overflow must not discard otherwise valid runtime evidence.
+	return parsedRuntimeVersion{
+		RuntimeVersion: RuntimeVersion{Major: major, Version: match[1]},
+		minor:          minor, patch: patch, componentsValid: minorErr == nil && patchErr == nil,
+	}
 }
 
 func ParseRuntimeMajor(version string) RuntimeMajor {
@@ -53,14 +65,8 @@ func ParseRuntimeMajor(version string) RuntimeMajor {
 // OpenCode 2.0.25 introduced host-provided @opencode/plugin; a local SDK is
 // optional tooling on these hosts, not a prerequisite for loading plugins.
 func RuntimeProvidesPluginSDK(version string) bool {
-	if ParseRuntimeMajor(version) != RuntimeV2 {
-		return false
-	}
-	fields := strings.Fields(version)
-	parts := strings.Split(strings.TrimPrefix(fields[len(fields)-1], "v"), ".")
-	minor, minorErr := strconv.ParseUint(parts[1], 10, 64)
-	patch, patchErr := strconv.ParseUint(parts[2], 10, 64)
-	return minorErr == nil && patchErr == nil && (minor > 0 || patch >= 25)
+	parsed := parseRuntimeVersion(version)
+	return parsed.Major == RuntimeV2 && parsed.componentsValid && (parsed.minor > 0 || parsed.patch >= 25)
 }
 
 type VersionCommandRunner func(context.Context, Command) (CommandOutput, error)
@@ -141,7 +147,7 @@ func DetectRuntimeVersion(ctx context.Context) (RuntimeVersion, error) {
 	}
 	if err == nil && len(output.Stdout) <= 4096 && len(output.Stderr) <= 4096 {
 		if version := parseRuntimeVersion(string(output.Stdout)); version.Major != RuntimeUnknown {
-			return version, nil
+			return version.RuntimeVersion, nil
 		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {

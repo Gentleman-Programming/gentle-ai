@@ -27,6 +27,9 @@ func TestRuntimeProvidesPluginSDK(t *testing.T) {
 		{"1.18.30", false}, {"2.0.4", false}, {"2.0.24", false},
 		{"2.0.25", true}, {"2.3.0", true}, {"2.10.0", true},
 		{"opencode v2.3.0\n", true}, {"OpenCode 2.3.0", true},
+		{"2.00.025", true}, {"2.00.024", false},
+		{"2.18446744073709551615.0", true}, {"2.0.18446744073709551615", true},
+		{"2.18446744073709551616.0", false}, {"2.1.18446744073709551616", false},
 		{"", false}, {"3.0.0", false}, {"2.3.0-rc.1", false}, {"failure 2.3.0", false},
 	} {
 		t.Run(tc.version, func(t *testing.T) {
@@ -54,6 +57,33 @@ func TestDetectRuntimeVersionRetainsEvidenceWithOneProbe(t *testing.T) {
 	calls = 0
 	if major, err := DetectRuntimeMajor(context.Background()); major != RuntimeV2 || err != nil || calls != 1 {
 		t.Fatalf("major = %v, error = %v, probes = %d", major, err, calls)
+	}
+}
+
+func TestDetectRuntimeVersionPreservesLargeComponents(t *testing.T) {
+	old := VersionRunnerOverride
+	t.Cleanup(func() { VersionRunnerOverride = old })
+	for _, tc := range []struct {
+		version string
+		major   RuntimeMajor
+	}{
+		{"1.18446744073709551616.0", RuntimeV1},
+		{"2.0.18446744073709551616", RuntimeV2},
+	} {
+		t.Run(tc.version, func(t *testing.T) {
+			calls := 0
+			VersionRunnerOverride = func(context.Context, Command) (CommandOutput, error) {
+				calls++
+				return CommandOutput{Stdout: []byte(tc.version)}, nil
+			}
+			if ParseRuntimeMajor(tc.version) != tc.major {
+				t.Fatal("large components changed runtime major selection")
+			}
+			version, err := DetectRuntimeVersion(context.Background())
+			if version != (RuntimeVersion{Major: tc.major, Version: tc.version}) || err != nil || calls != 1 {
+				t.Fatalf("version = %+v, error = %v, probes = %d", version, err, calls)
+			}
+		})
 	}
 }
 
