@@ -315,7 +315,7 @@ func TestBetaGoInstallMainUpgradeWarnsWhenDestinationDiffers(t *testing.T) {
 		},
 		LatestVersion:  "main@abc1234abcde",
 		BetaCommit:     "abc1234abcde0123456789abcdef0123456789ab",
-		BetaModulePath: "github.com/gentleman-programming/gentle-ai/v4",
+		BetaModulePath: "github.com/gentleman-programming/gentle-ai/v5",
 		Status:         update.UpdateAvailable,
 	}
 
