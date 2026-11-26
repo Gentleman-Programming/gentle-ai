@@ -620,7 +620,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	// implementation route (issue #1794). It runs after the components so their
 	// managed assets are in place before guidance is merged.
 	for _, agent := range r.agentIDs {
-		if r.scope == ScopeWorkspace && workspaceRoutingGuidanceGlobalOnly(agent) && !workspaceRoutingPromptOnly(agent) {
+		if r.scope == ScopeWorkspace && skipWorkspaceRoutingGuidance(agent) {
 			// The routing guidance step couples prompt guidance with
 			// home-level state mutation for these agents (global orchestrator
 			// settings, hook installation, Pi prompt retirement). A workspace
@@ -637,7 +637,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			claudePhases:     r.selection.ClaudePhaseAssignments,
 			backgroundPolicy: r.backgroundPolicy,
 			legacySDD:        false,
-			promptOnly:       r.scope == ScopeWorkspace && workspaceRoutingPromptOnly(agent),
+			promptOnly:       r.scope == ScopeWorkspace && agent == model.AgentClaudeCode,
 			id:               "sync:agent-guidance:" + string(agent),
 			agent:            agent,
 			homeDir:          r.homeDir,
@@ -800,7 +800,7 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 	// routing step mutates home-level state are skipped under ScopeWorkspace,
 	// exactly like the guidance step skips them.
 	for _, adapter := range adapters {
-		if workspace && workspaceRoutingGuidanceGlobalOnly(adapter.Agent()) && !workspaceRoutingPromptOnly(adapter.Agent()) {
+		if workspace && skipWorkspaceRoutingGuidance(adapter.Agent()) {
 			continue
 		}
 		if path := agentguidance.StrictTDDPath(routingGuidanceDir(homeDir, workspaceDir, scope, adapter), adapter.Agent()); path != "" {
@@ -811,7 +811,7 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 	if workspace {
 		guidanceAdapters = nil
 		for _, adapter := range adapters {
-			if workspaceRoutingGuidanceGlobalOnly(adapter.Agent()) && !workspaceRoutingPromptOnly(adapter.Agent()) {
+			if skipWorkspaceRoutingGuidance(adapter.Agent()) {
 				continue
 			}
 			guidanceAdapters = append(guidanceAdapters, adapter)
@@ -1035,11 +1035,9 @@ func workspaceRoutingGuidanceGlobalOnly(agent model.AgentID) bool {
 	return false
 }
 
-// workspaceRoutingPromptOnly reports whether a workspace sync still refreshes
-// an otherwise global-only agent's project prompt, skipping its hooks. Claude
-// Code's routing table lives in the project prompt a workspace install wrote.
-func workspaceRoutingPromptOnly(agent model.AgentID) bool {
-	return agent == model.AgentClaudeCode
+// Workspace sync refreshes Claude's project prompt without reinstalling hooks.
+func skipWorkspaceRoutingGuidance(agent model.AgentID) bool {
+	return agent != model.AgentClaudeCode && workspaceRoutingGuidanceGlobalOnly(agent)
 }
 
 // workspaceScopedAdapters drops the adapters whose sync writes for the

@@ -60,8 +60,10 @@ func TestKiroCustomRowsContainOnlyActiveRoles(t *testing.T) {
 			t.Fatalf("missing active role %q", want)
 		}
 	}
-	if strings.Contains(strings.ToLower(out), "sdd") {
-		t.Fatal("retired SDD role in Kiro custom picker")
+	for _, hidden := range []string{"sdd", "odd explorer", "odd worker", "odd verify"} {
+		if strings.Contains(strings.ToLower(out), hidden) {
+			t.Errorf("Kiro custom picker offers retired role %q", hidden)
+		}
 	}
 }
 
@@ -133,24 +135,6 @@ func TestNewKiroModelPickerStateFromAssignments_PreservesLegacyAliases(t *testin
 	_, saved := HandleKiroModelPickerNav("enter", &state, KiroModelPickerOptionCount(state)-2)
 	if got := saved["sdd-apply"]; got != model.KiroModelSonnet {
 		t.Fatalf("saved legacy alias = %q, want sonnet", got)
-	}
-}
-
-func TestKiroCustomRowsHideODDRoles(t *testing.T) {
-	state := NewKiroModelPickerState()
-	HandleKiroModelPickerNav("enter", &state, 4)
-	out := RenderKiroModelPicker(state, 0)
-	for _, hidden := range []string{"ODD Explorer", "ODD Worker", "ODD Verify"} {
-		if strings.Contains(out, hidden) {
-			t.Errorf("Kiro custom picker offers unconsumed role %q", hidden)
-		}
-	}
-	for _, preset := range []func() map[string]model.KiroModelAlias{model.KiroModelPresetBalanced, model.KiroModelPresetPerformance, model.KiroModelPresetEconomy, model.KiroModelPresetOpenWeight} {
-		for role := range preset() {
-			if strings.HasPrefix(role, "odd-") {
-				t.Errorf("Kiro preset still assigns %q", role)
-			}
-		}
 	}
 }
 

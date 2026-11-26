@@ -3,6 +3,7 @@ package screens
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
@@ -53,18 +54,10 @@ var kiroAliasOrder = []model.KiroModelAlias{
 	model.KiroModelQwen,
 }
 
-// kiroPhases are the Claude picker roles Kiro actually installs. ODD worker
-// classes have no Kiro agent, so their rows are hidden; persisted odd-* keys
-// survive like retired sdd-* keys.
-var kiroPhases = func() []string {
-	phases := make([]string, 0, len(claudePhases))
-	for _, phase := range claudePhases {
-		if !strings.HasPrefix(phase, "odd-") {
-			phases = append(phases, phase)
-		}
-	}
-	return phases
-}()
+// Kiro has no native agents for ODD worker classes.
+var kiroPhases = slices.DeleteFunc(slices.Clone(claudePhases), func(role string) bool {
+	return strings.HasPrefix(role, "odd-")
+})
 
 // KiroModelPickerState holds navigation state for the Kiro model picker screen.
 type KiroModelPickerState struct {
@@ -85,8 +78,13 @@ func NewKiroModelPickerStateFromAssignments(assignments map[string]model.KiroMod
 	if len(assignments) == 0 {
 		return NewKiroModelPickerState()
 	}
+	// Ignore retired ODD roles when identifying a preset, not when saving it.
+	visible := maps.Clone(assignments)
+	maps.DeleteFunc(visible, func(role string, _ model.KiroModelAlias) bool {
+		return strings.HasPrefix(role, "odd-")
+	})
 	for preset, constructor := range kiroPresetConstructors {
-		if kiroAssignmentsEqual(constructor(), visibleKiroAssignments(assignments)) {
+		if kiroAssignmentsEqual(constructor(), visible) {
 			return KiroModelPickerState{
 				Preset:            preset,
 				CustomAssignments: maps.Clone(assignments),
@@ -99,18 +97,6 @@ func NewKiroModelPickerStateFromAssignments(assignments map[string]model.KiroMod
 		CustomAssignments: maps.Clone(assignments),
 		InCustomMode:      false,
 	}
-}
-
-// visibleKiroAssignments drops retired odd-* keys so a map persisted before
-// they were hidden still matches its preset.
-func visibleKiroAssignments(assignments map[string]model.KiroModelAlias) map[string]model.KiroModelAlias {
-	visible := maps.Clone(assignments)
-	for key := range visible {
-		if strings.HasPrefix(key, "odd-") {
-			delete(visible, key)
-		}
-	}
-	return visible
 }
 
 func kiroAssignmentsEqual(a, b map[string]model.KiroModelAlias) bool {

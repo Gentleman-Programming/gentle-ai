@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,50 +17,28 @@ import (
 // table, so both install and sync must carry the saved assignments into it.
 func TestClaudeODDRoutingCarriesSavedAssignments(t *testing.T) {
 	selection := model.Selection{
-		Agents: []model.AgentID{model.AgentClaudeCode},
+		Agents:                 []model.AgentID{model.AgentClaudeCode},
+		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{"odd-verify": model.ClaudeModelHaiku},
 		ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{
 			"odd-worker": {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortMax},
-			"odd-verify": {Model: model.ClaudeModelHaiku},
 		},
 	}
-	want := []string{"| `odd-explorer` | `sonnet` | `default` |", "| `odd-worker` | `opus` | `max` |", "| `odd-verify` | `haiku` | `default` |"}
-
-	t.Run("install", func(t *testing.T) {
-		home := t.TempDir()
-		runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
-		body := readTextFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
-		for _, row := range want {
-			if !strings.Contains(body, row) {
-				t.Errorf("install routing missing %q", row)
+	for _, operation := range []string{"install", "sync"} {
+		t.Run(operation, func(t *testing.T) {
+			home := t.TempDir()
+			if operation == "install" {
+				runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
+			} else {
+				runSyncInjectionSteps(t, home, selection)
 			}
-		}
-	})
-
-	t.Run("sync", func(t *testing.T) {
-		home := t.TempDir()
-		runtime, err := newSyncRuntimeWithScope(home, selection, ScopeGlobal)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ran := false
-		for _, step := range runtime.stagePlan().Apply {
-			if routing, ok := step.(agentRoutingGuidanceStep); ok && routing.agent == model.AgentClaudeCode {
-				if err := routing.Run(); err != nil {
-					t.Fatal(err)
+			body := readTextFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
+			for _, row := range []string{"| `odd-explorer` | `sonnet` | `default` |", "| `odd-worker` | `opus` | `max` |", "| `odd-verify` | `haiku` | `default` |"} {
+				if !strings.Contains(body, row) {
+					t.Errorf("routing missing %q", row)
 				}
-				ran = true
 			}
-		}
-		if !ran {
-			t.Fatal("sync scheduled no Claude routing step")
-		}
-		body := readTextFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
-		for _, row := range want {
-			if !strings.Contains(body, row) {
-				t.Errorf("sync routing missing %q", row)
-			}
-		}
-	})
+		})
+	}
 }
 
 // A workspace sync must refresh the routing table a workspace install wrote,
@@ -83,22 +62,27 @@ func TestClaudeODDWorkspaceSyncRefreshesProjectRoutingTable(t *testing.T) {
 	}
 	settings := filepath.Join(workspace, ".claude", "settings.json")
 	// Empty settings: a sync that installed hooks would write them back here.
-	settingsBefore := []byte("{}\n")
-	mustWriteFile(t, settings, settingsBefore)
+	const settingsBefore = "{}\n"
+	mustWriteFile(t, settings, []byte(settingsBefore))
 
 	selection.ClaudePhaseAssignments = map[string]model.ClaudePhaseAssignment{"odd-worker": {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortHigh}}
 	sync, err := newSyncRuntimeWithScope(home, selection, ScopeWorkspace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(sync.stagePlan()); result.Err != nil {
+	t.Cleanup(sync.state.cleanupRollbackSnapshot)
+	plan := sync.stagePlan()
+	if !slices.Contains(sync.managedPaths, project) || slices.Contains(sync.managedPaths, filepath.Join(home, ".claude", "settings.json")) {
+		t.Errorf("workspace snapshot must include the project prompt but not global hook settings: %v", sync.managedPaths)
+	}
+	if result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan); result.Err != nil {
 		t.Fatalf("workspace sync: %v", result.Err)
 	}
 	if body := readTextFile(t, project); !strings.Contains(body, "| `odd-worker` | `opus` | `high` |") {
-		t.Errorf("workspace sync left the project routing table stale:\n%s", body)
+		t.Error("workspace sync left the project routing table stale")
 	}
-	if settingsAfter, _ := os.ReadFile(settings); string(settingsAfter) != string(settingsBefore) {
-		t.Errorf("workspace sync changed project hook settings:\nbefore: %s\nafter: %s", settingsBefore, settingsAfter)
+	if got := readTextFile(t, settings); got != settingsBefore {
+		t.Errorf("workspace sync changed project hook settings: %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
 		t.Errorf("workspace install and sync wrote the global Claude config: %v", err)
