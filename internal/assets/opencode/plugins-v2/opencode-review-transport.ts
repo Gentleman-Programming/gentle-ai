@@ -267,7 +267,17 @@ export default Plugin.define({
         const suppliedPrompt = input.prompt
         // The host may remove background from the executable input. Inspect
         // the exact calling message/tool while its original input is running.
-        const messages = await ctx.session.context({ sessionID: call.sessionID }).catch(() => [])
+        const lookup = AbortSignal.any([abort.signal, AbortSignal.timeout(15_000)])
+        let onAbort = () => {}
+        const unavailable = new Promise<never>((_, reject) => {
+          onAbort = () => reject(new RelayRefusal(REFUSAL_REASON.RelayUnavailable))
+          if (lookup.aborted) onAbort()
+          else lookup.addEventListener("abort", onAbort, { once: true })
+        })
+        const messages = await Promise.race([
+          unavailable, ctx.session.context({ sessionID: call.sessionID }, { signal: lookup }),
+        ]).catch(() => refuse(REFUSAL_REASON.RelayUnavailable))
+          .finally(() => lookup.removeEventListener("abort", onAbort))
         if (disposed) return refuse(REFUSAL_REASON.RelayUnavailable)
         const matches = messages.filter(message => message.id === call.messageID)
         const [message] = matches
