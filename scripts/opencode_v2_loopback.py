@@ -121,7 +121,10 @@ def local_provider(generic_task_only=False, review_script=None, max_requests=12)
             self.reject("nonloopback proxy request: " + self.path)
 
         def do_GET(self):
-            if self.path == "/catalog/api.json":
+            if self.path in (
+                "/catalog/api.json",
+                "/catalog/experimental/v2.0/api.json?type=chat,decision,image,video,realtime&include=openai-codex,openai-chatgpt",
+            ):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", "2")
