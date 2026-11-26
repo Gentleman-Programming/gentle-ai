@@ -37,6 +37,7 @@ func TestCodexODDRoutingInjectionPreservesUserTextAndResync(t *testing.T) {
 		CodexPhaseModelAssignments:  map[string]string{"odd-worker": "gpt-custom-worker"},
 		CodexModelAssignments:       map[string]model.CodexEffort{"odd-worker": model.CodexEffortXHigh},
 		CodexCarrilModelAssignments: map[string]string{"sdd-cheap": "gpt-custom-cheap", "sdd-strong": "gpt-custom-strong"},
+		ClaudePhaseAssignments:      map[string]model.ClaudePhaseAssignment{"odd-worker": {Model: model.ClaudeModelOpus}},
 	}
 	first, err := InjectRoutingWithOptions(home, model.AgentCodex, options)
 	if err != nil || !first.Changed {
@@ -50,6 +51,9 @@ func TestCodexODDRoutingInjectionPreservesUserTextAndResync(t *testing.T) {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("installed guidance missing %q", want)
 		}
+	}
+	if strings.Contains(string(body), "Claude ODD worker assignments") {
+		t.Error("Codex routing gained the Claude table")
 	}
 	second, err := InjectRoutingWithOptions(home, model.AgentCodex, options)
 	if err != nil || second.Changed {
@@ -66,6 +70,29 @@ func TestCodexODDRoutingInjectionPreservesUserTextAndResync(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(body), personal) || !strings.Contains(string(body), "gpt-new-worker") || strings.Contains(string(body), "gpt-custom-worker") {
 		t.Fatalf("re-sync failed to preserve personal text and replace managed assignment")
+	}
+}
+
+func TestClaudeODDRoutingRendersRoleModelTable(t *testing.T) {
+	home := t.TempDir()
+	options := RoutingOptions{CodexPhaseModelAssignments: map[string]string{"odd-worker": "codex-only"}}
+	if _, err := InjectRoutingWithOptions(home, model.AgentClaudeCode, options); err != nil {
+		t.Fatal(err)
+	}
+	body := readFile(t, filepath.Join(home, ".claude", "CLAUDE.md"))
+	for _, want := range []string{
+		"### Claude ODD worker assignments", "native Agent `model` and `effort`", "ODD, not RDD",
+		"Omit `effort` for `default`", "when Agent lacks it", "Claude Code 2.1.292+",
+		"General delegation fills only unassigned roles.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Claude routing missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"reasoning_effort", "Codex ODD worker assignments", "an unassigned `odd-verify`"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("Claude routing unexpectedly contains %q", unwanted)
+		}
 	}
 }
 

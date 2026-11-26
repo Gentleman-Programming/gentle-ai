@@ -620,7 +620,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	// implementation route (issue #1794). It runs after the components so their
 	// managed assets are in place before guidance is merged.
 	for _, agent := range r.agentIDs {
-		if r.scope == ScopeWorkspace && workspaceRoutingGuidanceGlobalOnly(agent) {
+		if r.scope == ScopeWorkspace && skipWorkspaceRoutingGuidance(agent) {
 			// The routing guidance step couples prompt guidance with
 			// home-level state mutation for these agents (global orchestrator
 			// settings, hook installation, Pi prompt retirement). A workspace
@@ -633,8 +633,11 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			codexPhaseModels: r.selection.CodexPhaseModelAssignments,
 			codexEfforts:     r.selection.CodexModelAssignments,
 			codexCarrils:     r.selection.CodexCarrilModelAssignments,
+			claudeModels:     r.selection.ClaudeModelAssignments,
+			claudePhases:     r.selection.ClaudePhaseAssignments,
 			backgroundPolicy: r.backgroundPolicy,
 			legacySDD:        false,
+			promptOnly:       r.scope == ScopeWorkspace && agent == model.AgentClaudeCode,
 			id:               "sync:agent-guidance:" + string(agent),
 			agent:            agent,
 			homeDir:          r.homeDir,
@@ -797,7 +800,7 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 	// routing step mutates home-level state are skipped under ScopeWorkspace,
 	// exactly like the guidance step skips them.
 	for _, adapter := range adapters {
-		if workspace && workspaceRoutingGuidanceGlobalOnly(adapter.Agent()) {
+		if workspace && skipWorkspaceRoutingGuidance(adapter.Agent()) {
 			continue
 		}
 		if path := agentguidance.StrictTDDPath(routingGuidanceDir(homeDir, workspaceDir, scope, adapter), adapter.Agent()); path != "" {
@@ -808,7 +811,7 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 	if workspace {
 		guidanceAdapters = nil
 		for _, adapter := range adapters {
-			if workspaceRoutingGuidanceGlobalOnly(adapter.Agent()) {
+			if skipWorkspaceRoutingGuidance(adapter.Agent()) {
 				continue
 			}
 			guidanceAdapters = append(guidanceAdapters, adapter)
@@ -831,8 +834,8 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 	for _, adapter := range guidanceAdapters {
 		// The routing step installs the retained review/telemetry and
 		// skill-registry hooks into the home Claude settings, whatever
-		// optional components were selected.
-		if adapter.Agent() == model.AgentClaudeCode {
+		// optional components were selected. A workspace sync installs none.
+		if adapter.Agent() == model.AgentClaudeCode && !workspace {
 			if path := adapter.SettingsPath(homeDir); path != "" {
 				paths[path] = struct{}{}
 			}
@@ -1030,6 +1033,11 @@ func workspaceRoutingGuidanceGlobalOnly(agent model.AgentID) bool {
 		return true
 	}
 	return false
+}
+
+// Workspace sync refreshes Claude's project prompt without reinstalling hooks.
+func skipWorkspaceRoutingGuidance(agent model.AgentID) bool {
+	return agent != model.AgentClaudeCode && workspaceRoutingGuidanceGlobalOnly(agent)
 }
 
 // workspaceScopedAdapters drops the adapters whose sync writes for the

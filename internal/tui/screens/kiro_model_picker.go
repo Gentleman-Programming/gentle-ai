@@ -3,6 +3,7 @@ package screens
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
@@ -20,11 +21,11 @@ const (
 )
 
 var kiroPresetDescriptions = map[KiroModelPreset]string{
-	KiroPresetBalanced:    "Kiro Auto for ODD delegation and review roles",
+	KiroPresetBalanced:    "Kiro Auto for delegation and review roles",
 	KiroPresetPerformance: "Frontier Claude-family models for delegation and review roles",
 	KiroPresetEconomy:     "Low-credit Kiro options: Qwen, DeepSeek, and MiniMax for budget-conscious runs",
 	KiroPresetOpenWeight:  "Kiro open-weight families: MiniMax, GLM, DeepSeek, and Qwen",
-	KiroPresetCustom:      "Pick the Kiro model for ODD, JD, RDD, and general delegation roles individually",
+	KiroPresetCustom:      "Pick the Kiro model for JD, RDD, and general delegation roles individually",
 }
 
 var kiroPresetOrder = []KiroModelPreset{
@@ -53,6 +54,11 @@ var kiroAliasOrder = []model.KiroModelAlias{
 	model.KiroModelQwen,
 }
 
+// Kiro has no native agents for ODD worker classes.
+var kiroPhases = slices.DeleteFunc(slices.Clone(claudePhases), func(role string) bool {
+	return strings.HasPrefix(role, "odd-")
+})
+
 // KiroModelPickerState holds navigation state for the Kiro model picker screen.
 type KiroModelPickerState struct {
 	Preset            KiroModelPreset
@@ -72,8 +78,13 @@ func NewKiroModelPickerStateFromAssignments(assignments map[string]model.KiroMod
 	if len(assignments) == 0 {
 		return NewKiroModelPickerState()
 	}
+	// Ignore retired ODD roles when identifying a preset, not when saving it.
+	visible := maps.Clone(assignments)
+	maps.DeleteFunc(visible, func(role string, _ model.KiroModelAlias) bool {
+		return strings.HasPrefix(role, "odd-")
+	})
 	for preset, constructor := range kiroPresetConstructors {
-		if kiroAssignmentsEqual(constructor(), assignments) {
+		if kiroAssignmentsEqual(constructor(), visible) {
 			return KiroModelPickerState{
 				Preset:            preset,
 				CustomAssignments: maps.Clone(assignments),
@@ -154,12 +165,12 @@ func handleKiroCustomPhaseNav(
 		state.InCustomMode = false
 		return true, nil
 	case "enter":
-		if cursor < len(claudePhases) {
-			phase := claudePhases[cursor]
+		if cursor < len(kiroPhases) {
+			phase := kiroPhases[cursor]
 			state.CustomAssignments[phase] = nextKiroAlias(state.CustomAssignments[phase])
 			return true, nil
 		}
-		if cursor == len(claudePhases) {
+		if cursor == len(kiroPhases) {
 			return true, maps.Clone(state.CustomAssignments)
 		}
 		state.InCustomMode = false
@@ -179,7 +190,7 @@ func nextKiroAlias(current model.KiroModelAlias) model.KiroModelAlias {
 
 func KiroModelPickerOptionCount(state KiroModelPickerState) int {
 	if state.InCustomMode {
-		return len(claudePhases) + 2 // role rows + Confirm + Back
+		return len(kiroPhases) + 2 // role rows + Confirm + Back
 	}
 	return len(kiroPresetOrder) + 1 // presets + Back
 }
@@ -196,7 +207,7 @@ func renderKiroPresetList(state KiroModelPickerState, cursor int) string {
 
 	b.WriteString(styles.TitleStyle.Render("Kiro Model Assignments"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Choose how Kiro models are assigned to ODD and review roles:"))
+	b.WriteString(styles.SubtextStyle.Render("Choose how Kiro models are assigned to delegation and review roles:"))
 	b.WriteString("\n\n")
 
 	for idx, preset := range kiroPresetOrder {
@@ -222,7 +233,7 @@ func renderKiroCustomPhaseList(state KiroModelPickerState, cursor int) string {
 	b.WriteString(styles.SubtextStyle.Render("Press enter on a role to cycle: auto → opus → sonnet → haiku → minimax → glm → deepseek → qwen"))
 	b.WriteString("\n\n")
 
-	for idx, phase := range claudePhases {
+	for idx, phase := range kiroPhases {
 		focused := idx == cursor
 		alias := state.CustomAssignments[phase]
 		if alias == "" {
@@ -239,7 +250,7 @@ func renderKiroCustomPhaseList(state KiroModelPickerState, cursor int) string {
 	}
 
 	b.WriteString("\n")
-	actionCursor := cursor - len(claudePhases)
+	actionCursor := cursor - len(kiroPhases)
 	b.WriteString(renderOptions([]string{"Confirm", "← Back"}, actionCursor))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: cycle/select • esc: back"))

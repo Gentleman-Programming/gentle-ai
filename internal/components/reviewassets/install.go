@@ -262,7 +262,7 @@ func renderNativeAgent(adapter agents.Adapter, name string, opts InstallOptions)
 		content = strings.ReplaceAll(content, "{{ANTIGRAVITY_MODEL}}", amr.AntigravityModelID(opts.AntigravityModelAssignments[phase]))
 	}
 	if cmr, ok := adapter.(claudeModelResolver); ok {
-		assignment := resolveClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, phase)
+		assignment := model.ResolveClaudeAssignment(opts.ClaudeModelAssignments, opts.ClaudePhaseAssignments, phase)
 		content = strings.ReplaceAll(content, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(assignment.Model))
 		effort := ""
 		if assignment.Effort != model.ClaudeEffortDefault && model.ClaudeEffortAllowedForModel(assignment.Model, assignment.Effort) {
@@ -324,25 +324,6 @@ func removeRetiredNativeAgent(journal *mutationjournal.Journal, dir, name string
 		return "", known, nil
 	}
 	return path, known, nil
-}
-
-func resolveClaudeAssignment(legacy map[string]model.ClaudeModelAlias, phases map[string]model.ClaudePhaseAssignment, phase string) model.ClaudePhaseAssignment {
-	merged := model.ClaudePhaseAssignmentsFromLegacy(model.ClaudeModelPresetBalanced())
-	for key, value := range model.ClaudePhaseAssignmentsFromLegacy(legacy) {
-		merged[key] = value
-	}
-	for key, value := range phases {
-		if value.Valid() {
-			merged[key] = value
-		}
-	}
-	if value, ok := merged[phase]; ok && value.Valid() {
-		return value
-	}
-	if value, ok := merged["default"]; ok && value.Valid() {
-		return value
-	}
-	return model.ClaudePhaseAssignment{Model: model.ClaudeModelSonnet}
 }
 
 func replaceJudgmentSection(content, body string) string {

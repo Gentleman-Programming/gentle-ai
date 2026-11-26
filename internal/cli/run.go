@@ -1047,6 +1047,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			codexPhaseModels: r.selection.CodexPhaseModelAssignments,
 			codexEfforts:     r.selection.CodexModelAssignments,
 			codexCarrils:     r.selection.CodexCarrilModelAssignments,
+			claudeModels:     r.selection.ClaudeModelAssignments,
+			claudePhases:     r.selection.ClaudePhaseAssignments,
 			backgroundPolicy: r.backgroundActivation != nil && r.backgroundActivation.Capability().Ready() && r.background.Effective == model.OpenCodeBackgroundOn,
 			legacySDD:        false,
 			id:               "agent-guidance:" + string(agent),
@@ -2025,8 +2027,11 @@ type agentRoutingGuidanceStep struct {
 	codexPhaseModels map[string]string
 	codexEfforts     map[string]model.CodexEffort
 	codexCarrils     map[string]string
+	claudeModels     map[string]model.ClaudeModelAlias
+	claudePhases     map[string]model.ClaudePhaseAssignment
 	backgroundPolicy bool
 	legacySDD        bool
+	promptOnly       bool // refresh prompt guidance only, installing no hooks
 	id               string
 	agent            model.AgentID
 	homeDir          string
@@ -2056,6 +2061,10 @@ func (s agentRoutingGuidanceStep) Run() error {
 		return err
 	}
 
+	if s.promptOnly {
+		return s.applyGuidance(adapter, options)
+	}
+
 	// Claude loads both global and project settings. Keep its hooks within
 	// the selected scope without changing Codex's home-level hook delivery.
 	hookRoot := s.homeDir
@@ -2083,7 +2092,10 @@ func (s agentRoutingGuidanceStep) Run() error {
 	if s.changedFiles != nil && hooks.Changed {
 		*s.changedFiles = append(*s.changedFiles, hooks.Files...)
 	}
+	return s.applyGuidance(adapter, options)
+}
 
+func (s agentRoutingGuidanceStep) applyGuidance(adapter agents.Adapter, options agentguidance.RoutingOptions) error {
 	// Pi owns its prompt delivery, but old installs left only allowlisted
 	// Gentle AI sections in APPEND_SYSTEM.md. Retire those before skipping prompt
 	// injection so install and every sync path converge without recreating routing.
@@ -2108,6 +2120,7 @@ func (s agentRoutingGuidanceStep) Run() error {
 		settingsPath := routingGuidanceOptions(s.homeDir, s.workspaceDir, adapter).SettingsPath
 		// The default-agent plan must observe settings before the managed
 		// orchestrator is merged below; see opencodedefault.PrepareInstall.
+		var err error
 		defaultAgentPlan, err = opencodedefault.PrepareInstall(settingsPath)
 		if err != nil {
 			return fmt.Errorf("prepare OpenCode default agent: %w", err)
@@ -2149,6 +2162,10 @@ func (s agentRoutingGuidanceStep) Run() error {
 		options.CodexPhaseModelAssignments = s.codexPhaseModels
 		options.CodexModelAssignments = s.codexEfforts
 		options.CodexCarrilModelAssignments = s.codexCarrils
+	}
+	if s.agent == model.AgentClaudeCode {
+		options.ClaudeModelAssignments = s.claudeModels
+		options.ClaudePhaseAssignments = s.claudePhases
 	}
 	injected, err := agentguidance.InjectRoutingWithOptions(targetDir, s.agent, options)
 	if err != nil {

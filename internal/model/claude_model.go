@@ -1,6 +1,10 @@
 package model
 
-import "maps"
+import (
+	"fmt"
+	"maps"
+	"strings"
+)
 
 // ClaudeModelAlias represents one of the Claude model tiers used for
 // per-phase model assignments in the SDD orchestrator.
@@ -105,6 +109,37 @@ type ClaudePhaseAssignment struct {
 // Valid reports whether the model is valid and the effort is supported by it.
 func (a ClaudePhaseAssignment) Valid() bool {
 	return a.Model.Valid() && ClaudeEffortAllowedForModel(a.Model, a.Effort)
+}
+
+// ResolveClaudeAssignment uses valid phase assignments over legacy choices and
+// balanced defaults. General delegation fills only roles missing from that table.
+func ResolveClaudeAssignment(legacy map[string]ClaudeModelAlias, phases map[string]ClaudePhaseAssignment, role string) ClaudePhaseAssignment {
+	merged := ClaudePhaseAssignmentsFromLegacy(ClaudeModelPresetBalanced())
+	maps.Copy(merged, ClaudePhaseAssignmentsFromLegacy(legacy))
+	for key, value := range phases {
+		if value.Valid() {
+			merged[key] = value
+		}
+	}
+	if value, ok := merged[role]; ok {
+		return value
+	}
+	return merged["default"]
+}
+
+// RenderClaudeODDAssignments provides native Agent arguments for ODD workers.
+func RenderClaudeODDAssignments(legacy map[string]ClaudeModelAlias, phases map[string]ClaudePhaseAssignment) string {
+	var b strings.Builder
+	b.WriteString("| ODD worker class | Model | Effort |\n|---|---|---|\n")
+	for _, role := range []string{"odd-explorer", "odd-worker", "odd-verify"} {
+		assignment := ResolveClaudeAssignment(legacy, phases, role)
+		effort := string(assignment.Effort)
+		if assignment.Effort == ClaudeEffortDefault {
+			effort = "default"
+		}
+		fmt.Fprintf(&b, "| `%s` | `%s` | `%s` |\n", role, assignment.Model, effort)
+	}
+	return b.String()
 }
 
 // ClaudePhaseAssignmentsFromLegacy converts the historical model-only map into

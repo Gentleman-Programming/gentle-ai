@@ -74,6 +74,8 @@ type RoutingOptions struct {
 	CodexPhaseModelAssignments  map[string]string
 	CodexModelAssignments       map[string]model.CodexEffort
 	CodexCarrilModelAssignments map[string]string
+	ClaudeModelAssignments      map[string]model.ClaudeModelAlias
+	ClaudePhaseAssignments      map[string]model.ClaudePhaseAssignment
 	// ClaudeGlobalModules opts the user-global Claude install into a core
 	// CLAUDE.md plus on-demand modules under its config directory. Only a
 	// caller installing the global scope may set it; every other agent and
@@ -122,6 +124,10 @@ func InjectRoutingWithOptions(targetDir string, agent model.AgentID, options Rou
 		}
 		rendered += "\n\n### Codex ODD worker assignments\n\nUse the exact model and reasoning_effort for the selected worker class when calling `spawn_agent`; set `fork_turns: \"none\"` for overrides. These assignments apply to ODD delegation, not native RDD review.\n\n" +
 			model.RenderCodexODDAssignments(options.CodexPhaseModelAssignments, options.CodexModelAssignments, options.CodexCarrilModelAssignments)
+	}
+	if agent == model.AgentClaudeCode {
+		rendered += "\n\n### Claude ODD worker assignments\n\nUse the selected role’s values as native Agent `model` and `effort` for ODD, not RDD. Omit `effort` for `default` or when Agent lacks it (requires Claude Code 2.1.292+). General delegation fills only unassigned roles.\n\n" +
+			model.RenderClaudeODDAssignments(options.ClaudeModelAssignments, options.ClaudePhaseAssignments)
 	}
 
 	delivery, err := resolveRoutingDelivery(targetDir, agent, options)
