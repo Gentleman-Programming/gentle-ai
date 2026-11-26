@@ -67,14 +67,11 @@ func (store CompactStore) ReserveOpenCodeLensDispatch(ctx context.Context, subje
 	}
 	defer lineageRoot.Close()
 	dir := filepath.Join(store.Dir, openCodeLensDispatchDirectory)
-	switch err := lineageRoot.Mkdir(openCodeLensDispatchDirectory, 0o700); {
-	case err == nil:
-		// Reuse the private directory policy, including owner-only Windows
-		// ACLs when the inherited permissions aren't private.
-		if err := repairAndValidatePrivateRARDirectory(dir); err != nil {
-			return err
-		}
-	case !errors.Is(err, os.ErrExist):
+	if err := lineageRoot.Mkdir(openCodeLensDispatchDirectory, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	// A previous relay may have exited after mkdir but before ACL repair.
+	if err := repairAndValidatePrivateRARDirectory(dir); err != nil {
 		return err
 	}
 	root, err := openOpenCodeLensDispatchRoot(dir, true)
