@@ -593,6 +593,13 @@ func TestPublishPreservesOpenClawSectionsWhenOpenClawIsManaged(t *testing.T) {
 	if !strings.Contains(gotConfigLink, "Updated persona.") || !strings.Contains(gotConfigLink, "<!-- gentle-ai:engram-protocol -->") {
 		t.Fatalf("expected updated persona and OpenClaw engram-protocol in home AGENTS.md, got:\n%s", gotConfigLink)
 	}
+
+	// An unreadable state file fails closed and preserves OpenClaw sections.
+	corruptStateHome := t.TempDir()
+	writeFile(t, state.Path(corruptStateHome), "{not json")
+	if !antigravityrules.OpenClawManaged(corruptStateHome, nil) {
+		t.Fatal("expected OpenClawManaged() = true on unreadable state.json")
+	}
 }
 
 func TestPublishWorkspaceSymlinkReadErrorPropagates(t *testing.T) {
