@@ -12,8 +12,10 @@ import (
 const openCodeLensDispatchDirectory = "opencode-dispatch"
 
 var (
+	// refusal:by-design operator-knowledge: the original dispatcher owns this slot; a duplicate caller cannot release it.
 	ErrOpenCodeLensDispatchReserved = errors.New("OpenCode lens dispatch slot is already reserved")
-	ErrOpenCodeLensDispatchStale    = errors.New("OpenCode lens dispatch does not match an uncollected slot")
+	// refusal:by-design operator-knowledge: the caller must obtain the current provider binding; the store cannot substitute one.
+	ErrOpenCodeLensDispatchStale = errors.New("OpenCode lens dispatch does not match an uncollected slot")
 )
 
 // ReserveOpenCodeLensDispatch admits one first-contact V2 dispatch per native

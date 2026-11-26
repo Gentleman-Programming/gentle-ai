@@ -291,10 +291,12 @@ func runReviewOpenCodeTransportFrames(args []string, stdin io.Reader, stdout io.
 	if openCodeRelayDeclaresV2() && session.binding.Role == "" && !session.passThrough {
 		switch err := session.store.ReserveOpenCodeLensDispatch(ctx, session.lensRequest.Subject); {
 		case errors.Is(err, reviewtransaction.ErrOpenCodeLensDispatchReserved):
+			// refusal:by-design operator-knowledge: only the original relay can finish an uncertain dispatch; replaying it is unsafe.
 			return errors.New("opencode_review_transport_lens_already_in_progress: this lens slot is reserved; the previous dispatch outcome may be unresolved")
 		case errors.Is(err, reviewtransaction.ErrOpenCodeLensDispatchStale):
 			return openCodeTransportStaleAuthority("Task does not match an uncollected lens slot")
 		case err != nil:
+			// refusal:by-design world-action: the operator must diagnose the local store before dispatch; no CLI command can repair an unknown storage failure.
 			return errors.New("opencode_review_transport_reservation_unavailable: could not safely reserve the lens slot")
 		}
 	}
