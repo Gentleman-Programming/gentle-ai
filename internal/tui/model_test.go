@@ -7879,3 +7879,68 @@ func TestModelConfigAntigravityPickerSyncsSelectedTiers(t *testing.T) {
 		t.Fatalf("picker confirm: screen = %v, overrides %+v; want sync with %+v", m.Screen, m.PendingSyncOverrides, want)
 	}
 }
+
+func TestModelConfigAntigravityLegacyThreeRolePresetReselection(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		legacyState    map[string]string
+		presetCursor   int
+		wantPreset     screens.AntigravityModelPreset
+		wantWorkerTier model.AntigravityModelTier
+	}{
+		{
+			name: "economy",
+			legacyState: map[string]string{
+				"jd-judge-a":   "flash",
+				"jd-judge-b":   "flash",
+				"jd-fix-agent": "flash_lite",
+			},
+			presetCursor:   2,
+			wantPreset:     screens.AntigravityPresetEconomy,
+			wantWorkerTier: model.AntigravityModelFlash,
+		},
+		{
+			name: "performance",
+			legacyState: map[string]string{
+				"jd-judge-a":   "pro",
+				"jd-judge-b":   "pro",
+				"jd-fix-agent": "pro",
+			},
+			presetCursor:   1,
+			wantPreset:     screens.AntigravityPresetPerformance,
+			wantWorkerTier: model.AntigravityModelPro,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev", state.InstallState{
+				AntigravityModelAssignments: tc.legacyState,
+			})
+			m.Screen = ScreenModelConfig
+			m.Cursor = 4
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = updated.(Model)
+
+			if m.Screen != ScreenAntigravityModelPicker {
+				t.Fatalf("screen = %v, want ScreenAntigravityModelPicker", m.Screen)
+			}
+			if m.AntigravityModelPicker.Preset != screens.AntigravityPresetCustom {
+				t.Fatalf("legacy %s preset = %q, want %q", tc.name, m.AntigravityModelPicker.Preset, screens.AntigravityPresetCustom)
+			}
+			wantCustom := model.AntigravityModelTiersFromStrings(tc.legacyState)
+			if !reflect.DeepEqual(m.AntigravityModelPicker.CustomAssignments, wantCustom) {
+				t.Fatalf("legacy %s custom choices = %v, want %v", tc.name, m.AntigravityModelPicker.CustomAssignments, wantCustom)
+			}
+
+			m.Cursor = tc.presetCursor
+			updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = updated.(Model)
+
+			if m.Screen != ScreenSync || m.PendingSyncOverrides == nil {
+				t.Fatalf("reselect %s: screen = %v, overrides = %+v; want ScreenSync", tc.name, m.Screen, m.PendingSyncOverrides)
+			}
+			if got := m.PendingSyncOverrides.AntigravityModelAssignments["gentle-ai-worker"]; got != tc.wantWorkerTier {
+				t.Fatalf("reselect %s worker tier = %q, want %q", tc.name, got, tc.wantWorkerTier)
+			}
+		})
+	}
+}

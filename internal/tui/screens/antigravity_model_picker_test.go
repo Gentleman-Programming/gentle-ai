@@ -112,3 +112,60 @@ func TestRenderAntigravityModelPickerWrapsNoticeToTerminalWidth(t *testing.T) {
 		t.Fatalf("custom view must retain unsupported mention, got:\n%s", outCustom)
 	}
 }
+
+// TestNewAntigravityModelPickerStateFromLegacyThreeRoleMaps verifies that older
+// three-role Economy and Performance maps load as Custom without automatic
+// migration, and that reselecting each preset assigns the expected worker tier.
+func TestNewAntigravityModelPickerStateFromLegacyThreeRoleMaps(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		legacy       map[string]model.AntigravityModelTier
+		presetCursor int
+		wantPreset   AntigravityModelPreset
+		wantWorker   model.AntigravityModelTier
+	}{
+		{
+			name: "economy",
+			legacy: map[string]model.AntigravityModelTier{
+				"jd-judge-a":   model.AntigravityModelFlash,
+				"jd-judge-b":   model.AntigravityModelFlash,
+				"jd-fix-agent": model.AntigravityModelFlashLite,
+			},
+			presetCursor: 2,
+			wantPreset:   AntigravityPresetEconomy,
+			wantWorker:   model.AntigravityModelFlash,
+		},
+		{
+			name: "performance",
+			legacy: map[string]model.AntigravityModelTier{
+				"jd-judge-a":   model.AntigravityModelPro,
+				"jd-judge-b":   model.AntigravityModelPro,
+				"jd-fix-agent": model.AntigravityModelPro,
+			},
+			presetCursor: 1,
+			wantPreset:   AntigravityPresetPerformance,
+			wantWorker:   model.AntigravityModelPro,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewAntigravityModelPickerStateFromAssignments(tc.legacy)
+			if state.Preset != AntigravityPresetCustom {
+				t.Fatalf("legacy %s map preset = %q, want %q", tc.name, state.Preset, AntigravityPresetCustom)
+			}
+			if !reflect.DeepEqual(state.CustomAssignments, tc.legacy) {
+				t.Fatalf("legacy %s custom choices = %v, want %v", tc.name, state.CustomAssignments, tc.legacy)
+			}
+			if got := model.AntigravityModelID(state.CustomAssignments["gentle-ai-worker"]); got != string(model.AntigravityModelInherit) {
+				t.Fatalf("legacy %s worker tier = %q, want %q", tc.name, got, model.AntigravityModelInherit)
+			}
+
+			handled, assignments := HandleAntigravityModelPickerNav("enter", &state, tc.presetCursor)
+			if !handled || state.Preset != tc.wantPreset {
+				t.Fatalf("reselect %s: handled=%t preset=%q, want %q", tc.name, handled, state.Preset, tc.wantPreset)
+			}
+			if got := assignments["gentle-ai-worker"]; got != tc.wantWorker {
+				t.Fatalf("reselect %s worker tier = %q, want %q", tc.name, got, tc.wantWorker)
+			}
+		})
+	}
+}
