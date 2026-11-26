@@ -283,9 +283,22 @@ func runReviewOpenCodeTransportFrames(args []string, stdin io.Reader, stdout io.
 	if err := validateOpenCodeTransportStart(start); err != nil {
 		return err
 	}
-	session, err := openCodeTransportStart(context.Background(), start)
+	ctx := context.Background()
+	session, err := openCodeTransportStart(ctx, start)
 	if err != nil {
 		return err
+	}
+	if openCodeRelayDeclaresV2() && session.binding.Role == "" && !session.passThrough {
+		switch err := session.store.ReserveOpenCodeLensDispatch(ctx, session.lensRequest.Subject); {
+		case errors.Is(err, reviewtransaction.ErrOpenCodeLensDispatchReserved):
+			// refusal:by-design operator-knowledge: only the original relay can finish an uncertain dispatch; replaying it is unsafe.
+			return errors.New("opencode_review_transport_lens_already_in_progress: this lens slot is reserved; the previous dispatch outcome may be unresolved")
+		case errors.Is(err, reviewtransaction.ErrOpenCodeLensDispatchStale):
+			return openCodeTransportStaleAuthority("Task does not match an uncollected lens slot")
+		case err != nil:
+			// refusal:by-design world-action: the operator must diagnose the local store before dispatch; no CLI command can repair an unknown storage failure.
+			return errors.New("opencode_review_transport_reservation_unavailable: could not safely reserve the lens slot")
+		}
 	}
 	if err := json.NewEncoder(stdout).Encode(openCodeTransportEnvelope{
 		Schema: openCodeReviewTransportSchema, Operation: "prompt", Nonce: session.nonce, Prompt: string(session.providerPrompt),
@@ -959,6 +972,7 @@ const (
 	openCodeRefusalAgentMismatch         = "agent_mismatch"
 	openCodeRefusalBindingMismatch       = "binding_mismatch"
 	openCodeRefusalStaleAuthority        = "stale_authority"
+	openCodeRefusalLensAlreadyInProgress = "lens_already_in_progress"
 	openCodeRefusalOutputRefused         = "output_refused"
 	openCodeRefusalProviderFailed        = "provider_failed"
 	openCodeRefusalRelayUnavailable      = "relay_unavailable"
@@ -966,7 +980,7 @@ const (
 
 var openCodeRefusalReasons = []string{
 	openCodeRefusalCapabilityUnavailable, openCodeRefusalEnvelopeInvalid, openCodeRefusalAgentMismatch,
-	openCodeRefusalBindingMismatch, openCodeRefusalStaleAuthority, openCodeRefusalOutputRefused,
+	openCodeRefusalBindingMismatch, openCodeRefusalStaleAuthority, openCodeRefusalLensAlreadyInProgress, openCodeRefusalOutputRefused,
 	openCodeRefusalProviderFailed, openCodeRefusalRelayUnavailable,
 }
 
@@ -1002,6 +1016,8 @@ func openCodeTransportRefusalReason(err error) string {
 		return openCodeRefusalCapabilityUnavailable
 	case "opencode_review_transport_envelope_invalid":
 		return openCodeRefusalEnvelopeInvalid
+	case "opencode_review_transport_lens_already_in_progress":
+		return openCodeRefusalLensAlreadyInProgress
 	case "opencode_review_transport_authority_unavailable", "opencode_review_transport_completion_unavailable":
 		return openCodeRefusalStaleAuthority
 	case "opencode_reviewer_result_refused", "opencode_provider_role_result_refused":

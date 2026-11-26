@@ -289,66 +289,99 @@ func openCodeV2MutatedLensPrompt(t *testing.T, prompt, field string) string {
 
 func openCodeV2Count(value int) *int { return &value }
 
-// Lens: every negative leaves authority unchanged and the slot re-offered
-// (the same Go-issued task is admitted afterwards); the positive admission is
-// the final lens closure; a replay of the captured task is refused.
+// Pre-dispatch negatives must not reserve the actual slot: the positive Task
+// uses exactly that slot, then a replay may not start another child.
 func TestOpenCodeV2RealHostLensRelayAdmitsBoundResultAndRefusesNegatives(t *testing.T) {
 	in := openCodeV2HostE2EInputs(t)
 	reviewEnabledHome(t)
+	testOpenCodeV2HostLensCapture(t, in, openCodeV2GateStubbed, func(task ReviewProviderTask, payload string) []openCodeV2HostStep {
+		return []openCodeV2HostStep{
+			{Name: "stale-revision", Agent: task.Agent, Prompt: openCodeV2MutatedLensPrompt(t, task.Prompt, "revision"), Child: payload, Expect: "refused", ChildRequests: openCodeV2Count(0)},
+			{Name: "wrong-target", Agent: task.Agent, Prompt: openCodeV2MutatedLensPrompt(t, task.Prompt, "target"), Child: payload, Expect: "refused", ChildRequests: openCodeV2Count(0)},
+			{Name: "background-true", Agent: task.Agent, Prompt: task.Prompt, Child: payload, Background: true, Expect: "refused", ChildRequests: openCodeV2Count(0), Reason: "dispatch_refused"},
+			{Name: "session-id", Agent: task.Agent, Prompt: task.Prompt, Child: payload, SessionID: "ses_fixture_resume", Expect: "refused", ChildRequests: openCodeV2Count(0), Reason: "dispatch_refused"},
+			{Name: "lens-task-under-refuter-agent", Agent: "review-refuter", Prompt: task.Prompt, Child: payload, Expect: "refused", ChildRequests: openCodeV2Count(0)},
+		}
+	})
+	testOpenCodeV2HostLensPostDispatchNegatives(t, in, openCodeV2GateStubbed)
+}
+
+func openCodeV2HostLensFixture(t *testing.T) (repo, host string, store reviewtransaction.CompactStore, task ReviewProviderTask, payload string) {
+	t.Helper()
 	repo, started, store, record := newArtifactReview(t, false)
-	if len(record.State.SelectedLenses) != 1 {
-		t.Fatalf("selected lenses = %v, want one final lens slot", record.State.SelectedLenses)
+	host = openCodeV2RegisteredHost(t, repo)
+	task = openCodeV2StatusProviderTask(t, repo, started.LineageID)
+	if len(record.State.SelectedLenses) != 1 || task.Role != string(reviewerprovider.RoleLens) || task.Agent != record.State.SelectedLenses[0] {
+		t.Fatal("expected one selected lens and its matching provider Task")
 	}
-	host := openCodeV2RegisteredHost(t, repo)
-	task := openCodeV2StatusProviderTask(t, repo, started.LineageID)
-	if task.Role != string(reviewerprovider.RoleLens) || task.Agent != record.State.SelectedLenses[0] {
-		t.Fatalf("lens provider task = %#v", task)
-	}
-	payload := string(admittedReviewerPayloadForTest(t, repo, record, task.Agent, 0))
-	wrongRole := `{"request_hash":"sha256:` + strings.Repeat("a", 64) + `","results":[]}`
-	refused := func(name string, step openCodeV2HostStep) openCodeV2HostStep {
-		step.Name, step.Expect = name, "refused"
-		if step.Agent == "" {
-			step.Agent = task.Agent
-		}
-		if step.Prompt == "" {
-			step.Prompt = task.Prompt
-		}
-		return step
-	}
-	steps := []openCodeV2HostStep{
-		refused("stale-revision", openCodeV2HostStep{Prompt: openCodeV2MutatedLensPrompt(t, task.Prompt, "revision"), Child: payload, ChildRequests: openCodeV2Count(0)}),
-		refused("wrong-target", openCodeV2HostStep{Prompt: openCodeV2MutatedLensPrompt(t, task.Prompt, "target"), Child: payload, ChildRequests: openCodeV2Count(0)}),
-		refused("background-true", openCodeV2HostStep{Background: true, Child: payload, ChildRequests: openCodeV2Count(0), Reason: "dispatch_refused"}),
-		refused("session-id", openCodeV2HostStep{SessionID: "ses_fixture_resume", Child: payload, ChildRequests: openCodeV2Count(0), Reason: "dispatch_refused"}),
-		refused("truncated-json", openCodeV2HostStep{Child: payload[:len(payload)/2]}),
-		refused("empty-output", openCodeV2HostStep{}),
-		refused("task-prefixed-output", openCodeV2HostStep{Child: "<task"}),
-		refused("child-provider-http-error", openCodeV2HostStep{ChildHTTPError: true}),
-		refused("wrong-role-payload", openCodeV2HostStep{Child: wrongRole}),
-		refused("lens-task-under-refuter-agent", openCodeV2HostStep{Agent: "review-refuter", Child: payload, ChildRequests: openCodeV2Count(0)}),
+	return repo, host, store, task, string(admittedReviewerPayloadForTest(t, repo, record, task.Agent, 0))
+}
+
+func testOpenCodeV2HostLensCapture(t *testing.T, in openCodeV2HostInputs, gate openCodeV2Gate, negatives func(ReviewProviderTask, string) []openCodeV2HostStep) {
+	t.Helper()
+	repo, host, store, task, payload := openCodeV2HostLensFixture(t)
+	steps := negatives(task, payload)
+	steps = append(steps,
 		openCodeV2Admitted("lens-admitted", task.Agent, task.Prompt, payload, `"operation":"review/capture-result"`, `"state":"approved"`),
-		refused("replay-captured-task", openCodeV2HostStep{Child: payload, ChildRequests: openCodeV2Count(0)}),
-	}
-	evidence := runOpenCodeV2HostScenario(t, in, repo, host, store.Dir, steps)
+		openCodeV2HostStep{Name: "replay-captured-task", Agent: task.Agent, Prompt: task.Prompt, Child: payload, Expect: "refused", ChildRequests: openCodeV2Count(0)},
+	)
+	evidence := runOpenCodeV2HostScenarioWithGate(t, in, repo, host, store.Dir, gate, steps)
 	admitted := evidence.Steps[len(steps)-2]
 	if admitted.Name != "lens-admitted" || admitted.ChildRequests != 1 || len(admitted.Materialized) != 1 || !admitted.Materialized[0] {
 		t.Fatalf("lens admission evidence = %#v, want one Go-materialized child request", admitted)
 	}
-
-	// The final lens capture closes the review: approved authority awaiting its
-	// exact acknowledgement is the in-process proof of admission.
 	current, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if current.State.State != reviewtransaction.StateApproved {
-		t.Fatalf("lens closure state = %q, want approved", current.State.State)
+	if err != nil || current.State.State != reviewtransaction.StateApproved {
+		t.Fatalf("lens closure state = %q, want approved; err=%v", current.State.State, err)
 	}
 	if _, pending := reviewtransaction.PendingApprovedCompactAcknowledgement(current); !pending {
 		t.Fatal("real-host lens closure left no pending approved acknowledgement")
 	}
-	assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+	assertApprovedCompactAuthorityBurned(t, store, current.State.LineageID)
+}
+
+// Each post-dispatch refusal exercises real admission on a fresh native slot;
+// otherwise a reservation could hide the original negative. The real gate
+// also verifies that an ambiguous provider failure cannot dispatch again.
+func testOpenCodeV2HostLensPostDispatchNegatives(t *testing.T, in openCodeV2HostInputs, gate openCodeV2Gate) {
+	t.Helper()
+	names := []string{"truncated-json", "child-provider-http-error"}
+	if gate == openCodeV2GateStubbed {
+		names = append(names, "empty-output", "task-prefixed-output", "wrong-role-payload")
+	}
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			repo, host, store, task, payload := openCodeV2HostLensFixture(t)
+			step := openCodeV2HostStep{Name: name, Agent: task.Agent, Prompt: task.Prompt, Expect: "refused"}
+			switch name {
+			case "truncated-json":
+				step.Child = payload[:len(payload)/2]
+				if gate == openCodeV2GateReal {
+					step.Reason = "output_refused"
+				}
+			case "child-provider-http-error":
+				step.ChildHTTPError = true
+				if gate == openCodeV2GateReal {
+					step.Reason = "provider_failed"
+				}
+			case "task-prefixed-output":
+				step.Child = "<task"
+			case "wrong-role-payload":
+				step.Child = `{"request_hash":"sha256:` + strings.Repeat("a", 64) + `","results":[]}`
+			}
+			steps := []openCodeV2HostStep{step}
+			if gate == openCodeV2GateReal && step.ChildHTTPError {
+				steps = append(steps, openCodeV2HostStep{
+					Name: "retry-unresolved-slot", Agent: task.Agent, Prompt: task.Prompt, Child: payload, Expect: "refused",
+					ChildRequests: openCodeV2Count(0), Reason: "lens_already_in_progress",
+				})
+			}
+			evidence := runOpenCodeV2HostScenarioWithGate(t, in, repo, host, store.Dir, gate, steps)
+			if first := evidence.Steps[0]; first.ChildRequests == 0 || len(first.Materialized) == 0 || !first.Materialized[0] {
+				t.Fatalf("negative never reached a Go-materialized child: %#v", first)
+			}
+		})
+	}
 }
 
 // openCodeV2RefuterReady captures one inferential severe finding so STATUS
@@ -461,29 +494,14 @@ func TestOpenCodeV2RealHostUnstubbedGateAdmitsRolesUnderTheirAgents(t *testing.T
 	in := openCodeV2HostE2EInputs(t)
 	t.Run("lens", func(t *testing.T) {
 		reviewEnabledHome(t)
-		repo, started, store, record := newArtifactReview(t, false)
-		host := openCodeV2RegisteredHost(t, repo)
-		task := openCodeV2StatusProviderTask(t, repo, started.LineageID)
-		payload := string(admittedReviewerPayloadForTest(t, repo, record, task.Agent, 0))
-		negative := func(name, agent, prompt, child, reason string, childRequests *int) openCodeV2HostStep {
-			return openCodeV2HostStep{Name: name, Agent: agent, Prompt: prompt, Child: child, Expect: "refused", Reason: reason, ChildRequests: childRequests}
-		}
-		steps := []openCodeV2HostStep{
-			negative("lens-task-under-refuter-agent", "review-refuter", task.Prompt, payload, "agent_mismatch", openCodeV2Count(0)),
-			negative("stale-revision", task.Agent, openCodeV2MutatedLensPrompt(t, task.Prompt, "revision"), payload, "binding_mismatch", openCodeV2Count(0)),
-			negative("background-true", task.Agent, task.Prompt, payload, "dispatch_refused", openCodeV2Count(0)),
-			negative("truncated-json", task.Agent, task.Prompt, payload[:len(payload)/2], "output_refused", nil),
-			negative("child-provider-http-error", task.Agent, task.Prompt, "", "provider_failed", nil),
-			openCodeV2Admitted("lens-admitted", task.Agent, task.Prompt, payload, `"operation":"review/capture-result"`, `"state":"approved"`),
-			negative("replay-captured-task", task.Agent, task.Prompt, payload, "", openCodeV2Count(0)),
-		}
-		steps[2].Background = true
-		steps[4].ChildHTTPError = true
-		evidence := runOpenCodeV2HostScenarioWithGate(t, in, repo, host, store.Dir, openCodeV2GateReal, steps)
-		if admitted := evidence.Steps[5]; admitted.Name != "lens-admitted" || admitted.ChildRequests != 1 || len(admitted.Materialized) != 1 || !admitted.Materialized[0] {
-			t.Fatalf("real-gate lens admission evidence = %#v", admitted)
-		}
-		assertApprovedCompactAuthorityBurned(t, store, started.LineageID)
+		testOpenCodeV2HostLensCapture(t, in, openCodeV2GateReal, func(task ReviewProviderTask, payload string) []openCodeV2HostStep {
+			return []openCodeV2HostStep{
+				{Name: "lens-task-under-refuter-agent", Agent: "review-refuter", Prompt: task.Prompt, Child: payload, Expect: "refused", Reason: "agent_mismatch", ChildRequests: openCodeV2Count(0)},
+				{Name: "stale-revision", Agent: task.Agent, Prompt: openCodeV2MutatedLensPrompt(t, task.Prompt, "revision"), Child: payload, Expect: "refused", Reason: "binding_mismatch", ChildRequests: openCodeV2Count(0)},
+				{Name: "background-true", Agent: task.Agent, Prompt: task.Prompt, Child: payload, Background: true, Expect: "refused", Reason: "dispatch_refused", ChildRequests: openCodeV2Count(0)},
+			}
+		})
+		testOpenCodeV2HostLensPostDispatchNegatives(t, in, openCodeV2GateReal)
 	})
 	t.Run("refuter", func(t *testing.T) {
 		reviewEnabledHome(t)

@@ -751,13 +751,21 @@ class LoopbackNetworkTests(unittest.TestCase):
 
     def test_catalog_is_fixture_only(self):
         from opencode_v2_loopback import local_provider
+        import urllib.error
         import urllib.request
         with local_provider() as (url, requests, failures):
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            with opener.open(url + "/catalog/api.json", timeout=2) as response:
-                self.assertEqual(response.read(), b"{}")
+            catalog = "/catalog/experimental/v2.0/api.json?type=chat,decision,image,video,realtime&include=openai-codex,openai-chatgpt"
+            for path in ("/catalog/api.json", catalog):
+                with opener.open(url + path, timeout=2) as response:
+                    self.assertEqual((response.status, response.read()), (200, b"{}"))
+            unexpected = catalog + "&extra=1"
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                opener.open(url + unexpected, timeout=2)
+            self.assertEqual(caught.exception.code, 400)
+            caught.exception.close()
             self.assertEqual(requests, [])
-            self.assertEqual(failures, [])
+            self.assertEqual(failures, ["unexpected GET target: " + unexpected])
 
 
 HEADER = "GENTLE_AI_REVIEW_PROVIDER_MATERIALIZATION"

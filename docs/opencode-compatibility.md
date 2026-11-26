@@ -74,11 +74,24 @@ one bound to its role.
   prompt, and Go refuses a Task whose agent is not the lens agent of its slot,
   `review-refuter` for a refuter Task, or `review-validator` for a validator Task.
   The V1 plugin forwards it too; an older V1 plugin without it is still admitted.
+- **Lens already reserved.** V2 reserves a lens before its first dispatch.
+  Another request for that same review, capture phase, target, and lens is
+  refused as `lens_already_in_progress`. It is not queued and does not invoke
+  the model again. This applies to repeated original lens requests, not to the
+  existing pass-through for an already materialized Task. Pass-through cannot
+  independently capture a result. Other selected lenses can still run.
+  The reason means the slot is reserved, not that the child is known to be
+  running. A disconnect, cancellation, or failure without an admitted result
+  does not make the slot safe to retry. Check `review status --next-transition`
+  for native review progress; rerunning STATUS does not clear a reservation.
+  An admitted result remains captured, and a different native review slot
+  has its own reservation. There is no reservation reset command.
 - **Refusal cause.** A refused V2 Task reaches the parent as
   `opencode_review_transport_relay_refused (reason: <reason>)`, where the reason
   is one bounded code (`capability_unavailable`, `envelope_invalid`,
   `agent_mismatch`, `binding_mismatch`, `stale_authority`, `output_refused`,
-  `provider_failed`, `relay_unavailable`, `dispatch_refused`). When native
+  `provider_failed`, `relay_unavailable`, `dispatch_refused`,
+  `lens_already_in_progress`). When native
   admission refused the child's result, the refusal also names one bounded cause:
   `opencode_review_transport_relay_refused (reason: output_refused, cause: <cause>)`,
   where the cause is `reviewer_result_not_admissible`,
@@ -89,7 +102,11 @@ one bound to its role.
   `candidate_causality_unclaimed_id`, `candidate_causality_evidence_degraded`).
   The refused bytes and the full admission reason are preserved under
   `<git common dir>/gentle-ai/rejected-results/<lineage>/`. Raw child output,
-  paths and free text never reach the parent.
+  paths and free text are not forwarded in the relay's refusal. OpenCode 2.4.2
+  separately sends the child text to the parent inbox. The plugin does not use
+  that notification for capture: it waits for the original child session and
+  sends its verified terminal turn to the original Go relay. This transport
+  was tested on a real 2.4.2 host with SDK 2.0.4 and a loopback model.
 - **Host subagent preamble.** OpenCode 2.0.19 prepends
   `You are a subagent spawned by another session.` to every subagent prompt, so
   the reviewer receives that host line before the Go materialization. The host

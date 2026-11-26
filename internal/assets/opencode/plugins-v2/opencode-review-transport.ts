@@ -24,6 +24,7 @@ const REFUSAL_REASON = {
   AgentMismatch: "agent_mismatch",
   BindingMismatch: "binding_mismatch",
   StaleAuthority: "stale_authority",
+  LensAlreadyInProgress: "lens_already_in_progress",
   OutputRefused: "output_refused",
   ProviderFailed: "provider_failed",
   RelayUnavailable: "relay_unavailable",
@@ -79,13 +80,16 @@ interface TransportFrame {
 interface Relay {
   prompt: Promise<{ nonce: string; prompt: string }>
   complete: (output: unknown) => Promise<string>
+  signal: AbortSignal
   close: () => void
 }
 
 interface RelayRegistration {
   owner: symbol
   relay: Relay
+  originalPrompt: string
   completing: boolean
+  childID?: string
 }
 
 function decodeTransportFrame(line: string): TransportFrame {
@@ -100,6 +104,7 @@ function startRelay(cwd: string, prompt: string, agent: string): Relay {
   const child = spawn(TRANSPORT.Command, ["review", "opencode-transport"], { cwd, env: { ...process.env, [RELAY_CONTRACT_ENV]: RELAY_CONTRACT }, stdio: ["pipe", "pipe", "pipe"] })
   let buffered = ""
   let closed = false
+  const abort = new AbortController()
   const stderr: Buffer[] = []
   let resolvePrompt: (value: { nonce: string; prompt: string }) => void
   let rejectPrompt: (reason: unknown) => void
@@ -114,6 +119,7 @@ function startRelay(cwd: string, prompt: string, agent: string): Relay {
     closed = true
     rejectPrompt(cause)
     rejectResult(cause)
+    abort.abort()
   }
   child.stdout.on("data", (chunk: Buffer) => {
     buffered += chunk.toString("utf8")
@@ -157,8 +163,10 @@ function startRelay(cwd: string, prompt: string, agent: string): Relay {
   })
   return {
     prompt: promptFrame,
+    signal: abort.signal,
     complete: async (output: unknown) => {
       const materialized = await promptFrame
+      if (abort.signal.aborted) return resultFrame
       const completion: TransportFrame = { schema: TRANSPORT.Schema, operation: TRANSPORT.Complete, nonce: materialized.nonce }
       if (typeof output === "string") completion.output = output
       else completion.error = "opencode_task_host_output_unavailable"
@@ -188,12 +196,13 @@ export default Plugin.define({
     const owner = Symbol("review-relay")
     const relays = registry()
     const deferred = new Map<string, RelayRegistration>()
+    const pendingLookups = new Map<string, Set<AbortController>>()
     const refused = new Map<string, RefusalReason>()
     const registrations: Array<{ dispose(): Promise<void> }> = []
     const abort = new AbortController()
     const location = [ctx.location.directory, ctx.location.workspaceID ?? ""]
     const prefix = JSON.stringify(location)
-    const keyFor = (call: { sessionID: string; id: string }, agent: string) => JSON.stringify([prefix, call.sessionID, call.id, agent])
+    const keyFor = (call: { sessionID: string; messageID?: string; id: string }, agent: string) => JSON.stringify([prefix, call.sessionID, call.messageID, call.id, agent])
     const reviewInput = (call: { tool: string; input: unknown }): Record<string, unknown> | undefined => {
       if (call.tool !== "subagent" || !call.input || typeof call.input !== "object") return
       const input = call.input as Record<string, unknown>
@@ -204,6 +213,40 @@ export default Plugin.define({
       if (registration?.owner !== owner) return
       relays.delete(key)
       registration.relay.close()
+    }
+    const backgroundOutput = async (registration: RelayRegistration, childID: string, parentID: string, agent: string, prompt: string) => {
+      const { signal } = registration.relay
+      if (signal.aborted) throw refusal(REFUSAL_REASON.RelayUnavailable)
+      registration.childID = childID
+      const read = async () => {
+        const session = await ctx.session.get({ sessionID: childID })
+        if (signal.aborted || session?.id !== childID || session.parentID !== parentID || session.agent !== agent) return
+        await ctx.session.wait({ sessionID: childID })
+        if (signal.aborted) return
+        const messages = await ctx.session.context({ sessionID: childID })
+        // A newly spawned child has exactly one user turn at the start. A
+        // subsequent user turn (even with identical text) is not this review.
+        const first = messages[0]
+        if (first?.type !== "user" || first.text !== "You are a subagent spawned by another session.\n" + prompt) return
+        const idle = messages.at(-1)
+        if (idle?.type !== "idle" || idle.outcome !== "succeeded" || ("error" in idle && idle.error !== undefined)) return
+        const terminal = messages.at(-2)
+        if (terminal?.type !== "assistant" || terminal.finish !== "stop") return
+        for (const message of messages.slice(1, -1)) {
+          if (message.type !== "assistant" || message.agent !== agent || message.error !== undefined || typeof message.time.completed !== "number") return
+          if (message !== terminal && message.finish !== "tool-calls") return
+        }
+        // The terminal text is opaque to the adapter. Go rejects empty or
+        // invalid payloads; neither reasoning nor tool content is forwarded.
+        return terminal.content.flatMap(part => part.type === "text" ? [part.text] : []).join("")
+      }
+      let cancel: () => void = () => {}
+      const disconnected = new Promise<never>((_resolve, reject) => {
+        cancel = () => reject(new RelayRefusal(REFUSAL_REASON.RelayUnavailable))
+      })
+      signal.addEventListener("abort", cancel, { once: true })
+      try { return await Promise.race([read().catch(() => undefined), disconnected]) }
+      finally { signal.removeEventListener("abort", cancel) }
     }
     let disposed = false
     const cleanup = async () => {
@@ -222,17 +265,61 @@ export default Plugin.define({
         const refuse = (reason: RefusalReason) => { refused.set(key, reason); input.prompt = REFUSED; throw refusal(reason) }
         if (disposed) return refuse(REFUSAL_REASON.RelayUnavailable)
         if (typeof input.prompt !== "string" || input.prompt === "" || input.background === true || input.sessionID !== undefined) return refuse(REFUSAL_REASON.DispatchRefused)
+        const suppliedPrompt = input.prompt
+        // The host may remove background from the executable input. Inspect
+        // the exact calling message/tool while its original input is running.
+        const pending = pendingLookups.get(call.sessionID) ?? new Set<AbortController>()
+        pendingLookups.set(call.sessionID, pending)
+        const cancelLookup = new AbortController()
+        pending.add(cancelLookup)
+        const lookup = AbortSignal.any([abort.signal, cancelLookup.signal, AbortSignal.timeout(15_000)])
+        let onAbort = () => {}
+        const unavailable = new Promise<never>((_, reject) => {
+          onAbort = () => reject(new RelayRefusal(REFUSAL_REASON.RelayUnavailable))
+          if (lookup.aborted) onAbort()
+          else lookup.addEventListener("abort", onAbort, { once: true })
+        })
+        let messages: Awaited<ReturnType<typeof ctx.session.context>>
+        try {
+          messages = await Promise.race([
+            unavailable, ctx.session.context({ sessionID: call.sessionID }, { signal: lookup }),
+          ])
+        } catch {
+          return refuse(REFUSAL_REASON.RelayUnavailable)
+        } finally {
+          lookup.removeEventListener("abort", onAbort)
+          pending.delete(cancelLookup)
+          if (pending.size === 0) pendingLookups.delete(call.sessionID)
+        }
+        if (lookup.aborted) return refuse(REFUSAL_REASON.RelayUnavailable)
+        const matches = messages.filter(message => message.id === call.messageID)
+        const [message] = matches
+        if (matches.length !== 1 || message?.type !== "assistant" || message.agent !== call.agent) return refuse(REFUSAL_REASON.DispatchRefused)
+        const parts = message.content.filter(part => part.type === "tool" && part.id === call.id)
+        const [part] = parts
+        if (parts.length !== 1 || part?.type !== "tool" || part.name !== call.tool || part.state.status !== "running") return refuse(REFUSAL_REASON.DispatchRefused)
+        const original = reviewInput({ tool: part.name, input: part.state.input })
+        if (!original || original.agent !== input.agent || original.background === true || original.sessionID !== undefined) return refuse(REFUSAL_REASON.DispatchRefused)
         const existing = relays.get(key)
         if (existing) {
-          if (existing.owner !== owner) deferred.set(key, existing)
+          if (original.prompt !== existing.originalPrompt) return refuse(REFUSAL_REASON.DispatchRefused)
           // Concurrent duplicate instances must also wait for Go's materialization.
-          try { input.prompt = (await existing.relay.prompt).prompt } catch (cause) { return refuse(refusalReason(cause)) }
+          let prompt: string
+          try { prompt = (await existing.relay.prompt).prompt } catch (cause) { return refuse(refusalReason(cause)) }
+          if (existing.relay.signal.aborted) return refuse(REFUSAL_REASON.RelayUnavailable)
+          if (suppliedPrompt !== existing.originalPrompt && suppliedPrompt !== prompt) return refuse(REFUSAL_REASON.DispatchRefused)
+          if (existing.owner !== owner) deferred.set(key, existing)
+          input.prompt = prompt
           return
         }
+        if (original.prompt !== suppliedPrompt) return refuse(REFUSAL_REASON.DispatchRefused)
         try {
-          const relay = startRelay(ctx.location.directory, input.prompt, input.agent as string)
-          relays.set(key, { owner, relay, completing: false })
-          input.prompt = (await relay.prompt).prompt
+          lookup.throwIfAborted()
+          const relay = startRelay(ctx.location.directory, suppliedPrompt, input.agent as string)
+          relays.set(key, { owner, relay, originalPrompt: suppliedPrompt, completing: false })
+          const { prompt } = await relay.prompt
+          relay.signal.throwIfAborted()
+          input.prompt = prompt
         } catch (cause) {
           clearOwned(key)
           return refuse(refusalReason(cause))
@@ -261,12 +348,18 @@ export default Plugin.define({
         if (!registration || registration.owner !== owner || registration.completing) return refuse(REFUSAL_REASON.RelayUnavailable)
         registration.completing = true
         try {
-          // Hook completion alone may acknowledge a running background child.
           const output = call.status === "completed" ? call.result.output : undefined
           const child = output && typeof output === "object" ? output as Record<string, unknown> : undefined
-          const raw = child?.status === "completed" && typeof child.sessionID === "string" && child.sessionID !== "" && typeof child.output === "string" ? child.output : undefined
+          const { prompt } = await registration.relay.prompt
+          let raw: string | undefined
+          if (input.prompt === prompt && typeof child?.sessionID === "string" && child.sessionID !== "" && child.sessionID !== call.sessionID) {
+            if (child.status === "completed" && typeof child.output === "string") raw = child.output
+            // A completed hook may only acknowledge a running child. Never
+            // forward its acknowledgement or the independent parent inbox item.
+            if (child.status === "running") raw = await backgroundOutput(registration, child.sessionID, call.sessionID, input.agent as string, prompt)
+          }
           const result = await registration.relay.complete(raw)
-          if (call.status === "completed") call.result = { ...call.result, output: { ...child, output: result }, content: result }
+          if (call.status === "completed") call.result = { ...call.result, output: { ...child, status: "completed", output: result }, content: result }
         } catch (cause) { return refuse(refusalReason(cause), refusalCause(cause)) }
         finally { clearOwned(key) }
       }))
@@ -277,8 +370,9 @@ export default Plugin.define({
         try {
           for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
             if (event.type !== "session.deleted" || event.location?.directory !== location[0] || (event.location?.workspaceID ?? "") !== location[1]) continue
+            for (const lookup of pendingLookups.get(event.data.sessionID) ?? []) lookup.abort()
             const sessionPrefix = JSON.stringify([prefix, event.data.sessionID]).slice(0, -1) + ","
-            for (const key of relays.keys()) if (key.startsWith(sessionPrefix)) clearOwned(key)
+            for (const [key, registration] of relays) if (key.startsWith(sessionPrefix) || registration.childID === event.data.sessionID) clearOwned(key)
             for (const key of deferred.keys()) if (key.startsWith(sessionPrefix)) deferred.delete(key)
             for (const key of refused.keys()) if (key.startsWith(sessionPrefix)) refused.delete(key)
           }
