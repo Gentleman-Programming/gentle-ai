@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // S1-S2: public renderer checks across the entire supported runtime catalog.
@@ -33,7 +33,7 @@ func TestVerifierReviewDueContract(t *testing.T) {
 			for _, want := range []string{
 				"When `review_due` is true (`high_risk`), or when the user explicitly asks for a review",
 				"When `review_due` is false, record `review_due_reason` and continue",
-				"`under_budget` stays pending in the slice until a later commit reaches the budget",
+				"`under_budget` (medium risk, not a size cap) is not auto-reviewed and stays pending until a high-risk commit or the user asks",
 				"assess the open slice first. Review the pending slice only when `review_due` is true or the user explicitly asks; otherwise preserve the pending boundary and proceed without starting review",
 				"A task boundary neither authorizes review nor advances a reviewed boundary",
 				"report the missing assessment proof; never infer `review_due` or construct a preflight transition",

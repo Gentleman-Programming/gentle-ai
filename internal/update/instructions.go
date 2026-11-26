@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 const WindowsDistributionHoldMessage = "Windows binary distribution and Scoop are temporarily unavailable until publicly trusted Authenticode signing is enforced."
@@ -43,6 +43,15 @@ func ValidatedBetaSourceInstallCommand(r UpdateResult) (string, error) {
 	return BetaSourceInstallCommand(r.BetaModulePath, r.BetaCommit), nil
 }
 
+// BetaReleaseUnknownHint returns the checker's pinned manual install command or
+// ancestry diagnostic. Other unknown versions keep their existing guidance.
+func BetaReleaseUnknownHint(r UpdateResult) string {
+	if r.Status != VersionUnknown || r.BetaCommit == "" || plainReleaseTag(r.InstalledVersion) == "" {
+		return ""
+	}
+	return r.UpdateHint
+}
+
 // updateHint returns a platform-specific instruction string for updating the given tool.
 func updateHint(tool ToolInfo, profile system.PlatformProfile) string {
 	switch tool.Name {
@@ -68,7 +77,7 @@ func updateHintForOwnership(tool ToolInfo, profile system.PlatformProfile, owner
 
 // gentleAIHint is the stable-channel instruction only. When the checker
 // resolves a main-head beta target, applyBetaMainHeadStatus overrides this
-// hint with GentleAISourceInstallCommand so the printed instruction installs
+// hint with BetaSourceInstallCommand so the printed instruction installs
 // the advertised target instead of the latest stable release.
 func gentleAIHint(profile system.PlatformProfile) string {
 	if profile.PackageManager == "brew" && homebrewPackageInstalled("gentle-ai") {
@@ -81,7 +90,7 @@ func gentleAIHint(profile system.PlatformProfile) string {
 	case "darwin":
 		return "gentle-ai upgrade (downloads pre-built binary)"
 	case "windows":
-		return WindowsDistributionHoldMessage + " Install/update from source with Go 1.25.10+: " + GentleAISourceInstallCommand("")
+		return WindowsDistributionHoldMessage + " Source installation requires an exact stable release tag; rerun the update check."
 	default:
 		return ""
 	}

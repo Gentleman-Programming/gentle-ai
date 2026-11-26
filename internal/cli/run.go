@@ -18,43 +18,43 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
-	codexagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/cursor"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
-	opencodeagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
-	piagent "github.com/gentleman-programming/gentle-ai/v4/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agenthooks"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/antigravityrules"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/geminimodules"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/legacyassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/mcp"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeagents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencodeplugin"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/opencoderuntimeplugins"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/permissions"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/telemetryruntime"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/installcmd"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	opencodeactivation "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/state"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
+	codexagent "github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/cursor"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/kimi"
+	opencodeagent "github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
+	piagent "github.com/gentleman-programming/gentle-ai/v5/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/agenthooks"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/antigravityrules"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/geminimodules"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/legacyassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencodeagents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/opencoderuntimeplugins"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/permissions"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/telemetryruntime"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/verify"
 )
 
 type InstallResult struct {
@@ -340,13 +340,12 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 	if backgroundActivation != nil {
 		result.Background.Activation = backgroundActivation.Report()
 	}
+	var verificationErr error
 	if !result.Verify.Ready {
-		verificationErr := fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
-		rollback := orchestrator.Rollback(result.Execution)
-		if rollback.Err != nil {
-			verificationErr = errors.Join(verificationErr, rollback.Err)
+		verificationErr = fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
+		if result.Verify.RollbackRequired {
+			return result, rollbackPostApplyError(orchestrator, result.Execution, verificationErr)
 		}
-		return result, verificationErr
 	}
 
 	// Persist the user's agent selection and model assignments so that future
@@ -401,8 +400,10 @@ func RunPreparedInstall(prepared PreparedInstall, detection system.DetectionResu
 		return result, persistErr
 	}
 
-	TelemetryTrigger(homeDir)
-	return result, nil
+	if verificationErr == nil {
+		TelemetryTrigger(homeDir)
+	}
+	return result, verificationErr
 }
 
 func rollbackPostApplyError(orchestrator *pipeline.Orchestrator, execution pipeline.ExecutionResult, cause error) error {
@@ -2487,6 +2488,34 @@ func installOpenCodeFamilyParityAgents(settingsPath string, agent model.AgentID)
 	specs := opencodeagents.Parity(agent)
 	agentsOverlay := make(map[string]any, len(specs))
 	for _, spec := range specs {
+		if spec.Name == "gentle-ai-worker" {
+			// Use the merge's view of the config. For malformed input, leave
+			// recovery or refusal to the existing JSON/JSONC merge policy.
+			root, _ := filemerge.UnmarshalJSONObject(raw)
+			agents, _ := root["agent"].(map[string]any)
+			if existing, present := agents[spec.Name]; present {
+				entry, ok := existing.(map[string]any)
+				if !ok {
+					continue
+				}
+				owned, err := opencodeagents.Shape(spec.Name, entry)
+				if err != nil {
+					return false, err
+				}
+				if !owned {
+					// A pins-only stub opts into the shipped worker with overrides.
+					pins := 0
+					for _, key := range [...]string{"model", "variant"} {
+						if _, ok := entry[key].(string); ok {
+							pins++
+						}
+					}
+					if pins == 0 || len(entry) != pins {
+						continue
+					}
+				}
+			}
+		}
 		entry, err := opencodeagents.Entry(spec)
 		if err != nil {
 			return false, err
@@ -4889,7 +4918,22 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	checks = append(checks, antigravityCollisionCheck(input.Resolved.Agents)...)
 	checks = append(checks, openCodeConfigChecks(input.HomeDir, input.WorkspaceDir, input.Resolved.Agents)...)
 
-	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
+	results := verify.RunChecks(context.Background(), checks)
+	return verify.BuildReport(withPiEngramCompatibility(results, input.Resolved.Agents, input.Resolved.OrderedComponents))
+}
+
+// Only add a result for a confirmed incompatibility, keeping the normal
+// verification output unchanged. Existing hard failures still roll back.
+func withPiEngramCompatibility(results []verify.CheckResult, agents []model.AgentID, components []model.ComponentID) []verify.CheckResult {
+	if !containsAgent(agents, model.AgentPi) || !hasComponent(components, model.ComponentEngram) {
+		return results
+	}
+	if err := engram.VerifyPiInstanceIdentity(context.Background()); err != nil {
+		return append(results, verify.CheckResult{
+			ID: "verify:pi:engram:instance-id", Status: verify.CheckStatusFailed, Error: err.Error(), NoRollback: true,
+		})
+	}
+	return results
 }
 
 func openCodeConfigChecks(homeDir, workspaceDir string, agentIDs []model.AgentID) []verify.Check {

@@ -70,9 +70,9 @@ Git ownership refusals retain `git_repository_untrusted`; authority from a newer
 
 ## Atomic lifecycle
 
-### 1. Selectorless STATUS preflights only
+### 1. Selectorless STATUS selects the next step
 
-Selectorless STATUS evaluates only the current worktree candidate and renders one exact START invocation. It does **not** discover ambient authority, resume another worktree, recover history, or select a stale lineage. The parent runs only the returned `next_transition` and its ordered tokens.
+Selectorless STATUS evaluates only the current candidate in the selected worktree. It normally renders one exact START invocation. A pending acknowledgement or, in v2, a reviewing recovery successor in the exact worktree-and-target START slot takes precedence. STATUS does **not** discover ambient authority, resume another worktree, recover history, or select a stale lineage. After this preflight, the parent runs only the returned `next_transition` and its ordered tokens.
 
 #### START options through STATUS (`start_options_preflight`)
 
@@ -80,10 +80,10 @@ A parent that runs only provider-issued tokens passes the START options to the n
 
 - STATUS validates them with START's own rules (see the two sections below) before it reads the repository, and creates no authority. A refusal is a `not_started` `invalid_request` failure, and nothing is written.
 - When the next transition is a fresh `review.start` (`fresh_target_ready`), its arguments end with the options: `request-context` (the absolute path of the file), then `escalate-item` and `escalate-reason`, then `lenses` (canonical lens names in 4R order) and `lenses-reason`. The binding and every other argument are unchanged. START itself reads the file again and freezes the request and the escalation.
-- Any other next transition is refused instead of being returned without the options: an existing lineage already froze its own options at START, and the other routes run no START. Rerun STATUS without the options, follow its transition, and pass them again to the STATUS that offers `review.start`.
+- Other transitions refuse these options because they do not run START. The exception is a v2 selectorless STATUS resuming the exact reviewing recovery successor: a `--lenses` and `--lenses-reason` pair that matches the successor's frozen selection and reason is accepted without changing authority. Otherwise, rerun STATUS without the options, follow its transition, and pass them again to the STATUS that offers `review.start`.
 - The options require `--contract` and `--next-transition`, and each may appear only once.
 
-Without the options, STATUS and its START vector are unchanged. Forward the options through STATUS only when `review capabilities` lists `start_options_preflight`; see "Detecting support" below.
+Omitting the options leaves the START vector unchanged. Forward the options through STATUS only when `review capabilities` lists `start_options_preflight`; see "Detecting support" below.
 
 ### 2. START freezes an independent transaction
 
@@ -134,6 +134,8 @@ Without the flags, START keeps the tier default and the persisted authority is u
 
 Callers detect both START inputs, and their STATUS preflight, from `gentle-ai review capabilities` instead of probing START or STATUS. Both negotiated advertisements (`capabilities/v1.5` and `capabilities/v2.6`) list four optional features:
 
+Legacy v1 authority is unsupported, so `capabilities/v2.6` does not announce it: `compatibility.modes` is `["compact-v2"]`, there is no `compatibility.legacy_window`, and `legacy_v1_target_scoped_read_only` is not a mandatory feature. The published `capabilities-v2.6.schema.json` was corrected in place for this (no version bump). The frozen `capabilities/v1.5` advertisement still carries the legacy mode and window its published schema requires.
+
 | Feature | Input | Requires |
 | --- | --- | --- |
 | `start_request_context` | START `--request-context <file>` | `compact_v2_authority` |
@@ -145,7 +147,7 @@ Callers detect both START inputs, and their STATUS preflight, from `gentle-ai re
 
 ### 3. Bound calls drive the transaction
 
-A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. The parent runs that command verbatim, with the repository as process cwd, and satisfies every later STATUS and bound capture call only with the exact tokens each returned transition names. The parent routes only from that transaction's returned `next_transition`:
+A reviewing START carries `next_transition.execute(review.status)` — the provider-issued re-entry for its frozen binding. Run that command verbatim with the repository as process cwd. Except for the documented [selectorless preflight after recovery](#native-recovery-for-an-explicitly-selected-lineage), use only the exact tokens from returned transitions for later STATUS and bound captures. Route only from the returned `next_transition`:
 
 | Transition | Parent action |
 | --- | --- |
@@ -154,6 +156,22 @@ A reviewing START carries `next_transition.execute(review.status)` — the provi
 | `stop` | Run no lifecycle operation. Do not infer a recovery from prose. |
 
 A forecast is descriptive, not a route. Relay every forecast step and horizon losslessly, but execute only `next_transition`.
+
+#### Untracked selection in bound STATUS
+
+When no runtime agent is resolved, STATUS v9 offers manual selection without a `submission`. Omitting `--agent` alone does not guarantee this: a bound review can supply its frozen runtime.
+With `--agent=pi`, older Pi can decode the historical submission when the
+bound-selection opt-in is absent or unrecognized. That submission carries the
+target selector but omits `--lineage`; it does not let older Pi recover the
+bound review through selection.
+
+For an explicitly selected authority, the exact environment setting
+`GENTLE_AI_BOUND_SELECTION_CONTRACT=gentle-ai.review-bound-selection/v1` lets
+STATUS with a named runtime emit a submission that preserves `--lineage`.
+A compatible Pi refuses to replay an unbound submission for a bound review;
+it must not infer a lineage or retry with unbound tokens. For manual selection,
+rerun STATUS with the same lineage and target selector, adding `--untracked-scope`,
+`--expected-untracked-inventory`, and `--intended-untracked` for each selected path.
 
 #### Native recovery for an explicitly selected lineage
 
@@ -171,6 +189,13 @@ an available suffix. An occupied name, the predecessor's own name, or an already
 recorded successor fails closed with a read-only `review inspect-authority`
 diagnostic. Run that diagnostic with the requested repository as process cwd;
 do not invent a new successor to bypass the conflict.
+
+After successful `review recover` into `reviewing` under the derived successor name,
+run the same selectorless v2 STATUS preflight from the same worktree:
+`gentle-ai review status --contract gentle-ai.review-integration/v2 --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --next-transition`,
+retaining the target selectors. This documented entry binds the
+successor in that slot; follow only its returned `next_transition`. STATUS
+still bound to the predecessor cannot offer another recovery.
 
 When strict compact-state decoding and historical compatibility both fail,
 `CompactStore.Load` reports the lineage and both failure causes, retaining the
@@ -206,7 +231,7 @@ The provider contract is shared by Claude Code, OpenCode, Codex, and Pi. Go deri
 
 The in-process Claude Code reviewer uses the saved model and effort for each role (`risk`, `readability`, `reliability`, `resilience`, `refuter`, and `validator`). It passes `--effort` only for a non-default effort supported by the assigned model, using the same compatibility rule as generated `review-*` subagents. Default effort and legacy model-only assignments omit the flag. Missing or malformed assignments preserve native defaults or a valid legacy model fallback. The reviewer keeps `--setting-sources ""`; it does not inherit user or project effort settings.
 
-Each provider-issued capture input is one slot. Its reviewer prompt starts with `GENTLE_AI_REVIEW_BINDING ` followed by one-line binding JSON. A result echoes the exact `subject_hash`, reports completed inspection of the full manifest, and supplies structured findings/evidence. On malformed, incomplete, or unavailable inspection, query bound STATUS again; relaunch only when it reoffers the exact same slot.
+Each provider-issued capture input is one slot. Its reviewer prompt starts with `GENTLE_AI_REVIEW_BINDING ` followed by one-line binding JSON. The reviewer reports completed inspection of the full manifest and supplies structured findings and evidence. It does not need to copy `subject_hash` into its output. A submitting host passes the provider-issued `--subject-hash` from the collect binding unchanged. Capture refuses an empty, malformed, or different host hash and ignores the echo when the host hash matches. When `capture-result --agent` launches the reviewer itself, the invocation already binds the slot, so a missing or mismatched echo cannot block capture. External `--input` (including stdin) without a host hash uses the provider-derived subject; any echo must match that slot's current or legacy v1 subject. An echo mismatch does not consume the slot: re-run the lens and capture the corrected result on the same lineage. On malformed, incomplete, or unavailable inspection, query bound STATUS again; relaunch only when it reoffers the exact same slot.
 
 Reviewers inspect only provider-bound immutable trees. They never inspect the live worktree, index, `HEAD`, or another revision, and candidate bytes must not move through `/tmp`, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`. The one exception is the Codex refuter probe below: Go itself writes the frozen candidate tree into a fresh scratch copy it creates and removes.
 
@@ -215,6 +240,8 @@ Dependency locks (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, 
 ### Non-lens provider roles: refuter and targeted validator
 
 `gentle-ai review capture-refuter` and `gentle-ai review capture-validation` bind the transaction-wide refuter batch and the correction-bound targeted validator the same way `review capture-result` binds a lens — `--lineage`, `--target`, `--expected-revision` (plus `--request-hash` for the validator) — and exactly one of three modes. A compiled runtime (Claude Code, Codex, OpenCode) passes `--agent` and `--execute`: Go materializes the role request, runs its own in-process adapter, and admits the raw result; no submission descriptor exists for this form, and `--materialize`/`--input` refuse typed for it. Pi is host-relay, so `--execute` refuses typed for it: Go never spawns a process for a pi role. STATUS instead renders the pi collect input as `--materialize=true` plus a `submission` descriptor, exactly like the lens `capture-result` path — `gentle-pi` materializes the read-only prompt, runs the model itself, and submits the raw result through `--input=<path|->`, whose `{{value}}` slot repeats every binding token (including `--agent`) and drops only the `--materialize` selector. Go admits that submission through the same raw admitters the compiled `--execute` path uses, with the same binding; no adapter runs and no retry is granted, so an unadmittable submission leaves the slot open for STATUS to reoffer, exactly like a malformed in-process capture.
+
+For a targeted validator result, copy `validation_request.request_hash` to `targeted_validation_request_hash` and `validation_request.correction_target_identity` to `correction_target_identity` from the materialized input, not from the schema example. A missing or mismatched echo, or a conclusive failed regression check that names no regression, is a submission refusal and leaves the correction slot open. A correctly bound result that reports a genuine failure is admitted and stops the lineage; it is not a submission refusal. An explicit `inspection.status: completed` and an omitted inspection that passes the legacy admission check both bind the same stored verdict evidence. `inspection.status: unavailable` still produces no verdict.
 
 #### Refuter probe
 
@@ -242,7 +269,11 @@ The role submission descriptor is a negotiated status contract change, so the ne
 
 Native Go alone selects lenses, classifies candidate causality, performs refutation, derives repository evidence, and permits at most one bounded correction. A validator that cannot inspect its immutable trees has no verdict; report that block rather than submitting a failed validation.
 
-A committed-range correction re-entered with the exact selector the final capture returned (`--base-ref <frozen tree> --committed-only`), or with the commit START was pinned to, keeps its frozen empty intended-untracked exclusion. Unrelated untracked files do not reopen that decision or require a new `--untracked-scope` declaration. A different base tree names a different target and never inherits the frozen decision.
+Bound STATUS keeps the workspace correction's frozen intended-untracked scope. An empty scope stays empty whether START explicitly excluded untracked files or found none. A file that first appears during correction does not reopen selection. To include it, track it with `git add`; the ordinary correction scope and budget rules then apply to it as a tracked change.
+
+A committed-range correction also keeps its exclusion when re-entered with the exact selector the final capture returned (`--base-ref <frozen tree> --committed-only`) or with the commit START was pinned to. A different base tree names a different target and never inherits the frozen decision.
+
+After a targeted validator rejects that correction, bound STATUS with the same committed-only range and unchanged rejected candidate still reports `native_stop_required`, even if unrelated untracked files now exist. This does not authorize recovery. A changed committed candidate or a fresh lineage does not inherit the exclusion.
 
 ### Non-blocking findings of a stopped review (`--non-blocking-findings`)
 
@@ -265,13 +296,15 @@ When a review stops in `correction_required` or `escalated`, the correction requ
 - Without the opt-in, STATUS output is unchanged. The last-event closure is unchanged for every client: `advisory_findings` and `reviewer_results` stay approved-only.
 - The flag requires `--contract gentle-ai.review-integration/v2`; without it, or with v1, STATUS refuses. A provider older than this change refuses the unknown flag, so a client can fall back to plain STATUS.
 
+START checks the frozen lens context budget before asking for review consent. An oversized candidate returns `lens_context_budget_exceeded` without creating review authority. With a smaller commit checked out, run the STATUS command the refusal prints from the repository and follow the returned transition. It reviews only that last commit's committed changes.
+
 Medium and high-risk START may return the typed `gentle-ai.review-integration.consent/v3` envelope. Relay the complete choice envelope losslessly, preserve machine tokens and invocations exactly, and run only the invocation selected by the human. Global RDD mode permits review; it never grants per-candidate consent. A decline is not the kill switch.
 
 ## Read-only risk assessment (`gentle-ai review assess`)
 
 `gentle-ai review assess --cwd <repo> [--agent <runtime>] [--base-ref <ref> --committed-only] [--untracked-scope exclude|select --intended-untracked <path> --expected-untracked-inventory <digest>] [--escalate-item <1-6> --escalate-reason <text>] [--json]` prints the same candidate risk classification START uses to select lenses (`reviewtransaction.AssessSnapshotRisk`), without creating any review authority, lineage, or store mutation. It works identically with receipt-driven development on or off, so a host can gate delegated verification on the result before ever calling `review start`.
 
-It builds the exact same candidate `review start` would: current changes by default, or an immutable base-to-HEAD comparison with `--base-ref` (which requires `--committed-only` to acknowledge dirty tracked changes, exactly like `review start`). The untracked-scope flags accept the same values `review start` does. The optional `--agent` declares the runtime identity to carry on `next_transition` below; it is validated exactly as `review status --agent` is.
+It builds the exact same candidate `review start` would: current changes by default, or an immutable base-to-HEAD comparison with `--base-ref` (which requires `--committed-only` to acknowledge dirty tracked changes, exactly like `review start`). The untracked-scope flags accept the same values `review start` does. The optional `--agent` identifies the runtime and is carried on `next_transition`. Assessment measures the candidate; it does not launch a reviewer or require a completed reviewer Task. A review-due result is not evidence that dispatch succeeded.
 
 The optional `--escalate-item` and `--escalate-reason` let an agent raise the risk to `high` by citing one high-risk item. They must be passed together: `--escalate-item` is an integer from 1 to 6 (1 data or irreversible effects, 2 security, 3 contracts others consume, 4 concurrency, 5 delivery or environment, 6 no test would catch a regression), and `--escalate-reason` is a non-empty reason of at most 500 bytes (UTF-8); keep it to one line. Escalation raises `passive` or `medium` to `high`, never lowers a tier, and appends an `agent_escalation` reason naming the item. Missing either flag, an item outside 1-6, or an empty or oversized reason fails with a rerun hint.
 
@@ -335,6 +368,8 @@ The v1 contract and historical artifacts remain published compatibility surfaces
 
 A `stop` carries one reason code and no executable transition. The table below is the complete continuation inventory for the atomic target-root lifecycle. `Terminal` means no in-lineage continuation exists; it never authorizes delivery. For every clone-scoped exit, gates remain unmanaged and ordinary repository policy decides delivery.
 
+When a last-event closure reports `targeted_validator_rejected`, its human-readable `action` prints a read-only v2 repair preflight. With RDD enabled, bound v2 STATUS for that same unchanged terminal lineage also prints it in the stop forecast's `description`, not in `next_transition`. Before consulting repair help, match a returned successor-only selector to the closure's `lineage_id` and `store_revision`, or to STATUS's `authority.lineage_id` and `authority.revision`. No exact match means this handoff does not apply. Preflight does not release authority; any release requires separate, explicit maintainer authorization. Changed-target STATUS keeps its existing target-scoped rules.
+
 | Reason code | Continuation |
 | --- | --- |
 | `captured_artifacts_unverifiable` | Terminal — a captured reviewer artifact failed local verification. Ask a maintainer to inspect the B authority, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
@@ -348,7 +383,7 @@ A `stop` carries one reason code and no executable transition. The table below i
 | `corrupted_or_unverifiable_authority` | Terminal — the authority is unreadable or unsupported. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `manual_intervention_required` | Terminal — the authority state is outside the negotiated lifecycle. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `missing_authority_binding` | Terminal — a current target had no authority binding. File a bounded defect with the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
-| `native_stop_required` | Terminal — the lineage is escalated but has no native continuation. Ask a maintainer to inspect it, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
+| `native_stop_required` | Terminal — there is no in-lineage continuation. For an isolated canonical rejected-validator terminal, a maintainer can follow the [exact `review repair` disposition procedure](review-authority-threat-model.md#rejected-validator-terminal-disposition). Otherwise ask a maintainer to inspect the lineage, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. Disposition does not approve the candidate or authorize delivery. |
 | `recovery_scope_unchanged` | Change B so its target identity differs, then retry the exact returned `gentle-ai review recover` invocation. |
 | `staged_workspace_overlay_recovery_unavailable` | Terminal — pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and start a fresh target; otherwise run `gentle-ai review mode disable --scope clone --cwd <repo>`. |
 | `unachievable_lens_slot` | A host reported a selected reviewer slot unachievable under current conditions. If that was transient, re-run `gentle-ai review capture-unachievable` with the same binding and `--withdraw=true` so B re-offers the same slot. If it is not transient, reduce the B candidate scope and start a new `gentle-ai review start`, or run `gentle-ai review mode disable --scope clone --cwd <repo>`. |

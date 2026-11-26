@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // TestReviewAssessPassiveDocumentationCandidate proves review assess reports
@@ -47,6 +47,47 @@ func TestReviewAssessPassiveDocumentationCandidate(t *testing.T) {
 	}
 	if result.NextTransition != nil {
 		t.Fatalf("passive review assess published a next_transition it must not offer: %#v", result.NextTransition)
+	}
+}
+
+func TestReviewAssessOpenCodeDispatchUnavailableStillMeasuresCandidate(t *testing.T) {
+	for _, fixture := range []struct {
+		risk, path, body, dueReason string
+		due                         bool
+	}{
+		{"passive", "docs/guide.md", "ordinary documentation prose.\n", "passive", false},
+		{"high", "internal/auth/login.go", "package auth\n", "high_risk", true},
+	} {
+		t.Run(fixture.risk, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			writeReviewStartCandidate(t, repo, fixture.path, fixture.body, 0o644)
+			before := runReviewCLIGit(t, repo, "status", "--porcelain=v1")
+			assess := func(version string) (ReviewAssessmentResult, string, error) {
+				stubOpenCodeRuntimeProbeSequence(t, version)
+				t.Setenv(openCodeRelayContractEnvironment, openCodeRelayContractV2)
+				return runEscalatedAssess(t, repo, "--agent", "opencode")
+			}
+			_, baseline, err := assess("2.0.19")
+			if err != nil {
+				t.Fatalf("baseline assess: %v\n%s", err, baseline)
+			}
+			result, got, err := assess("2.4.1")
+			if err != nil || got != baseline {
+				t.Fatalf("OpenCode 2.4.1 assess: %v\ngot: %s\nwant: %s", err, got, baseline)
+			}
+			if result.Risk != fixture.risk || result.ReviewDue != fixture.due || result.ReviewDueReason != fixture.dueReason ||
+				result.ChangedPaths != 1 || result.ChangedLines != 1 {
+				t.Fatalf("assessment did not measure the fixture: %s", got)
+			}
+			if fixture.due {
+				assertReviewAssessNextTransition(t, result.NextTransition, repo, "opencode", "")
+			} else if result.NextTransition != nil {
+				t.Fatalf("unexpected passive transition: %s", got)
+			}
+			if after := runReviewCLIGit(t, repo, "status", "--porcelain=v1"); before != after {
+				t.Fatalf("assessment changed git status: %q -> %q", before, after)
+			}
+		})
 	}
 }
 
@@ -411,6 +452,26 @@ func TestReviewAssessInvalidAgentRefusesTyped(t *testing.T) {
 	}
 	if classification := typed.classification(); classification.Code != reviewImmutableTransportUnsupportedCode {
 		t.Fatalf("review assess invalid --agent classification = %#v, want code %q", classification, reviewImmutableTransportUnsupportedCode)
+	}
+}
+
+func TestReviewAssessStillRefusesUnprovenOpenCodeRuntime(t *testing.T) {
+	for _, declaration := range []string{"", "gentle-ai.opencode-relay/v3"} {
+		t.Run("declaration="+declaration, func(t *testing.T) {
+			probes := stubOpenCodeRuntimeProbeSequence(t, "2.4.1")
+			t.Setenv(openCodeRelayContractEnvironment, declaration)
+			result, raw, err := runEscalatedAssess(t, t.TempDir()+"/missing", "--agent", "opencode")
+			var typed *reviewIntegrationPreflightError
+			if !errors.As(err, &typed) || typed.classification().Code != reviewImmutableTransportUnsupportedCode ||
+				!strings.Contains(err.Error(), "OpenCode qualifies only when `opencode --version`") ||
+				len(result.Reasons) != 1 || result.Reasons[0].Code != "unassessable" ||
+				result.ChangedPaths != 0 || result.ChangedLines != 0 || result.NextTransition != nil {
+				t.Fatalf("unproven runtime did not fail closed before repository validation: %v\n%s", err, raw)
+			}
+			if wantProbe := declaration == ""; *probes > 1 || (*probes == 1) != wantProbe {
+				t.Fatalf("OpenCode runtime probed %d times, want probe = %v", *probes, wantProbe)
+			}
+		})
 	}
 }
 

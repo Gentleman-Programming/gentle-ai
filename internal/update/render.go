@@ -15,6 +15,7 @@ func RenderCLI(results []UpdateResult) string {
 
 	updatesAvailable := 0
 	checksFailed := 0
+	unknownVersions := 0
 
 	for _, r := range results {
 		status := statusIcon(r.Status)
@@ -40,6 +41,11 @@ func RenderCLI(results []UpdateResult) string {
 				fmt.Fprintf(&b, ": %v", r.Err)
 			}
 			checksFailed++
+		} else if r.Status == VersionUnknown {
+			if hint := BetaReleaseUnknownHint(r); hint != "" {
+				fmt.Fprintf(&b, "  %s", hint)
+			}
+			unknownVersions++
 		}
 
 		b.WriteString("\n")
@@ -53,8 +59,11 @@ func RenderCLI(results []UpdateResult) string {
 		fmt.Fprintf(&b, "%d update(s) available.\n", updatesAvailable)
 	} else if checksFailed > 0 {
 		fmt.Fprintf(&b, "Update check incomplete: %d tool(s) failed to check.\n", checksFailed)
-	} else {
+	} else if unknownVersions == 0 {
 		b.WriteString("All tools are up to date!\n")
+	}
+	if unknownVersions > 0 {
+		fmt.Fprintf(&b, "Update state could not be determined for %d tool(s).\n", unknownVersions)
 	}
 
 	return b.String()

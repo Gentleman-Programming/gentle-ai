@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // TestNativeAgentRenderStaysStableForExistingRuntimes pins the rendered
@@ -23,7 +23,7 @@ func TestNativeAgentRenderStaysStableForExistingRuntimes(t *testing.T) {
 		dir        string
 		wantDigest string
 	}{
-		{model.AgentClaudeCode, filepath.Join(home, ".claude", "agents"), "sha256:a53f9a75e452cc8a31aeca46eaf3f5501fdc20a239bd0620fb0b132e2118fa72"},
+		{model.AgentClaudeCode, filepath.Join(home, ".claude", "agents"), "sha256:b2cb09b059bfb8f985ac654c6d0149d27b9bd67d610f690b3cec310b338e2b05"},
 		{model.AgentCursor, filepath.Join(home, ".cursor", "agents"), "sha256:42ecb0185e9ae6b89d744c17092c8716030e6246cb8ac14d0e09c1055054ec7f"},
 		{model.AgentKiroIDE, filepath.Join(home, ".kiro", "agents"), "sha256:9c77aad65d788632676be8b48c3fa6c00c0ff5984763f1c6b34e1533751d62b9"},
 	}

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,10 +11,10 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/shellinstaller"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/tui/screens"
 )
 
 func openInstallationPlan(t *testing.T) (Model, shellinstaller.UserInstallRequest) {
@@ -155,7 +156,7 @@ func TestShellMainFailureOffersQualifiedFallback(t *testing.T) {
 	m = m.WithShellInstallRunner(func(ctx context.Context, got shellinstaller.UserInstallRequest, report func(shellinstaller.UserInstallProgress)) error {
 		calls++
 		report(shellinstaller.UserInstallProgress{Index: 1, Total: 5, Label: shellInstallStepLabels[0], State: "running"})
-		return errors.New("Main SDK + stock provider: private installation: nonzero")
+		return fmt.Errorf("Main SDK + stock provider: %w", shellinstaller.ErrMainSDKInstall)
 	})
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)

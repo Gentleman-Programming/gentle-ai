@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // These tests prove each surviving collect-satisfying capture operation
@@ -275,17 +275,9 @@ func TestOverBudgetCorrectionPlanRefusalIsClassifiedAsNotStarted(t *testing.T) {
 	}
 }
 
-// TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent covers the way a
-// correction actually happens: the operator edits, and the tools they run while
-// editing leave files behind. A test artifact, a build output, a coverage
-// profile -- any untracked file appearing during the correction switched STATUS
-// to the untracked-selection transition, which legitimately carries no
-// validation request while the status still carried one, and the consistency
-// check read that as two copies disagreeing.
-//
-// The result was a lineage with no way forward: the exact-lineage STATUS the
-// contract names as the only re-entry refused, and its read-only envelope is
-// content-free by design, so the refusal advertised "retry" and named nothing.
+// TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent proves that an
+// artifact produced during a correction does not replace pending validation
+// with a new selection. The scope was frozen at START (#6225).
 func TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent(t *testing.T) {
 	repo, started, _, record, request := correctionRequiredForPlanCapture(t)
 	if err := RunReview([]string{
@@ -329,69 +321,16 @@ func TestCorrectionStatusRoutesWithAnUntrackedArtifactPresent(t *testing.T) {
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &status)
-	if status.NextTransition == nil {
-		t.Fatalf("correction STATUS offered no transition: %s", output.String())
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "targeted_validation_required" ||
+		!reflect.DeepEqual(status.Authority, beforeStatus.Authority) {
+		t.Fatalf("the artifact redirected the correction: %s", output.String())
 	}
-	if status.NextTransition.ReasonCode != "intended_untracked_selection_required" {
-		t.Fatalf("correction STATUS reason = %q, want the untracked selection the new file requires", status.NextTransition.ReasonCode)
-	}
-	// The point of the exemption: the pending validation is still true while the
-	// operator declares the file, so the status must keep reporting it.
-	if status.ValidationRequest == nil {
-		t.Fatal("correction STATUS dropped the pending validation request the review is still waiting on")
-	}
-	if !reflect.DeepEqual(*status.ValidationRequest, *beforeStatus.ValidationRequest) {
+	if !reflect.DeepEqual(status.ValidationRequest, beforeStatus.ValidationRequest) {
 		t.Fatalf("the untracked artifact changed the pending validation request: %#v vs %#v", status.ValidationRequest, beforeStatus.ValidationRequest)
 	}
 
-	// Routing is only half of it. The lineage was stranded because nothing could
-	// drive it forward, so declaring the artifact has to put the review back
-	// where it was: waiting on the same validation.
-	if status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
-		t.Fatalf("untracked selection offered no single collect input: %#v", status.NextTransition.Collect)
-	}
-	// This input is a decision the operator owns, so it carries values and no
-	// runnable tokens: the product names the exact flags in its own refusal
-	// rather than issuing an invocation. Composing them here is therefore the
-	// real route, and this assertion makes a future change that starts issuing
-	// tokens fail rather than let the test keep hand-building them.
-	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
-		if argument.Token != "" {
-			t.Fatalf("untracked selection now issues runnable tokens; replay them instead of composing flags: %#v", argument)
-		}
-	}
-	inventory := ""
-	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
-		if argument.Name == "expected_untracked_inventory" {
-			if inventory != "" {
-				t.Fatalf("untracked selection repeated its inventory argument: %#v", status.NextTransition.Collect.Inputs[0].Arguments)
-			}
-			inventory = argument.Value
-		}
-	}
-	if inventory == "" {
-		t.Fatalf("untracked selection offered no inventory to declare against: %#v", status.NextTransition.Collect.Inputs[0].Arguments)
-	}
-	var recovered bytes.Buffer
-	if err := RunReview([]string{
-		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
-		"--agent", "claude-code", "--lineage", started.LineageID, "--next-transition",
-		"--untracked-scope=exclude", "--expected-untracked-inventory=" + inventory,
-	}, &recovered); err != nil {
-		t.Fatalf("declaring the artifact did not recover the correction: %v\n%s", err, recovered.String())
-	}
-	var recoveredStatus ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, recovered.Bytes(), &recoveredStatus)
-	if recoveredStatus.NextTransition == nil || recoveredStatus.NextTransition.ReasonCode != "targeted_validation_required" {
-		t.Fatalf("declared artifact left the correction unable to proceed: %#v", recoveredStatus.NextTransition)
-	}
-	if recoveredStatus.ValidationRequest == nil || !reflect.DeepEqual(*recoveredStatus.ValidationRequest, *beforeStatus.ValidationRequest) {
-		t.Fatalf("recovery changed the pending validation request: %#v", recoveredStatus.ValidationRequest)
-	}
-
-	// The exemption relaxes presence parity, so the gate it sits in must still
-	// refuse two copies that genuinely disagree. Nothing else proves that the
-	// gate is wired to the helper at all.
+	// The status validator must still refuse two copies that genuinely disagree.
 	// PolicyContent is chosen deliberately: the earlier submission-descriptor and
 	// binding guards pin the request hash, target and trees, so tampering one of
 	// those never reaches this gate. This one only the copies check compares.

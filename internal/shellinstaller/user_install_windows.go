@@ -18,7 +18,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
-	assets "github.com/gentleman-programming/gentle-ai/v4/scripts"
+	assets "github.com/gentleman-programming/gentle-ai/v5/scripts"
 	"golang.org/x/sys/windows"
 )
 
@@ -159,7 +159,7 @@ func userWindowsEnvironment(root string) ([]string, error) {
 	// The host announces a managed reconfigure (and its registry home) through
 	// these variables; the sanitized worker environment is built from scratch,
 	// so they must be forwarded explicitly or the managed-update intent is lost.
-	for _, name := range []string{"GENTLE_AI_RECONFIGURE_TARGET", "GENTLE_AI_SHELL_REGISTRY_HOME"} {
+	for _, name := range []string{"GENTLE_AI_RECONFIGURE_TARGET", "GENTLE_AI_SHELL_REGISTRY_HOME", "GENTLE_AI_MAIN_FALLBACK"} {
 		if value := os.Getenv(name); value != "" {
 			env = append(env, name+"="+value)
 		}
@@ -379,21 +379,45 @@ const (
 	userWindowsInventoryLaunch
 	// Complete owned stage before removal; data names permitted below the stage.
 	userWindowsInventoryCleanup
+	// Complete update stage before publication: installer artefacts stay as
+	// strict as a fresh stage, but the operator state carried from the retired
+	// installation (sessions and the agent's own npm tree) keeps the launch
+	// treatment, so a grown session or extension never blocks an update.
+	userWindowsInventoryCarried
 )
+
+// Operator state an update stage carries from the retired agent; the subset of
+// userWindowsMutableState that the installer never writes into a fresh stage.
+var userWindowsCarriedState = []string{"agent/sessions", "agent/npm"}
+
+// An update stage holds the retired operator state, either carried after a
+// rebuilt SDK or moved in with the reused agent tree; a fresh stage holds none.
+func userWindowsPublicationInventory(installed *userWindowsManifest) userWindowsInventoryMode {
+	if installed != nil {
+		return userWindowsInventoryCarried
+	}
+	return userWindowsInventoryInstalled
+}
 
 func userWindowsInventory(root string, mode userWindowsInventoryMode) error {
 	// Runtime state is not an installed artefact: caches and sessions written
 	// after publication legitimately grow past the artefact byte bounds. Only
 	// the fresh pre-publication stage keeps every one of its bytes bounded.
 	state := map[string]bool{}
-	if mode != userWindowsInventoryInstalled {
-		for _, relative := range userWindowsMutableState {
-			state[filepath.Join(root, filepath.FromSlash(relative))] = true
-		}
+	roots := userWindowsMutableState
+	switch mode {
+	case userWindowsInventoryInstalled:
+		roots = nil
+	case userWindowsInventoryCarried:
+		roots = userWindowsCarriedState
 	}
-	// Launch additionally treats names below these roots as data names.
+	for _, relative := range roots {
+		state[filepath.Join(root, filepath.FromSlash(relative))] = true
+	}
+	// Launch and carried operator state additionally treat names below these
+	// roots as data names.
 	mutable := map[string]bool{}
-	if mode == userWindowsInventoryLaunch {
+	if mode == userWindowsInventoryLaunch || mode == userWindowsInventoryCarried {
 		mutable = state
 	}
 	stateDescendant := func(path string) bool {
@@ -473,6 +497,89 @@ func userWindowsStageRemove(stage, identity string) error {
 	return os.RemoveAll(stage)
 }
 
+// userWindowsRetireReplacement renames the owned destination to a fresh
+// sibling TARGET.replaced-<UTC> backup and returns the backup path with the
+// physical identity it carries, so a failed replacement can restore exactly
+// that tree.
+func userWindowsRetireReplacement(destination string, now time.Time) (backup, identity string, err error) {
+	backup = destination + ".replaced-" + now.UTC().Format("20060102T150405Z")
+	if _, err := os.Lstat(backup); !os.IsNotExist(err) {
+		return "", "", errors.Join(err, errors.New("Windows replacement backup path is already occupied"))
+	}
+	identity, err = userWindowsIdentity(destination, true)
+	if err != nil {
+		return "", "", err
+	}
+	if err := userWindowsRenameBusy(destination, destination, backup); err != nil {
+		return "", "", err
+	}
+	return backup, identity, nil
+}
+
+// userWindowsRestoreReplacement moves the retired backup back to its original
+// destination after a failure before publication. Like the Unix
+// userRestoreShellReplacement it never removes or overwrites a destination
+// that exists: both trees are then retained and reported. A backup whose
+// physical identity changed since the retire is never restored.
+func userWindowsRestoreReplacement(destination, backup, identity string) error {
+	if _, err := os.Lstat(destination); err == nil {
+		return fmt.Errorf("replacement failure left a destination at %q; both trees retained, backup retained at %s", destination, backup)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(err, fmt.Errorf("Windows destination state is uncertain; backup retained at %s", backup))
+	}
+	if observed, err := userWindowsIdentity(backup, true); err != nil || observed != identity {
+		return errors.Join(err, fmt.Errorf("Windows replacement backup identity differs; not restored, backup retained at %s", backup))
+	}
+	// No replace-existing flag: a destination that appeared after the Lstat
+	// check is never overwritten.
+	if err := userWindowsMoveNoReplaceBusy(backup, backup, destination); err != nil {
+		return errors.Join(err, fmt.Errorf("previous Windows installation could not be restored; backup retained at %s", backup))
+	}
+	return nil
+}
+
+// userWindowsReplacementFailure joins a pre-publication failure with the
+// outcome of restoring the retired installation.
+func userWindowsReplacementFailure(cause error, destination, backup, identity string) error {
+	if restoreErr := userWindowsRestoreReplacement(destination, backup, identity); restoreErr != nil {
+		return errors.Join(cause, restoreErr)
+	}
+	return errors.Join(cause, fmt.Errorf("previous Windows installation restored to %q", destination))
+}
+
+// userWindowsWorker is a background acquisition that writes into the stage.
+// Stop cancels and joins it, so the stage is never removed while it writes.
+type userWindowsWorker struct {
+	cancel context.CancelFunc
+	done   chan error
+	joined bool
+	err    error
+}
+
+func userWindowsStartWorker(ctx context.Context, work func(context.Context) error) *userWindowsWorker {
+	workCtx, cancel := context.WithCancel(ctx)
+	worker := &userWindowsWorker{cancel: cancel, done: make(chan error, 1)}
+	go func() { worker.done <- work(workCtx) }()
+	return worker
+}
+
+// Wait joins the worker and returns its result; later calls repeat it.
+func (w *userWindowsWorker) Wait() error {
+	if !w.joined {
+		w.err, w.joined = <-w.done, true
+		w.cancel()
+	}
+	return w.err
+}
+
+// Stop cancels a still-running worker and waits for it to return.
+func (w *userWindowsWorker) Stop() {
+	if !w.joined {
+		w.cancel()
+		_ = w.Wait()
+	}
+}
+
 func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserInstallResult, err error) {
 	if ctx == nil || ctx.Err() != nil {
 		return result, errors.New("Windows installation canceled")
@@ -501,6 +608,11 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil || confirmation != req.Confirmation {
 		return result, errors.Join(err, errors.New("physical Windows selection confirmation differs"))
 	}
+	release, err := userAcquireOperationLock(req.Destination)
+	if err != nil {
+		return result, err
+	}
+	defer userReleaseOperationLock(release, &err)
 	var backup string
 	// A component-scoped update reuses the recorded installation: the scope is
 	// bound to the reconfigure target and the recorded manifest supplies the
@@ -511,6 +623,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	}
 	var installed *userWindowsManifest
 	goReuse := false
+	retire := false
 	if _, err := os.Lstat(req.Destination); err == nil {
 		// A reconfigure/replace of the managed target (channel switch or
 		// component update) is a fresh install over a retired backup, so the
@@ -564,26 +677,14 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 				return result, fmt.Errorf("component update requires a recorded installation: %w", manifestErr)
 			}
 			installed = &recorded
-			if pin, pinErr := userWindowsGoPinSHA(); pinErr == nil && scope.reused[UserComponentNode] && installed.GoSHA == pin {
-				goReuse = true
-			}
+			goReuse = userWindowsGoReusable(req.Destination, installed, scope)
 		} else if recorded, manifestErr := userWindowsManifestRead(req.Destination); manifestErr == nil {
 			// A full reconfigure of a recorded installation still rebuilds a
 			// fresh stage, so the operator state is carried from the recorded
 			// agent.
 			installed = &recorded
 		}
-		backup = req.Destination + ".replaced-" + time.Now().UTC().Format("20060102T150405Z")
-		if _, err := os.Lstat(backup); !os.IsNotExist(err) {
-			return result, errors.Join(err, errors.New("Windows replacement backup path is already occupied"))
-		}
-		if _, err := userWindowsIdentity(req.Destination, true); err != nil {
-			return result, err
-		}
-		if err := os.Rename(req.Destination, backup); err != nil {
-			return result, err
-		}
-		fmt.Fprintf(os.Stderr, "Windows install phase: replaced previous installation %s -> %s\n", req.Destination, backup)
+		retire = true
 	}
 	if !scope.full && installed == nil {
 		return result, errors.New("a component update requires a recorded installation")
@@ -594,12 +695,33 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		fmt.Fprintln(os.Stderr, "Windows install phase: main-acquire")
 		mainArtifact, mainData, err = userWindowsMainSnapshot(ctx) // Confirmed choice, before first filesystem effect.
 		if err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK acquisition", err)
 		}
 		if _, err := userWindowsMainFiles(ctx, mainData, mainArtifact); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK acquisition", err)
 		}
 		fmt.Fprintf(os.Stderr, "Frozen canonical Gentle Shell Main: %s archive SHA256 %s (TLS publisher, not signed binary)\n", mainArtifact.Prefix, mainArtifact.SHA)
+	}
+	published := false
+	if retire {
+		// Reconfigure: retire the previous tree to its .replaced- backup so the
+		// fresh install below can publish into the confirmed destination. The
+		// pure acquisition above runs first, so a failed download never
+		// retires anything.
+		var backupIdentity string
+		backup, backupIdentity, err = userWindowsRetireReplacement(req.Destination, time.Now())
+		if err != nil {
+			return result, err
+		}
+		fmt.Fprintf(os.Stderr, "Windows install phase: replaced previous installation %s -> %s\n", req.Destination, backup)
+		// Registered before the stage cleanup, so it runs after it: every
+		// failure before publication moves the retired tree back. A published
+		// destination is never touched.
+		defer func() {
+			if !published {
+				err = userWindowsReplacementFailure(err, req.Destination, backup, backupIdentity)
+			}
+		}()
 	}
 	parent := filepath.Dir(req.Destination)
 	stage, err := os.MkdirTemp(parent, ".gentle-shell-windows-stage-")
@@ -610,7 +732,6 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if identityErr != nil {
 		return result, identityErr // Do not claim ownership or remove an unknown stage.
 	}
-	published := false
 	defer func() {
 		if published {
 			return
@@ -654,10 +775,12 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-acquire")
-	codegraph := make(chan error, 1)
-	go func() {
-		codegraph <- userWindowsCodeGraphAcquire(ctx, stage, req, scope)
-	}()
+	codegraph := userWindowsStartWorker(ctx, func(ctx context.Context) error {
+		return userWindowsCodeGraphAcquire(ctx, stage, req, scope)
+	})
+	// Registered after the stage cleanup, so it runs before it: an early
+	// return cancels and joins the acquisition before the stage is removed.
+	defer codegraph.Stop()
 	// The Windows stock provision helper requires its exact six-field
 	// selection ABI. Preferences are already materialized in the staged
 	// config/state/mcp files and must not widen this helper boundary.
@@ -728,16 +851,12 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			}
 		}
 	}
-	if err := <-codegraph; err != nil {
+	if err := codegraph.Wait(); err != nil {
 		return result, err
 	}
 	fmt.Fprintln(os.Stderr, "Windows install phase: codegraph-ready")
 	if channel == "main" {
-		metadata, _ := json.Marshal(mainArtifact)
-		if err := userWindowsWrite(filepath.Join(stage, "main.json"), metadata); err != nil {
-			return result, err
-		}
-		if err := userWindowsWrite(filepath.Join(stage, "runtime/archives/main.zip"), mainData); err != nil {
+		if err := userWindowsStageMainMetadata(stage, scope.reused[UserComponentSDK], mainArtifact, mainData); err != nil {
 			return result, err
 		}
 	}
@@ -795,31 +914,31 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if channel == "main" && !scope.reused[UserComponentSDK] {
 		fmt.Fprintln(os.Stderr, "Windows install phase: overlay main")
 		if err := userWindowsInventory(stage, userWindowsInventoryInstalled); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK overlay", err)
 		}
 		gentle, stock := filepath.Join(stage, "prefix/node_modules/gentle-pi"), filepath.Join(stage, "stock-gentle-pi")
 		if err := os.Rename(gentle, stock); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK overlay", err)
 		}
 		if _, err := userWindowsZIP(ctx, mainData, mainArtifact, gentle, ""); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK overlay", err)
 		}
 		for _, name := range []string{".gentle-ai", "node_modules"} {
 			original := filepath.Join(stock, name)
 			if _, err := os.Lstat(original); errors.Is(err, os.ErrNotExist) && name == "node_modules" {
 				continue
 			} else if err != nil {
-				return result, err
+				return result, userMainSDKFailure("Main SDK overlay", err)
 			}
 			if err := os.Rename(original, filepath.Join(gentle, name)); err != nil {
-				return result, err
+				return result, userMainSDKFailure("Main SDK overlay", err)
 			}
 		}
 		if err := userWindowsCompareMain(ctx, mainData, mainArtifact, gentle); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK overlay", err)
 		}
 		if err := userWindowsProvision(ctx, stage, "overlay", io.Discard, os.Stderr); err != nil {
-			return result, err
+			return result, userMainSDKFailure("Main SDK overlay", err)
 		}
 		fmt.Fprintln(os.Stderr, "Windows install phase: overlay-ready main")
 	}
@@ -844,7 +963,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 			return result, err
 		}
 	}
-	if err := userWindowsInventory(stage, userWindowsInventoryInstalled); err != nil {
+	if err := userWindowsInventory(stage, userWindowsPublicationInventory(installed)); err != nil {
 		return result, err
 	}
 	observed, err := InspectUserInstall(req)
@@ -917,9 +1036,7 @@ func RunUserInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 		return result, err
 	}
 	fmt.Fprintln(os.Stderr, "Windows install phase: publish")
-	from, _ := windows.UTF16PtrFromString(stage)
-	to, _ := windows.UTF16PtrFromString(req.Destination)
-	if err := windows.MoveFileEx(from, to, windows.MOVEFILE_WRITE_THROUGH); err != nil {
+	if err := userWindowsMoveNoReplaceBusy(stage, stage, req.Destination); err != nil {
 		return result, err
 	} // No replace-existing flag.
 	published = true
@@ -973,3 +1090,21 @@ func userWindowsLocalAppData() (string, error) {
 // probe (#5713): Windows supervises the runtime through its own cooperative
 // worker, so there is no transient-unit precondition to prove here.
 func RunUserLaunchProbe(context.Context, string) error { return nil }
+
+// userWindowsStageMainMetadata stages the acquired Main snapshot descriptor
+// and archive. A component update that reuses the SDK already carried both
+// from the retired installation and never acquired a snapshot, so it keeps
+// the reused pair (#6239).
+func userWindowsStageMainMetadata(stage string, reusedSDK bool, artifact userWindowsArtifact, data []byte) error {
+	if reusedSDK {
+		return nil
+	}
+	metadata, err := json.Marshal(artifact)
+	if err != nil {
+		return err
+	}
+	if err := userWindowsWrite(filepath.Join(stage, "main.json"), metadata); err != nil {
+		return err
+	}
+	return userWindowsWrite(filepath.Join(stage, "runtime/archives/main.zip"), data)
+}

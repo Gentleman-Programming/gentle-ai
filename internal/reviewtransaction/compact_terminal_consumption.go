@@ -56,6 +56,10 @@ func CompactTargetConsumed(ctx context.Context, repo, target string) (bool, erro
 	if err != nil {
 		return false, err
 	}
+	return compactTargetConsumedAtRoot(base, root, target)
+}
+
+func compactTargetConsumedAtRoot(base, root, target string) (bool, error) {
 	path := compactTerminalConsumptionPath(base, root, target)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {

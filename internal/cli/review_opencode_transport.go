@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 const (
@@ -258,7 +258,11 @@ func openCodeTransportRefusedFrameFor(err error) openCodeTransportRefusedFrame {
 }
 
 func runReviewOpenCodeTransportFrames(args []string, stdin io.Reader, stdout io.Writer) error {
-	if !reviewImmutableRuntimeCapability(model.AgentOpenCode).supportsImmutableReceiptReview() {
+	capability := reviewImmutableRuntimeCapability(model.AgentOpenCode)
+	if !capability.supportsImmutableReceiptReview() {
+		if errors.Is(capability.Refusal, errReviewOpenCode241Dispatch) {
+			return fmt.Errorf("%s: %w", reviewImmutableTransportUnsupportedCode, capability.Refusal)
+		}
 		return errors.New(reviewImmutableTransportUnsupportedCode)
 	}
 	if len(args) != 0 {
@@ -533,7 +537,7 @@ func openCodeTransportComplete(ctx context.Context, session openCodeTransportSes
 		output := openCodeProviderRoleResultEnvelope(session.binding.Role)
 		return openCodeTransportEnvelope{Schema: openCodeReviewTransportSchema, Operation: "result", Output: &output}, nil
 	}
-	admitted, err := reviewProviderAdmitRaw(ctx, session.root, record.State, record.State.CapturePhaseRevision, session.lensRequest.Frozen, session.lensRequest.Subject, hostOutput)
+	admitted, err := reviewProviderAdmitRaw(ctx, session.root, record.State, session.lensRequest.Frozen, session.lensRequest.Subject, reviewProviderRequireEcho, hostOutput)
 	if err != nil {
 		// The host relay owns its reviewer and gets no corrective
 		// re-invocation, but the refused bytes are preserved for the report.

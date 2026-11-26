@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/reviewassets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/reviewassets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
 )
 
 // harness-continuity S3/C6: missing proof forbids a completion claim, never
@@ -22,7 +22,6 @@ func TestRenderedOrchestratorNeverStopsForUnavailableProof(t *testing.T) {
 
 	const (
 		unscopedProofStop = "unavailable required proof"
-		canonicalContinue = "Authorized work continues: runnable in-scope steps run"
 		smallModelHeading = "Orchestrator Instructions (Small Model)"
 	)
 
@@ -53,8 +52,8 @@ func TestRenderedOrchestratorNeverStopsForUnavailableProof(t *testing.T) {
 				if section == "" {
 					t.Fatalf("rendered %s orchestrator has no Authorized work continuity section", name)
 				}
-				if !strings.Contains(section, canonicalContinue) {
-					t.Errorf("rendered %s Authorized work continuity is missing the canonical continuity sentence %q", name, canonicalContinue)
+				if !strings.Contains(section, continueAuthorizedWorkRule) {
+					t.Errorf("rendered %s Authorized work continuity is missing the canonical continuity sentence %q", name, continueAuthorizedWorkRule)
 				}
 				if strings.Contains(section, "Stop only for") {
 					t.Errorf("rendered %s Authorized work continuity keeps the restated stop list", name)

@@ -3,7 +3,7 @@ package agentguidance_test
 import (
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
 )
 
 // TestMainPinsCodexRuntimeVersionProbe locks the TestMain default: rendered

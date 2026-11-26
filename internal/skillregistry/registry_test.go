@@ -6,8 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/trae"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/trae"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 func TestRegenerateWritesRegistryAndCacheThenHitsCache(t *testing.T) {
@@ -445,7 +446,7 @@ func TestUserSkillDirsIncludesSupportedAgentSkillLocations(t *testing.T) {
 		filepath.Join(home, ".openclaw", "skills"),
 		filepath.Join(home, ".pi", "agent", "skills"),
 		filepath.Join(home, ".agents", "skills"),
-		filepath.Join(home, ".hermes", "skills"),
+		filepath.Join(system.HermesConfigDir(home), "skills"),
 		trae.NewAdapter().SkillsDir(home),
 	} {
 		if !containsPath(dirs, want) {

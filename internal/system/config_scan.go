@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/copilotconfig"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/copilotconfig"
 )
 
 // ConfigState records the filesystem presence of an agent's global config directory.
@@ -53,7 +53,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "openclaw", Path: filepath.Join(homeDir, ".openclaw")},
 		{Agent: "pi", Path: filepath.Join(homeDir, ".pi")},
 		{Agent: "trae-ide", Path: filepath.Join(homeDir, ".trae")},
-		{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")},
+		{Agent: "hermes", Path: HermesConfigDir(homeDir)},
 		{Agent: "conductor", Path: filepath.Join(homeDir, ".conductor")},
 		{Agent: "github-copilot-cli", Path: copilotconfig.Root(homeDir)},
 	}

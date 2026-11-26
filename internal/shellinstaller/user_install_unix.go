@@ -284,7 +284,7 @@ func userSupervisorSHA(ctx context.Context, source string) (string, error) {
 		privateGroup := os.Getuid() != 0 && group == uint32(os.Getuid())
 		writable := st.Mode().Perm()&0002 != 0 || (st.Mode().Perm()&0020 != 0 && !privateGroup)
 		if (owner != 0 && owner != uint32(os.Getuid())) || (writable && !trustedTmp) {
-			return "", privateError("source", fmt.Errorf("supervisor ancestor refused: path=%q owner=%d mode=%#o", current, owner, st.Mode().Perm()))
+			return "", userSupervisorAncestorRefusal(current, owner, st.Mode().Perm())
 		}
 		if current == "/" {
 			break

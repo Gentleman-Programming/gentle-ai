@@ -30,7 +30,8 @@ fresh private directories; no invented zero-write storage contract is imposed.
   `SessionManager.inMemory`, binding and shutdown with SDK-required `reason:
   "quit"` before disposal; no factories replace Main code. Every loaded extension path belongs to retained Main.
 - No loading warnings/errors or reported startup/shutdown handler errors;
-  review, capture, CodeGraph and TODO definitions exist without invoking them.
+  review, capture and TODO definitions exist without invoking them. Native
+  CodeGraph tool registration is not required.
 - Main archive/source, SDK source, private Git and existing project entries stay
   exact. Separate personal Pi/project preservation fixtures also stay exact.
 - Main creates only its existing private project skill-registry cache:

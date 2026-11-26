@@ -199,12 +199,19 @@ func compactTargetedValidatorEvidenceHashForDomain(domain string, check CompactT
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// CheckDigests binds the conclusive check evidence that compact capture retains.
+// The raw inspection status gates admission but is not part of this evidence.
+func (evidence CompactTargetedValidatorEvidence) CheckDigests() (originalCriteria, correctionRegression string) {
+	return compactTargetedValidatorEvidenceHashForDomain("original-criteria", evidence.OriginalCriteria),
+		compactTargetedValidatorEvidenceHashForDomain("correction-regression", evidence.CorrectionRegression)
+}
+
 func (evidence CompactTargetedValidatorEvidence) Validate(request TargetedValidationRequest, validation ScopedValidationResult) error {
+	originalCriteria, correctionRegression := evidence.CheckDigests()
 	if evidence.TargetedValidationRequestHash != request.RequestHash || evidence.CorrectionTargetIdentity != request.CorrectionTargetIdentity ||
 		evidence.OriginalCriteria.Passed != validation.OriginalCriteria.Passed || evidence.CorrectionRegression.Passed != validation.CorrectionRegression.Passed ||
 		evidence.FollowUps == nil || !reflect.DeepEqual(evidence.FollowUps, validation.FollowUps) ||
-		compactTargetedValidatorEvidenceHashForDomain("original-criteria", evidence.OriginalCriteria) != validation.OriginalCriteria.EvidenceHash ||
-		compactTargetedValidatorEvidenceHashForDomain("correction-regression", evidence.CorrectionRegression) != validation.CorrectionRegression.EvidenceHash {
+		originalCriteria != validation.OriginalCriteria.EvidenceHash || correctionRegression != validation.CorrectionRegression.EvidenceHash {
 		return errors.New("admitted targeted-validator evidence does not match its request and digests") // refusal:by-design world-action: exact validator evidence must bind the provider-issued request before it can consume correction authority
 	}
 	for _, check := range []CompactTargetedValidatorCheckEvidence{evidence.OriginalCriteria, evidence.CorrectionRegression} {
@@ -436,7 +443,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 	admitted, admission, err := AdmitArtifact(ctx, ArtifactAdmissionRequest{
 		ExpectedSubject:           expected,
 		FrozenContext:             nativeContext,
-		EchoedSubjectHash:         providerResult.SubjectHash,
+		CanonicalSubjectHash:      providerResult.SubjectHash,
 		Inspection:                canonicalInspection,
 		Result:                    canonicalResult,
 		CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,

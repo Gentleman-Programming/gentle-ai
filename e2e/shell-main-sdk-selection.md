@@ -31,8 +31,9 @@ readback is not an atomic rollback guarantee.
 `TestUserMainSDKSelectedPackage` uses the authentic offline stock/Main fixture.
 The actual SDK reads production settings with `SettingsManager.create`, without
 an in-memory package override. It must load twenty Main extensions plus skills,
-prompts and themes, register the existing review/CodeGraph/todo tools, start a
-session and complete supported quit/shutdown/dispose naturally.
+prompts and themes, register the existing review/capture/todo tools, start a
+session and complete supported quit/shutdown/dispose naturally. Native CodeGraph
+tool registration is not required.
 
 Refusals cover absent selection, duplicate stock, preselected Main, nonprivate
 agent, published stage, repeated selection, stock verification and changed declaration;

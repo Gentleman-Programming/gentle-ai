@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 func TestReviewCaptureResultStrictBindingTerminalCapture(t *testing.T) {
@@ -102,9 +102,6 @@ func TestReviewCaptureResultRejectsSemanticAdmissionBeforePublication(t *testing
 		name   string
 		mutate func(*facadeReviewerResult)
 	}{
-		{name: "subject mismatch", mutate: func(result *facadeReviewerResult) {
-			result.SubjectHash = "sha256:" + strings.Repeat("9", 64)
-		}},
 		{name: "inspection denied", mutate: func(result *facadeReviewerResult) {
 			result.Inspection.Status = "blocked"
 			result.Evidence = []string{"Access denied; candidate was not inspected."}

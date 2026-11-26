@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // lensContextArgv renders the closed lens-context command form from the flags
@@ -413,16 +413,17 @@ func TestNegotiatedStatusReoffersEmptyReviewerResultWithoutBudgetTerminal(t *tes
 
 func TestReviewLensContextRecoveryGuidanceRefreshesThenExecutesNextTransition(t *testing.T) {
 	tests := []struct {
-		name   string
-		action string
+		name    string
+		action  string
+		command string
 	}{
-		{name: "evidence capacity", action: reviewLensContextBudgetAction},
-		{name: "start capacity", action: reviewLensContextStartBudgetAction},
-		{name: "deadline", action: reviewLensContextDeadlineAction},
+		{name: "evidence capacity", action: reviewLensContextBudgetAction, command: reviewNextTransitionRefreshCommandV21},
+		{name: "start capacity", action: reviewLensContextStartBudgetAction, command: reviewLensContextStartBudgetRefreshCommand},
+		{name: "deadline", action: reviewLensContextDeadlineAction, command: reviewNextTransitionRefreshCommandV21},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if !strings.Contains(test.action, reviewNextTransitionRefreshCommandV21) ||
+			if !strings.Contains(test.action, test.command) ||
 				!strings.Contains(test.action, "refresh the exact native next transition") ||
 				!strings.Contains(test.action, "execute the returned transition") {
 				t.Fatalf("recovery guidance = %q, want STATUS to refresh the exact transition and the caller to execute it", test.action)
@@ -949,7 +950,7 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 			// its span entirely within candidate-changed lines, since one
 			// unchanged context line in the span rejects the result too.
 			for _, required := range []string{
-				"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end",
+				"complete and only", "working tree", "complete unique unordered set", "path:line or path:start-end",
 				"exactly as it appears in the changed-path manifest", "host:port", "validated against the frozen repository",
 				"entirely within lines this candidate changed", "one unchanged context line in the span",
 				"never reproduce that token", "describe it in words and cite the manifest file and line",
@@ -957,6 +958,9 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 				if !strings.Contains(instruction, required) {
 					t.Fatalf("instruction omits %q:\n%s", required, instruction)
 				}
+			}
+			if strings.Contains(instruction, "subject_hash") {
+				t.Fatalf("instruction still asks the reviewer to handle the subject hash:\n%s", instruction)
 			}
 			schema, found := lensContextSection(block, "GENTLE_AI_REVIEW_RESULT_SCHEMA")
 			if !found {

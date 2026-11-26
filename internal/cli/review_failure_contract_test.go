@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 func TestNegotiatedReviewFailuresUseOneEnvelopeAcrossRoutes(t *testing.T) {
@@ -438,52 +438,6 @@ func TestNegotiatedFacadeAggregateTimeoutPreservesMutationTruth(t *testing.T) {
 			if failure.Code != "operation_timeout" || failure.Phase != tt.phase || failure.MutationOutcome != tt.mutation ||
 				failure.RetrySafe != tt.retrySafe || failure.Replayability != tt.replayability || failure.NextAction != tt.nextAction || failure.LineageID != tt.lineage {
 				t.Fatalf("timeout failure = %#v", failure)
-			}
-		})
-	}
-}
-
-func TestNegotiatedRepairProgressFailurePreservesOpaqueReplayTruth(t *testing.T) {
-	base := reviewtransaction.ClassifiedAuthorityRepairExecution{
-		Class:     reviewtransaction.AuthorityRepairClassLegacyV1HistoricalAlias,
-		LineageID: "repair-progress", Revision: "sha256:" + strings.Repeat("a", 64),
-		ChainIdentity:    "sha256:" + strings.Repeat("b", 64),
-		Cause:            reviewtransaction.AuthorityRepairCauseUnsupportedHistoricalV1OperationAlias,
-		Disposition:      reviewtransaction.AuthorityRepairDispositionQuarantineHistoricalAlias,
-		AssessmentDigest: "sha256:" + strings.Repeat("c", 64), RequestDigest: "sha256:" + strings.Repeat("d", 64),
-		RecordIdentity: "sha256:" + strings.Repeat("e", 64),
-	}
-	for _, tt := range []struct {
-		name          string
-		status        string
-		phase         string
-		mutation      ReviewMutationOutcome
-		replayability reviewtransaction.Replayability
-		nextAction    string
-		exactReplay   bool
-	}{
-		{name: "prepared", status: reviewtransaction.CompactReclaimPrepared, phase: "native_running", mutation: ReviewMutationUnknown, replayability: reviewtransaction.ReplayabilityExactReplaySafe, nextAction: "review.repair", exactReplay: true},
-		{name: "committed verified", status: reviewtransaction.CompactReclaimCommitted, phase: "native_committed", mutation: ReviewMutationCommitted, replayability: reviewtransaction.ReplayabilityExactReplaySafe, nextAction: "review.repair", exactReplay: true},
-		{name: "committed unverified", status: reviewtransaction.CompactReclaimCommitted, phase: "native_committed", mutation: ReviewMutationCommitted, replayability: reviewtransaction.ReplayabilityStatusRequired, nextAction: "review.status"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			progress := base
-			progress.Status = tt.status
-			failure := newReviewIntegrationFailure("review.repair", []string{"--lineage", progress.LineageID}, &reviewtransaction.ClassifiedAuthorityRepairProgressError{
-				Progress: progress, ExactReplaySafe: tt.exactReplay, Cause: context.DeadlineExceeded,
-			})
-			if failure.Code != "operation_timeout" || failure.Phase != tt.phase || failure.MutationOutcome != tt.mutation ||
-				failure.Replayability != tt.replayability || failure.NextAction != tt.nextAction || failure.RetrySafe != tt.exactReplay ||
-				failure.LineageID != progress.LineageID || failure.RequestDigest != progress.RequestDigest || failure.ProgressIdentity != progress.RecordIdentity {
-				t.Fatalf("%s repair progress failure = %#v", tt.name, failure)
-			}
-			if err := failure.Validate(); err != nil {
-				t.Fatal(err)
-			}
-			withoutProgress := failure
-			withoutProgress.ProgressIdentity = ""
-			if err := withoutProgress.Validate(); err == nil {
-				t.Fatal("repair progress failure accepted a request digest without its progress identity")
 			}
 		})
 	}

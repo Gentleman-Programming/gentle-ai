@@ -1138,7 +1138,7 @@ func captureDamagedAuthorityBytes(sandbox *Sandbox) error {
 }
 
 // repairAssessment is the subset of `review repair --preflight` that says
-// whether classified repair covers this damage.
+// whether repair covers this damage.
 type repairAssessment struct {
 	Assessment struct {
 		Status string `json:"status"`
@@ -1160,11 +1160,11 @@ func repairOffersNothing(_ *Sandbox, observation Observation) error {
 	}
 	if assessment.Assessment.Status != "unsupported" || assessment.Assessment.Counts.EligibleCandidates != 0 {
 		return fmt.Errorf(
-			"classified repair now reports status %q with %d eligible candidate(s); it covers this damage, so the journey's claim that every advertised surface refuses is stale",
+			"review repair now reports status %q with %d eligible candidate(s); it covers this damage, so the journey's claim that every advertised surface refuses is stale",
 			assessment.Assessment.Status, assessment.Assessment.Counts.EligibleCandidates)
 	}
 	if assessment.Assessment.Counts.UnsupportedLineages == 0 {
-		return errors.New("classified repair reports no unsupported lineage, so it is not looking at the damaged one")
+		return errors.New("review repair reports no unsupported lineage, so it is not looking at the damaged one")
 	}
 	return nil
 }

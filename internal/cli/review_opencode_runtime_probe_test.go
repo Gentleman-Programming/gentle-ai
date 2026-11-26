@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
 )
 
 // stubOpenCodeRuntimeProbeSequence answers each `opencode --version` probe
@@ -39,23 +39,24 @@ func stubOpenCodeRuntimeProbeSequence(t *testing.T, answers ...string) *int {
 // one process is a regression, whether the first probe admitted or refused.
 func TestOpenCodeRuntimeProbeRunsOncePerProcess(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		answer   string
-		admitted bool
+		name, declaration, answer string
+		admitted, captureAdmitted bool
 	}{
-		{name: "admitted", answer: "1.18.30", admitted: true},
+		{name: "admitted", answer: "1.18.30", admitted: true, captureAdmitted: true},
 		{name: "refused", answer: ""},
+		{name: "dispatch refused only", declaration: openCodeRelayContractV2, answer: "2.4.1", captureAdmitted: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			probes := stubOpenCodeRuntimeProbeSequence(t, test.answer)
+			t.Setenv(openCodeRelayContractEnvironment, test.declaration)
 			for range 3 {
 				_, err := reviewRuntimeWithImmutableTransport(string(model.AgentOpenCode))
 				if (err == nil) != test.admitted {
 					t.Fatalf("START/STATUS gate admitted = %t, want %t: %v", err == nil, test.admitted, err)
 				}
 				_, err = reviewCaptureRuntimeWithBoundTransport(string(model.AgentOpenCode))
-				if (err == nil) != test.admitted {
-					t.Fatalf("capture gate admitted = %t, want %t: %v", err == nil, test.admitted, err)
+				if (err == nil) != test.captureAdmitted {
+					t.Fatalf("capture gate admitted = %t, want %t: %v", err == nil, test.captureAdmitted, err)
 				}
 				if got := reviewImmutableRuntimeCapability(model.AgentOpenCode).supportsImmutableReceiptReview(); got != test.admitted {
 					t.Fatalf("relay/consent gate admitted = %t, want %t", got, test.admitted)

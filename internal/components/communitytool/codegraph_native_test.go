@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
 )
 
 func TestReconcileOpenCodeCodeGraphFilePriority(t *testing.T) {

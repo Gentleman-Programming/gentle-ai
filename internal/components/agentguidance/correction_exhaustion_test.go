@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
 )
 
 // orchestrator-owns-correction-exhaustion (S1–S4) shipped-policy checks through
@@ -15,35 +15,29 @@ const (
 	// always-on rules must stay within AlwaysOnBudgetBytes without demoting the
 	// routing core (S4: never raise prompt budgets).
 	//
-	// S1: the writer's exhausted limit ends its cycle, not the unit, and the
-	// parent, not the user, decides the next step.
-	exhaustionEndsCycle = "A writer's exhausted limit ends its cycle, not the unit: you, not the user, name and act on the loop's cause:"
-	// S2: Gentle AI has no delegation modes, so the route is mode-free: fix
-	// inline only when small and understood, else launch a new bounded
-	// writer with the diagnosis and a new hypothesis, never a repeat.
-	exhaustionRoute    = "fix inline only when small and understood, else launch a new bounded writer with the diagnosis and a new hypothesis, never a repeat;"
-	exhaustionNoRepeat = "a recurring cause or no hypothesis blocks the unit."
+	// The worker-local stop ends its cycle, not the unit; the parent, not
+	// the user, diagnoses and routes the failure without resetting the cycle.
+	workerStopEndsCycle = "A worker-local stop (same cause after a real fix, no new hypothesis) ends its cycle, not the unit."
+	workerStopRoute     = "You diagnose, not the user: fix inline only if small and clear; else launch a bounded writer with the cause and new hypothesis."
+	workerStopNoReset   = "Never repeat or reset. Without a new route, the unit stays blocked."
 	// S1 PRESERVE: still-open verifier blockers keep ending the unit partial.
 	verifierBlockersPartial = "Blockers still open after that leave the unit `status: partial`, naming any genuine human decision; independent authorized work continues."
 
-	// S1/S3 worker side.
-	workerKeepsLimit      = "Make one correction attempt per failing check, and a second only if the same check still fails after a real fix; then stop and return `status: partial` with the failing command and its output, never looping."
-	workerDiagnosedCause  = "Name in `summary` the loop's diagnosed cause (for example a wrong test, a wrong hypothesis, missing context, a setup or environment error, or a real blocker). Exhaustion ends this cycle, not the unit: the parent decides the next step from your evidence."
-	workerREDConstruction = "Making a new test fail for the expected reason is RED construction, not a fix correction: its own harness or setup errors get the setup bound (one self-fix), separate from the fix's limit; if the test still cannot reproduce the failure, return `status: partial` naming a reproduction blocker, not exhausted corrections."
+	workerProgress = "A failing check is an obstacle: keep correcting while each attempt names a cause from the output and makes a change to address it. Never repeat the same change or stop because of an attempt count. RED construction is separate from fix correction: harness or setup errors get one self-fix; if the test still cannot reproduce the failure, return `status: partial` with the reproduction blocker and its evidence."
+	workerStop     = "Stop correcting and return `status: partial` only if the same cause fails again after a real fix and no new hypothesis exists, passing would require weakening, skipping or rewriting the check, or the fix needs work outside the allowed surfaces or crosses an explicit limit."
+	workerHandoff  = "Return the failing command and its output, the remaining implementation work, the missing proof, and your diagnosed cause with evidence. Name the cause in `summary`. That ends your cycle, not the unit: the parent decides the next step from your evidence. Do not start a fresh correction cycle or treat a new session as a reset."
 )
 
-// TestRenderedGateGivesTheParentTheExhaustedWorkerLoop: every rendered
-// orchestrator owns the next step after a worker's exhausted limit, routes it
-// without naming delegation modes Gentle AI does not have, forbids repeating the attempt, and keeps the existing
-// correction bound and separate budgets (S4).
+// Every rendered orchestrator owns the next step after a worker-local stop
+// and keeps the separate verifier and review limits.
 func TestRenderedGateGivesTheParentTheExhaustedWorkerLoop(t *testing.T) {
 	t.Parallel()
 
 	for name, rendered := range orchestratorVariants(t) {
 		for _, want := range []string{
-			exhaustionEndsCycle,
-			exhaustionRoute,
-			exhaustionNoRepeat,
+			workerStopEndsCycle,
+			workerStopRoute,
+			workerStopNoReset,
 			verifierBlockersPartial,
 			// S4 PRESERVE: the bound and the separate budgets are unchanged.
 			"A second correction runs only when the recheck shows the same blocker still failing; a new finding never earns one.",
@@ -53,7 +47,7 @@ func TestRenderedGateGivesTheParentTheExhaustedWorkerLoop(t *testing.T) {
 				t.Errorf("%s orchestrator carries %q %d times, want 1", name, want, count)
 			}
 		}
-		for _, banned := range []string{"explicit human authorization", "human-controlled", "a writer's self-review under the same bound"} {
+		for _, banned := range []string{"explicit human authorization", "human-controlled", "a writer's self-review under the same bound", "A writer's exhausted limit", "exhausted worker-local correction limit"} {
 			if strings.Contains(rendered, banned) {
 				t.Errorf("%s orchestrator still says %q", name, banned)
 			}
@@ -70,9 +64,8 @@ func TestRenderedGateGivesTheParentTheExhaustedWorkerLoop(t *testing.T) {
 	}
 }
 
-// TestWorkerReturnsExhaustionWithACauseAndSeparatesREDConstruction: the
-// worker keeps its two-attempt limit, returns a diagnosed cause that ends only
-// its cycle, and treats RED construction under the setup bound.
+// The worker corrects while making progress, hands back partial with evidence,
+// and keeps the RED construction setup limit.
 func TestWorkerReturnsExhaustionWithACauseAndSeparatesREDConstruction(t *testing.T) {
 	t.Parallel()
 
@@ -80,12 +73,12 @@ func TestWorkerReturnsExhaustionWithACauseAndSeparatesREDConstruction(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{workerKeepsLimit, workerDiagnosedCause, workerREDConstruction} {
+	for _, want := range []string{workerProgress, workerStop, workerHandoff} {
 		if count := strings.Count(worker, want); count != 1 {
 			t.Errorf("gentle-ai-worker carries %q %d times, want 1", want, count)
 		}
 	}
-	for _, banned := range []string{"explicit human authorization", "human-controlled", "fix it inline"} {
+	for _, banned := range []string{"explicit human authorization", "human-controlled", "fix it inline", "one correction attempt per failing check"} {
 		if strings.Contains(worker, banned) {
 			t.Errorf("gentle-ai-worker still says %q", banned)
 		}

@@ -18,12 +18,12 @@ Native providers own verification, review mechanics, and lifecycle authority; or
 1. Describe the outcome in natural language.
 2. Gentle AI uses the smallest useful implementation route: direct inline or
    delegated direct.
-3. The normal interaction reports **Working**, **Checking**, and **Ready**, and
-   surfaces a blocker only for a real human decision, the user's explicit stop, a
-   denial, missing consent, or an exhausted limit: never to ask permission to
-   continue work the request already authorizes. A tracked task may end the turn
-   pending for exactly that boundary, and never for the independent work beside
-   it.
+3. The normal interaction reports **Working**, **Checking**, and **Ready**.
+   Work through failures with a permitted route left; report failures without
+   one as incomplete. Close only when no runnable authorized step remains.
+   A tracked task may end the turn pending for launched work still running, a
+   real human decision, explicit user stop, denial, missing consent, or an
+   exhausted limit. These boundaries do not stop independent authorized work.
 
 The user does not choose review internals, hashes, receipts, or lifecycle
 transitions. A question is necessary only when the answer changes requested
@@ -134,8 +134,12 @@ report `disabled/unmanaged` when no exact receipt applies and never fabricate ap
 Review authority accumulates without bound: every candidate leaves a lineage
 behind and nothing removes a delivered one, so a long-lived clone eventually
 holds hundreds of lineages and hundreds of megabytes of candidate checkouts.
-`review abandon` refuses terminal states and `review reclaim` refuses any entry
-holding authoritative artifacts, so until now a degraded store had no exit.
+`review abandon` accepts every state (terminal, unreadable, missing
+`review-state.json`) and moves the lineage and its recovery
+successors into the audited quarantine one lineage at a time, only with the
+maintainer's `--expected-revision` and authorization binding, which names the
+lineage and every successor that moves with it; `review
+store-reset` is the clone-wide human tool for removing the whole store.
 
 | Command | Effect |
 |---|---|

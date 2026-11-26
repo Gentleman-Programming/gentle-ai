@@ -1,37 +1,36 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 
-// Actual public SDK registration + installed-command fixture, no model call,
-// assistant provenance, indexing or installed-platform qualification.
-const [root] = process.argv.slice(2);
-const pkg = "/node_modules/@earendil-works/pi-coding-agent";
-const extension = "/node_modules/gentle-pi/extensions/codegraph-tools.ts";
-assert.equal(createHash("sha256").update(readFileSync(extension)).digest("hex"), "7d499bc7c70e9b7812bc03c373aafe766472ace6b95d036e0a585438ba35d0f7");
-const { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } = await import(pathToFileURL(join(pkg,"dist/index.js")).href);
-const cwd = join(root,"project"), agentDir = join(root,"agent"), config = join(root,"config");
-const settingsManager = SettingsManager.inMemory({ packages:["/node_modules/gentle-pi"], extensions:["-builtin:mcp"] });
-const modelRuntime = await ModelRuntime.create({authPath:join(config,"auth.json"),modelsStorePath:join(config,"models-store.json"),modelsPath:null,allowModelNetwork:false,refreshOnCreate:false});
-let session;
-try {
-  const loader = new DefaultResourceLoader({cwd,agentDir,settingsManager});
-  await loader.reload();
-  ({session} = await createAgentSession({cwd,agentDir,settingsManager,resourceLoader:loader,modelRuntime,sessionManager:SessionManager.inMemory(),noTools:"builtin"}));
-  await session.bindExtensions({});
-  assert.deepEqual(loader.getExtensions().errors,[]);
-  assert.ok(session.getToolDefinition("codegraph"),"actual packaged SDK did not register CodeGraph");
-  assert.equal(execFileSync("codegraph",["--version"],{cwd,encoding:"utf8"}).trim(),"1.4.1");
-  const status = JSON.parse(execFileSync("codegraph",["status",cwd,"--json"],{cwd,encoding:"utf8"}));
-  assert.equal(status.initialized,false);
-  assert.equal(status.lastIndexed,null);
-  assert.equal(status.projectPath,cwd);
-  console.log("CODEGRAPH_PACKAGED_SDK_DISCOVERY_PASS tool_registered=true actual_private_command=1.4.1 initialized=false lastIndexed=null no_model_call=true");
-} finally {
-  if (session) {
-    await session.extensionRunner.emit({type:"session_shutdown"});
-    session.dispose();
-  }
-}
+// Pi's MCP CLI connects without loading any packages or calling a model.
+const [root, pkg = "/node_modules/@earendil-works/pi-coding-agent"] = process.argv.slice(2);
+const cwd = join(root, "project"), agentDir = join(root, "agent");
+const configPath = join(agentDir, "mcp.json");
+// Mirror the optional Gentle AI integration; this fixture does not run the installer.
+const config = JSON.stringify({ mcpServers: { codegraph: { command: "codegraph", args: ["serve", "--mcp"] } } });
+writeFileSync(configPath, config, { encoding: "utf8", flag: "wx", mode: 0o600 });
+
+const options = { cwd, encoding: "utf8", timeout: 15000 };
+const report = JSON.parse(execFileSync(process.execPath, [join(pkg, "dist/bundle/cli.js"), "mcp", "list", "--json"], {
+  ...options, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
+}));
+assert.deepEqual(report.errors, []);
+assert.equal(report.servers.length, 1);
+const [server] = report.servers;
+assert.equal(server.name, "codegraph");
+assert.equal(server.scope, "global");
+assert.equal(server.source, configPath);
+assert.equal(server.enabled, true);
+assert.equal(server.state, "connected");
+assert.deepEqual(server.tools, ["codegraph_explore"]);
+assert.equal(readFileSync(configPath, "utf8"), config);
+
+const status = JSON.parse(execFileSync("codegraph", ["status", cwd, "--json"], options));
+assert.equal(status.initialized, false);
+assert.equal(status.lastIndexed, null);
+assert.equal(status.projectPath, cwd);
+assert.equal(existsSync(join(cwd, ".codegraph")), false, "MCP discovery must not index the project");
+assert.equal(execFileSync("codegraph", ["--version"], options).trim(), "1.4.1");
+// Keep the pass marker consumed by the tagged Go launcher fixture.
+console.log("CODEGRAPH_PACKAGED_SDK_DISCOVERY_PASS mcp_tool=codegraph_explore actual_private_command=1.4.1 initialized=false lastIndexed=null no_model_call=true");

@@ -10,18 +10,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/antigravity"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/hermes"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kilocode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/openclaw"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/antigravity"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/system"
 )
 
 func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
@@ -3470,7 +3471,7 @@ func TestInjectHermesGentlemanWritesSOULMD(t *testing.T) {
 		t.Fatal("Inject(hermes, gentleman) changed = false")
 	}
 
-	soulPath := filepath.Join(home, ".hermes", "SOUL.md")
+	soulPath := filepath.Join(system.HermesConfigDir(home), "SOUL.md")
 	content, err := os.ReadFile(soulPath)
 	if err != nil {
 		t.Fatalf("ReadFile(SOUL.md) error = %v", err)
@@ -3505,7 +3506,7 @@ func TestInjectHermesNeutralWritesSOULMD(t *testing.T) {
 		t.Fatal("Inject(hermes, neutral) changed = false")
 	}
 
-	soulPath := filepath.Join(home, ".hermes", "SOUL.md")
+	soulPath := filepath.Join(system.HermesConfigDir(home), "SOUL.md")
 	content, err := os.ReadFile(soulPath)
 	if err != nil {
 		t.Fatalf("ReadFile(SOUL.md) error = %v", err)

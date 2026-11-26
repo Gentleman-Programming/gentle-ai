@@ -5,8 +5,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	runtimeopencode "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	runtimeopencode "github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
 )
 
 // gentle-pi issues some bound STATUS calls without --agent. Under its relay

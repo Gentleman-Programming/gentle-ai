@@ -18,11 +18,36 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/assets"
-	runtimeopencode "github.com/gentleman-programming/gentle-ai/v4/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/assets"
+	runtimeopencode "github.com/gentleman-programming/gentle-ai/v5/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
+
+func TestReviewBindingMismatchOpenCodeTransportRejectsForeignEcho(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, started, _, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	result := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	result.SubjectHash = "sha256:" + strings.Repeat("b", 64)
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	relay := startOpenCodeTransportRelay(t, repo, openCodeLensTransportStart(t, repo, record, lens))
+	output := "<task id=\"t1\" state=\"completed\">\n<task_result>\n" + string(raw) + "\n</task_result>\n</task>"
+	response, err := relay.complete(openCodeTransportEnvelope{
+		Schema: openCodeReviewTransportSchema, Operation: "complete", Nonce: relay.prompt.Nonce, Output: &output,
+	})
+	assertOpenCodeTransportRefusal(t, err, []string{"opencode_reviewer_result_refused (cause: reviewer_result_not_admissible)", "--next-transition"})
+	if !reflect.DeepEqual(response, openCodeTransportEnvelope{}) || !reflect.DeepEqual(before, explicitFrozenReviewingStatus(t, repo, started.LineageID)) {
+		t.Fatalf("OpenCode foreign echo produced a response or changed STATUS: %#v", response)
+	}
+	assertOpenCodeTransportPreservedRejectedPayload(t, repo, started.LineageID, lens, string(raw))
+	cause, _, _ := strings.Cut(err.Error(), "; the rejected reviewer payload was preserved at ")
+	t.Logf("OpenCode foreign echo boundary: empty completion; refused: %s", cause)
+}
 
 func TestOpenCodeReviewTransportFinalLensClosesAndBurnsThroughSharedGoReducer(t *testing.T) {
 	if testing.Short() {
@@ -907,7 +932,7 @@ func (relay openCodeTransportRelay) complete(completion openCodeTransportEnvelop
 	decodeErr := relay.output.Decode(&response)
 	err := <-relay.done
 	if err != nil {
-		return openCodeTransportEnvelope{}, err
+		return response, err
 	}
 	if decodeErr != nil {
 		return openCodeTransportEnvelope{}, decodeErr

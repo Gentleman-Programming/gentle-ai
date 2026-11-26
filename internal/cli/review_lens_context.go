@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewerprovider"
-	"github.com/gentleman-programming/gentle-ai/v4/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewerprovider"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/reviewtransaction"
 )
 
 // reviewLensContextTimeout bounds the whole assembly, not one read. The surface
@@ -123,10 +123,11 @@ const (
 	reviewLensContextBudgetAction = "immutable candidate evidence is never truncated and retrying this candidate cannot succeed; " +
 		"split the candidate into a chained sequence of smaller reviewable commits, each under the budget, then refresh the exact native next transition by running " +
 		reviewNextTransitionRefreshCommandV21 + " and execute the returned transition for the reduced scope"
-	reviewLensContextStartBudgetAction = "no review authority was created, so nothing has to be abandoned or repaired; " +
-		"immutable candidate evidence is never truncated and retrying this exact candidate cannot succeed, so split it into a chained sequence of smaller reviewable commits, each under the budget, " +
-		"then refresh the exact native next transition by running " + reviewNextTransitionRefreshCommandV21 +
-		" and execute the returned transition for the reduced scope"
+	reviewLensContextStartBudgetRefreshCommand = "gentle-ai review status --contract " + ReviewIntegrationContractV2 + " --next-transition --base-ref HEAD~1 --committed-only"
+	reviewLensContextStartBudgetAction         = "no review authority was created, so nothing has to be abandoned or repaired; " +
+		"immutable candidate evidence is never truncated and retrying this exact candidate cannot succeed, so split it into a chained sequence of smaller reviewable commits, each under the budget; " +
+		"from the repository with a smaller commit checked out, refresh the exact native next transition by running `" + reviewLensContextStartBudgetRefreshCommand +
+		"` and execute the returned transition for the reduced scope"
 	// reviewLensContextStartRequestBudgetAction replaces the split remedy when
 	// the candidate alone fits and only the frozen request overflows.
 	reviewLensContextStartRequestBudgetAction = "no review authority was created, so nothing has to be abandoned or repaired; " +
@@ -825,13 +826,13 @@ Causality. Report only what this candidate caused. Give every BLOCKER or CRITICA
 
 %s%s
 
-Return. Emit exactly one JSON object and nothing else: no prose before or after it, no markdown fence, no task envelope. It must validate against the schema in %s. Set subject_hash to exactly %s -- this is the %s section's own subject_hash field above, and only that field; never echo a target or target_identity value carried elsewhere in this context, even though it is also a sha256: string. When you inspected the complete candidate, set inspection.status to "completed" and inspection.paths to the complete unique unordered set of every manifest path. When you could not inspect the candidate, set inspection.status to "unavailable", leave inspection.paths empty, and set inspection.reason to a non-empty explanation -- inspection.status and inspection.reason are the typed signal admission reads for this decision; evidence prose is not a substitute for them. Each finding location is one path:line or path:start-end inclusive span. findings and evidence must both be present, and evidence must be non-empty.
+Return. Emit exactly one JSON object and nothing else: no prose before or after it, no markdown fence, no task envelope. It must validate against the schema in %s. When you inspected the complete candidate, set inspection.status to "completed" and inspection.paths to the complete unique unordered set of every manifest path. When you could not inspect the candidate, set inspection.status to "unavailable", leave inspection.paths empty, and set inspection.reason to a non-empty explanation -- inspection.status and inspection.reason are the typed signal admission reads for this decision; evidence prose is not a substitute for them. Each finding location is one path:line or path:start-end inclusive span. findings and evidence must both be present, and evidence must be non-empty.
 
 Citations. Every finding location, and every path cited inside an evidence string or a proof_refs entry, must be a repository-relative path exactly as it appears in the changed-path manifest, optionally with :line or :start-end. Never cite absolute paths, bare file basenames without their directory, or non-path colon-number shapes such as host:port. Any token shaped like path:line is validated against the frozen repository, and one unknown path rejects the entire result. A finding whose causal_disposition is introduced, behavior-activated, or worsened must anchor its location entirely within lines this candidate changed: every line of a path:start-end span is validated as candidate-changed, one unchanged context line in the span rejects the entire result, and observations about unchanged code belong under pre-existing or base-only instead. When the candidate's own content contains a path-shaped literal that is not a real repository path (for example a traversal or fixture token inside a test), never reproduce that token in evidence or proof_refs: describe it in words and cite the manifest file and line that contain it.
 
 Honesty. If you could not inspect the candidate, set inspection.status to "unavailable" with a non-empty inspection.reason explaining why, and do not return a clean result: an access failure is not a completed inspection. Describing the failure only in evidence while leaving inspection.status as "completed" is a false completion: admission refuses it when the prose reports an inaccessible candidate, and otherwise cannot recover from it.`,
 		title, focus, reviewLensContextPatch, paths, reviewLensContextContextHeader, reviewerprovider.SeverityRules,
-		reviewRequestContextInstruction(binding.requestContext), reviewLensContextResultSchema, binding.SubjectHash, reviewLensContextBindingHeader), nil
+		reviewRequestContextInstruction(binding.requestContext), reviewLensContextResultSchema), nil
 }
 
 // reviewLensContextWriteLine writes one header plus its canonical one-line

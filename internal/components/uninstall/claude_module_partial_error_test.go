@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v4/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v5/internal/components/agentguidance"
 )
 
 // #5256 U2c: a failed pilot retirement only claims partial changes when its

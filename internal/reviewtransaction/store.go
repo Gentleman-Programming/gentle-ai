@@ -160,8 +160,11 @@ func reviewAuthorityRoot(ctx context.Context, repo string) (string, string, erro
 	if err != nil {
 		return "", "", fmt.Errorf("resolve repository Git identity: %w", err)
 	}
-	authorityRoot := filepath.Join(identity.GitCommonDir, "gentle-ai", "review-transactions")
-	return authorityRoot, identity.RepositoryRoot, nil
+	return reviewAuthorityRootIn(identity.GitCommonDir), identity.RepositoryRoot, nil
+}
+
+func reviewAuthorityRootIn(gitCommonDir string) string {
+	return filepath.Join(gitCommonDir, "gentle-ai", "review-transactions")
 }
 
 func validateLineageID(lineageID string) error {
@@ -330,12 +333,6 @@ func (store Store) append(expectedRevision string, record Record) (string, error
 		return "", err
 	}
 	return revision, nil
-}
-
-// InvalidatePristine is retained as a compatibility entry point, but ordinary
-// legacy-v1 authority is immutable once created.
-func (store Store) InvalidatePristine(expectedRevision, reason string, snapshot Snapshot) (string, error) {
-	return "", NewLegacyReadOnlyError("review/invalidate", store.lineageID)
 }
 
 func (store Store) Load() (Record, string, error) {

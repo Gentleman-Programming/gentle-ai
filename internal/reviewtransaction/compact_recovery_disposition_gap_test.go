@@ -2,7 +2,7 @@ package reviewtransaction
 
 import (
 	"context"
-	"strings"
+	"os"
 	"testing"
 	"time"
 )
@@ -10,15 +10,10 @@ import (
 // TestSanctionedRecoveryExitNamesMaintainerPathForInteriorReconciliationAnomaly
 // is issue #2422. Wave 7 S3a retired `review reconcile-authority`, the only
 // exit reconciliation's two anomaly classes (unchanged_target,
-// malformed_recovery_authorization) ever had. A LEAF successor in either
-// class still gets `review abandon` today
-// (TestForgedRecoveryAuthorizationOnNonTerminalSuccessorHasSanctionedAbandonExit
-// proves the same for the disjoint content-mismatch corruption class), but an
-// INTERIOR successor -- one that itself has a successor recovering from it,
-// so InspectCompactPristineAbandonment's own read-only prediction refuses it
-// -- had no exit left at all: SanctionedCompactRecoveryExits fell through to
-// prose naming no runnable `gentle-ai` invocation, so the block was terminal
-// for a consumer.
+// malformed_recovery_authorization) ever had, and an INTERIOR successor -- one
+// that itself has a successor recovering from it -- was left with no exit.
+// `review abandon` now accepts it too and abandons its successors with it, so
+// the exit is a runnable abandon, never a prose dead end.
 func TestSanctionedRecoveryExitNamesMaintainerPathForInteriorReconciliationAnomaly(t *testing.T) {
 	ctx := context.Background()
 	repo := initSnapshotRepo(t)
@@ -90,8 +85,8 @@ func TestSanctionedRecoveryExitNamesMaintainerPathForInteriorReconciliationAnoma
 	if err != nil {
 		t.Fatal(err)
 	}
-	if eligibility.Eligible {
-		t.Fatalf("l2 abandon eligibility = %#v, want ineligible: it has its own successor l3", eligibility)
+	if !eligibility.Eligible {
+		t.Fatalf("l2 abandon eligibility = %#v, want eligible: abandonment cascades to its successor l3", eligibility)
 	}
 
 	exits, err := SanctionedCompactRecoveryExits(ctx, repo, report)
@@ -107,11 +102,24 @@ func TestSanctionedRecoveryExitNamesMaintainerPathForInteriorReconciliationAnoma
 	if l2Exit == nil {
 		t.Fatalf("exits = %#v, want an exit entry for l2", exits)
 	}
-	if l2Exit.Operation != "" {
-		t.Fatalf("l2 exit = %#v, want no automatic operation for an interior reconciliation anomaly", *l2Exit)
+	if l2Exit.Operation != CompactRecoveryEdgeExitAbandon || l2Exit.Blocked != "" {
+		t.Fatalf("l2 exit = %#v, want the runnable abandon exit", *l2Exit)
 	}
-	if !strings.Contains(l2Exit.Blocked, "gentle-ai review mode disable") {
-		t.Fatalf("l2 exit Blocked = %q, want a literal runnable gentle-ai invocation naming the maintainer path", l2Exit.Blocked)
+
+	// Driving the named exit abandons l2 AND its successor l3, and leaves the
+	// escalated predecessor l1 alone.
+	committed, err := abandonAuthorized(t, ctx, repo, CompactAbandonRequest{
+		LineageID: l2State.LineageID, Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
+	})
+	if err != nil || len(committed.Cascaded) != 1 || committed.Cascaded[0].LineageID != l3State.LineageID {
+		t.Fatalf("interior abandonment = %#v, %v", committed, err)
+	}
+	after, err := InspectCompactRecoveryEdges(ctx, repo)
+	if err != nil || len(after.Edges) != 0 || !after.Valid {
+		t.Fatalf("post-abandon inspection = %#v, %v", after, err)
+	}
+	if _, err := os.Stat(predecessorStore.Dir); err != nil {
+		t.Fatalf("the predecessor did not survive: %v", err)
 	}
 }
 

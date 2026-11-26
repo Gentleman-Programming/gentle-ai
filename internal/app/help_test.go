@@ -11,7 +11,7 @@ func TestHelpContainsAllCommands(t *testing.T) {
 	printHelp(&buf, "v1.0.0-test")
 	output := buf.String()
 
-	commands := []string{"install", "uninstall", "sync", "review start", "review capture-result", "review capture-correction-plan", "review capture-refuter", "review capture-validation", "review validate", "review status", "review repair", "review-start", "review-resume", "review-bundle-export", "review-bundle-import", "review-validate", "update", "upgrade", "restore", "version"}
+	commands := []string{"install", "uninstall", "sync", "review start", "review capture-result", "review capture-correction-plan", "review capture-refuter", "review capture-validation", "review validate", "review status", "review repair", "review-resume", "review-bundle-export", "review-bundle-import", "review-validate", "update", "upgrade", "restore", "version"}
 	for _, cmd := range commands {
 		if !strings.Contains(output, cmd) {
 			t.Errorf("help output missing command %q", cmd)
@@ -54,7 +54,7 @@ func TestHelpPresentsFlatReviewCommandsAsCompatibilityPaths(t *testing.T) {
 	var buf bytes.Buffer
 	printHelp(&buf, "v1.0.0-test")
 	output := buf.String()
-	if !strings.Contains(output, "COMPATIBILITY COMMANDS\n  review-start") || !strings.Contains(output, "Read-only legacy v1 surface; rejects new v1 authority") {
+	if !strings.Contains(output, "COMPATIBILITY COMMANDS\n  review-resume") {
 		t.Fatalf("help does not separate facade from compatibility commands:\n%s", output)
 	}
 }
@@ -83,8 +83,6 @@ func TestHelpDescribesCurrentReviewAuthorityAndCompatibilitySyntax(t *testing.T)
 	output := buf.String()
 	for _, want := range []string{
 		"the final capture closes and burns its review",
-		"Read-only legacy v1 surface; rejects new v1 authority",
-		"Read-only legacy v1 surface; rejects mutation",
 		"Read shipped v1 authority without mutation",
 		"Export a read-only legacy v1 chain transport",
 		"Import a read-only legacy v1 transport",

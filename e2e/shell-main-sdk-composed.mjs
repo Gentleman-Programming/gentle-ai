@@ -78,7 +78,7 @@ try {
   }));
   await session.bindExtensions({ onError: (error) => errors.push(error) });
   assert.deepEqual(errors, [], "actual Main session_start reported errors");
-  for (const tool of ["gentle_review", "gentle_review_capture", "codegraph", "todo"]) {
+  for (const tool of ["gentle_review", "gentle_review_capture", "todo"]) {
     assert.ok(session.getToolDefinition(tool), `actual Main did not register ${tool}`);
   }
   assert.equal(session.isStreaming, false);
