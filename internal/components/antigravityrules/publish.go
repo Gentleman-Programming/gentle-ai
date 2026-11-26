@@ -176,6 +176,9 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 
 	hasStaging := strings.TrimSpace(staging) != ""
 	priorConfigRaw, priorConfigErr := os.ReadFile(configAgentsPath)
+	if priorConfigErr != nil && !os.IsNotExist(priorConfigErr) {
+		return fmt.Errorf("read Antigravity config AGENTS.md: %w", priorConfigErr)
+	}
 	priorAgentsPerm := os.FileMode(0o644)
 	if priorAgentsInfo, err := os.Stat(agentsPath); err == nil {
 		priorAgentsPerm = priorAgentsInfo.Mode().Perm()
@@ -194,7 +197,7 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 		}
 	}
 
-	if err := reconcileProjectAgentsMD(baseDir, staging, hasStaging, priorConfigRaw, priorConfigErr, priorAgentsPerm, options, result); err != nil {
+	if err := reconcileProjectAgentsMD(baseDir, staging, hasStaging, priorConfigRaw, priorAgentsPerm, options, result); err != nil {
 		return err
 	}
 
@@ -209,7 +212,7 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 	return nil
 }
 
-func reconcileProjectAgentsMD(baseDir, staging string, hasStaging bool, priorConfigRaw []byte, priorConfigErr error, priorAgentsPerm os.FileMode, options publishOptions, result *Result) error {
+func reconcileProjectAgentsMD(baseDir, staging string, hasStaging bool, priorConfigRaw []byte, priorAgentsPerm os.FileMode, options publishOptions, result *Result) error {
 	configAgentsPath := ConfigAgentsMDPath(baseDir)
 	agentsPath := AgentsMDPath(baseDir)
 
@@ -243,16 +246,17 @@ func reconcileProjectAgentsMD(baseDir, staging string, hasStaging bool, priorCon
 			return nil
 		}
 
-		raw, err := priorConfigRaw, priorConfigErr
+		raw := priorConfigRaw
 		if !isManagedConfigLink {
+			var err error
 			raw, err = os.ReadFile(agentsPath)
-		}
-		if err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("read %q: %w", agentsPath, err)
+			if err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("read %q: %w", agentsPath, err)
+			}
 		}
 
 		hasRetainedContent := strings.TrimSpace(reconcileAgentsMDContent(string(raw), "", baseDir, options)) != ""
-		if !hasStaging || isWorkspace || (isLegacyGeminiLink && hasRetainedContent) {
+		if !hasStaging || isWorkspace || hasRetainedContent {
 			updated := reconcileAgentsMDContent(string(raw), staging, baseDir, options)
 			if strings.TrimSpace(updated) == "" {
 				if err := os.Remove(agentsPath); err == nil {
