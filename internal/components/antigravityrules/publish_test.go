@@ -596,9 +596,24 @@ func TestPublishPreservesOpenClawSectionsWhenOpenClawIsManaged(t *testing.T) {
 
 	// An unreadable state file fails closed and preserves OpenClaw sections.
 	corruptStateHome := t.TempDir()
+	t.Setenv(state.HomeEnv, "")
 	writeFile(t, state.Path(corruptStateHome), "{not json")
 	if !antigravityrules.OpenClawManaged(corruptStateHome, nil) {
 		t.Fatal("expected OpenClawManaged() = true on unreadable state.json")
+	}
+
+	// Repeated home publish with OpenClaw active and engram-protocol in staging keeps the symlink unchanged.
+	repeatHome := t.TempDir()
+	writeFile(t, antigravityrules.StagingPath(repeatHome), initialContent)
+	if _, err := antigravityrules.Publish(repeatHome, antigravityrules.WithActiveAgents([]model.AgentID{model.AgentOpenClaw})); err != nil {
+		t.Fatalf("first Publish(repeatHome) error = %v", err)
+	}
+	again, err := antigravityrules.Publish(repeatHome, antigravityrules.WithActiveAgents([]model.AgentID{model.AgentOpenClaw}))
+	if err != nil || again.Changed {
+		t.Fatalf("second Publish(repeatHome) = %+v, %v; want unchanged symlink", again, err)
+	}
+	if info, err := os.Lstat(antigravityrules.AgentsMDPath(repeatHome)); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected home AGENTS.md to remain a symlink after second publish, err=%v", err)
 	}
 }
 
