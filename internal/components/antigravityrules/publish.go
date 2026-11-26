@@ -89,20 +89,22 @@ var managedSectionIDs = map[string]bool{
 }
 
 // OpenClawManaged reports whether Gentle AI manages OpenClaw, which also loads
-// and writes AGENTS.md in homeDir or workspaceDir.
+// and writes AGENTS.md in homeDir or workspaceDir. An unreadable state file
+// counts as managed so shared sections are preserved.
 func OpenClawManaged(baseDir string, activeAgents []model.AgentID) bool {
-	if slices.Contains(activeAgents, model.AgentOpenClaw) {
+	if slices.Contains(activeAgents, model.AgentOpenClaw) || openClawInState(baseDir) {
 		return true
 	}
-	if persisted, err := state.Read(baseDir); err == nil && slices.Contains(persisted.InstalledAgents, string(model.AgentOpenClaw)) {
-		return true
+	home, err := os.UserHomeDir()
+	return err == nil && filepath.Clean(home) != filepath.Clean(baseDir) && openClawInState(home)
+}
+
+func openClawInState(dir string) bool {
+	persisted, err := state.Read(dir)
+	if err != nil {
+		return !os.IsNotExist(err)
 	}
-	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) != filepath.Clean(baseDir) {
-		if persisted, err := state.Read(home); err == nil && slices.Contains(persisted.InstalledAgents, string(model.AgentOpenClaw)) {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(persisted.InstalledAgents, string(model.AgentOpenClaw))
 }
 
 // otherAgentNeedsSection reports whether an agent other than Antigravity (such as OpenClaw)
@@ -172,20 +174,15 @@ func Publish(baseDir string, opts ...Option) (Result, error) {
 
 func reconcileAgentsMD(baseDir string, staging string, options publishOptions, result *Result) error {
 	configAgentsPath := ConfigAgentsMDPath(baseDir)
-	agentsPath := AgentsMDPath(baseDir)
-
 	hasStaging := strings.TrimSpace(staging) != ""
-	priorConfigRaw, priorConfigErr := os.ReadFile(configAgentsPath)
-	if priorConfigErr != nil && !os.IsNotExist(priorConfigErr) {
-		return fmt.Errorf("read Antigravity config AGENTS.md: %w", priorConfigErr)
-	}
-	priorAgentsPerm := os.FileMode(0o644)
-	if priorAgentsInfo, err := os.Stat(agentsPath); err == nil {
-		priorAgentsPerm = priorAgentsInfo.Mode().Perm()
+
+	// 1. Reconcile baseDir/AGENTS.md first while configAgentsPath still holds its
+	// prior content and permissions on disk, so a failed conversion is retry-safe.
+	if err := reconcileProjectAgentsMD(baseDir, staging, hasStaging, options, result); err != nil {
+		return err
 	}
 
-	// 1. Write .gemini/config/AGENTS.md when staging is present; defer removal on
-	// empty staging until after baseDir/AGENTS.md reconciliation succeeds.
+	// 2. Write or remove .gemini/config/AGENTS.md.
 	if hasStaging {
 		write, err := filemerge.WriteFileAtomic(configAgentsPath, []byte(staging), 0o644)
 		if err != nil {
@@ -195,13 +192,7 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 			result.Changed = true
 			result.Files = append(result.Files, configAgentsPath)
 		}
-	}
-
-	if err := reconcileProjectAgentsMD(baseDir, staging, hasStaging, priorConfigRaw, priorAgentsPerm, options, result); err != nil {
-		return err
-	}
-
-	if !hasStaging {
+	} else {
 		if err := os.Remove(configAgentsPath); err == nil {
 			result.Changed = true
 			result.Files = append(result.Files, configAgentsPath)
@@ -212,11 +203,10 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 	return nil
 }
 
-func reconcileProjectAgentsMD(baseDir, staging string, hasStaging bool, priorConfigRaw []byte, priorAgentsPerm os.FileMode, options publishOptions, result *Result) error {
+func reconcileProjectAgentsMD(baseDir, staging string, hasStaging bool, options publishOptions, result *Result) error {
 	configAgentsPath := ConfigAgentsMDPath(baseDir)
 	agentsPath := AgentsMDPath(baseDir)
 
-	// 2. Manage baseDir/AGENTS.md
 	info, lstatErr := os.Lstat(agentsPath)
 	if lstatErr != nil && !os.IsNotExist(lstatErr) {
 		return fmt.Errorf("stat AGENTS.md %q: %w", agentsPath, lstatErr)
@@ -246,13 +236,13 @@ func reconcileProjectAgentsMD(baseDir, staging string, hasStaging bool, priorCon
 			return nil
 		}
 
-		raw := priorConfigRaw
-		if !isManagedConfigLink {
-			var err error
-			raw, err = os.ReadFile(agentsPath)
-			if err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("read %q: %w", agentsPath, err)
-			}
+		priorAgentsPerm := os.FileMode(0o644)
+		if priorAgentsInfo, err := os.Stat(agentsPath); err == nil {
+			priorAgentsPerm = priorAgentsInfo.Mode().Perm()
+		}
+		raw, err := os.ReadFile(agentsPath)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read %q: %w", agentsPath, err)
 		}
 
 		hasRetainedContent := strings.TrimSpace(reconcileAgentsMDContent(string(raw), "", baseDir, options)) != ""
