@@ -176,8 +176,13 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 
 	hasStaging := strings.TrimSpace(staging) != ""
 	priorConfigRaw, priorConfigErr := os.ReadFile(configAgentsPath)
+	priorAgentsPerm := os.FileMode(0o644)
+	if priorAgentsInfo, err := os.Stat(agentsPath); err == nil {
+		priorAgentsPerm = priorAgentsInfo.Mode().Perm()
+	}
 
-	// 1. Manage .gemini/config/AGENTS.md
+	// 1. Write .gemini/config/AGENTS.md when staging is present; defer removal on
+	// empty staging until after baseDir/AGENTS.md reconciliation succeeds.
 	if hasStaging {
 		write, err := filemerge.WriteFileAtomic(configAgentsPath, []byte(staging), 0o644)
 		if err != nil {
@@ -187,7 +192,13 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 			result.Changed = true
 			result.Files = append(result.Files, configAgentsPath)
 		}
-	} else {
+	}
+
+	if err := reconcileProjectAgentsMD(baseDir, staging, hasStaging, priorConfigRaw, priorConfigErr, priorAgentsPerm, options, result); err != nil {
+		return err
+	}
+
+	if !hasStaging {
 		if err := os.Remove(configAgentsPath); err == nil {
 			result.Changed = true
 			result.Files = append(result.Files, configAgentsPath)
@@ -195,6 +206,12 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 			return fmt.Errorf("remove Antigravity config AGENTS.md: %w", err)
 		}
 	}
+	return nil
+}
+
+func reconcileProjectAgentsMD(baseDir, staging string, hasStaging bool, priorConfigRaw []byte, priorConfigErr error, priorAgentsPerm os.FileMode, options publishOptions, result *Result) error {
+	configAgentsPath := ConfigAgentsMDPath(baseDir)
+	agentsPath := AgentsMDPath(baseDir)
 
 	// 2. Manage baseDir/AGENTS.md
 	info, lstatErr := os.Lstat(agentsPath)
@@ -222,33 +239,35 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 
 		isManagedConfigLink := resolvedTarget == filepath.Clean(configAgentsPath)
 		isLegacyGeminiLink := resolvedTarget == filepath.Clean(LegacyPromptPath(baseDir))
+		if !isManagedConfigLink && !isLegacyGeminiLink {
+			return nil
+		}
 
-		if !hasStaging || isWorkspace {
-			if isManagedConfigLink || isLegacyGeminiLink {
-				raw, err := priorConfigRaw, priorConfigErr
-				if !isManagedConfigLink {
-					raw, err = os.ReadFile(agentsPath)
+		raw, err := priorConfigRaw, priorConfigErr
+		if !isManagedConfigLink {
+			raw, err = os.ReadFile(agentsPath)
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read %q: %w", agentsPath, err)
+		}
+
+		hasRetainedContent := strings.TrimSpace(reconcileAgentsMDContent(string(raw), "", baseDir, options)) != ""
+		if !hasStaging || isWorkspace || (isLegacyGeminiLink && hasRetainedContent) {
+			updated := reconcileAgentsMDContent(string(raw), staging, baseDir, options)
+			if strings.TrimSpace(updated) == "" {
+				if err := os.Remove(agentsPath); err == nil {
+					result.Changed = true
+					result.Files = append(result.Files, agentsPath)
+				} else if !os.IsNotExist(err) {
+					return fmt.Errorf("remove AGENTS.md symlink: %w", err)
 				}
-				if err != nil && !os.IsNotExist(err) {
-					return fmt.Errorf("read %q: %w", agentsPath, err)
-				}
-				updated := reconcileAgentsMDContent(string(raw), staging, baseDir, options)
-				if strings.TrimSpace(updated) == "" {
-					if err := os.Remove(agentsPath); err == nil {
-						result.Changed = true
-						result.Files = append(result.Files, agentsPath)
-					} else if !os.IsNotExist(err) {
-						return fmt.Errorf("remove AGENTS.md symlink: %w", err)
-					}
-					return nil
-				}
-				if err := replaceSymlinkWithRegularFile(agentsPath, []byte(updated), 0o644); err != nil {
-					return err
-				}
-				result.Changed = true
-				result.Files = append(result.Files, agentsPath)
 				return nil
 			}
+			if err := replaceSymlinkWithRegularFile(agentsPath, []byte(updated), priorAgentsPerm); err != nil {
+				return err
+			}
+			result.Changed = true
+			result.Files = append(result.Files, agentsPath)
 			return nil
 		}
 
@@ -259,11 +278,6 @@ func reconcileAgentsMD(baseDir string, staging string, options publishOptions, r
 			}
 			result.Changed = true
 			result.Files = append(result.Files, agentsPath)
-			return nil
-		}
-
-		if isManagedConfigLink {
-			return nil
 		}
 		return nil
 	}
