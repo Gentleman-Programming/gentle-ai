@@ -2030,6 +2030,7 @@ type agentRoutingGuidanceStep struct {
 	claudePhases     map[string]model.ClaudePhaseAssignment
 	backgroundPolicy bool
 	legacySDD        bool
+	promptOnly       bool // refresh prompt guidance only, installing no hooks
 	id               string
 	agent            model.AgentID
 	homeDir          string
@@ -2059,32 +2060,10 @@ func (s agentRoutingGuidanceStep) Run() error {
 		return err
 	}
 
-	// Claude loads both global and project settings. Keep its hooks within
-	// the selected scope without changing Codex's home-level hook delivery.
-	hookRoot := s.homeDir
-	if adapter.Agent() == model.AgentClaudeCode {
-		hookRoot = ResolveAgentConfigDir(s.scope, s.homeDir, s.workspaceDir)
-	}
-	retainedHooks, err := agenthooks.InstallRetainedClaudeHooks(hookRoot, adapter)
-	if err != nil {
-		return fmt.Errorf("install retained Claude hooks for %q: %w", s.agent, err)
-	}
-	if s.changedFiles != nil && retainedHooks.Changed {
-		*s.changedFiles = append(*s.changedFiles, retainedHooks.Files...)
-	}
-	telemetryHooks, err := agenthooks.InstallCodexTelemetry(s.homeDir, adapter)
-	if err != nil {
-		return fmt.Errorf("install Codex telemetry hooks for %q: %w", s.agent, err)
-	}
-	if s.changedFiles != nil && telemetryHooks.Changed {
-		*s.changedFiles = append(*s.changedFiles, telemetryHooks.Files...)
-	}
-	hooks, err := agenthooks.InstallSkillRegistry(hookRoot, adapter)
-	if err != nil {
-		return fmt.Errorf("install skill-registry hook for %q: %w", s.agent, err)
-	}
-	if s.changedFiles != nil && hooks.Changed {
-		*s.changedFiles = append(*s.changedFiles, hooks.Files...)
+	if !s.promptOnly {
+		if err := s.installHooks(adapter); err != nil {
+			return err
+		}
 	}
 
 	// Pi owns its prompt delivery, but old installs left only allowlisted
@@ -2524,6 +2503,37 @@ func installOpenCodeFamilyParityAgents(settingsPath string, agent model.AgentID)
 	}
 	result, err := filemerge.WriteFileAtomic(settingsPath, merged, filemerge.ExistingFileMode(settingsPath, 0o644))
 	return result.Changed, err
+}
+
+func (s agentRoutingGuidanceStep) installHooks(adapter agents.Adapter) error {
+	// Claude loads both global and project settings. Keep its hooks within
+	// the selected scope without changing Codex's home-level hook delivery.
+	hookRoot := s.homeDir
+	if adapter.Agent() == model.AgentClaudeCode {
+		hookRoot = ResolveAgentConfigDir(s.scope, s.homeDir, s.workspaceDir)
+	}
+	retainedHooks, err := agenthooks.InstallRetainedClaudeHooks(hookRoot, adapter)
+	if err != nil {
+		return fmt.Errorf("install retained Claude hooks for %q: %w", s.agent, err)
+	}
+	if s.changedFiles != nil && retainedHooks.Changed {
+		*s.changedFiles = append(*s.changedFiles, retainedHooks.Files...)
+	}
+	telemetryHooks, err := agenthooks.InstallCodexTelemetry(s.homeDir, adapter)
+	if err != nil {
+		return fmt.Errorf("install Codex telemetry hooks for %q: %w", s.agent, err)
+	}
+	if s.changedFiles != nil && telemetryHooks.Changed {
+		*s.changedFiles = append(*s.changedFiles, telemetryHooks.Files...)
+	}
+	hooks, err := agenthooks.InstallSkillRegistry(hookRoot, adapter)
+	if err != nil {
+		return fmt.Errorf("install skill-registry hook for %q: %w", s.agent, err)
+	}
+	if s.changedFiles != nil && hooks.Changed {
+		*s.changedFiles = append(*s.changedFiles, hooks.Files...)
+	}
+	return nil
 }
 
 func (s agentRoutingGuidanceStep) recordChanged(result agentguidance.Result) {

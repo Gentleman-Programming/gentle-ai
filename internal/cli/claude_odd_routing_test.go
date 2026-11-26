@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v4/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v4/internal/system"
 )
 
 // Issue #5252: Claude ODD role models and efforts are only consumed through the routing
@@ -56,4 +60,47 @@ func TestClaudeODDRoutingCarriesSavedAssignments(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A workspace sync must refresh the routing table a workspace install wrote,
+// without touching the home directory or the hooks in the project settings.
+func TestClaudeODDWorkspaceSyncRefreshesProjectRoutingTable(t *testing.T) {
+	home := t.TempDir()
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}}
+	install, err := newInstallRuntime(home, ScopeWorkspace, ChannelStable, selection, planner.ResolvedPlan{Agents: selection.Agents}, system.PlatformProfile{PackageManager: "brew"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runInstallInjectionSteps(t, install)
+	project := filepath.Join(workspace, ".claude", "CLAUDE.md")
+	if body := readTextFile(t, project); !strings.Contains(body, "| `odd-worker` | `sonnet` | `default` |") {
+		t.Fatalf("workspace install wrote no default ODD row:\n%s", body)
+	}
+	settings := filepath.Join(workspace, ".claude", "settings.json")
+	// Empty settings: a sync that installed hooks would write them back here.
+	settingsBefore := []byte("{}\n")
+	mustWriteFile(t, settings, settingsBefore)
+
+	selection.ClaudePhaseAssignments = map[string]model.ClaudePhaseAssignment{"odd-worker": {Model: model.ClaudeModelOpus, Effort: model.ClaudeEffortHigh}}
+	sync, err := newSyncRuntimeWithScope(home, selection, ScopeWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(sync.stagePlan()); result.Err != nil {
+		t.Fatalf("workspace sync: %v", result.Err)
+	}
+	if body := readTextFile(t, project); !strings.Contains(body, "| `odd-worker` | `opus` | `high` |") {
+		t.Errorf("workspace sync left the project routing table stale:\n%s", body)
+	}
+	if settingsAfter, _ := os.ReadFile(settings); string(settingsAfter) != string(settingsBefore) {
+		t.Errorf("workspace sync changed project hook settings:\nbefore: %s\nafter: %s", settingsBefore, settingsAfter)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude")); !os.IsNotExist(err) {
+		t.Errorf("workspace install and sync wrote the global Claude config: %v", err)
+	}
 }
