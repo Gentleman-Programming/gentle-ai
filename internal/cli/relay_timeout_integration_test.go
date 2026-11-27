@@ -3,7 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
-		"testing"
+	"testing"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/model"
