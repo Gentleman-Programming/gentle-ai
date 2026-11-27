@@ -149,7 +149,7 @@ func TestRetireOpenCodeSDDSettingsBothShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := RetireOpenCodeSDDSettings(path)
+	result, err := RetireOpenCodeSDDSettings(path, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestRetireOpenCodeSDDSettingsBothShapes(t *testing.T) {
 		t.Errorf("preserved agent not reported: %v", result.ManualActions())
 	}
 
-	again, err := RetireOpenCodeSDDSettings(path)
+	again, err := RetireOpenCodeSDDSettings(path, "", "")
 	if err != nil || again.Changed || len(again.Removed) != 0 {
 		t.Fatalf("second run = %+v, %v", again, err)
 	}
@@ -202,34 +202,58 @@ func TestRetireOpenCodeSDDSettingsBothShapes(t *testing.T) {
 }
 
 // An owned entry with comments attached is kept with its marker and reported.
+// An owned entry with comments attached is kept with its marker and reported.
+// Its dangling SDD prompt reference is removed (the prompt member had no comment).
 func TestRetireOpenCodeSDDSettingsKeepsCommentedOwnedEntry(t *testing.T) {
 	entry, err := json.Marshal(releasedOpenCodeAgents(t, "v1")["sdd-apply"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	document := "{\n  \"agent\": {\n    // tuned for my repo\n    \"sdd-apply\": " + string(entry) + "\n  }\n}\n"
+	document := `{
+  "agent": {
+    // tuned for my repo
+    "sdd-apply": ` + string(entry) + `
+  }
+}
+`
 	path := filepath.Join(t.TempDir(), "opencode.jsonc")
 	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result, err := RetireOpenCodeSDDSettings(path)
+	result, err := RetireOpenCodeSDDSettings(path, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Changed || !slices.Equal(result.Commented, []string{"agent.sdd-apply"}) {
-		t.Fatalf("result = %+v", result)
+	// The owned entry is kept due to comments, but its dangling prompt should be removed
+	if !result.Changed {
+		t.Fatal("expected settings to be changed (dangling prompt removed from commented entry)")
+	}
+	if !slices.Equal(result.Commented, []string{"agent.sdd-apply"}) {
+		t.Fatalf("expected Commented=[agent.sdd-apply], got %v", result.Commented)
+	}
+	// The prompt member had no comment, so it was successfully removed (not kept)
+	if len(result.DanglingPromptKept) != 0 {
+		t.Fatalf("expected DanglingPromptKept=[], got %v", result.DanglingPromptKept)
 	}
 	if !hasAction(result.ManualActions(), "agent.sdd-apply", "comments are attached", "move or delete it") {
 		t.Fatalf("commented entry not reported: %v", result.ManualActions())
 	}
-	if data, _ := os.ReadFile(path); string(data) != document {
-		t.Fatal("commented entry was rewritten")
+	// The entry should be kept but its prompt member removed
+	data, _ := os.ReadFile(path)
+	root, _ := filemerge.UnmarshalJSONObject(data)
+	agent := root["agent"].(map[string]any)
+	keptEntry := agent["sdd-apply"].(map[string]any)
+	if _, hasPrompt := keptEntry["prompt"]; hasPrompt {
+		t.Fatalf("dangling prompt reference was not removed from commented entry: %v", keptEntry["prompt"])
+	}
+	if keptEntry["description"] != "Implement code changes from task definitions" {
+		t.Fatalf("other fields should be preserved: %v", keptEntry)
 	}
 }
 
 func TestRetireOpenCodeSDDSettingsMissingAndNonRegular(t *testing.T) {
 	dir := t.TempDir()
-	if result, err := RetireOpenCodeSDDSettings(filepath.Join(dir, "absent.json")); err != nil || result.Changed || len(result.ManualActions()) != 0 {
+	if result, err := RetireOpenCodeSDDSettings(filepath.Join(dir, "absent.json"), ""); err != nil || result.Changed || len(result.ManualActions()) != 0 {
 		t.Fatalf("missing settings = %+v, %v", result, err)
 	}
 	target := filepath.Join(dir, "real.json")
@@ -241,7 +265,7 @@ func TestRetireOpenCodeSDDSettingsMissingAndNonRegular(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	result, err := RetireOpenCodeSDDSettings(link)
+	result, err := RetireOpenCodeSDDSettings(link, "", "")
 	if err != nil || result.Changed || !hasAction(result.ManualActions(), link, "not a regular file") {
 		t.Fatalf("symlinked settings = %+v, %v", result, err)
 	}
@@ -498,7 +522,7 @@ func TestRetireOpenCodeSDDSettingsKeepsWildcardWhileUserSDDAgentsRemain(t *testi
 					t.Fatal(err)
 				}
 			}
-			if _, err := RetireOpenCodeSDDSettings(path); err != nil {
+			if _, err := RetireOpenCodeSDDSettings(path, "", ""); err != nil {
 				t.Fatal(err)
 			}
 			data, err := os.ReadFile(path)
@@ -533,7 +557,7 @@ func TestRetireOpenCodeSDDSettingsCommentedEntryInPlainJSON(t *testing.T) {
 		if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		result, err := RetireOpenCodeSDDSettings(path)
+		result, err := RetireOpenCodeSDDSettings(path, "", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -549,4 +573,161 @@ func TestRetireOpenCodeSDDSettingsCommentedEntryInPlainJSON(t *testing.T) {
 			t.Errorf("%s: action does not explain plain JSON drops comments: %q", name, actions[0])
 		}
 	}
+}
+
+// TestRetireOpenCodeSDDSettingsRemovesDanglingPromptRefs verifies that
+// preserved retired SDD agent entries have their dangling {file:prompts/sdd/...}
+// prompt references removed, so the resulting config doesn't reference deleted files.
+func TestRetireOpenCodeSDDSettingsRemovesDanglingPromptRefs(t *testing.T) {
+	// Entry with a dangling prompt reference to the retired prompts/sdd/ directory
+	doc := `{
+  "agent": {
+    "sdd-apply-fallback": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Apply changes",
+      "prompt": "{file:./prompts/sdd/sdd-apply.md}"
+    }
+  }
+}`
+	path := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := RetireOpenCodeSDDSettings(path, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The entry should be preserved (ownership not proven) but its prompt removed
+	if !result.Changed {
+		t.Fatal("expected settings to be changed")
+	}
+	if !slices.Contains(result.Preserved, "agent.sdd-apply-fallback") {
+		t.Fatalf("expected agent.sdd-apply-fallback to be preserved, got %v", result.Preserved)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
+		t.Fatalf("result does not parse: %v\n%s", err, data)
+	}
+	agent := root["agent"].(map[string]any)
+	entry := agent["sdd-apply-fallback"].(map[string]any)
+	if _, hasPrompt := entry["prompt"]; hasPrompt {
+		t.Fatalf("dangling prompt reference was not removed: %v", entry["prompt"])
+	}
+	if entry["description"] != "Apply changes" {
+		t.Fatalf("other fields should be preserved: %v", entry)
+	}
+
+	// Also test with agents map shape
+	doc2 := `{
+  "agents": {
+    "sdd-apply-fallback": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Apply changes",
+      "prompt": "{file:prompts/sdd/sdd-apply.md}"
+    }
+  }
+}`
+	path2 := filepath.Join(t.TempDir(), "opencode2.json")
+	if err := os.WriteFile(path2, []byte(doc2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result2, err := RetireOpenCodeSDDSettings(path2, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Contains(result2.Preserved, "agents.sdd-apply-fallback") {
+		t.Fatalf("expected agents.sdd-apply-fallback to be preserved, got %v", result2.Preserved)
+	}
+
+	data2, _ := os.ReadFile(path2)
+	root2, _ := filemerge.UnmarshalJSONObject(data2)
+	agents := root2["agents"].(map[string]any)
+	entry2 := agents["sdd-apply-fallback"].(map[string]any)
+	if _, hasPrompt := entry2["prompt"]; hasPrompt {
+		t.Fatalf("dangling prompt reference was not removed in agents map: %v", entry2["prompt"])
+	}
+	// Also test with absolute Unix path to retired prompts/sdd/ directory
+	doc3 := `{
+  "agent": {
+    "sdd-apply-fallback": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Apply changes",
+      "prompt": "{file:/absolute/path/to/prompts/sdd/sdd-apply.md}"
+    }
+  }
+}`
+	path3 := filepath.Join(t.TempDir(), "opencode3.json")
+	if err := os.WriteFile(path3, []byte(doc3), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result3, err := RetireOpenCodeSDDSettings(path3, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The entry should be preserved (ownership not proven) but its prompt removed
+	if !result3.Changed {
+		t.Fatal("expected settings to be changed for absolute path")
+	}
+	if !slices.Contains(result3.Preserved, "agent.sdd-apply-fallback") {
+		t.Fatalf("expected agent.sdd-apply-fallback to be preserved, got %v", result3.Preserved)
+	}
+
+	data3, _ := os.ReadFile(path3)
+	root3, _ := filemerge.UnmarshalJSONObject(data3)
+	agent3 := root3["agent"].(map[string]any)
+	entry3 := agent3["sdd-apply-fallback"].(map[string]any)
+	if _, hasPrompt := entry3["prompt"]; hasPrompt {
+		t.Fatalf("dangling absolute prompt reference was not removed: %v", entry3["prompt"])
+	}
+
+	// Also test with absolute Windows path
+	doc4 := `{
+  "agent": {
+    "sdd-apply-fallback": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Apply changes",
+      "prompt": "{file:C:\\\\prompts\\\\sdd\\\\sdd-apply.md}"
+    }
+  }
+}`
+	path4 := filepath.Join(t.TempDir(), "opencode4.json")
+	if err := os.WriteFile(path4, []byte(doc4), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result4, err := RetireOpenCodeSDDSettings(path4, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !result4.Changed {
+		t.Fatal("expected settings to be changed for absolute Windows path")
+	}
+	if !slices.Contains(result4.Preserved, "agent.sdd-apply-fallback") {
+		t.Fatalf("expected agent.sdd-apply-fallback to be preserved, got %v", result4.Preserved)
+	}
+
+	data4, _ := os.ReadFile(path4)
+	root4, _ := filemerge.UnmarshalJSONObject(data4)
+	agent4 := root4["agent"].(map[string]any)
+	entry4 := agent4["sdd-apply-fallback"].(map[string]any)
+	if _, hasPrompt := entry4["prompt"]; hasPrompt {
+		t.Fatalf("dangling absolute Windows prompt reference was not removed: %v", entry4["prompt"])
+	}
+
 }

@@ -74,7 +74,7 @@ func (s *Service) retiredSDDOperation(adapter agents.Adapter) (operation, []stri
 			}
 		}
 		for _, path := range settings {
-			res, err := legacyassets.RetireOpenCodeSDDSettings(path, agentDirs...)
+			res, err := legacyassets.RetireOpenCodeSDDSettings(path, s.homeDir, agentDirs...)
 			if res.Changed {
 				rewritten = append(rewritten, path)
 			}

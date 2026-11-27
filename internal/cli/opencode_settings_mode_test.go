@@ -54,7 +54,7 @@ func TestOpenCodeFamilySettingsWritersPreservePrivateMode(t *testing.T) {
 					return result.Changed, err
 				}},
 				{"retire SDD settings", func() (bool, error) {
-					result, err := legacyassets.RetireOpenCodeSDDSettings(settingsPath)
+					result, err := legacyassets.RetireOpenCodeSDDSettings(settingsPath, "")
 					return result.Changed, err
 				}},
 				{"migrate legacy agents", func() (bool, error) {

@@ -291,6 +291,8 @@ type OpenCodeSettingsResult struct {
 	Preserved []string
 	// Commented lists Gentle AI's entries kept because comments are attached.
 	Commented []string
+	// DanglingPromptKept lists preserved entries where the dangling prompt member was kept due to comments.
+	DanglingPromptKept []string
 	// Unsupported is set when the settings path is not a regular file.
 	Unsupported bool
 }
@@ -307,7 +309,70 @@ type OpenCodeSettingsResult struct {
 // remains: in the settings, or as a markdown agent in agentDirs or in the
 // agent directories beside the settings file (agent/, agents/, and their
 // .opencode/ project spelling), all of which the runtime loads.
-func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCodeSettingsResult, error) {
+
+// isDanglingSDDPromptRef reports whether prompt is a {file:...} reference
+// pointing into the retired prompts/sdd/ directory whose target no longer
+// exists. It resolves the path using the same rules as SettingsFileReferences:
+// absolute paths are kept as-is, ~/ paths are resolved against homeDir, and
+// relative paths are resolved against the settings file's directory. The
+// reference is dangling only when it lands inside the retired prompts
+// directory and the target file is gone; a still-existing file is referenced
+// and must be kept.
+func isDanglingSDDPromptRef(prompt, settingsPath, homeDir string) bool {
+	match := promptFileRef.FindStringSubmatch(prompt)
+	if match == nil {
+		return false
+	}
+	// Normalize backslashes to forward slashes for consistent handling
+	raw := strings.ReplaceAll(match[1], `\`, "/")
+	// Detect Windows absolute paths (C:/..., D:/..., etc.) and Unix absolute paths (/...)
+	isWindowsAbs := len(raw) >= 3 && raw[1] == ':' && (raw[2] == '/' || raw[2] == '\\')
+	isUnixAbs := strings.HasPrefix(raw, "/")
+	if strings.HasPrefix(raw, "~/") {
+		if err := validateLocalFileReference(homeDir); err != nil {
+			return false
+		}
+		target := filepath.Join(homeDir, raw[2:])
+		cleaned := filepath.Clean(target)
+		cleaned = filepath.ToSlash(cleaned)
+		if !(strings.HasSuffix(cleaned, "/prompts/sdd/") || strings.Contains(cleaned, "/prompts/sdd/")) {
+			return false
+		}
+		_, err := os.Stat(cleaned)
+		return os.IsNotExist(err)
+	}
+	var target string
+	if isWindowsAbs || isUnixAbs {
+		target = filepath.FromSlash(raw)
+	} else {
+		target = filepath.Join(filepath.Dir(settingsPath), filepath.FromSlash(raw))
+	}
+	// Validate the path is not a remote/device path
+	if err := validateLocalFileReference(target); err != nil {
+		return false
+	}
+	cleaned := filepath.Clean(target)
+	// Normalize to slash separators for consistent cross-platform matching
+	cleaned = filepath.ToSlash(cleaned)
+	// The retired prompts live under <hermes_dir>/prompts/sdd/, so a reference
+	// into that directory is dangling only while its target file is gone; an
+	// existing file is still referenced and must be kept.
+	if !(strings.HasSuffix(cleaned, "/prompts/sdd/") || strings.Contains(cleaned, "/prompts/sdd/")) {
+		return false
+	}
+	_, err := os.Stat(cleaned)
+	return os.IsNotExist(err)
+}
+
+// validateLocalFileReference rejects remote or device paths.
+func validateLocalFileReference(target string) error {
+	normalized := strings.ReplaceAll(target, `\`, "/")
+	if strings.HasPrefix(normalized, "//") || normalized == "/??" || strings.HasPrefix(normalized, "/??/") {
+		return fmt.Errorf("remote or device paths are not supported")
+	}
+	return nil
+}
+func RetireOpenCodeSDDSettings(settingsPath, homeDir string, agentDirs ...string) (OpenCodeSettingsResult, error) {
 	result := OpenCodeSettingsResult{Path: settingsPath}
 	info, err := os.Lstat(settingsPath)
 	if os.IsNotExist(err) {
@@ -330,6 +395,8 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 	}
 	updated := raw
 	remaining := map[string]bool{}
+	// Track preserved entries with dangling prompt refs for later cleanup
+	danglingPrompts := map[string]string{} // section.name -> prompt value
 	for _, section := range []string{"agent", "agents"} {
 		agents, _ := root[section].(map[string]any)
 		var owned []string
@@ -345,6 +412,11 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 			case retired:
 				result.Preserved = append(result.Preserved, section+"."+name)
 				remaining[name] = true
+				// If the preserved entry has a dangling SDD prompt reference,
+				// track it for removal after the first pass.
+				if promptVal, ok := entry["prompt"].(string); ok && isDanglingSDDPromptRef(promptVal, settingsPath, homeDir) {
+					danglingPrompts[section+"."+name] = promptVal
+				}
 			default:
 				remaining[name] = true
 			}
@@ -358,6 +430,15 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 			if slices.Contains(kept, name) {
 				result.Commented = append(result.Commented, section+"."+name)
 				remaining[name] = true
+				// If the commented owned entry has a dangling SDD prompt reference,
+				// track it for removal (preserve the entry and its comments).
+				if agents, ok := root[section].(map[string]any); ok {
+					if entry, ok := agents[name].(map[string]any); ok {
+						if promptVal, ok := entry["prompt"].(string); ok && isDanglingSDDPromptRef(promptVal, settingsPath, homeDir) {
+							danglingPrompts[section+"."+name] = promptVal
+						}
+					}
+				}
 			} else {
 				result.Removed = append(result.Removed, section+"."+name)
 			}
@@ -392,6 +473,24 @@ func RetireOpenCodeSDDSettings(settingsPath string, agentDirs ...string) (OpenCo
 	if err != nil {
 		return result, fmt.Errorf("retire SDD task permissions in %s: %w", settingsPath, err)
 	}
+	// If any preserved entries had dangling SDD prompt references, remove them now
+	// using RemoveJSONCMembers which preserves comments.
+	if len(danglingPrompts) > 0 {
+		for key := range danglingPrompts {
+			section, name, _ := strings.Cut(key, ".")
+			var kept []string
+			updated, kept, err = filemerge.RemoveJSONCMembers(updated, []string{section, name}, []string{"prompt"}, false)
+			if err != nil {
+				return result, fmt.Errorf("remove dangling prompt from %s.%s: %w", section, name, err)
+			}
+			// If the prompt member was kept (e.g., due to a comment), record it
+			// so the retained reference is not silently treated as cleaned up.
+			if slices.Contains(kept, "prompt") {
+				result.DanglingPromptKept = append(result.DanglingPromptKept, section+"."+name)
+			}
+		}
+	}
+
 	if string(updated) == string(raw) {
 		return result, nil
 	}
@@ -457,6 +556,9 @@ func (r OpenCodeSettingsResult) ManualActions() []string {
 			continue
 		}
 		actions = append(actions, fmt.Sprintf("Retired SDD agent %s in %s was kept because comments are attached to it: Gentle AI wrote this entry, but removing it would discard your notes. SDD was retired in v4.0.0: move your comments and then move or delete it, or rerun `gentle-ai sync` to retire it.", entry, r.Path))
+	}
+	for _, entry := range r.DanglingPromptKept {
+		actions = append(actions, fmt.Sprintf("Retired SDD agent %s in %s had a dangling prompt reference to the retired prompts/sdd/ directory that was not removed. SDD was retired in v4.0.0: remove the prompt member and rerun `gentle-ai sync`, or correct the prompt reference to point to an existing file.", entry, r.Path))
 	}
 	return actions
 }
