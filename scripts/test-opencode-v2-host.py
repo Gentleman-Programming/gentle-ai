@@ -150,7 +150,7 @@ def validate_host_version(stdout, selector):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary")
-    parser.add_argument("dependencies", help="existing isolated node_modules with SDK 2.0.4")
+    parser.add_argument("dependencies", help="existing isolated node_modules (SDK 2.0.4 unless --installed-sdk-missing is selected)")
     parser.add_argument("--host-version", required=True)
     parser.add_argument("--temp-root", default=os.environ.get("TMPDIR"))
     modes = parser.add_mutually_exclusive_group()

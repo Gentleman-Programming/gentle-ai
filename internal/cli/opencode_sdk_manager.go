@@ -21,11 +21,26 @@ import (
 // unknown: every plan that includes OpenCode writes version-specific managed
 // plugins and telemetry, so V1 and V2 assets must never be guessed.
 func openCodeRuntimeMajorForManagedAssets() (opencodeactivation.RuntimeMajor, error) {
-	major, err := opencodeactivation.DetectRuntimeMajor(context.Background())
+	version, err := openCodeRuntimeVersionForManagedAssets()
+	return version.Major, err
+}
+
+func openCodeRuntimeVersionForManagedAssets() (opencodeactivation.RuntimeEvidence, error) {
+	version, err := opencodeactivation.DetectRuntimeEvidence(context.Background())
 	if err != nil {
-		return major, fmt.Errorf("%w; Gentle AI could not choose V1 or V2 managed OpenCode plugins and telemetry; make sure `opencode --version` succeeds in this shell (install, update, or add OpenCode to PATH), or deselect OpenCode, then retry", err)
+		return opencodeactivation.RuntimeEvidence{}, fmt.Errorf("%w; Gentle AI could not choose V1 or V2 managed OpenCode plugins and telemetry; make sure `opencode --version` succeeds in this shell (install, update, or add OpenCode to PATH), or deselect OpenCode, then retry", err)
 	}
-	return major, nil
+	return version, nil
+}
+
+// Install proposal and sync preflight share host capability; ownership matters only when a local SDK is required.
+func openCodeNeedsLocalPluginSDK() (bool, error) {
+	version, err := openCodeRuntimeVersionForManagedAssets()
+	if err != nil {
+		return false, err
+	}
+	return version.Major == opencodeactivation.RuntimeV2 &&
+		!version.ProvidesPluginSDK(), nil
 }
 
 // openCodeSDKIsolatedPathDirs is the only PATH the credential-isolated npm

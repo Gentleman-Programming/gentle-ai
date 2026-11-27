@@ -41,15 +41,21 @@ func assertOpenCodeOrchestratorPermissions(t *testing.T, agents map[string]any) 
 // the same agent.<name>.permission.question rule from the 1.x config shape.
 var openCodeRuntimeVersions = []string{"1.18.30", "2.0.23"}
 
-// stubOpenCodeRuntimeVersion selects the runtime major; for 2.x it also seeds
-// the installed plugin SDK the V2 preflight requires before any write.
-func stubOpenCodeRuntimeVersion(t *testing.T, home, version string) {
+// stubOpenCodeRuntimeVersionOnly changes runtime evidence, never package state.
+func stubOpenCodeRuntimeVersionOnly(t *testing.T, version string) {
 	t.Helper()
 	old := runtimeopencode.VersionRunnerOverride
 	t.Cleanup(func() { runtimeopencode.VersionRunnerOverride = old })
 	runtimeopencode.VersionRunnerOverride = func(context.Context, runtimeopencode.Command) (runtimeopencode.CommandOutput, error) {
 		return runtimeopencode.CommandOutput{Stdout: []byte(version)}, nil
 	}
+}
+
+// stubOpenCodeRuntimeVersion retains the local-SDK fixture for older-host tests.
+// Fresh-host tests use stubOpenCodeRuntimeVersionOnly and select SDK state separately.
+func stubOpenCodeRuntimeVersion(t *testing.T, home, version string) {
+	t.Helper()
+	stubOpenCodeRuntimeVersionOnly(t, version)
 	if runtimeopencode.ParseRuntimeMajor(version) != runtimeopencode.RuntimeV2 {
 		return
 	}

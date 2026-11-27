@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,22 +31,44 @@ type RuntimeVersion struct {
 	Version string
 }
 
-var stableRuntimeVersion = regexp.MustCompile(`^(?:opencode |OpenCode )?v?(([12])\.[0-9]+\.[0-9]+)$`)
+type RuntimeEvidence struct {
+	RuntimeVersion
+	minor, patch    uint64
+	componentsValid bool
+}
 
-func parseRuntimeVersion(version string) RuntimeVersion {
+var stableRuntimeVersion = regexp.MustCompile(`^(?:opencode |OpenCode )?v?(([12])\.([0-9]+)\.([0-9]+))$`)
+
+func parseRuntimeVersion(version string) RuntimeEvidence {
 	match := stableRuntimeVersion.FindStringSubmatch(strings.TrimSpace(version))
 	if match == nil {
-		return RuntimeVersion{}
+		return RuntimeEvidence{}
 	}
 	major := RuntimeV1
 	if match[2] == "2" {
 		major = RuntimeV2
 	}
-	return RuntimeVersion{Major: major, Version: match[1]}
+	minor, minorErr := strconv.ParseUint(match[3], 10, 64)
+	patch, patchErr := strconv.ParseUint(match[4], 10, 64)
+	// Numeric overflow must not discard otherwise valid runtime evidence.
+	return RuntimeEvidence{
+		RuntimeVersion:  RuntimeVersion{Major: major, Version: match[1]},
+		minor:           minor,
+		patch:           patch,
+		componentsValid: minorErr == nil && patchErr == nil,
+	}
 }
 
 func ParseRuntimeMajor(version string) RuntimeMajor {
 	return parseRuntimeVersion(version).Major
+}
+
+// ProvidesPluginSDK uses the detected version components to identify V2 hosts
+// with built-in plugin modules. OpenCode 2.0.25 introduced host-provided
+// @opencode/plugin; a local SDK is optional tooling on these hosts, not a
+// prerequisite for loading plugins.
+func (version RuntimeEvidence) ProvidesPluginSDK() bool {
+	return version.Major == RuntimeV2 && version.componentsValid && (version.minor > 0 || version.patch >= 25)
 }
 
 type VersionCommandRunner func(context.Context, Command) (CommandOutput, error)
@@ -110,6 +133,11 @@ func DetectRuntimeMajor(ctx context.Context) (RuntimeMajor, error) {
 // DetectRuntimeVersion returns the major and exact stable version from the
 // same bounded executable probe.
 func DetectRuntimeVersion(ctx context.Context) (RuntimeVersion, error) {
+	evidence, err := DetectRuntimeEvidence(ctx)
+	return evidence.RuntimeVersion, err
+}
+
+func DetectRuntimeEvidence(ctx context.Context) (RuntimeEvidence, error) {
 	ctx, cancel := context.WithTimeout(ctx, runtimeVersionTimeout)
 	defer cancel()
 	probe := Command{Path: "opencode", Args: []string{"--version"}, OutputLimit: 4096}
@@ -130,9 +158,9 @@ func DetectRuntimeVersion(ctx context.Context) (RuntimeVersion, error) {
 		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return RuntimeVersion{}, fmt.Errorf("%w after %s; managed runtime assets were not selected", ErrRuntimeVersionTimeout, runtimeVersionTimeout)
+		return RuntimeEvidence{}, fmt.Errorf("%w after %s; managed runtime assets were not selected", ErrRuntimeVersionTimeout, runtimeVersionTimeout)
 	}
-	return RuntimeVersion{}, errors.New("OpenCode runtime version unavailable or unsupported; managed runtime assets were not selected")
+	return RuntimeEvidence{}, errors.New("OpenCode runtime version unavailable or unsupported; managed runtime assets were not selected")
 }
 
 // brokenManagedLauncherFallback resolves an alternate executable only when
