@@ -33,8 +33,7 @@ func openCodeRuntimeVersionForManagedAssets() (opencodeactivation.RuntimeEvidenc
 	return version, nil
 }
 
-// Both the install proposal and sync preflight use the same host capability;
-// package ownership is relevant only when a local SDK is actually required.
+// Install proposal and sync preflight share host capability; ownership matters only when a local SDK is required.
 func openCodeNeedsLocalPluginSDK() (bool, error) {
 	version, err := openCodeRuntimeVersionForManagedAssets()
 	if err != nil {
