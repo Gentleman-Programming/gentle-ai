@@ -17,7 +17,7 @@ import (
 // ─── #1635 B: cooperative single-writer coordination lock ────────────────────
 
 func TestInjectAntigravityHeldLeaseRefusesWithoutManagedWrites(t *testing.T) {
-	home, globalPath, settingsPath, pluginPath, pluginMCPPath, hooksPath := antigravityWriteFixture(t)
+	home, globalPath, settingsPath := antigravityWriteFixture(t)
 	lease, lockErr := acquireAntigravityCoordinationLock(home)
 	if lockErr != nil {
 		t.Fatalf("acquireAntigravityCoordinationLock(%q) error = %v", home, lockErr)
@@ -37,7 +37,7 @@ func TestInjectAntigravityHeldLeaseRefusesWithoutManagedWrites(t *testing.T) {
 	if got := readAntigravityFile(t, globalPath); !bytes.Equal(got, before) {
 		t.Fatalf("global MCP config must be untouched while the lease is held\nwant:\n%s\ngot:\n%s", before, got)
 	}
-	for _, path := range []string{settingsPath, pluginPath, pluginMCPPath, hooksPath} {
+	for _, path := range []string{settingsPath} {
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 			t.Fatalf("%q must not be created while the lease is held; stat err = %v", path, statErr)
 		}
@@ -53,8 +53,9 @@ func TestInjectAntigravityHeldLeaseRefusesWithoutManagedWrites(t *testing.T) {
 	if retryErr != nil {
 		t.Fatalf("Inject(antigravity) after release error = %v", retryErr)
 	}
-	for _, path := range []string{pluginPath, pluginMCPPath, hooksPath} {
-		assertAntigravityCanonicalPluginAsset(t, path)
+	raw := readAntigravityFile(t, globalPath)
+	if !bytes.Contains(raw, []byte(`"engram"`)) || !bytes.Contains(raw, []byte(`"context7"`)) {
+		t.Fatalf("global MCP config must register engram and preserve context7; got:\n%s", raw)
 	}
 	if raw := readAntigravityFile(t, settingsPath); strings.TrimSpace(string(raw)) != "{}" {
 		t.Fatalf("settings on disk = %q, want empty JSON object", raw)
@@ -183,11 +184,11 @@ func TestInjectAntigravityMalformedGlobalCreatesZeroPaths(t *testing.T) {
 }
 
 func TestInjectAntigravityReleasesLockAfterFailure(t *testing.T) {
-	home, globalPath, _, pluginPath, pluginMCPPath, hooksPath := antigravityWriteFixture(t)
+	home, globalPath, _ := antigravityWriteFixture(t)
 	orig := writeAntigravityFileAtomic
 	writeAntigravityFileAtomic = func(path string, content []byte, perm fs.FileMode) (filemerge.WriteResult, error) {
 		result, writeErr := orig(path, content, perm)
-		if writeErr == nil && filepath.Base(path) == "hooks.json" {
+		if writeErr == nil && filepath.Base(path) == "mcp_config.json" {
 			writeErr = errAntigravityWriteFault
 		}
 		return result, writeErr
@@ -198,16 +199,14 @@ func TestInjectAntigravityReleasesLockAfterFailure(t *testing.T) {
 	writeAntigravityFileAtomic = orig
 
 	// The failed pass must have released the lease: the retry acquires and
-	// completes the full ownership transfer.
+	// completes the registration.
 	retry, retryErr := Inject(home, antigravityAdapter())
 	if retryErr != nil {
 		t.Fatalf("Inject(antigravity) after a failed pass error = %v; the coordination lock must be released on failure", retryErr)
 	}
-	for _, path := range []string{pluginPath, pluginMCPPath, hooksPath} {
-		assertAntigravityCanonicalPluginAsset(t, path)
-	}
-	if raw := readAntigravityFile(t, globalPath); bytes.Contains(raw, []byte("engram")) || !bytes.Contains(raw, []byte("context7")) {
-		t.Fatalf("completed transfer must remove the managed Engram duplicate and keep context7; got:\n%s", raw)
+	raw := readAntigravityFile(t, globalPath)
+	if !bytes.Contains(raw, []byte(`"engram"`)) || !bytes.Contains(raw, []byte(`"context7"`)) {
+		t.Fatalf("completed injection must register engram and keep context7; got:\n%s", raw)
 	}
 	if !retry.Changed {
 		t.Fatalf("retry injection must report its mutations")

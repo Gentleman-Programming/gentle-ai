@@ -1790,12 +1790,11 @@ func TestComponentPathsOpenCodeGentleLogoMatchesSelectedAdapter(t *testing.T) {
 	}
 }
 
-// TestBackupTargetsEngramAntigravityIncludePluginStagingFiles pins that the
-// Antigravity Engram plugin assets Engram injection writes stay install backup
-// targets, so a failed install or sync can restore the plugin staging files
-// (PR #1643). Plugin staging lives under the shared ~/.gemini/config root agy
-// 1.4 loads (#5930).
-func TestBackupTargetsEngramAntigravityIncludePluginStagingFiles(t *testing.T) {
+// TestBackupTargetsEngramAntigravityIncludeGlobalMCPAndSettings pins that
+// Antigravity Engram injection targets ~/.gemini/config/mcp_config.json,
+// ~/.gemini/antigravity-cli/settings.json, and both current and legacy plugin
+// assets for backup while keeping retired plugin assets out of active verification (#5988).
+func TestBackupTargetsEngramAntigravityIncludeGlobalMCPAndSettings(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{Agents: []model.AgentID{model.AgentAntigravity}, Components: []model.ComponentID{model.ComponentEngram}}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
@@ -1804,15 +1803,24 @@ func TestBackupTargetsEngramAntigravityIncludePluginStagingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backupTargets() error = %v", err)
 	}
-	pluginDir := engram.AntigravityPluginDir(home)
-	for _, want := range []string{
-		filepath.Join(pluginDir, "mcp_config.json"),
-		filepath.Join(pluginDir, "hooks.json"),
-		filepath.Join(pluginDir, "plugin.json"),
+	expected := []string{
+		filepath.Join(home, ".gemini", "config", "mcp_config.json"),
 		filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"),
-	} {
+	}
+	expected = append(expected, engram.AntigravityPluginAssetPaths(home)...)
+	expected = append(expected, engram.AntigravityLegacyPluginAssetPaths(home)...)
+	for _, want := range expected {
 		if !containsPath(targets, want) {
-			t.Fatalf("backupTargets missing Antigravity plugin staging path %q; targets=%v", want, targets)
+			t.Fatalf("backupTargets missing Antigravity path %q; targets=%v", want, targets)
+		}
+	}
+
+	// Verify retired plugin assets are excluded from active verification.
+	adapters := resolveAdapters(resolved.Agents)
+	verifyPaths := verificationComponentPaths(home, "", ScopeGlobal, selection, adapters, model.ComponentEngram)
+	for _, retired := range append(engram.AntigravityPluginAssetPaths(home), engram.AntigravityLegacyPluginAssetPaths(home)...) {
+		if containsPath(verifyPaths, retired) {
+			t.Fatalf("retired plugin asset %q must not be in active verification targets: %v", retired, verifyPaths)
 		}
 	}
 }

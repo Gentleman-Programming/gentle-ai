@@ -35,3 +35,28 @@ func TestEngramReachablePassesOnAntigravityOnlyHost(t *testing.T) {
 		t.Fatalf("detail = %q, want it to name the plugin registration %q", got.Detail, pluginMCP)
 	}
 }
+
+// TestEngramReachablePassesWithGlobalMCPAntigravityHost pins #5988: Antigravity's
+// Engram registration in ~/.gemini/config/mcp_config.json is discovered and probed.
+func TestEngramReachablePassesWithGlobalMCPAntigravityHost(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
+	homeDir := t.TempDir()
+	globalMCP := filepath.Join(homeDir, ".gemini", "config", "mcp_config.json")
+	if err := os.MkdirAll(filepath.Dir(globalMCP), 0o755); err != nil {
+		t.Fatalf("MkdirAll(global) error = %v", err)
+	}
+	content := `{"mcpServers":{"engram":{"command":"/configured/agy-engram","args":["mcp","--tools=agent"]}}}`
+	if err := os.WriteFile(globalMCP, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(global mcp) error = %v", err)
+	}
+
+	got := checkEngramReachable(context.Background(), homeDir, []string{"antigravity"})
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("status = %s (%s), want pass from global MCP registration", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, globalMCP) {
+		t.Fatalf("detail = %q, want it to name the global MCP registration %q", got.Detail, globalMCP)
+	}
+}
