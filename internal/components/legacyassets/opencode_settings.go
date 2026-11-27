@@ -311,11 +311,13 @@ type OpenCodeSettingsResult struct {
 // .opencode/ project spelling), all of which the runtime loads.
 
 // isDanglingSDDPromptRef reports whether prompt is a {file:...} reference
-// pointing into the retired prompts/sdd/ directory.
-// It resolves the path using the same rules as SettingsFileReferences:
-// absolute paths are kept as-is, ~/ paths are resolved against homeDir,
-// and relative paths are resolved against the settings file's directory.
-// Then it checks if the resolved path is inside a prompts/sdd/ directory.
+// pointing into the retired prompts/sdd/ directory whose target no longer
+// exists. It resolves the path using the same rules as SettingsFileReferences:
+// absolute paths are kept as-is, ~/ paths are resolved against homeDir, and
+// relative paths are resolved against the settings file's directory. The
+// reference is dangling only when it lands inside the retired prompts
+// directory and the target file is gone; a still-existing file is referenced
+// and must be kept.
 func isDanglingSDDPromptRef(prompt, settingsPath, homeDir string) bool {
 	match := promptFileRef.FindStringSubmatch(prompt)
 	if match == nil {
@@ -333,7 +335,11 @@ func isDanglingSDDPromptRef(prompt, settingsPath, homeDir string) bool {
 		target := filepath.Join(homeDir, raw[2:])
 		cleaned := filepath.Clean(target)
 		cleaned = filepath.ToSlash(cleaned)
-		return strings.HasSuffix(cleaned, "/prompts/sdd/") || strings.Contains(cleaned, "/prompts/sdd/")
+		if !(strings.HasSuffix(cleaned, "/prompts/sdd/") || strings.Contains(cleaned, "/prompts/sdd/")) {
+			return false
+		}
+		_, err := os.Stat(cleaned)
+		return os.IsNotExist(err)
 	}
 	var target string
 	if isWindowsAbs || isUnixAbs {
@@ -348,10 +354,14 @@ func isDanglingSDDPromptRef(prompt, settingsPath, homeDir string) bool {
 	cleaned := filepath.Clean(target)
 	// Normalize to slash separators for consistent cross-platform matching
 	cleaned = filepath.ToSlash(cleaned)
-	// Check if the resolved path is inside a prompts/sdd/ directory
-	// The retired prompts are under <hermes_dir>/prompts/sdd/
-	// We check if the path contains "/prompts/sdd/" anywhere
-	return strings.HasSuffix(cleaned, "/prompts/sdd/") || strings.Contains(cleaned, "/prompts/sdd/")
+	// The retired prompts live under <hermes_dir>/prompts/sdd/, so a reference
+	// into that directory is dangling only while its target file is gone; an
+	// existing file is still referenced and must be kept.
+	if !(strings.HasSuffix(cleaned, "/prompts/sdd/") || strings.Contains(cleaned, "/prompts/sdd/")) {
+		return false
+	}
+	_, err := os.Stat(cleaned)
+	return os.IsNotExist(err)
 }
 
 // validateLocalFileReference rejects remote or device paths.
