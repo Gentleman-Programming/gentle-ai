@@ -188,8 +188,7 @@ def parse_args(argv=None):
                 or args.installed_workspace != args.installed_root / "workspace"
                 or args.dependencies != args.installed_config / "node_modules"):
             parser.error("installed paths must match the existing Go fixture layout")
-    elif any((args.installed_root, args.installed_config, args.installed_workspace,
-              args.installed_sdk_missing)):
+    elif any((args.installed_root, args.installed_config, args.installed_workspace, args.installed_sdk_missing)):
         parser.error("installed paths require --installed-activation-only")
     review = (args.gentle_ai, args.host_project, args.evidence, args.capability_gate)
     if args.review_scenario:

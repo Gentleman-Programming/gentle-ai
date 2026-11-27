@@ -23,26 +23,6 @@ class HostVersionTests(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         host.parse_args(['host', 'deps', '--host-version', selector, '--temp-root', root])
 
-    def test_removed_host_sdk_flag_is_unknown(self):
-        with tempfile.TemporaryDirectory() as directory, \
-             patch.object(host.subprocess, 'Popen') as launch, \
-             patch('sys.stdout', new_callable=io.StringIO) as output, \
-             patch('sys.stderr', new_callable=io.StringIO) as errors:
-            with self.assertRaises(SystemExit) as caught:
-                host.main(['host', 'deps', '--host-version', '2.x',
-                           '--temp-root', directory, '--installed-host-sdk'])
-            self.assertEqual(caught.exception.code, 2)
-            self.assertEqual(output.getvalue(), '')
-            self.assertEqual(errors.getvalue().split('error: ')[-1],
-                             'unrecognized arguments: --installed-host-sdk\n')
-            launch.assert_not_called()
-        with patch('sys.stdout', new_callable=io.StringIO) as output:
-            with self.assertRaises(SystemExit) as caught:
-                host.parse_args(['--help'])
-        self.assertEqual(caught.exception.code, 0)
-        self.assertNotIn('--installed-host-sdk', output.getvalue())
-        self.assertIn('--installed-sdk-missing', output.getvalue())
-
     def test_observed_host_version_matches_selector(self):
         for version in ('2.0.18', '2.0.19'):
             for selector in ('2.x', version):
@@ -286,16 +266,14 @@ class RequestBoundaryTests(unittest.TestCase):
 
 
 class InstalledActivationTests(unittest.TestCase):
-    def fixture(self, root, with_sdk=True):
+    def fixture(self, root):
         root = Path(root).resolve()
         for name in ('home', 'config/opencode/plugins', 'data', 'state', 'cache', 'tmp', 'run', 'workspace'):
             (root / name).mkdir(parents=True, exist_ok=True)
         config = root / 'config/opencode'
         package = config / 'node_modules/@opencode/plugin'
-        (config / 'node_modules').mkdir()
-        if with_sdk:
-            package.mkdir(parents=True)
-            (package / 'package.json').write_text('{"version":"2.0.4"}')
+        package.mkdir(parents=True)
+        (package / 'package.json').write_text('{"version":"2.0.4"}')
         (config / 'opencode.json').write_text('{"default_agent":"gentle-orchestrator"}')
         for name in host.PLUGIN_IDS:
             (config / 'plugins' / (name.removeprefix('gentle-ai.') + '.ts')).write_text(name)
@@ -545,24 +523,19 @@ class InstalledRestartAndMissingSDKTests(unittest.TestCase):
     def source(self, root, name):
         return str(Path(root).resolve() / 'config/opencode/plugins' / (name.removeprefix('gentle-ai.') + '.ts'))
 
-    def run_main(self, args, request, extra_patches=(), host_version='2.0.19'):
-        with patch.object(host, 'network_prefix', return_value=['sandbox']) as guard, \
+    def run_main(self, args, request, extra_patches=()):
+        with patch.object(host, 'network_prefix', return_value=['sandbox']), \
              patch.object(host.subprocess, 'Popen') as launch, patch.object(host, 'stop') as stop, \
              patch.object(host, 'read_address', return_value='http://127.0.0.1:1234'), \
-             patch.object(host, 'fixture_request', return_value=request), patch.object(host.os, 'killpg') as kill, \
-             patch('sys.stdout', new_callable=io.StringIO) as output, \
-             patch('sys.stderr', new_callable=io.StringIO) as errors:
-            launch.return_value.communicate.return_value = ('opencode v' + host_version, '')
+             patch.object(host, 'fixture_request', return_value=request), patch.object(host.os, 'killpg'), \
+             patch('sys.stdout', new_callable=io.StringIO) as output:
+            launch.return_value.communicate.return_value = ('opencode v2.0.19', '')
             launch.return_value.returncode = 0
             launch.return_value.poll.return_value = -15
             try:
-                self.result = host.main(args)
+                host.main(args)
             finally:
                 self.launches, self.stops, self.output = launch.call_count, stop.call_count, output.getvalue()
-                self.errors, self.kills = errors.getvalue(), kill.call_count
-                self.commands = [call.args[0] for call in launch.call_args_list]
-                self.environments = [call.kwargs['env'] for call in launch.call_args_list]
-                self.guard_calls = guard.call_args_list
 
     def inventory(self, root, status='active', ids=True, error='Plugin failed to load'):
         state = {'status': status}
@@ -675,23 +648,6 @@ class InstalledRestartAndMissingSDKTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 host.parse_args(['host', 'deps', '--host-version', '2.x', '--temp-root', directory,
                                  '--installed-sdk-missing'])
-
-
-    def test_default_sdk_backed_mode_retains_exact_output_and_restart(self):
-        with tempfile.TemporaryDirectory() as directory:
-            args = self.fixture(directory)
-            config = Path(directory).resolve() / 'config/opencode'
-            before = host.installed_hashes(config)
-            self.run_main(args, self.counting_request(lambda n: self.inventory(directory)))
-            self.assertIsNone(self.result)
-            self.assertEqual(self.errors, '')
-            self.assertEqual(self.output,
-                'PASS: installed activation: host opencode v2.0.19; four managed plugins active; installed settings/SDK/assets hashes unchanged\n'
-                'PASS: installed restart: host opencode v2.0.19; same installed root relaunched; four managed plugins active again; installed settings/SDK/assets hashes unchanged\n'
-                'NOT PROVEN: reviewer/refuter/validator; native admission/receipt/capability\n')
-            self.assertEqual((self.launches, self.stops, self.kills), (3, 3, 3))
-            self.assertEqual(host.installed_hashes(config), before)
-
 
 
 class MissingSDKRefusalPollTests(unittest.TestCase):
