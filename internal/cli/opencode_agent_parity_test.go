@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -66,8 +67,9 @@ func TestOpenCodeInstallWritesParityAgentsWithoutManagedByMarker(t *testing.T) {
 		if !ok {
 			t.Fatalf("opencode.json missing parity agent %q; got agents: %v", name, config.Agent)
 		}
-		if entry["mode"] != "subagent" || entry["hidden"] != true {
-			t.Fatalf("parity agent %q missing mode/hidden: %#v", name, entry)
+		wantHidden := !strings.HasPrefix(name, "gentle-ai-")
+		if entry["mode"] != "subagent" || entry["hidden"] != wantHidden {
+			t.Fatalf("parity agent %q mode/hidden = (%#v, %#v), want (\"subagent\", %v): %#v", name, entry["mode"], entry["hidden"], wantHidden, entry)
 		}
 		if desc, _ := entry["description"].(string); desc == "" {
 			t.Fatalf("parity agent %q missing description: %#v", name, entry)
@@ -300,4 +302,120 @@ func v5WorkerPrompt(t *testing.T, current string) string {
 		t.Fatalf("worker fixture hash = %s, want v5.0.0 %s", got, releasedSHA)
 	}
 	return prompt
+}
+
+func TestOpenCodeUpgradeAndUninstallLegacyHiddenODDAgents(t *testing.T) {
+	oddNames := []string{"gentle-ai-explore", "gentle-ai-verify", "gentle-ai-worker"}
+
+	setLegacyHidden := func(t *testing.T, settingsPath string, withModel bool) {
+		t.Helper()
+		raw, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var root map[string]any
+		if err := json.Unmarshal(raw, &root); err != nil {
+			t.Fatal(err)
+		}
+		agents, _ := root["agent"].(map[string]any)
+		for _, name := range oddNames {
+			entry, ok := agents[name].(map[string]any)
+			if !ok {
+				t.Fatalf("missing agent %q in %s", name, settingsPath)
+			}
+			entry["hidden"] = true
+			if withModel && name == "gentle-ai-explore" {
+				entry["model"] = "anthropic/claude-sonnet-4"
+			}
+		}
+		encoded, err := json.MarshalIndent(root, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(settingsPath, append(encoded, '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("install and sync converge legacy hidden ODD trio to false", func(t *testing.T) {
+		for _, command := range []string{"install", "sync"} {
+			t.Run(command, func(t *testing.T) {
+				home := installTestHome(t)
+				t.Setenv("HOME", home)
+				t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+				stubOpenCodeRuntimeVersion(t, home, "2.0.23")
+
+				if _, err := RunInstall([]string{"--agent", "opencode", "--component", "persona"}, system.DetectionResult{}); err != nil {
+					t.Fatal(err)
+				}
+				settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+				setLegacyHidden(t, settingsPath, true)
+
+				if command == "install" {
+					if _, err := RunInstall([]string{"--agent", "opencode", "--component", "persona"}, system.DetectionResult{}); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if _, err := RunSync([]string{"--agent", "opencode"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+
+				raw, err := os.ReadFile(settingsPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var config struct {
+					Agent map[string]map[string]any `json:"agent"`
+				}
+				if err := json.Unmarshal(raw, &config); err != nil {
+					t.Fatalf("decode opencode.json: %v", err)
+				}
+				for _, name := range openCodeParityAgentNames {
+					entry, ok := config.Agent[name]
+					if !ok {
+						t.Fatalf("%s missing parity agent %q", command, name)
+					}
+					wantHidden := !strings.HasPrefix(name, "gentle-ai-")
+					if entry["hidden"] != wantHidden {
+						t.Fatalf("%s agent %q hidden = %#v, want %v", command, name, entry["hidden"], wantHidden)
+					}
+				}
+				if got := config.Agent["gentle-ai-explore"]["model"]; got != "anthropic/claude-sonnet-4" {
+					t.Fatalf("%s did not preserve gentle-ai-explore model = %#v, want %q", command, got, "anthropic/claude-sonnet-4")
+				}
+			})
+		}
+	})
+
+	t.Run("uninstall removes legacy hidden ODD trio", func(t *testing.T) {
+		home := installTestHome(t)
+		t.Setenv("HOME", home)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+		stubOpenCodeRuntimeVersion(t, home, "2.0.23")
+
+		if _, err := RunInstall([]string{"--agent", "opencode", "--component", "persona"}, system.DetectionResult{}); err != nil {
+			t.Fatal(err)
+		}
+		settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+		setLegacyHidden(t, settingsPath, false)
+
+		if _, err := RunUninstall([]string{"--agent", "opencode", "--yes"}, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var root map[string]any
+		if err := json.Unmarshal(raw, &root); err != nil {
+			t.Fatal(err)
+		}
+		agents, _ := root["agent"].(map[string]any)
+		for _, name := range oddNames {
+			if _, stillPresent := agents[name]; stillPresent {
+				t.Fatalf("legacy hidden ODD agent %q was not removed by uninstall: %#v", name, agents[name])
+			}
+		}
+	})
 }
