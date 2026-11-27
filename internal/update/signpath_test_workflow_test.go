@@ -2,6 +2,8 @@ package update
 
 import (
 	"encoding/xml"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -186,7 +188,29 @@ func TestSignPathPremergeFixturesAreSecretFree(t *testing.T) {
 	}
 }
 
+func requireSignPathFixtures(t *testing.T) {
+	t.Helper()
+	fixtures := filepath.Join("..", "..", ".github", "signpath")
+	if _, err := os.Lstat(fixtures); err == nil {
+		return
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("inspect SignPath fixture directory: %v", err)
+	}
+
+	// Go module ZIPs omit nested modules. A Git checkout or worktree
+	// must still contain the fixtures, even if the entire directory is missing.
+	_, err := os.Lstat(filepath.Join("..", "..", ".git"))
+	if os.IsNotExist(err) {
+		t.Skip("SignPath fixtures are excluded from the published Go module")
+	}
+	if err != nil {
+		t.Fatalf("inspect Git checkout: %v", err)
+	}
+	t.Fatal("SignPath fixture directory is missing from the Git checkout")
+}
+
 func TestSignPathArtifactConfiguration(t *testing.T) {
+	requireSignPathFixtures(t)
 	text := readRepositoryFile(t, ".github", "signpath", "github-test-zip.xml")
 	var config struct {
 		XMLName xml.Name
@@ -221,6 +245,7 @@ func TestSignPathArtifactConfiguration(t *testing.T) {
 }
 
 func TestSignPathVerifierIsFailClosed(t *testing.T) {
+	requireSignPathFixtures(t)
 	verifier := readRepositoryFile(t, ".github", "signpath", "verify-signpath-test.ps1")
 	for _, want := range []string{"Get-AuthenticodeSignature", "SignerCertificate", "SHA256", "RawData", "HashMismatch", "NotTrusted", "CustomRootTrust", "CustomTrustStore", "NoCheck", "finally", "0x8664", "0xAA64", "SIGNPATH-STAGE"} {
 		if !strings.Contains(verifier, want) {
