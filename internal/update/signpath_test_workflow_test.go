@@ -90,7 +90,7 @@ func TestSignPathWorkflowProvenanceAndGates(t *testing.T) {
 		t.Error("incorrect secret or fingerprint scope")
 	}
 	for _, name := range []string{"Test verifier", "Verify signed artifacts"} {
-		if !strings.Contains(job.Steps[positions[name]].Run, "scripts/verify-signpath-test") {
+		if !strings.Contains(job.Steps[positions[name]].Run, ".github/signpath/verify-signpath-test") {
 			t.Errorf("%s does not run verifier", name)
 		}
 	}
@@ -132,12 +132,13 @@ func TestSignPathPremergeFixturesAreSecretFree(t *testing.T) {
 		t.Fatalf("missing bounded pull_request trigger: %v", workflow.On)
 	}
 	wantPaths := map[string]bool{
-		".github/workflows/signpath-test.yml":            false,
-		".github/signpath/github-test-zip.xml":           false,
-		"scripts/verify-signpath-test.ps1":               false,
-		"scripts/verify-signpath-test.tests.ps1":         false,
-		"internal/update/signpath_test_workflow_test.go": false,
-		"docs/signpath-test.md":                          false,
+		".github/workflows/signpath-test.yml":             false,
+		".github/signpath/github-test-zip.xml":            false,
+		".github/signpath/go.mod":                         false,
+		".github/signpath/verify-signpath-test.ps1":       false,
+		".github/signpath/verify-signpath-test.tests.ps1": false,
+		"internal/update/signpath_test_workflow_test.go":  false,
+		"docs/signpath-test.md":                           false,
 	}
 	for _, path := range pr.Paths {
 		if _, found := wantPaths[path]; !found {
@@ -177,7 +178,7 @@ func TestSignPathPremergeFixturesAreSecretFree(t *testing.T) {
 			t.Errorf("premerge build missing %q", want)
 		}
 	}
-	if build.Uses != "" || fixtures.Uses != "" || !strings.Contains(fixtures.Run, "./scripts/verify-signpath-test.tests.ps1") || !strings.Contains(fixtures.Run, "signpath-unsigned") {
+	if build.Uses != "" || fixtures.Uses != "" || !strings.Contains(fixtures.Run, "./.github/signpath/verify-signpath-test.tests.ps1") || !strings.Contains(fixtures.Run, "signpath-unsigned") {
 		t.Error("premerge job does not execute the synthetic fixtures on built binaries")
 	}
 	if workflow.Jobs["signpath-test"].If != "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" {
@@ -220,7 +221,7 @@ func TestSignPathArtifactConfiguration(t *testing.T) {
 }
 
 func TestSignPathVerifierIsFailClosed(t *testing.T) {
-	verifier := readRepositoryFile(t, "scripts", "verify-signpath-test.ps1")
+	verifier := readRepositoryFile(t, ".github", "signpath", "verify-signpath-test.ps1")
 	for _, want := range []string{"Get-AuthenticodeSignature", "SignerCertificate", "SHA256", "RawData", "HashMismatch", "NotTrusted", "CustomRootTrust", "CustomTrustStore", "NoCheck", "finally", "0x8664", "0xAA64", "SIGNPATH-STAGE"} {
 		if !strings.Contains(verifier, want) {
 			t.Errorf("verifier missing %q", want)
@@ -233,7 +234,7 @@ func TestSignPathVerifierIsFailClosed(t *testing.T) {
 			t.Errorf("verifier must not use %q", banned)
 		}
 	}
-	tests := readRepositoryFile(t, "scripts", "verify-signpath-test.tests.ps1")
+	tests := readRepositoryFile(t, ".github", "signpath", "verify-signpath-test.tests.ps1")
 	for _, want := range []string{"tampered", "wrong signer", "unsigned", "missing", "extra", "architecture", "intact", "WaitForExit", "Kill($true)", "timed out", "SIGNPATH-STAGE", "Verifier leaked trust anchor"} {
 		if !strings.Contains(tests, want) {
 			t.Errorf("native fixture coverage missing %q", want)

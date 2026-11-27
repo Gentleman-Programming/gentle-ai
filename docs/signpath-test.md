@@ -2,6 +2,8 @@
 
 Maintainers can use this manual CI pilot to check SignPath setup. Its self-signed artifacts are **TEST only**, not releases or publicly trusted Windows binaries. The existing Windows distribution hold remains in force.
 
+The SignPath scripts and configuration live in the nested module under `.github/signpath/`. Go excludes this directory from the published Gentle AI module ZIP.
+
 ## Verify before merge
 
 The pull request's secret-free Windows fixture job builds both binaries and exercises the verifier without submitting a signing request or publishing artifacts. Require its successful result before considering a separately authorized merge. Production signing remains disabled.
