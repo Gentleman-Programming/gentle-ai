@@ -42,7 +42,6 @@ if [[ "$CURRENT_BRANCH" != "sync-fork-all" ]]; then
     echo "HEAD in $SYNC_FORK is on branch '$CURRENT_BRANCH', expected 'sync-fork-all'. Aborting rebase."
     exit 1
 fi
-BEFORE_TIP=$(git rev-parse origin/sync-fork-all)
 git rebase upstream/main
 git push --force-with-lease origin sync-fork-all
 echo "sync-fork-all rebased and pushed"
