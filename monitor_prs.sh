@@ -28,14 +28,17 @@ for pr in "${PRS[@]}"; do
     echo ""
 done
 
-# Check if #6252 is mergeable and has type:chore label
+# Check if #6252 is mergeable, open, and has the type:chore label
 echo "=== Critical Path Check ==="
-PR6252=$(gh pr view 6252 --repo "$REPO" --json mergeable,labels,state --jq '{mergeable, labels: [.labels[].name], state}')
-echo "PR #6252: $PR6252"
+PR6252=$(gh pr view 6252 --repo "$REPO" --json mergeable,labels,state)
+MERGEABLE=$(echo "$PR6252" | jq -r '.mergeable')
+STATE=$(echo "$PR6252" | jq -r '.state')
+LABELS=$(echo "$PR6252" | jq -r '.labels[].name')
+echo "PR #6252: mergeable=$MERGEABLE state=$STATE labels=$LABELS"
 echo ""
 
-if echo "$PR6252" | grep -q '"type:chore"'; then
-    echo "PR #6252 has type:chore label - ready for merge"
+if echo "$LABELS" | grep -qx 'type:chore' && [[ "$MERGEABLE" == "MERGEABLE" && "$STATE" == "OPEN" ]]; then
+    echo "PR #6252 has type:chore label and is mergeable/open - merge readiness checks satisfied"
 else
-    echo "PR #6252 missing type:chore label - NEEDS MAINTAINER ACTION"
+    echo "PR #6252 missing type:chore label or not merge-ready - NEEDS MAINTAINER ACTION"
 fi

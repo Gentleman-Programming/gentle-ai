@@ -37,8 +37,14 @@ echo ""
 echo "Step 2: Rebase sync-fork-all onto upstream/main..."
 cd "$SYNC_FORK"
 git fetch upstream
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [[ "$CURRENT_BRANCH" != "sync-fork-all" ]]; then
+    echo "HEAD in $SYNC_FORK is on branch '$CURRENT_BRANCH', expected 'sync-fork-all'. Aborting rebase."
+    exit 1
+fi
+BEFORE_TIP=$(git rev-parse origin/sync-fork-all)
 git rebase upstream/main
-git push -f origin sync-fork-all
+git push --force-with-lease origin sync-fork-all
 echo "sync-fork-all rebased and pushed"
 echo ""
 
@@ -52,8 +58,13 @@ for entry in "${CHAINS[@]}"; do
         echo "  Rebasing $wt_dir ($description)..."
         cd "$wt_path"
         git fetch upstream
+        WT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        if [[ "$WT_BRANCH" != "$branch_name" ]]; then
+            echo "  $wt_dir: HEAD is on branch '$WT_BRANCH', expected '$branch_name'. Skipping rebase."
+            continue
+        fi
         git rebase sync-fork-all
-        git push -f origin "$branch_name"
+        git push --force-with-lease origin "$branch_name"
         echo "  $wt_dir rebased and pushed"
     else
         echo "  $wt_dir not found, skipping"
