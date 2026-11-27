@@ -129,7 +129,14 @@ type CodeGraphPathSet struct {
 // directory override is active, an isolated manifest path is derived to prevent
 // cross-contamination with the default global Pi manifest.
 func CodeGraphPaths(homeDir string) CodeGraphPathSet {
-	agentDir := AgentConfigPath(homeDir)
+	return CodeGraphPathsForAgent(homeDir, AgentConfigPath(homeDir))
+}
+
+// CodeGraphPathsForAgent resolves the CodeGraph path set for an explicit agent
+// directory. The default agent directory shares the canonical pi-codegraph.json
+// manifest; every other agent directory gets an isolated, hash-derived manifest
+// name so two agent homes never share ownership records.
+func CodeGraphPathsForAgent(homeDir, agentDir string) CodeGraphPathSet {
 	manifest := filepath.Join(state.Dir(homeDir), "pi-codegraph.json")
 	if defaultDir := filepath.Join(ConfigPath(homeDir), "agent"); filepath.Clean(agentDir) != filepath.Clean(defaultDir) {
 		sum := sha256.Sum256([]byte(filepath.Clean(agentDir)))
@@ -155,7 +162,13 @@ type CodeGraphChild struct {
 // workspace. Later Pi discovery locations override an earlier CodeGraph server;
 // malformed or unreadable participating configuration fails closed.
 func EffectiveCodeGraphMCPPath(homeDir, workspaceDir string) (string, error) {
-	paths := CodeGraphPaths(homeDir)
+	return EffectiveCodeGraphMCPPathIn(CodeGraphPaths(homeDir), homeDir, workspaceDir)
+}
+
+// EffectiveCodeGraphMCPPathIn resolves the effective MCP configuration for the
+// agent directory in paths, with the same discovery order and fail-closed
+// parsing as EffectiveCodeGraphMCPPath.
+func EffectiveCodeGraphMCPPathIn(paths CodeGraphPathSet, homeDir, workspaceDir string) (string, error) {
 	candidates := []string{
 		filepath.Join(homeDir, ".config", "mcp", "mcp.json"),
 		paths.MCPConfig,
@@ -194,7 +207,13 @@ func EffectiveCodeGraphMCPPath(homeDir, workspaceDir string) (string, error) {
 // DiscoverCodeGraphChildren resolves Pi's user then project child directories.
 // Later directories override an earlier child with the same normalized name.
 func DiscoverCodeGraphChildren(homeDir, workspaceDir string) ([]CodeGraphChild, error) {
-	paths := CodeGraphPaths(homeDir)
+	return DiscoverCodeGraphChildrenIn(CodeGraphPaths(homeDir), workspaceDir)
+}
+
+// DiscoverCodeGraphChildrenIn resolves the effective children for the agent
+// directory in paths, with the same user-then-project precedence as
+// DiscoverCodeGraphChildren.
+func DiscoverCodeGraphChildrenIn(paths CodeGraphPathSet, workspaceDir string) ([]CodeGraphChild, error) {
 	dirs := []string{
 		filepath.Join(paths.AgentDir, "node_modules"),
 		filepath.Join(paths.AgentDir, "agents"),

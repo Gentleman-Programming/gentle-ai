@@ -312,118 +312,44 @@ func TestInstallWithHomeFailsClosedForEmptyPiSettingsWithoutMCPProcess(t *testin
 	}
 }
 
-// TestCodeGraphGuidanceContainsLazyInitAndUsageRules verifies that the CodeGraph
-// guidance block contains mandatory ordering, initialization, and worktree placement rules.
-func TestCodeGraphGuidanceContainsLazyInitAndUsageRules(t *testing.T) {
+// TestCodeGraphGuidanceContainsCodegraphFirstContract verifies that the injected
+// CodeGraph guidance block carries the codegraph-first contract.
+func TestCodeGraphGuidanceContainsCodegraphFirstContract(t *testing.T) {
 	guidance := CodeGraphGuidanceMarkdown()
 	for _, want := range []string{
-		"use CodeGraph before broad filesystem searches",
-		"hard ordering rule",
-		"Create Git worktrees that may need CodeGraph under the user's home directory",
-		"<repo-parent>/<repo-name>-worktrees/<worktree-name>",
-		"immediate parent directory of the repository root",
-		"repo `~/Projects/Rust/foo` → `~/Projects/Rust/foo-worktrees/<worktree-name>`",
-		"Never place a CodeGraph-dependent worktree under `/tmp`, `/var/tmp`, or `/tmp/opencode`",
-		"generic temporary-work guidance does not override this rule",
-		"Every worktree needs its own `.codegraph/` index",
-		"Never copy, symlink, or reuse another checkout's index",
-		"git rev-parse --show-toplevel || pwd",
-		"Do not ask the user before initializing CodeGraph in a real project.",
-		"Do not initialize CodeGraph in `$HOME`, temporary directories, or non-project folders",
-		"<project-root>/.codegraph/",
-		"before any broad Read/Glob/Grep filesystem exploration",
-		"immediately run `gentle-ai codegraph init --cwd <project-root>`",
-		"gentle-ai codegraph init --cwd <project-root>",
-		"codegraph_explore",
-		"call paths, and blast-radius context",
-		"invoke the upstream CLI directly",
-		"`codegraph status`",
-		"`codegraph query`",
-		"`codegraph explore`",
-		"`codegraph node`",
-		"`codegraph files`",
-		"`codegraph callers`",
-		"`codegraph callees`",
-		"`codegraph impact`",
-		"`codegraph affected`",
-		"Do not use `gentle-ai codegraph` as a general proxy",
-		"Never run or recommend destructive or administrative lifecycle commands",
-		"`codegraph uninit`",
-		"`codegraph install`",
-		"`codegraph uninstall`",
-		"`codegraph upgrade`",
-		"Reserve `codegraph index` for explicit index-corruption recovery, never routine use",
-		"Missing .codegraph/ is the trigger to initialize, not a reason to skip CodeGraph.",
-		"Do not fall back just because `.codegraph/` is missing",
-		"missing index is the trigger to lazy-initialize",
-		"read-only upstream CLI commands when MCP tools are absent",
-		"Only fall back to normal filesystem tools after CodeGraph initialization or use fails",
-		"Broad Read/Glob/Grep exploration before this CodeGraph check is explicitly discouraged",
+		"Codegraph comes first",
+		"run a codegraph query or explore BEFORE any read/fd/find/rg/grep search whenever the workspace has a .codegraph index",
+		"rg/grep are for exact-string and filename lookups",
+		"Trust by calling, not by checking",
+		"never probe daemon state before the first codegraph call",
+		"only a failed call, or one that returns no results for the question, is the signal to fall back to read/grep/find",
+		"the session's first fd/find/rg/grep search must come after a codegraph query or explore",
+		"every planned codegraph query or explore must have returned before any memory read",
+		"run mem_context and at least one task-scoped mem_search",
+		"history alone authorizes no init/sync",
+		"never commit index files or hand-edit the exclude",
+		"names the skip reason in one line in the final report",
+		"current source prevails over conflicting graph output",
+		"source returned by the graph counts as inspected",
+		"assert its \"Project:\" line names that path",
+		"codegraph silently answers from the current project (exit 0)",
+		"a linked worktree without an index is seeded from the main checkout by the runtime at session start",
+		"must quote the query it ran or cite the parent-provided findings",
+		"Warning: truncated output",
+		"unaffected by the 20 KB MCP cap",
 	} {
 		if !strings.Contains(guidance, want) {
 			t.Fatalf("CodeGraphGuidanceMarkdown() missing %q:\n%s", want, guidance)
 		}
 	}
-}
-
-func TestCodeGraphGuidanceRequiresFreshIndexForCLIReads(t *testing.T) {
-	guidance := CodeGraphGuidanceMarkdown()
-	for _, want := range []string{
-		"MCP auto-sync requires a running daemon with an active file watcher",
-		"CLI intelligence commands read the existing index as-is and do not auto-sync",
-		"Before CLI intelligence reads, run `codegraph sync -q <project-root>`",
-		"If sync fails, do not treat the existing index as current",
-		"The presence of `.codegraph/` alone does not guarantee freshness",
-	} {
-		if !strings.Contains(guidance, want) {
-			t.Errorf("CodeGraphGuidanceMarkdown() missing %q", want)
-		}
-	}
 	for _, stale := range []string{
-		"rely on watcher auto-sync by default",
-		"Run `codegraph sync` only when",
+		"gentle-ai codegraph init --cwd <project-root>",
+		"Required order for",
+		"Never run or recommend destructive or administrative lifecycle commands",
 	} {
 		if strings.Contains(guidance, stale) {
-			t.Errorf("CodeGraphGuidanceMarkdown() retains misleading freshness rule %q", stale)
+			t.Errorf("CodeGraphGuidanceMarkdown() retains replaced rule %q", stale)
 		}
-	}
-}
-
-func TestCodeGraphGuidanceSyncPrecedesCLIReads(t *testing.T) {
-	guidance := CodeGraphGuidanceMarkdown()
-	read := strings.Index(guidance, "Use `codegraph_explore` after initialization, or the read-only upstream CLI commands when MCP tools are absent")
-	if read < 0 {
-		t.Fatal("missing intelligence read instruction")
-	}
-	for _, prerequisite := range []string{
-		"Before CLI intelligence reads, run `codegraph sync -q <project-root>`",
-		"If sync fails, do not treat the existing index as current; explain the failure and fall back to normal filesystem tools",
-	} {
-		position := strings.Index(guidance, prerequisite)
-		if position < 0 || position >= read {
-			t.Errorf("prerequisite %q must precede the intelligence read instruction", prerequisite)
-		}
-	}
-}
-
-func TestCodeGraphGuidancePreservesExplicitInitializationWorkspace(t *testing.T) {
-	guidance := CodeGraphGuidanceMarkdown()
-	for _, want := range []string{
-		"For project initialization, the explicit agent working directory is authoritative",
-		"Check `<cwd>/.git` (directory or worktree file) and `<cwd>/.codegraph/` before ancestor discovery",
-		"Never replace an initialization target with an enclosing repository",
-		"Only for an already-selected existing repository",
-		"git rev-parse --show-toplevel || pwd",
-		"If the explicit initialization target is not a Git root",
-		"git -C <cwd> init",
-		"never retry initialization against the parent",
-	} {
-		if !strings.Contains(guidance, want) {
-			t.Errorf("initialization workspace contract missing %q", want)
-		}
-	}
-	if strings.Contains(guidance, "1. Resolve the project root with `git rev-parse --show-toplevel || pwd`.") {
-		t.Error("guidance still unconditionally replaces the workspace with its ancestor Git root")
 	}
 }
 
@@ -465,7 +391,7 @@ func TestCodeGraphGuidanceInjectsForRepresentativeAgents(t *testing.T) {
 			t.Fatalf("ReadFile(%q) error = %v", path, err)
 		}
 		text := string(content)
-		if !strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>") {
+		if !strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(text, "Codegraph comes first") {
 			t.Fatalf("%q missing CodeGraph guidance:\n%s", path, text)
 		}
 	}
@@ -507,7 +433,7 @@ func TestCodeGraphGuidanceInjectRemovesLegacySkipBlock(t *testing.T) {
 			t.Fatalf("legacy CodeGraph guidance %q was not removed:\n%s", stale, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "Codegraph comes first"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
@@ -554,7 +480,7 @@ func TestCodeGraphGuidanceInjectRemovesUnmarkedUpstreamDuplicateBlock(t *testing
 			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "## CodeGraph manual notes", "This manual section is unrelated and must stay.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "## CodeGraph manual notes", "This manual section is unrelated and must stay.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "Codegraph comes first"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
@@ -601,7 +527,7 @@ func TestCodeGraphGuidanceInjectPreservesManualNotesInsideUnmarkedCodeGraphSecti
 			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "Manual note: keep CodeGraph indexes outside throwaway directories.", "Manual note: rerun `codegraph sync` after large refactors.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "Manual note: keep CodeGraph indexes outside throwaway directories.", "Manual note: rerun `codegraph sync` after large refactors.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "Codegraph comes first"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
@@ -655,7 +581,7 @@ func TestCodeGraphGuidanceInjectPreservesManualNoteBoundaryBeforeNextHeading(t *
 			t.Fatalf("manual note boundary contains invalid separator %q:\n%s", broken, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "This section must remain separate.", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "This section must remain separate.", "<!-- gentle-ai:codegraph-guidance -->", "Codegraph comes first"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
@@ -702,7 +628,7 @@ func TestCodeGraphGuidanceInjectPreservesManualNotesBeforeUnmarkedUpstreamDuplic
 			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "Manual note: always inspect the project root before using generated indexes.", "Manual note: never initialize CodeGraph in scratch directories.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "Manual note: always inspect the project root before using generated indexes.", "Manual note: never initialize CodeGraph in scratch directories.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "Codegraph comes first"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
@@ -748,7 +674,7 @@ func TestCodeGraphGuidanceInjectPreservesManualNotesInterleavedWithUnmarkedUpstr
 			t.Fatalf("unmarked upstream CodeGraph guidance %q was not removed:\n%s", stale, text)
 		}
 	}
-	for _, want := range []string{"custom notes", "Manual note: prefer the MCP tool when it returns exact source.", "Manual note: shell fallback is okay after CodeGraph initialization fails.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "gentle-ai codegraph init --cwd <project-root>"} {
+	for _, want := range []string{"custom notes", "Manual note: prefer the MCP tool when it returns exact source.", "Manual note: shell fallback is okay after CodeGraph initialization fails.", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "Codegraph comes first"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated guidance missing %q:\n%s", want, text)
 		}
@@ -829,11 +755,8 @@ func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testin
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
-	if result.PiCodeGraph == nil || len(result.PiCodeGraph.ManualActions) != 1 {
-		t.Fatalf("Pi result = %#v, want pending guidance", result.PiCodeGraph)
-	}
-	if !strings.Contains(result.PiCodeGraph.ManualActions[0], "pending") {
-		t.Fatalf("Pi manual action = %q, want pending state", result.PiCodeGraph.ManualActions[0])
+	if result.PiCodeGraph == nil || len(result.PiCodeGraph.ManualActions) != 0 {
+		t.Fatalf("Pi result = %#v, want silent pending", result.PiCodeGraph)
 	}
 	pi := findAgentStatus(t, *result.StatusAfter, model.AgentPi)
 	if pi.Configured || pi.Status != "pending" {
@@ -857,17 +780,17 @@ func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testin
 	if calls != 0 || len(rerun.CommandsRun) != 0 {
 		t.Fatalf("rerun calls = %d, commands = %v, want no install commands", calls, rerun.CommandsRun)
 	}
-	wantPending := "CodeGraph configuration is reconciled for all detected supported agents. Pi activation health remains pending."
-	if !slices.Contains(rerun.ManualActions, wantPending) {
-		t.Fatalf("rerun actions = %v, want %q", rerun.ManualActions, wantPending)
+	wantRemoved := "CodeGraph configuration is reconciled for all detected supported agents. Pi activation health remains pending."
+	if slices.Contains(rerun.ManualActions, wantRemoved) {
+		t.Fatalf("rerun actions = %v, want the pending notice removed", rerun.ManualActions)
 	}
 	for _, action := range rerun.ManualActions {
 		if strings.Contains(action, "configured for all") || strings.Contains(action, "already available and MCP-configured") {
 			t.Fatalf("pending rerun falsely reports configured health: %q", action)
 		}
 	}
-	if rerun.PiCodeGraph == nil || !slices.Contains(rerun.ManualActions, piCodeGraphPendingAction) {
-		t.Fatalf("rerun = %#v, want pending health guidance preserved", rerun)
+	if rerun.PiCodeGraph == nil {
+		t.Fatalf("rerun = %#v, want pending Pi result preserved", rerun)
 	}
 	if rerun.StatusAfter == nil || findAgentStatus(t, *rerun.StatusAfter, model.AgentPi).Status != "pending" {
 		t.Fatalf("rerun status = %#v, want Pi still pending", rerun.StatusAfter)
@@ -881,8 +804,8 @@ func TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable(t *testin
 	if err != nil || calls != 0 || len(updated.CommandsRun) != 0 {
 		t.Fatalf("guidance refresh = %#v, err=%v, calls=%d, want no installer", updated, err, calls)
 	}
-	if !slices.Contains(updated.ManualActions, wantPending) || !slices.Contains(updated.ManualActions, piCodeGraphPendingAction) {
-		t.Fatalf("guidance refresh actions = %v, want reconciled pending guidance", updated.ManualActions)
+	if len(updated.ManualActions) != 0 {
+		t.Fatalf("guidance refresh actions = %v, want silent pending", updated.ManualActions)
 	}
 	if pi := findAgentStatus(t, *updated.StatusAfter, model.AgentPi); pi.Configured || pi.Status != AgentStatusPending {
 		t.Fatalf("refreshed Pi = %#v, want unconfigured pending", pi)
@@ -1429,7 +1352,7 @@ func TestInstallRefreshesOldCodeGraphGuidanceMarker(t *testing.T) {
 	if strings.Contains(text, "old CodeGraph prompt") {
 		t.Fatalf("old guidance was not replaced:\n%s", text)
 	}
-	if !strings.Contains(text, "immediately run `gentle-ai codegraph init --cwd <project-root>`") || !strings.Contains(text, "user content") {
+	if !strings.Contains(text, "Codegraph comes first") || !strings.Contains(text, "user content") {
 		t.Fatalf("latest guidance/user content missing after refresh:\n%s", text)
 	}
 }

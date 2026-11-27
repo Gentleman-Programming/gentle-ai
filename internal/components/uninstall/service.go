@@ -492,6 +492,9 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 		for _, target := range communitytool.PiCodeGraphPaths(s.homeDir, s.workspaceDir) {
 			backupTargets[target] = struct{}{}
 		}
+		for _, target := range communitytool.ForeignPiCodeGraphBackupPaths(s.homeDir) {
+			backupTargets[target] = struct{}{}
+		}
 		if piAdapter, ok := s.registry.Get(model.AgentPi); ok {
 			backupTargets[piAdapter.SystemPromptFile(s.homeDir)] = struct{}{}
 		}
@@ -686,7 +689,7 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 	// before other component cleanup (notably Engram) mutates that file, otherwise
 	// an unrelated mutation is indistinguishable from user drift.
 	if slices.Contains(agentsToRemove, model.AgentPi) {
-		piResult, piErr := communitytool.UninstallPiCodeGraph(s.homeDir)
+		piResult, piErr := communitytool.UninstallAllPiCodeGraph(s.homeDir)
 		if piErr != nil {
 			failures = append(failures, operationFailure{
 				path:   firstOrEmpty(communitytool.PiCodeGraphPaths(s.homeDir, s.workspaceDir)),

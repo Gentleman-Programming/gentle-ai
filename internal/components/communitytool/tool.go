@@ -232,12 +232,12 @@ func InstallWithOptions(id model.CommunityToolID, workspaceDir string, options I
 				break
 			}
 		}
-		if piPending {
-			result.ManualActions = append(result.ManualActions, "CodeGraph configuration is reconciled for all detected supported agents. Pi activation health remains pending.")
-		} else if openCodeResult.Changed || guidanceResult.Changed {
-			result.ManualActions = append(result.ManualActions, "CodeGraph is already available and MCP-configured. Agent guidance was updated so enabled agents lazily initialize project indexes when needed.")
-		} else {
-			result.ManualActions = append(result.ManualActions, "CodeGraph is already available and configured for all detected supported agents. No changes were needed.")
+		if !piPending {
+			if openCodeResult.Changed || guidanceResult.Changed {
+				result.ManualActions = append(result.ManualActions, "CodeGraph is already available and MCP-configured. Agent guidance was updated so enabled agents lazily initialize project indexes when needed.")
+			} else {
+				result.ManualActions = append(result.ManualActions, "CodeGraph is already available and configured for all detected supported agents. No changes were needed.")
+			}
 		}
 		return result, nil
 	}
