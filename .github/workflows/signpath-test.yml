@@ -6,8 +6,9 @@ on:
     paths:
       - .github/workflows/signpath-test.yml
       - .github/signpath/github-test-zip.xml
-      - scripts/verify-signpath-test.ps1
-      - scripts/verify-signpath-test.tests.ps1
+      - .github/signpath/go.mod
+      - .github/signpath/verify-signpath-test.ps1
+      - .github/signpath/verify-signpath-test.tests.ps1
       - internal/update/signpath_test_workflow_test.go
       - docs/signpath-test.md
 
@@ -44,7 +45,7 @@ jobs:
           }
       - name: Test verifier
         shell: pwsh
-        run: ./scripts/verify-signpath-test.tests.ps1 -UnsignedDirectory "$env:RUNNER_TEMP\signpath-unsigned"
+        run: ./.github/signpath/verify-signpath-test.tests.ps1 -UnsignedDirectory "$env:RUNNER_TEMP\signpath-unsigned"
 
   signpath-test:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
@@ -83,7 +84,7 @@ jobs:
           }
       - name: Test verifier
         shell: pwsh
-        run: ./scripts/verify-signpath-test.tests.ps1 -UnsignedDirectory "$env:RUNNER_TEMP\signpath-unsigned"
+        run: ./.github/signpath/verify-signpath-test.tests.ps1 -UnsignedDirectory "$env:RUNNER_TEMP\signpath-unsigned"
       - name: Upload unsigned artifact
         id: unsigned
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -106,7 +107,7 @@ jobs:
         shell: pwsh
         env:
           EXPECTED_CERTIFICATE_SHA256: ${{ vars.SIGNPATH_TEST_CERTIFICATE_SHA256 }}
-        run: ./scripts/verify-signpath-test.ps1 -Directory "$env:RUNNER_TEMP\signpath-signed" -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256
+        run: ./.github/signpath/verify-signpath-test.ps1 -Directory "$env:RUNNER_TEMP\signpath-signed" -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256
       - name: Upload verified test artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
