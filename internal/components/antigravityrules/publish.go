@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v5/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/v5/internal/components/filemerge"
@@ -34,16 +35,40 @@ func RulesDir(baseDir string) string {
 	return filepath.Join(baseDir, ".gemini", "config", "rules")
 }
 
+// ConfigAgentsMDPath is the unified instructions file in Antigravity's shared
+// config directory, providing a complete ruleset for external harnesses and ACP.
+func ConfigAgentsMDPath(baseDir string) string {
+	return filepath.Join(baseDir, ".gemini", "config", "AGENTS.md")
+}
+
+// AgentsMDPath is the standard project / workspace instructions file loaded by
+// Antigravity (and other agents) in workspaces and parent directories.
+func AgentsMDPath(baseDir string) string {
+	return filepath.Join(baseDir, "AGENTS.md")
+}
+
 // LegacyPromptPath is the Gemini-compatible prompt older releases appended
 // Antigravity sections to.
 func LegacyPromptPath(baseDir string) string {
 	return filepath.Join(baseDir, ".gemini", "GEMINI.md")
 }
 
-// Publish renders the staging file into RulesDir and removes the Gentle AI
-// rules it no longer produces. A missing or emptied staging file retires every
-// owned rule. Files outside the owned name pattern, or without one of the
-// managed frontmatters, are never touched.
+// managedSectionIDs is the complete set of section IDs Gentle AI injects into markdown prompt files.
+var managedSectionIDs = map[string]bool{
+	"persona":            true,
+	"gemini-cli-imports": true,
+	"engram-protocol":    true,
+	"agent-routing":      true,
+	"strict-tdd-mode":    true,
+	"orchestrator":       true,
+	"sdd-orchestrator":   true,
+}
+
+// Publish renders the staging file into RulesDir, manages the unified
+// AGENTS.md for Antigravity ACP and external harnesses, and removes the Gentle
+// AI rules it no longer produces. A missing or emptied staging file retires
+// every owned rule and managed AGENTS.md section. Files outside the owned name
+// pattern, or without one of the managed frontmatters, are never touched.
 func Publish(baseDir string) (Result, error) {
 	staging, err := os.ReadFile(StagingPath(baseDir))
 	if err != nil && !os.IsNotExist(err) {
@@ -80,7 +105,216 @@ func Publish(baseDir string) (Result, error) {
 		result.Changed = true
 		result.Files = append(result.Files, path)
 	}
+
+	if err := reconcileAgentsMD(baseDir, string(staging), &result); err != nil {
+		return result, err
+	}
 	return result, nil
+}
+
+func reconcileAgentsMD(baseDir string, staging string, result *Result) error {
+	configAgentsPath := ConfigAgentsMDPath(baseDir)
+	agentsPath := AgentsMDPath(baseDir)
+
+	hasStaging := strings.TrimSpace(staging) != ""
+
+	// 1. Manage .gemini/config/AGENTS.md
+	if hasStaging {
+		write, err := filemerge.WriteFileAtomic(configAgentsPath, []byte(staging), 0o644)
+		if err != nil {
+			return fmt.Errorf("write Antigravity config AGENTS.md: %w", err)
+		}
+		if write.Changed {
+			result.Changed = true
+			result.Files = append(result.Files, configAgentsPath)
+		}
+	} else {
+		if err := os.Remove(configAgentsPath); err == nil {
+			result.Changed = true
+			result.Files = append(result.Files, configAgentsPath)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("remove Antigravity config AGENTS.md: %w", err)
+		}
+	}
+
+	// 2. Manage baseDir/AGENTS.md
+	info, lstatErr := os.Lstat(agentsPath)
+	if lstatErr != nil && !os.IsNotExist(lstatErr) {
+		return fmt.Errorf("stat AGENTS.md %q: %w", agentsPath, lstatErr)
+	}
+	if lstatErr == nil && info.IsDir() {
+		return fmt.Errorf("expected %q to be a file, got directory", agentsPath)
+	}
+
+	if lstatErr == nil && (info.Mode()&os.ModeSymlink != 0) {
+		target, readlinkErr := os.Readlink(agentsPath)
+		if readlinkErr != nil {
+			return fmt.Errorf("readlink %q: %w", agentsPath, readlinkErr)
+		}
+
+		resolvedTarget := target
+		if !filepath.IsAbs(resolvedTarget) {
+			resolvedTarget = filepath.Clean(filepath.Join(filepath.Dir(agentsPath), resolvedTarget))
+		} else {
+			resolvedTarget = filepath.Clean(resolvedTarget)
+		}
+
+		isManagedConfigLink := resolvedTarget == filepath.Clean(configAgentsPath)
+		isLegacyGeminiLink := resolvedTarget == filepath.Clean(LegacyPromptPath(baseDir))
+
+		if !hasStaging {
+			if isManagedConfigLink || isLegacyGeminiLink {
+				if err := os.Remove(agentsPath); err == nil {
+					result.Changed = true
+					result.Files = append(result.Files, agentsPath)
+				} else if !os.IsNotExist(err) {
+					return fmt.Errorf("remove AGENTS.md symlink: %w", err)
+				}
+			}
+			return nil
+		}
+
+		if isLegacyGeminiLink {
+			relTarget := filepath.Join(".gemini", "config", "AGENTS.md")
+			if err := replaceSymlink(agentsPath, relTarget); err != nil {
+				return fmt.Errorf("migrate legacy AGENTS.md symlink: %w", err)
+			}
+			result.Changed = true
+			result.Files = append(result.Files, agentsPath)
+			return nil
+		}
+
+		if isManagedConfigLink {
+			return nil
+		}
+		return nil
+	}
+
+	if lstatErr == nil && info.Mode().IsRegular() {
+		raw, err := os.ReadFile(agentsPath)
+		if err != nil {
+			return fmt.Errorf("read %q: %w", agentsPath, err)
+		}
+		original := string(raw)
+
+		updated := reconcileAgentsMDContent(original, staging)
+
+		if strings.TrimSpace(updated) == "" {
+			if err := os.Remove(agentsPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove emptied %q: %w", agentsPath, err)
+			}
+			result.Changed = true
+			result.Files = append(result.Files, agentsPath)
+			return nil
+		}
+
+		if updated != original {
+			write, err := filemerge.WriteFileAtomic(agentsPath, []byte(updated), info.Mode().Perm())
+			if err != nil {
+				return fmt.Errorf("write %q: %w", agentsPath, err)
+			}
+			if write.Changed {
+				result.Changed = true
+				result.Files = append(result.Files, agentsPath)
+			}
+		}
+		return nil
+	}
+
+	if os.IsNotExist(lstatErr) && hasStaging {
+		relTarget := filepath.Join(".gemini", "config", "AGENTS.md")
+		if err := os.Symlink(relTarget, agentsPath); err == nil {
+			result.Changed = true
+			result.Files = append(result.Files, agentsPath)
+		} else {
+			write, err := filemerge.WriteFileAtomic(agentsPath, []byte(staging), 0o644)
+			if err != nil {
+				return fmt.Errorf("write fallback %q: %w", agentsPath, err)
+			}
+			if write.Changed {
+				result.Changed = true
+				result.Files = append(result.Files, agentsPath)
+			}
+		}
+	}
+
+	return nil
+}
+
+func reconcileAgentsMDContent(original string, staging string) string {
+	stagedSections := Sections(staging)
+	stagedMap := make(map[string]string, len(stagedSections))
+	for _, sec := range stagedSections {
+		stagedMap[sec.ID] = sec.Body
+	}
+
+	updated := original
+	// 1. Update or inject all sections present in staging
+	for _, sec := range stagedSections {
+		updated = filemerge.InjectMarkdownSection(updated, sec.ID, sec.Body)
+	}
+
+	// 2. Remove any managed section present in original that is NOT in staging.
+	for _, sec := range Sections(original) {
+		if _, inStaging := stagedMap[sec.ID]; inStaging {
+			continue
+		}
+		if !managedSectionIDs[sec.ID] {
+			continue
+		}
+		updated = removeMarkdownSection(updated, sec.ID)
+	}
+
+	return updated
+}
+
+// removeMarkdownSection strips a marker-bounded Gentle AI section while
+// preserving every byte outside the markers, including surrounding spacing.
+func removeMarkdownSection(content, sectionID string) string {
+	open := "<!-- gentle-ai:" + sectionID + " -->"
+	close := "<!-- /gentle-ai:" + sectionID + " -->"
+	for {
+		openIdx := strings.Index(content, open)
+		if openIdx < 0 {
+			return content
+		}
+		bodyStart := openIdx + len(open)
+		closeOffset := strings.Index(content[bodyStart:], close)
+		if closeOffset < 0 {
+			return content
+		}
+		endIdx := bodyStart + closeOffset + len(close)
+		if endIdx < len(content) && content[endIdx] == '\r' {
+			endIdx++
+		}
+		if endIdx < len(content) && content[endIdx] == '\n' {
+			endIdx++
+		}
+		content = content[:openIdx] + content[endIdx:]
+	}
+}
+
+func replaceSymlink(symlinkPath string, target string) error {
+	dir := filepath.Dir(symlinkPath)
+	tmpLink := filepath.Join(dir, fmt.Sprintf(".agents-link-%d-%d.tmp", os.Getpid(), time.Now().UnixNano()))
+	if err := os.Symlink(target, tmpLink); err != nil {
+		return fmt.Errorf("create temporary symlink: %w", err)
+	}
+	defer func() {
+		_ = os.Remove(tmpLink)
+	}()
+
+	if err := os.Rename(tmpLink, symlinkPath); err != nil {
+		return fmt.Errorf("replace symlink %q: %w", symlinkPath, err)
+	}
+	got, err := os.Readlink(symlinkPath)
+	if err != nil {
+		return fmt.Errorf("verify symlink replacement %q: %w", symlinkPath, err)
+	}
+	if got != target {
+		return fmt.Errorf("replace symlink %q: link does not point to %q (got %q)", symlinkPath, target, got)
+	}
+	return nil
 }
 
 // OwnedRulePaths lists the rule files Publish owns that exist on disk.
@@ -119,6 +353,11 @@ func ManagedPaths(baseDir string) []string {
 	staging, _ := os.ReadFile(StagingPath(baseDir))
 	for _, rule := range Render(string(staging)) {
 		path := filepath.Join(RulesDir(baseDir), rule.Name)
+		if !slices.Contains(paths, path) {
+			paths = append(paths, path)
+		}
+	}
+	for _, path := range []string{ConfigAgentsMDPath(baseDir), AgentsMDPath(baseDir)} {
 		if !slices.Contains(paths, path) {
 			paths = append(paths, path)
 		}
