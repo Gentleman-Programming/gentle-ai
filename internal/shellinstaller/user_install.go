@@ -89,6 +89,14 @@ func userServicePropertyBase(unit string, interactive bool, cwd string) []string
 	return result
 }
 
+// userProgramIdentityEnv marks the supervised program as Gentle Shell. gentle-pi only
+// publishes its per-session desktop feed when PI_PROGRAM_STATUS_APP says so — the JS
+// launcher sets it, and without it Gentle Shell Desktop sees no session at all
+// (Gentleman-Programming/gentle-shell#3419).
+func userProgramIdentityEnv() []string {
+	return []string{"PI_PROGRAM_STATUS_APP=gentle-shell"}
+}
+
 func userServiceArgs(unit string, interactive bool, self, cwd string, args, env []string) []string {
 	result := append([]string{"--user"}, userServicePropertyBase(unit, interactive, cwd)...)
 	result = append(result, "/usr/bin/env", "-i")

@@ -61,7 +61,7 @@ func TestUserEngramLinuxWorkerForwardsOnlyEngramEntries(t *testing.T) {
 	t.Setenv("GENTLE_AI_MAIN_FALLBACK", "1")
 	root := filepath.Join(t.TempDir(), "shell")
 	manifest := userManifest{Mode: "separate", Prefix: filepath.Join(root, "prefix"), Agent: filepath.Join(root, "agent")}
-	baseline := append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0")
+	baseline := append(userEnvironment(root, manifest.Prefix, manifest.Agent), "GIT_OPTIONAL_LOCKS=0", "PI_PROGRAM_STATUS_APP=gentle-shell")
 	got := userLaunchCommand(userEngramLaunchScope(context.Background(), root, nil), root, manifest, "/not-executed/cli.js", nil).Env
 	if want := append(append([]string{}, baseline...), "ENGRAM_URL="+userEngramDefaultURL, "ENGRAM_STARTUP_POLICY=allow"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("worker launch env = %q, want %q", got, want)

@@ -12,6 +12,17 @@ import (
 	"strings"
 )
 
+// userPNPMLaunchEnv is the child environment of a PNPM launch. Only the Shell role is Gentle
+// Shell: the pi role reaches the same path and must not claim the identity that gates gentle-pi's
+// desktop feed (Gentleman-Programming/gentle-shell#3419).
+func userPNPMLaunchEnv(role string, base []string, prefix, root string) []string {
+	env := append(base, "PNPM_HOME="+prefix, "XDG_DATA_HOME="+root+"/data", "XDG_CACHE_HOME="+root+"/data/cache", "GIT_OPTIONAL_LOCKS=0", "GOMAXPROCS=1", "UV_THREADPOOL_SIZE=1", "NODE_OPTIONS=--v8-pool-size=1")
+	if role == "gentle-shell" {
+		env = append(env, userProgramIdentityEnv()...)
+	}
+	return env
+}
+
 func userLaunchPNPM(ctx context.Context, root, role string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if (role != "pi" && role != "gentle-shell") || strings.ContainsRune(root, os.PathListSeparator) {
 		return privateError("refused", errors.New("invalid PNPM launcher role or PATH root"))
@@ -52,7 +63,7 @@ func userLaunchPNPM(ctx context.Context, root, role string, args []string, stdin
 	// Keep supplier home selection: direct Pi uses Agent; Shell's isolated
 	// default stays under private HOME. Never inherit caller runtime injection.
 	cmd.Env = append(cmd.Env, userEngramSeparateLaunch(manifest.Mode, nil)...)
-	cmd.Env = append(cmd.Env, "PNPM_HOME="+manifest.Prefix, "XDG_DATA_HOME="+root+"/data", "XDG_CACHE_HOME="+root+"/data/cache", "GIT_OPTIONAL_LOCKS=0", "GOMAXPROCS=1", "UV_THREADPOOL_SIZE=1", "NODE_OPTIONS=--v8-pool-size=1")
+	cmd.Env = userPNPMLaunchEnv(role, cmd.Env, manifest.Prefix, root)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	return userLaunchGroup(cmd, stdin, func(exitErr error) error {
 		if _, err := userReadManifest(context.Background(), root); err != nil {
